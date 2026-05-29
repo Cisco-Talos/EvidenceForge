@@ -719,6 +719,82 @@ class TestWindowsEventEmitter:
         assert termination["TimeCreated"] == child_time + expected_delta
         emitter._cleanup_spool_unlocked()
 
+    def test_process_termination_shifted_after_same_process_wfp(self, format_def, temp_output):
+        """Security 4689 should not visibly terminate before later same-process 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = terminate_time + timedelta(hours=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0xe78",
+                "ProcessName": r"C:\Python311\python.exe",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 3704,
+                "Application": r"\device\harddiskvolume1\python311\python.exe",
+            },
+        ]
+
+        emitter._shift_process_terminations_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_dependent",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0xe78",
+                "python.exe",
+                wfp_time,
+            ),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == wfp_time + expected_delta
+
+    def test_spooled_process_termination_shifted_after_same_process_wfp(
+        self, format_def, temp_output
+    ):
+        """Spooled Security 4689 fixups should account for later same-process 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = terminate_time + timedelta(hours=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0xe78",
+                "ProcessName": r"C:\Python311\python.exe",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 3704,
+                "Application": r"\device\harddiskvolume1\python311\python.exe",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_terminations_after_dependents_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_dependent",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0xe78",
+                "python.exe",
+                wfp_time,
+            ),
+        )
+        termination = next(event for event in events if event["EventID"] == 4689)
+        assert termination["TimeCreated"] == wfp_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
     def test_process_termination_shifted_after_same_pid_create(self, format_def, temp_output):
         """Security 4689 should not visibly precede same-process Security 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -1592,8 +1668,46 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Data Name="IpAddress">-</Data>' in content
-        assert '<Data Name="IpPort">0</Data>' in content
+        assert '<Data Name="IpPort">-</Data>' in content
         assert "58680" not in content
+
+    def test_local_logon_blank_source_renders_dash_port(self, format_def, temp_output):
+        """4624 local/service logons should render unavailable IP and port as dashes."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="SYSTEM",
+                user_sid="S-1-5-18",
+                logon_type=5,
+                source_ip="-",
+                source_port=0,
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                logon_process="Advapi",
+                auth_package="Negotiate",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">-</Data>' in content
 
     def test_ntlm_field_names(self, format_def, temp_output):
         """Test that 4776 uses correct field names (TargetUserName, Workstation)."""
@@ -1702,6 +1816,43 @@ class TestWindowsEventEmitter:
         assert '<Data Name="TargetUserName">admin01</Data>' in content
         assert '<Data Name="NetworkAddress">10.0.0.50</Data>' in content
         assert '<Data Name="NetworkPort">50123</Data>' in content
+
+    def test_explicit_credentials_blank_endpoint_renders_dash_port(self, format_def, temp_output):
+        """4648 should render unavailable NetworkAddress and NetworkPort consistently."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+            event_type="explicit_credentials",
+            dst_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.25",
+                fqdn="WKS-01.corp.local",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                netbios_domain="CORP",
+            ),
+            auth=AuthContext(
+                username="admin01",
+                subject_username="SYSTEM",
+                subject_sid="S-1-5-18",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                source_ip="-",
+                source_port=0,
+                target_server="WKS-01",
+                process_name=r"C:\Windows\System32\runas.exe",
+                process_pid=4242,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="NetworkAddress">-</Data>' in content
+        assert '<Data Name="NetworkPort">-</Data>' in content
 
     def test_emit_wfp_outbound_connection(self, format_def, temp_output):
         """Test emitting 5156 (WFP outbound connection)."""
@@ -1893,6 +2044,47 @@ class TestWindowsEventEmitter:
         assert '<Data Name="ProcessID">4</Data>' in content
         assert '<Data Name="Application">System</Data>' in content
         assert "svchost.exe" not in content
+
+    def test_wfp_connection_renders_inbound_direction(self, format_def, temp_output):
+        """Target-side WFP rows should render inbound direction and local service PID."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="DC-01.corp.local",
+            ),
+            process=ProcessContext(
+                pid=684,
+                parent_pid=500,
+                image=r"C:\Windows\System32\lsass.exe",
+                command_line="lsass.exe",
+                username="SYSTEM",
+                start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="10.0.0.10",
+                dst_port=88,
+                protocol="tcp",
+                initiating_pid=684,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="Direction">%%14592</Data>' in content
+        assert '<Data Name="ProcessID">684</Data>' in content
+        assert '<Data Name="DestAddress">10.0.0.10</Data>' in content
 
     def test_wfp_dns_connection_uses_dns_client_svchost_pid(self, format_def, temp_output):
         """DNS-client WFP rows should align with Sysmon Event 22's svchost identity."""
@@ -2110,7 +2302,7 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Data Name="IpAddress">-</Data>' in content
-        assert '<Data Name="IpPort">0</Data>' in content
+        assert '<Data Name="IpPort">-</Data>' in content
         assert "49888" not in content
 
     def test_emit_log_cleared(self, format_def, temp_output):

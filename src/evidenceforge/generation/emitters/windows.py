@@ -264,6 +264,13 @@ def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
 
 
+def _windows_endpoint_port(address: str | None, port: int | str | None) -> int | str:
+    """Return the native Windows EventData port value for an address field."""
+    if not address or address == "-":
+        return "-"
+    return port if port not in (None, "") else 0
+
+
 def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
     """Return the same-user/source-port key for DC Kerberos ticket ordering checks."""
     if event.get("EventID") not in {4768, 4769}:
@@ -569,6 +576,8 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         workstation_name = _logon_workstation_name(auth, host, event)
         process_pid, process_name = self._logon_caller_process_identity(host, auth)
+        ip_address = self._ipv6_mapped(auth.source_ip)
+        logon_source_port = auth.source_port if auth.logon_type in (3, 10) else None
 
         event_data = {
             "EventID": 4624,
@@ -590,8 +599,8 @@ class WindowsEventEmitter(LogEmitter):
             "WorkstationName": workstation_name,
             "ProcessId": f"0x{process_pid:x}" if process_pid else "0x0",
             "ProcessName": process_name,
-            "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": auth.source_port if auth.logon_type in (3, 10) else 0,
+            "IpAddress": ip_address,
+            "IpPort": _windows_endpoint_port(ip_address, logon_source_port),
             "LogonProcessName": auth.logon_process,
             "AuthenticationPackageName": auth.auth_package,
             "LmPackageName": auth.lm_package,
@@ -746,7 +755,7 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         ip_address = self._ipv6_mapped(auth.source_ip)
         has_source_ip = ip_address != "-"
-        ip_port = auth.source_port if has_source_ip else 0
+        ip_port: int | str = auth.source_port if has_source_ip else "-"
         if not ip_port and has_source_ip and auth.logon_type == 3:
             ip_port = rng.randint(49152, 65535)
 
@@ -789,10 +798,15 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
+        process_seed = (host.hostname, proc.pid, process_start_time)
+        render_time = _SOURCE_TIMING.source_time_after_source(
             event,
             "source.windows_security_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
+            after_source_key="source.sysmon_process_create",
+            gap_key="source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=process_seed,
+            after_seed_parts=process_seed,
+            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -863,10 +877,15 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
+        process_seed = (host.hostname, proc.pid, process_start_time)
+        render_time = _SOURCE_TIMING.source_time_after_source(
             event,
             "source.windows_security_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
+            after_source_key="source.sysmon_process_create",
+            gap_key="source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=process_seed,
+            after_seed_parts=process_seed,
+            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -903,6 +922,7 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
         workstation = auth.username.rstrip("$") if auth.username.endswith("$") else auth.username
+        ip_address = self._ipv6_mapped(auth.source_ip)
 
         event_data = {
             "EventID": 4624,
@@ -930,8 +950,8 @@ class WindowsEventEmitter(LogEmitter):
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "ProcessId": "0x0",
             "ProcessName": "-",
-            "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": auth.source_port,
+            "IpAddress": ip_address,
+            "IpPort": _windows_endpoint_port(ip_address, auth.source_port),
             "ImpersonationLevel": "%%1833",
             "RestrictedAdminMode": "-",
             "TargetOutboundUserName": "-",
@@ -992,7 +1012,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketEncryptionType": krb.encryption_type,
             "PreAuthType": krb.pre_auth_type,
             "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpPort": _windows_endpoint_port(krb.source_ip, krb.source_port),
             "CertIssuerName": krb.cert_issuer_name,
             "CertSerialNumber": krb.cert_serial_number,
             "CertThumbprint": krb.cert_thumbprint,
@@ -1024,7 +1044,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketOptions": krb.ticket_options,
             "TicketEncryptionType": krb.encryption_type,
             "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpPort": _windows_endpoint_port(krb.source_ip, krb.source_port),
             "Status": krb.ticket_status,
         }
         self.emit_event(event_data)
@@ -1050,7 +1070,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketOptions": krb.ticket_options,
             "TicketEncryptionType": krb.encryption_type,
             "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpPort": _windows_endpoint_port(krb.source_ip, krb.source_port),
             "Status": "0x0",
         }
         self.emit_event(event_data)
@@ -1104,7 +1124,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
             "NetworkAddress": auth.source_ip or "-",
-            "NetworkPort": auth.source_port or 0,
+            "NetworkPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
         }
         self.emit_event(event_data)
 
@@ -1258,7 +1278,7 @@ class WindowsEventEmitter(LogEmitter):
             "Status": krb.ticket_status,
             "PreAuthType": krb.pre_auth_type,
             "IpAddress": source_ip,
-            "IpPort": source_port,
+            "IpPort": _windows_endpoint_port(source_ip, source_port),
         }
         self.emit_event(event_data)
 
@@ -1915,16 +1935,30 @@ class WindowsEventEmitter(LogEmitter):
         self._update_spooled_events_unlocked(updates)
 
     def _shift_spooled_process_terminations_after_dependents_unlocked(self) -> None:
-        """Keep spooled Security 4689 events after visible child-process lifecycle."""
+        """Keep spooled Security 4689 events after visible process dependents."""
         latest_child_create: dict[tuple[str, str], datetime] = {}
+        latest_same_process_dependent: dict[tuple[str, str, str], datetime] = {}
         for _, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
-            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+            if not isinstance(ts, datetime):
                 continue
-            parent_pid = str(event.get("ProcessId") or "")
-            if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
-                key = (str(event.get("Computer", "")), parent_pid.lower())
-                latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            computer = str(event.get("Computer", ""))
+            if event.get("EventID") == 4688:
+                parent_pid = str(event.get("ProcessId") or "")
+                if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                    key = (computer, parent_pid.lower())
+                    latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            elif event.get("EventID") == 5156:
+                key = _security_process_key(
+                    computer,
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                if key is not None:
+                    latest_same_process_dependent[key] = max(
+                        ts,
+                        latest_same_process_dependent.get(key, ts),
+                    )
 
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
@@ -1932,12 +1966,45 @@ class WindowsEventEmitter(LogEmitter):
             if not isinstance(ts, datetime) or event.get("EventID") != 4689:
                 continue
             process_pid = str(event.get("ProcessId") or "")
-            key = (str(event.get("Computer", "")), process_pid.lower())
-            latest = latest_child_create.get(key)
-            if process_pid and latest is not None and ts <= latest:
+            computer = str(event.get("Computer", ""))
+            child_key = (computer, process_pid.lower())
+            process_key = _security_process_key(
+                computer,
+                event.get("ProcessId"),
+                event.get("ProcessName"),
+            )
+            candidates: list[tuple[datetime, str, tuple[Any, ...]]] = []
+            latest_child = latest_child_create.get(child_key)
+            if process_pid and latest_child is not None:
+                candidates.append(
+                    (
+                        latest_child,
+                        "windows.process_exit_after_visible_child",
+                        (child_key[0], child_key[1], latest_child),
+                    )
+                )
+            if process_key is not None:
+                latest_dependent = latest_same_process_dependent.get(process_key)
+                if latest_dependent is not None:
+                    candidates.append(
+                        (
+                            latest_dependent,
+                            "windows.process_exit_after_visible_dependent",
+                            (
+                                process_key[0],
+                                process_key[1],
+                                process_key[2],
+                                latest_dependent,
+                            ),
+                        )
+                    )
+            if not candidates:
+                continue
+            latest, relationship_key, seed_parts = max(candidates, key=lambda item: item[0])
+            if ts <= latest:
                 event["TimeCreated"] = latest + sample_timing_delta(
-                    "windows.process_exit_after_visible_child",
-                    seed_parts=(key[0], key[1], latest),
+                    relationship_key,
+                    seed_parts=seed_parts,
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2313,13 +2380,15 @@ class WindowsEventEmitter(LogEmitter):
                 break
 
     def _shift_process_terminations_after_dependents(self) -> None:
-        """Keep Security 4689 aligned with visible child-process lifecycle.
+        """Keep Security 4689 aligned with visible process lifecycle dependents.
 
         Sysmon Event 5 already moves after visible same-process follow-on
-        telemetry. Security 4689 needs the same source-native lifecycle truth
-        for parent processes that visibly spawn children later in the buffer.
+        telemetry. Security 4689 needs the same source-native lifecycle truth for
+        parent processes that visibly spawn children and for same-process
+        dependents such as WFP 5156 connection rows.
         """
         latest_child_create: dict[tuple[str, str], datetime] = {}
+        latest_same_process_dependent: dict[tuple[str, str, str], datetime] = {}
         terminations: list[tuple[tuple[str, str], dict[str, Any]]] = []
 
         for event in self._event_dicts:
@@ -2333,18 +2402,63 @@ class WindowsEventEmitter(LogEmitter):
                 if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
                     key = (computer, parent_pid.lower())
                     latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            elif event_id == 5156:
+                key = _security_process_key(
+                    computer,
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                if key is not None:
+                    latest_same_process_dependent[key] = max(
+                        ts,
+                        latest_same_process_dependent.get(key, ts),
+                    )
             elif event_id == 4689:
                 process_pid = str(event.get("ProcessId") or "")
                 if process_pid:
                     terminations.append(((computer, process_pid.lower()), event))
 
-        for key, event in terminations:
+        for child_key, event in terminations:
             ts = event.get("TimeCreated")
-            latest = latest_child_create.get(key)
-            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+            if not isinstance(ts, datetime):
+                continue
+            process_key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("ProcessId"),
+                event.get("ProcessName"),
+            )
+            candidates: list[tuple[datetime, str, tuple[Any, ...]]] = []
+            latest_child = latest_child_create.get(child_key)
+            if latest_child is not None:
+                candidates.append(
+                    (
+                        latest_child,
+                        "windows.process_exit_after_visible_child",
+                        (child_key[0], child_key[1], latest_child),
+                    )
+                )
+            if process_key is not None:
+                latest_dependent = latest_same_process_dependent.get(process_key)
+                if latest_dependent is not None:
+                    candidates.append(
+                        (
+                            latest_dependent,
+                            "windows.process_exit_after_visible_dependent",
+                            (
+                                process_key[0],
+                                process_key[1],
+                                process_key[2],
+                                latest_dependent,
+                            ),
+                        )
+                    )
+            if not candidates:
+                continue
+            latest, relationship_key, seed_parts = max(candidates, key=lambda item: item[0])
+            if ts <= latest:
                 event["TimeCreated"] = latest + sample_timing_delta(
-                    "windows.process_exit_after_visible_child",
-                    seed_parts=(key[0], key[1], latest),
+                    relationship_key,
+                    seed_parts=seed_parts,
                 )
 
     def _shift_process_dependents_after_create(self) -> None:

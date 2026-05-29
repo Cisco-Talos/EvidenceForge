@@ -2154,7 +2154,12 @@ class StorylineMixin:
                 process_actor, process_logon_id, parent_pid = service_context
             else:
                 parent_pid = self.activity_generator._resolve_parent(
-                    system, process_actor, time, process_logon_id, process_name
+                    system,
+                    process_actor,
+                    time,
+                    process_logon_id,
+                    process_name,
+                    process_command_line,
                 )
             if os_category == "linux":
                 reserved_start_time = (
@@ -2482,6 +2487,7 @@ class StorylineMixin:
                             orig_bytes=orig_bytes,
                             resp_bytes=resp_bytes,
                             auth_method="publickey",
+                            emit_session_close=True,
                             source="storyline_scp",
                         )
                         self._emit_scp_receiver_artifacts(
@@ -2838,6 +2844,7 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    emit_session_close=True,
                 )
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:
@@ -4258,6 +4265,25 @@ class StorylineMixin:
             "_vip_to_real_ip",
             {},
         )
+        segment_cidrs = {}
+        fw_sensor = None
+        if self.scenario.environment.network:
+            for segment in self.scenario.environment.network.segments:
+                try:
+                    segment_cidrs[segment.name] = ipaddress.ip_network(
+                        segment.cidr,
+                        strict=False,
+                    )
+                except ValueError:
+                    continue
+            fw_sensor = next(
+                (
+                    candidate
+                    for candidate in self.scenario.environment.network.sensors
+                    if candidate.type == "firewall" and "cisco_asa" in candidate.log_formats
+                ),
+                None,
+            )
         scan_profile_rng = random.Random(
             _stable_seed(
                 "port_scan_profile:"
@@ -4281,15 +4307,44 @@ class StorylineMixin:
 
             from evidenceforge.events.contexts import FirewallContext
 
-            denied, scan_conn_state, service, duration, orig_bytes, resp_bytes = (
-                _port_scan_connection_profile(
-                    scan_profile_rng,
-                    port=port,
-                    target_system=target_system,
-                    external=is_external_scan,
-                    default_deny_state=conn_state,
+            policy_denied = False
+            if (
+                is_external_scan
+                and fw_sensor is not None
+                and hasattr(self, "_evaluate_firewall_policy")
+            ):
+                policy_denied = (
+                    self._evaluate_firewall_policy(
+                        scan_src_ip,
+                        real_target_ip,
+                        port,
+                        fw_sensor,
+                        segment_cidrs,
+                    )
+                    == "deny"
                 )
-            )
+            if policy_denied:
+                denied = True
+                scan_conn_state = conn_state
+                service = ""
+                if scan_conn_state == "REJ":
+                    duration = scan_profile_rng.uniform(0.003, 0.18)
+                    orig_bytes = scan_profile_rng.randint(40, 120)
+                    resp_bytes = scan_profile_rng.randint(40, 96)
+                else:
+                    duration = scan_profile_rng.uniform(1.2, 7.0)
+                    orig_bytes = scan_profile_rng.randint(40, 96)
+                    resp_bytes = 0
+            else:
+                denied, scan_conn_state, service, duration, orig_bytes, resp_bytes = (
+                    _port_scan_connection_profile(
+                        scan_profile_rng,
+                        port=port,
+                        target_system=target_system,
+                        external=is_external_scan,
+                        default_deny_state=conn_state,
+                    )
+                )
             firewall = (
                 FirewallContext(
                     action="deny",

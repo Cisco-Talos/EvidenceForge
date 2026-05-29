@@ -1525,7 +1525,7 @@ class TestCallTraceConsistency:
 class TestProcessGuidBootTime:
     """ProcessGuid shape should be stable, host-specific, and source-native."""
 
-    def test_guid_differs_with_different_boot_times_without_low_counter_shape(self, emitter):
+    def test_guid_differs_with_different_boot_times_and_native_token_shape(self, emitter):
         emitter._host_boot_times = {
             "HOST-A": datetime(2024, 2, 1, 6, 0, tzinfo=UTC),
             "HOST-B": datetime(2024, 3, 15, 12, 0, tzinfo=UTC),
@@ -1539,7 +1539,10 @@ class TestProcessGuidBootTime:
         assert guid_a.split("-")[1] == f"{unix_ts & 0xFFFF:04x}"
         assert guid_a.split("-")[2] == f"{(unix_ts >> 16) & 0xFFFF:04x}"
         assert guid_a.split("-")[1] != "000c"
-        assert not guid_a.strip("{}").split("-")[4].startswith("000000")
+        token_word = guid_a.strip("{}").split("-")[3]
+        token_tail = guid_a.strip("{}").split("-")[4]
+        assert token_word[2:] in {"00", "02"}
+        assert token_tail.startswith(("0000", "0010"))
 
     def test_guid_deterministic_with_boot_time(self, emitter):
         emitter._host_boot_times = {

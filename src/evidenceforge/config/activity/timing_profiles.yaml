@@ -61,6 +61,11 @@ relationships:
     position: after
     min_ms: 25
     max_ms: 350
+  windows.process_exit_after_visible_dependent:
+    class: teardown
+    position: after
+    min_ms: 25
+    max_ms: 450
   windows.audit_after_visible_admin_command:
     class: source_latency
     position: after
@@ -84,8 +89,8 @@ relationships:
   source.windows_security_process_create:
     class: source_latency
     position: after
-    min_ms: 80
-    max_ms: 4200
+    min_ms: 35
+    max_ms: 900
   source.windows_explicit_credentials_after_process_create:
     class: source_latency
     position: after
@@ -99,13 +104,13 @@ relationships:
   source.windows_security_after_sysmon_process_create_gap:
     class: source_latency
     position: after
-    min_ms: 250
-    max_ms: 1850
+    min_ms: 35
+    max_ms: 650
   source.sysmon_process_create:
     class: source_latency
     position: after
     min_ms: 18
-    max_ms: 2400
+    max_ms: 1100
   source.sysmon_process_terminate:
     class: source_latency
     position: after

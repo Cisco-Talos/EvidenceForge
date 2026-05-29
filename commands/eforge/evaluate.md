@@ -21,9 +21,9 @@ If the user has a generated output directory and scenario file:
 eforge eval scenarios/<slug>/data --scenario scenarios/<slug>/scenario.yaml --verbose
 ```
 
-In a source checkout, prefix CLI commands with `uv run` (for example,
-`uv run eforge eval ...`). Installed package users can run `eforge`
-directly.
+Default to `eforge` for all CLI execution. If `eforge` is not found and you are
+in an EvidenceForge source checkout, retry the same command with
+`uv run eforge ...`.
 
 If they don't have generated output yet, suggest using `/eforge generate` first.
 

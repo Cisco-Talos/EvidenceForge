@@ -21,9 +21,9 @@ eforge validate scenarios/<slug>/scenario.yaml
 eforge generate scenarios/<slug>/scenario.yaml --verbose --force
 ```
 
-In a source checkout, prefix CLI commands with `uv run` (for example,
-`uv run eforge validate ...`). Installed package users can run `eforge`
-directly.
+Default to `eforge` for all CLI execution. If `eforge` is not found and you are
+in an EvidenceForge source checkout, retry the same command with
+`uv run eforge ...`.
 
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
 

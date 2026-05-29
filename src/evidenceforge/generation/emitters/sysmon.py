@@ -845,10 +845,10 @@ class SysmonEventEmitter(LogEmitter):
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
         Sysmon ProcessGuid values are source-specific correlation IDs, not RFC
-        UUIDs. They expose a stable machine prefix, the process creation time
-        as low/high 16-bit Unix-time words, and a zero-heavy process token
-        suffix. Keep the value deterministic without rendering a UUID-like
-        random tail.
+        UUIDs. Public native samples commonly expose a stable machine prefix,
+        process creation time as low/high 16-bit Unix-time words, a non-version
+        process word, and a zero-heavy token suffix. Keep the value
+        deterministic without rendering a UUID-like random tail.
         """
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
@@ -863,14 +863,13 @@ class SysmonEventEmitter(LogEmitter):
 
         seed = f"{hostname}:{pid}:{timestamp.isoformat()}:{boot_seed}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        token_word = int(h[:4], 16)
-        if token_word == (pid & 0xFFFF):
-            token_word ^= 0x5A5A
-        token_tail = int(h[4:16], 16) | 0x100000000000
+        token_word = (int(h[:2], 16) << 8) | (int(h[2:4], 16) & 0x02)
+        token_counter = int(h[4:12], 16)
+        tail_prefix = "0010" if int(h[12:14], 16) & 1 else "0000"
 
         return (
             f"{{{machine_prefix}-{time_low:04x}-{time_high:04x}-"
-            f"{token_word:04x}-{token_tail:012x}}}"
+            f"{token_word:04x}-{tail_prefix}{token_counter:08x}}}"
         )
 
     @classmethod

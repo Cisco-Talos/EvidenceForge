@@ -29,7 +29,10 @@ import pytest
 
 from evidenceforge.evaluation._shared import _jensen_shannon_divergence
 from evidenceforge.evaluation.parsers import ParsedRecord
-from evidenceforge.evaluation.pillars.parseability import ParseabilityScorer
+from evidenceforge.evaluation.pillars.parseability import (
+    ParseabilityScorer,
+    _normalize_for_validation,
+)
 from evidenceforge.evaluation.pillars.plausibility import PlausibilityScorer
 
 # Alias for tests that use the old RecordFidelityScorer name
@@ -97,6 +100,23 @@ class TestTierA:
         tier_a = scorer._score_spec_conformance({"zeek_conn": all_records})
         # 3 good out of 4 total = 75%
         assert tier_a.score == 75.0
+
+    def test_windows_dash_ports_normalize_for_integer_validation(self):
+        """Raw Windows XML can use '-' for unavailable ports without failing eval."""
+        normalized = _normalize_for_validation(
+            "windows_event_security",
+            {
+                "EventID": 4648,
+                "NetworkAddress": "-",
+                "NetworkPort": "-",
+                "IpAddress": "-",
+                "IpPort": "-",
+            },
+            None,
+        )
+
+        assert normalized["NetworkPort"] == 0
+        assert normalized["IpPort"] == 0
 
 
 class TestTierB:

@@ -1259,7 +1259,7 @@ output:
         <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
         <Data Name="ProcessName">{{ ProcessName | default('-') }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="IpPort">{{ '-' if IpAddress == '-' else (IpPort | default(0)) }}</Data>
         <Data Name="ImpersonationLevel">{{ ImpersonationLevel | default('%%1833') }}</Data>
         <Data Name="RestrictedAdminMode">{{ RestrictedAdminMode | default('-') }}</Data>
         <Data Name="TargetOutboundUserName">{{ TargetOutboundUserName | default('-') }}</Data>
@@ -1310,7 +1310,7 @@ output:
         <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
         <Data Name="ProcessName">{{ ProcessName | default('-') }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="IpPort">{{ '-' if IpAddress == '-' else (IpPort | default(0)) }}</Data>
         {% elif EventID == 4672 %}
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
         <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
@@ -1339,7 +1339,7 @@ output:
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="ProcessName">{{ ProcessName }}</Data>
         <Data Name="NetworkAddress">{{ NetworkAddress | default('-') }}</Data>
-        <Data Name="NetworkPort">{{ NetworkPort | default(0) }}</Data>
+        <Data Name="NetworkPort">{{ '-' if (NetworkAddress | default('-')) == '-' else (NetworkPort | default(0)) }}</Data>
         {% elif EventID == 4768 %}
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
         <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
@@ -1351,7 +1351,7 @@ output:
         <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
         <Data Name="PreAuthType">{{ PreAuthType | default(2) }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="IpPort">{{ '-' if IpAddress == '-' else (IpPort | default(0)) }}</Data>
         <Data Name="CertIssuerName">{{ CertIssuerName | default('') }}</Data>
         <Data Name="CertSerialNumber">{{ CertSerialNumber | default('') }}</Data>
         <Data Name="CertThumbprint">{{ CertThumbprint | default('') }}</Data>
@@ -1363,7 +1363,7 @@ output:
         <Data Name="TicketOptions">{{ TicketOptions }}</Data>
         <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="IpPort">{{ '-' if IpAddress == '-' else (IpPort | default(0)) }}</Data>
         <Data Name="Status">{{ Status }}</Data>
         <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
         <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
@@ -1375,7 +1375,7 @@ output:
         <Data Name="TicketOptions">{{ TicketOptions }}</Data>
         <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="IpPort">{{ '-' if IpAddress == '-' else (IpPort | default(0)) }}</Data>
         <Data Name="Status">{{ Status | default('0x0') }}</Data>
         {% elif EventID == 4776 %}
         <Data Name="PackageName">{{ PackageName }}</Data>
@@ -1390,7 +1390,7 @@ output:
         <Data Name="Status">{{ Status }}</Data>
         <Data Name="PreAuthType">{{ PreAuthType | default(0) }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="IpPort">{{ '-' if IpAddress == '-' else (IpPort | default(0)) }}</Data>
         <Data Name="CertIssuerName">{{ CertIssuerName | default('') }}</Data>
         <Data Name="CertSerialNumber">{{ CertSerialNumber | default('') }}</Data>
         <Data Name="CertThumbprint">{{ CertThumbprint | default('') }}</Data>

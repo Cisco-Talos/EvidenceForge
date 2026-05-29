@@ -197,6 +197,22 @@ from .network import (
 
 logger = logging.getLogger(__name__)
 
+_WINDOWS_INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
+    53: ("dns", "svchost_netsvcs", "svchost_net_svc"),
+    88: ("lsass",),
+    135: ("svchost_dcom", "svchost_netsvcs"),
+    139: ("system",),
+    389: ("lsass",),
+    445: ("system", "lanmanserver"),
+    464: ("lsass",),
+    636: ("lsass",),
+    3268: ("lsass",),
+    3269: ("lsass",),
+    3389: ("svchost_termservice", "svchost_netsvcs"),
+    5985: ("svchost_netsvcs",),
+    5986: ("svchost_netsvcs",),
+}
+
 
 def _format_windows_account_attribute_time(value: datetime) -> str:
     """Format account-management attribute timestamps like Event Viewer XML data."""
@@ -1546,7 +1562,11 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
 
 
 _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
+    "apt",
+    "apt-get",
     "curl",
+    "dnf",
+    "python3",
     "wget",
     "scp",
     "kubectl",
@@ -1627,6 +1647,113 @@ def _windows_foreground_lifetime(
     return None
 
 
+_DNS_QTYPE_RDATA_LENGTHS = {
+    "A": 4,
+    "AAAA": 16,
+}
+
+
+def _dns_name_wire_size(name: str) -> int:
+    """Return the encoded DNS owner-name size, including label lengths and root."""
+    labels = [label for label in name.rstrip(".").split(".") if label]
+    if not labels:
+        return 1
+    return sum(1 + len(label.encode("utf-8", errors="ignore")) for label in labels) + 1
+
+
+def _dns_question_wire_size(query: str) -> int:
+    """Return DNS question section size for one IN-class query."""
+    return _dns_name_wire_size(query) + 4
+
+
+def _dns_payload_padding(*, query: str, query_type: str, response: bool) -> int:
+    """Return stable EDNS/client-padding texture for DNS payload accounting."""
+    seed = _stable_seed(f"dns_payload_padding:{query.lower()}:{query_type}:{response}")
+    rng = random.Random(seed)
+    if query_type in {"TXT", "NULL"}:
+        choices = (0, 11, 23, 47, 71)
+        weights = (30, 35, 20, 10, 5)
+    elif response:
+        choices = (0, 11, 23, 35)
+        weights = (45, 35, 15, 5)
+    else:
+        choices = (0, 11, 23)
+        weights = (35, 50, 15)
+    return rng.choices(choices, weights=weights, k=1)[0]
+
+
+def _dns_rr_rdata_size(query_type: str, answer: str) -> int:
+    """Return an approximate RDATA length for a source-native DNS answer."""
+    if query_type in _DNS_QTYPE_RDATA_LENGTHS:
+        return _DNS_QTYPE_RDATA_LENGTHS[query_type]
+    if query_type in {"CNAME", "PTR", "NS"}:
+        return _dns_name_wire_size(answer)
+    if query_type == "MX":
+        parts = answer.split(maxsplit=1)
+        exchange = parts[1] if len(parts) == 2 else answer
+        return 2 + _dns_name_wire_size(exchange)
+    if query_type == "SRV":
+        parts = answer.split()
+        target = parts[-1] if parts else answer
+        return 6 + _dns_name_wire_size(target)
+    if query_type == "SOA":
+        parts = answer.split()
+        if len(parts) >= 2:
+            return _dns_name_wire_size(parts[0]) + _dns_name_wire_size(parts[1]) + 20
+        return max(24, len(answer.encode("utf-8", errors="ignore")))
+    if query_type == "TXT":
+        text_len = len(answer.encode("utf-8", errors="ignore"))
+        return text_len + max(1, math.ceil(text_len / 255))
+    return max(4, len(answer.encode("utf-8", errors="ignore")))
+
+
+def _dns_response_wire_size(*, dns: DnsContext, question_size: int, query_type: str) -> int:
+    """Return DNS response payload bytes derived from the visible DNS context."""
+    base_size = 12 + question_size
+    answers = dns.answers or []
+    if answers:
+        rr_bytes = 0
+        for answer in answers:
+            rdata_size = _dns_rr_rdata_size(query_type, str(answer))
+            rr_bytes += 2 + 10 + rdata_size  # compressed owner pointer + RR metadata
+        return (
+            base_size
+            + rr_bytes
+            + _dns_payload_padding(
+                query=dns.query,
+                query_type=query_type,
+                response=True,
+            )
+        )
+
+    rcode = (dns.rcode or "").upper()
+    if rcode in {"NXDOMAIN", "SERVFAIL", "REFUSED"} or dns.rcode_num in {2, 3, 5}:
+        failure_seed = _stable_seed(f"dns_failure_payload:{dns.query}:{query_type}:{rcode}")
+        failure_rng = random.Random(failure_seed)
+        authority_bytes = {
+            "NXDOMAIN": failure_rng.randint(36, 92),
+            "SERVFAIL": failure_rng.randint(18, 46),
+            "REFUSED": failure_rng.randint(18, 54),
+        }.get(rcode, failure_rng.randint(18, 54))
+        return (
+            base_size
+            + authority_bytes
+            + _dns_payload_padding(
+                query=dns.query,
+                query_type=query_type,
+                response=True,
+            )
+        )
+
+    if rcode == "NOERROR" or dns.rcode_num == 0:
+        return base_size + _dns_payload_padding(
+            query=dns.query,
+            query_type=query_type,
+            response=True,
+        )
+    return 0
+
+
 def _dns_payload_accounting(
     *,
     dns: DnsContext,
@@ -1644,32 +1771,27 @@ def _dns_payload_accounting(
         or dns.rcode.upper() in response_rcodes
         or dns.rcode_num in {0, 2, 3, 5}
     )
-    answers = dns.answers or []
-
-    query_floor = max(40, len(query.encode("utf-8", errors="ignore")) + 18)
-    if query_type in {"TXT", "NULL"}:
-        query_floor += 18
-        query_ceiling = 1232
-    elif query_type == "SRV":
-        query_floor += 10
-        query_ceiling = 512
-    else:
-        query_ceiling = 260
-
-    normalized_orig = min(max(orig_bytes or 0, query_floor), query_ceiling)
+    question_size = _dns_question_wire_size(query)
+    query_payload_size = (
+        12
+        + question_size
+        + _dns_payload_padding(
+            query=query,
+            query_type=query_type,
+            response=False,
+        )
+    )
+    normalized_orig = max(28, min(query_payload_size, 1232))
 
     if not has_response:
         normalized_resp = 0
     else:
-        answer_bytes = sum(len(str(answer).encode("utf-8", errors="ignore")) for answer in answers)
-        answer_overhead = 18 * max(1, len(answers))
-        response_floor = max(70, query_floor + answer_bytes + answer_overhead + 12)
-        if query_type in {"TXT", "NULL"}:
-            response_slack = max(48, min(240, answer_bytes // 2 + 64))
-            response_ceiling = max(response_floor, min(1232, response_floor + response_slack))
-        else:
-            response_ceiling = max(response_floor, min(512, response_floor + 96))
-        normalized_resp = min(max(resp_bytes or 0, response_floor), response_ceiling)
+        response_payload_size = _dns_response_wire_size(
+            dns=dns,
+            question_size=question_size,
+            query_type=query_type,
+        )
+        normalized_resp = max(40, min(response_payload_size, 1232))
 
     normalized_duration = duration
     if dns.rtt is not None:
@@ -2405,6 +2527,22 @@ def _dns_registrable_domain(hostname: str) -> str:
     return dns_registrable_domain(hostname)
 
 
+def _dns_reverse_query(ip: str) -> str:
+    """Return the in-addr.arpa owner name for an IPv4 address."""
+    octets = ip.split(".")
+    return ".".join(reversed(octets)) + ".in-addr.arpa"
+
+
+def _public_dns_ptr_response(ip: str, forward_hostname: str | None) -> tuple[str, int, list[str]]:
+    """Return a resolver-visible public PTR response for companion lookups."""
+    rng = random.Random(_stable_seed(f"public_dns_ptr:{ip}:{forward_hostname or ''}"))
+    # Public reverse DNS is often absent for SaaS/CDN destinations observed
+    # through enterprise resolvers. Keep that incompleteness stable per tuple.
+    if rng.random() < 0.28:
+        return "NXDOMAIN", 3, []
+    return "NOERROR", 0, [_generate_rdns_name(rng, ip, forward_hostname)]
+
+
 def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
     """Return a stable provider-style public DNS profile for a domain."""
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
@@ -2459,7 +2597,10 @@ def _dns_soa_answer(domain: str, mname: str, rname: str, seed_context: str = "")
     owner = domain.lower().rstrip(".")
     seed = _stable_seed(f"dns_soa:{owner}:{mname}:{rname}:{seed_context}")
     rng = random.Random(seed)
-    serial = 2024000000 + rng.randint(10100, 123199)
+    # Avoid date-coded YYYYMMDDnn serials for generated companion answers.
+    # Without owning the zone's real edit history, arbitrary monotonically
+    # shaped serials are less misleading than future or invalid date encodings.
+    serial = 1_600_000_000 + rng.randint(0, 180_000_000)
     refresh = rng.choice((1800, 3600, 7200, 10800, 14400))
     retry = rng.choice((300, 600, 900, 1200, 1800))
     expire = rng.choice((604800, 1209600, 2419200))
@@ -3369,7 +3510,7 @@ class ActivityGenerator:
         self._proxy_mode = "transparent"
         self._proxy_listener_port = 8080
         self._explicit_proxy_tunnels: dict[
-            tuple[str, str, str, str, int], tuple[datetime, str]
+            tuple[str, str, str, str, int, str], tuple[datetime, str]
         ] = {}
         self._http_persistent_connections: dict[
             tuple[str, str, int, str, str], _HttpPersistentConnection
@@ -3398,6 +3539,7 @@ class ActivityGenerator:
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
+        self._linux_shell_last_session_close: dict[tuple[str, str], datetime] = {}
         self._linux_local_logon_syslog_sessions: set[str] = set()
         self._linux_local_logind_session_ids: dict[str, int] = {}
         self._ssh_session_ready_times: dict[str, datetime] = {}
@@ -5062,15 +5204,18 @@ class ActivityGenerator:
         hostname: str,
         dst_port: int,
         proxy_sys: System,
+        source_system: System | None = None,
     ) -> tuple[str, str] | None:
         """Map user-owned proxy User-Agents to the process that owns the socket."""
-        browser_hint = self._browser_http_client_process_hint(
-            user_agent=user_agent,
-            hostname=hostname,
-            dst_port=dst_port,
-        )
-        if browser_hint is not None:
-            return browser_hint
+        os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
+        if os_category == "windows":
+            browser_hint = self._browser_http_client_process_hint(
+                user_agent=user_agent,
+                hostname=hostname,
+                dst_port=dst_port,
+            )
+            if browser_hint is not None:
+                return browser_hint
 
         ua = (user_agent or "").lower()
         if not ua:
@@ -5081,9 +5226,58 @@ class ActivityGenerator:
             f"http://{self._proxy_fqdn(proxy_sys)}:{getattr(self, '_proxy_listener_port', 8080)}"
         )
 
+        if os_category == "linux":
+            if "firefox/" in ua:
+                return "/usr/bin/firefox", f"firefox --new-window {target_url}"
+            if "edg/" in ua or "edge/" in ua:
+                return "/usr/bin/microsoft-edge", f"microsoft-edge {target_url}"
+            if "opr/" in ua or "opera/" in ua:
+                return "/usr/bin/opera", f"opera {target_url}"
+            if "chrome/" in ua and "google update" not in ua:
+                return "/usr/bin/google-chrome", f"google-chrome {target_url}"
+            if ua.startswith("curl/") or " curl/" in ua:
+                return "/usr/bin/curl", f"curl --proxy {proxy_url} {target_url}"
+            if ua.startswith("wget/") or " wget/" in ua:
+                return (
+                    "/usr/bin/wget",
+                    f"wget -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
+                )
+            if ua.startswith("python-requests/"):
+                return (
+                    "/usr/bin/python3",
+                    f"python3 -c 'import requests; requests.get(\"{target_url}\")'",
+                )
+            if ua.startswith("go-http-client/"):
+                return "/usr/local/bin/service-healthcheck", (
+                    f"service-healthcheck --url {target_url}"
+                )
+            if ua.startswith("apache-httpclient/"):
+                return "/usr/bin/java", (
+                    f"java -jar /opt/meridian/integration-worker.jar --check-url {target_url}"
+                )
+            if "apt-http" in ua:
+                return "/usr/bin/apt-get", "apt-get update"
+            if "libdnf" in ua:
+                return "/usr/bin/dnf", "dnf makecache"
+            if "powershell" in ua or "invoke-webrequest" in ua:
+                return "/usr/bin/pwsh", f"pwsh -NoProfile -Command Invoke-WebRequest {target_url}"
+            return None
+
         if ua.startswith("curl/") or " curl/" in ua:
             image = r"C:\Windows\System32\curl.exe"
             return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
+        if ua.startswith("wget/") or " wget/" in ua:
+            image = r"C:\Program Files\GnuWin32\bin\wget.exe"
+            return image, f'wget.exe -e use_proxy=yes -e http_proxy={proxy_url} "{target_url}"'
+        if ua.startswith("python-requests/"):
+            image = r"C:\Python311\python.exe"
+            return image, f"python.exe -c \"import requests; requests.get('{target_url}')\""
+        if ua.startswith("go-http-client/"):
+            image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
+            return image, f'"{image}" --url "{target_url}"'
+        if ua.startswith("apache-httpclient/"):
+            image = r"C:\Program Files\Eclipse Adoptium\jdk-17\bin\java.exe"
+            return image, f'"{image}" -jar C:\\ProgramData\\Meridian\\integration-worker.jar'
         if "powershell" in ua or "invoke-webrequest" in ua:
             image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
             return image, (
@@ -5334,13 +5528,15 @@ class ActivityGenerator:
     ) -> tuple[int, str | None]:
         """Create or reuse the process that source-natively owns a proxy client socket."""
         if source_system is None or _get_os_category(source_system.os) != "windows":
-            return -1, None
+            if source_system is None or _get_os_category(source_system.os) != "linux":
+                return -1, None
 
         hint = self._explicit_proxy_client_process_hint(
             user_agent=proxy_context.user_agent,
             hostname=proxy_context.host,
             dst_port=dst_port,
             proxy_sys=proxy_sys,
+            source_system=source_system,
         )
         if hint is None:
             return -1, None
@@ -5370,7 +5566,8 @@ class ActivityGenerator:
             )
             return proc.pid, proc.image
 
-        if image_lower.endswith(tuple(_WINDOWS_BROWSER_EXES)):
+        os_category = _get_os_category(source_system.os)
+        if os_category == "windows" and image_lower.endswith(tuple(_WINDOWS_BROWSER_EXES)):
             parsed_url = urlsplit(proxy_context.url or "")
             proxy_uri = parsed_url.path or "/"
             if not self._browser_target_allows_top_level_launch(proxy_context.host, proxy_uri):
@@ -5390,7 +5587,11 @@ class ActivityGenerator:
                 f"{source_system.hostname}:{user.username}:{image}:{proxy_context.host}"
             )
         )
-        process_lifetime = _windows_foreground_lifetime(image, command_line)
+        process_lifetime = (
+            _windows_foreground_lifetime(image, command_line)
+            if os_category == "windows"
+            else _linux_foreground_lifetime(image, command_line)
+        )
         if process_lifetime is not None:
             lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
         else:
@@ -5643,6 +5844,102 @@ class ActivityGenerator:
             pid=-1,
         )
 
+    @staticmethod
+    def _proxy_origin_port_from_http(http: HttpContext) -> int:
+        """Return the origin port represented by a client-to-proxy HTTP request."""
+        if (http.method or "").upper() == "CONNECT":
+            target = http.uri or http.host or ""
+            _host, separator, port_text = target.rpartition(":")
+            if separator and port_text.isdigit():
+                port = int(port_text)
+                if 1 <= port <= 65535:
+                    return port
+            return 443
+        url = http.uri or ""
+        if url.startswith(("http://", "https://")):
+            try:
+                parsed = urlsplit(url)
+            except ValueError:
+                return 443 if url.startswith("https://") else 80
+            if parsed.port is not None:
+                return parsed.port
+            return 443 if parsed.scheme == "https" else 80
+        return 80
+
+    def _repair_explicit_proxy_listener_process_attribution(
+        self,
+        event: SecurityEvent,
+        *,
+        source_system: System | None,
+        time: datetime,
+    ) -> None:
+        """Apply proxy client process ownership to direct client-to-proxy HTTP flows."""
+        if source_system is None or event.http is None or event.network is None:
+            return
+        if event.network.dst_port != getattr(self, "_proxy_listener_port", 8080):
+            return
+        proxy_sys = getattr(self, "_ip_to_system", {}).get(event.network.dst_ip)
+        if proxy_sys is None or "forward_proxy" not in (proxy_sys.roles or []):
+            return
+
+        proxy_context = ProxyContext(
+            client_ip=event.network.src_ip,
+            method=event.http.method,
+            url=event.http.uri,
+            host=event.http.host,
+            status_code=event.http.status_code,
+            user_agent=event.http.user_agent,
+            proxy_fqdn=self._proxy_fqdn(proxy_sys),
+        )
+        origin_port = self._proxy_origin_port_from_http(event.http)
+        current_pid = event.network.initiating_pid
+        current_image = event.process.image if event.process is not None else None
+        if current_pid > 0:
+            caller_process_image = self._caller_explicit_proxy_process_image(
+                source_system=source_system,
+                pid=current_pid,
+                process_image=current_image,
+                time=time,
+                proxy_context=proxy_context,
+                proxy_sys=proxy_sys,
+                dst_port=origin_port,
+            )
+            if caller_process_image is not None:
+                self._set_connection_process_context(
+                    event,
+                    source_system=source_system,
+                    pid=current_pid,
+                    image=caller_process_image,
+                )
+                self.state_manager.update_process_activity_time(
+                    source_system.hostname,
+                    current_pid,
+                    time,
+                )
+                return
+
+        client_pid, client_image = self._ensure_explicit_proxy_client_process(
+            source_system=source_system,
+            time=time,
+            proxy_context=proxy_context,
+            proxy_sys=proxy_sys,
+            dst_port=origin_port,
+        )
+        if client_pid > 0:
+            self._set_connection_process_context(
+                event,
+                source_system=source_system,
+                pid=client_pid,
+                image=client_image,
+            )
+            return
+
+        self._set_connection_process_context(
+            event,
+            source_system=source_system,
+            pid=-1,
+        )
+
     def _caller_explicit_proxy_process_image(
         self,
         *,
@@ -5671,14 +5968,12 @@ class ActivityGenerator:
         if not candidate_image:
             return None
 
-        if _get_os_category(source_system.os) != "windows":
-            return candidate_image
-
         hint = self._explicit_proxy_client_process_hint(
             user_agent=proxy_context.user_agent,
             hostname=proxy_context.host,
             dst_port=dst_port,
             proxy_sys=proxy_sys,
+            source_system=source_system,
         )
         if hint is None:
             return candidate_image
@@ -5688,9 +5983,23 @@ class ActivityGenerator:
             return candidate_image
         expected_exe = ntpath.basename(expected_image).lower()
         candidate_exe = ntpath.basename(candidate_image).lower()
-        if expected_exe in _WINDOWS_BROWSER_EXES and candidate_exe in _WINDOWS_BROWSER_EXES:
+        proxy_browser_exes = _WINDOWS_BROWSER_EXES | {
+            "chromium",
+            "chromium-browser",
+            "firefox",
+            "google-chrome",
+            "microsoft-edge",
+            "opera",
+        }
+        if expected_exe in proxy_browser_exes and candidate_exe in proxy_browser_exes:
             return None
-        if self._windows_proxy_pid_should_be_replaced(running):
+        os_category = _get_os_category(source_system.os)
+        if os_category == "windows" and self._windows_proxy_pid_should_be_replaced(running):
+            return None
+        if os_category == "linux" and self._linux_proxy_pid_should_be_replaced(
+            running,
+            expected_exe=expected_exe,
+        ):
             return None
         return candidate_image
 
@@ -5700,10 +6009,72 @@ class ActivityGenerator:
         image = str(getattr(process, "image", "") or "")
         command_line = str(getattr(process, "command_line", "") or "")
         exe_name = ntpath.basename(image).lower()
+        unrelated_user_app_exes = {
+            "acrobat.exe",
+            "devicesyncsvc.exe",
+            "dropbox.exe",
+            "dropboxupdate.exe",
+            "excel.exe",
+            "googledrivefs.exe",
+            "outlook.exe",
+            "onedrive.exe",
+            "pangpa.exe",
+            "postman.exe",
+            "python.exe",
+            "python3.exe",
+            "selfservice.exe",
+            "slack.exe",
+            "teams.exe",
+            "vpnui.exe",
+            "webex.exe",
+            "winword.exe",
+            "zoom.exe",
+            "zsatray.exe",
+        }
         return (
             _windows_service_process_account(image, command_line) is not None
             or exe_name in _WINDOWS_SINGLETON_SERVICE_EXES
+            or exe_name in unrelated_user_app_exes
         )
+
+    @staticmethod
+    def _linux_proxy_pid_should_be_replaced(process: Any, *, expected_exe: str) -> bool:
+        """Return whether a Linux PID is source-native noise for a proxy client socket."""
+        image = str(getattr(process, "image", "") or "")
+        exe_name = image.rsplit("/", 1)[-1].lower()
+        if exe_name == expected_exe:
+            return False
+        return exe_name in {
+            "apache2",
+            "bash",
+            "cat",
+            "cargo",
+            "curl",
+            "docker",
+            "git",
+            "grep",
+            "head",
+            "httpd",
+            "java",
+            "journalctl",
+            "kubectl",
+            "less",
+            "ls",
+            "nano",
+            "nginx",
+            "npm",
+            "php-fpm",
+            "ps",
+            "python",
+            "python3",
+            "sed",
+            "service-healthcheck",
+            "sh",
+            "systemctl",
+            "tail",
+            "vim",
+            "zsh",
+        }
 
     def _attach_ssl_context(
         self,
@@ -7665,6 +8036,14 @@ class ActivityGenerator:
                 )
                 if time <= min_logoff_time:
                     time = min_logoff_time
+            if (
+                _get_os_category(system.os) == "linux"
+                and session.session_kind not in {"network", "service"}
+                and session.logon_type not in {3, 5}
+            ):
+                self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
+                    time
+                )
             if session.explorer_pid is not None:
                 self.state_manager.end_process(session.system, session.explorer_pid)
             # Clean up per-RDP-session winlogon chain
@@ -9144,8 +9523,13 @@ class ActivityGenerator:
                     scenario_start + timedelta(milliseconds=400 + (seed % 1800)),
                 )
 
+        strict_server_session = (
+            source_system.type or "workstation"
+        ).lower() == "server" and getattr(self, "_scenario_start_time", None) is not None
         session = self._active_source_linux_session(user, source_system, requested_time)
         if session is None:
+            if strict_server_session:
+                return None
             logon_time = process_time - timedelta(seconds=7 + (seed % 9))
             logon_id = self.generate_logon(
                 user,
@@ -9201,6 +9585,12 @@ class ActivityGenerator:
         )
         self._record_user_process(source_system, user, pid, image)
         self._emit_bash_command_event(user, source_system, process_time, command_line)
+        self._remember_linux_bash_session_activity(
+            user,
+            source_system,
+            process_time,
+            requested_time,
+        )
         self.state_manager.update_process_activity_time(source_system.hostname, pid, requested_time)
         self.state_manager.set_current_time(requested_time)
         return pid, image
@@ -9212,11 +9602,15 @@ class ActivityGenerator:
         time: datetime,
     ) -> ActiveSession | None:
         """Return the newest active Linux session that can launch an SSH client."""
+        strict_server_session = (system.type or "workstation").lower() == "server" and getattr(
+            self, "_scenario_start_time", None
+        ) is not None
         candidates = [
             session
             for session in self.state_manager.get_sessions_for_user_at(user.username, time)
             if session.system == system.hostname
             and _session_active_for_activity(session, time, margin_seconds=1.5)
+            and (not strict_server_session or session.session_kind == "ssh")
         ]
         if not candidates:
             return None
@@ -10245,22 +10639,43 @@ class ActivityGenerator:
                     resp_bytes=resp_bytes,
                 )
         elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
-            duration = min(
-                duration
-                or _jitter_default_connection_duration(
-                    0.02,
-                    caller_provided_duration=False,
-                    seed_parts=(src_ip, dst_ip, dst_port, time, "dns_default"),
-                ),
-                0.08,
-            )
-            orig_bytes = min(max(orig_bytes or 40, 40), 260)
-            if resp_bytes is None:
-                resp_bytes = 120
-            elif resp_bytes <= 0:
-                resp_bytes = 0
+            if hostname and resp_bytes is not None and resp_bytes > 0:
+                dns_query = (
+                    hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
+                )
+                fallback_dns = DnsContext(
+                    query=dns_query,
+                    trans_id=0,
+                    qtype=1,
+                    query_type="A",
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=[dst_ip],
+                    rtt=duration,
+                )
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
+                    dns=fallback_dns,
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                )
             else:
-                resp_bytes = min(max(resp_bytes, 70), 512)
+                duration = min(
+                    duration
+                    or _jitter_default_connection_duration(
+                        0.02,
+                        caller_provided_duration=False,
+                        seed_parts=(src_ip, dst_ip, dst_port, time, "dns_default"),
+                    ),
+                    0.08,
+                )
+                orig_bytes = min(max(orig_bytes or 40, 40), 260)
+                if resp_bytes is None:
+                    resp_bytes = 120
+                elif resp_bytes <= 0:
+                    resp_bytes = 0
+                else:
+                    resp_bytes = min(max(resp_bytes, 70), 512)
 
         if (
             service == "dns"
@@ -10339,8 +10754,8 @@ class ActivityGenerator:
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
-            orig_bytes = max(orig_bytes or 0, rng.randint(35, 95))
-            resp_bytes = max(resp_bytes or 0, rng.randint(80, 220))
+            orig_bytes = max(orig_bytes or 0, 28)
+            resp_bytes = max(resp_bytes or 0, 40)
             if dns.rtt is not None and (duration is None or duration < dns.rtt):
                 duration = dns.rtt
         elif conn_state is not None:
@@ -10793,6 +11208,17 @@ class ActivityGenerator:
         target_has_ssh = target_system is not None and "ssh" in {
             str(service_name).lower() for service_name in (target_system.services or [])
         }
+        if (
+            target_system is not None
+            and dst_host_ctx is not None
+            and dst_host_ctx.os_category == "windows"
+            and responding_pid <= 0
+        ):
+            responding_pid = self._resolve_windows_inbound_service_pid(
+                target_system,
+                dst_port,
+                time,
+            )
         if (
             dst_host_ctx is not None
             and dst_host_ctx.os_category == "linux"
@@ -11555,6 +11981,11 @@ class ActivityGenerator:
                 event.network.resp_bytes or 0,
             )
 
+        self._repair_explicit_proxy_listener_process_attribution(
+            event,
+            source_system=resolved_source_system,
+            time=time,
+        )
         self._repair_browser_http_process_attribution(
             event,
             source_system=resolved_source_system,
@@ -11633,6 +12064,31 @@ class ActivityGenerator:
                 protocol=proto,
                 pid=pid,
                 application=wfp_application,
+            )
+
+        if (
+            target_system is not None
+            and dst_host_ctx is not None
+            and dst_host_ctx.os_category == "windows"
+            and not event.network.application_layer_only
+            and self._should_emit_windows_inbound_wfp(event, target_system)
+        ):
+            inbound_pid = event.network.responding_pid
+            inbound_application = self._lookup_process_name(
+                target_system.hostname,
+                inbound_pid,
+                "windows",
+            )
+            self.generate_wfp_connection(
+                system=target_system,
+                time=time,
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=target_system.ip,
+                dst_port=dst_port,
+                protocol=proto,
+                pid=inbound_pid,
+                application=inbound_application,
             )
 
         if pid > 0 and resolved_source_system is not None and process_ctx is not None:
@@ -12394,7 +12850,7 @@ class ActivityGenerator:
         system: System,
         requested_time: datetime,
         command: str,
-    ) -> datetime:
+    ) -> datetime | None:
         """Preserve foreground command dwell time for one user's shell history."""
         requested_time = self._align_linux_bash_after_session_ready(
             user,
@@ -12404,7 +12860,21 @@ class ActivityGenerator:
         )
         key = (system.hostname, user.username)
         scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
+        scheduled_time = self._fit_bash_history_time_to_linux_session(
+            user,
+            system,
+            scheduled_time,
+        )
+        if scheduled_time is None:
+            return None
         scheduled_time = self._reserve_bash_history_second(user, system, scheduled_time, command)
+        scheduled_time = self._fit_bash_history_time_to_linux_session(
+            user,
+            system,
+            scheduled_time,
+        )
+        if scheduled_time is None:
+            return None
         dwell_seconds = _bash_command_dwell_seconds(command)
         jitter_rng = random.Random(
             _stable_seed(
@@ -12434,9 +12904,84 @@ class ActivityGenerator:
         else:
             dwell_seconds = max(dwell_seconds, dwell_seconds * jitter_rng.uniform(0.95, 1.35))
             self._bash_history_quick_streaks[key] = 0
+        completion_time = scheduled_time + timedelta(seconds=dwell_seconds)
         self._bash_history_command_counts[key] = self._bash_history_command_counts.get(key, 0) + 1
-        self._bash_history_next_time[key] = scheduled_time + timedelta(seconds=dwell_seconds)
+        self._bash_history_next_time[key] = completion_time
+        self._remember_linux_bash_session_activity(
+            user,
+            system,
+            scheduled_time,
+            completion_time,
+        )
         return scheduled_time
+
+    def _remember_linux_bash_session_activity(
+        self,
+        user: User,
+        system: System,
+        scheduled_time: datetime,
+        completion_time: datetime,
+    ) -> None:
+        """Record shell-history activity on the concrete session that owns it."""
+        if _get_os_category(system.os) != "linux":
+            return
+        activity_time = ensure_utc(scheduled_time)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type not in {3, 5}
+            and _session_started_by(session, activity_time)
+        ]
+        if not sessions:
+            return
+        session = max(sessions, key=lambda candidate: ensure_utc(candidate.start_time))
+        marker = ensure_utc(completion_time)
+        if session.network_close_time is not None:
+            network_close_time = ensure_utc(session.network_close_time)
+            marker = min(marker, network_close_time - timedelta(milliseconds=900))
+        if session.last_activity_time is None or marker > ensure_utc(session.last_activity_time):
+            session.last_activity_time = marker
+
+    def _fit_bash_history_time_to_linux_session(
+        self,
+        user: User,
+        system: System,
+        scheduled_time: datetime,
+    ) -> datetime | None:
+        """Return a concrete session-owned bash timestamp for Linux shell history."""
+        if _get_os_category(system.os) != "linux":
+            return scheduled_time
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type not in {3, 5}
+        ]
+        strict_server_session = (system.type or "workstation").lower() == "server" and getattr(
+            self, "_scenario_start_time", None
+        ) is not None
+        if not sessions:
+            if strict_server_session:
+                return None
+            last_close = self._linux_shell_last_session_close.get((system.hostname, user.username))
+            if last_close is not None and ensure_utc(scheduled_time) >= ensure_utc(last_close):
+                return None
+            return scheduled_time
+
+        activity_time = ensure_utc(scheduled_time)
+        sessions.sort(key=lambda session: ensure_utc(session.start_time))
+        for session in sessions:
+            window_start = _session_source_ready_time(session) or ensure_utc(session.start_time)
+            window_end = getattr(session, "network_close_time", None)
+            if window_end is not None:
+                window_end = ensure_utc(window_end) - timedelta(milliseconds=900)
+            candidate_time = max(activity_time, window_start)
+            if window_end is None or candidate_time < window_end:
+                return candidate_time
+        return None
 
     def _align_linux_bash_after_session_ready(
         self,
@@ -13056,8 +13601,7 @@ class ActivityGenerator:
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
-            octets = dst_ip.split(".")
-            query = ".".join(reversed(octets)) + ".in-addr.arpa"
+            query = _dns_reverse_query(dst_ip)
             if _is_private_ip(dst_ip):
                 answers = [hostname]
             else:
@@ -13179,6 +13723,8 @@ class ActivityGenerator:
             )[0]
             companion_query = hostname
             companion_answers: list[str] = []
+            companion_rcode = "NOERROR"
+            companion_rcode_num = 0
             companion_qtype = 28
             if companion_kind == "AAAA":
                 companion_qtype = 28
@@ -13189,9 +13735,15 @@ class ActivityGenerator:
                 ]
             elif companion_kind == "PTR":
                 companion_qtype = 12
-                octets = dst_ip.split(".")
-                companion_query = ".".join(reversed(octets)) + ".in-addr.arpa"
-                companion_answers = [hostname]
+                companion_query = _dns_reverse_query(dst_ip)
+                if _is_private_ip(dst_ip):
+                    companion_answers = [hostname]
+                else:
+                    (
+                        companion_rcode,
+                        companion_rcode_num,
+                        companion_answers,
+                    ) = _public_dns_ptr_response(dst_ip, hostname)
             elif companion_kind == "NS":
                 companion_qtype = 2
                 companion_query = _dns_registrable_domain(hostname)
@@ -13238,8 +13790,8 @@ class ActivityGenerator:
                 trans_id=rng.randint(1, 65535),
                 qtype=companion_qtype,
                 query_type=companion_kind,
-                rcode="NOERROR",
-                rcode_num=0,
+                rcode=companion_rcode,
+                rcode_num=companion_rcode_num,
                 answers=companion_answers,
                 TTLs=companion_ttls,
                 rtt=_dns_rtt(rng, dns_server_ip),
@@ -13943,7 +14495,9 @@ class ActivityGenerator:
                         process_time = self._schedule_bash_history_time(
                             user, system, time, command_line
                         )
-                        if not self._is_within_scenario_window(process_time):
+                        if process_time is None or not self._is_within_scenario_window(
+                            process_time
+                        ):
                             return
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
@@ -14132,7 +14686,7 @@ class ActivityGenerator:
                     process_time = self._schedule_bash_history_time(
                         user, system, time, command_line
                     )
-                    if not self._is_within_scenario_window(process_time):
+                    if process_time is None or not self._is_within_scenario_window(process_time):
                         return
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
@@ -15005,6 +15559,47 @@ class ActivityGenerator:
             f"{system.hostname}:{user.username}:{logon_id}:{time.isoformat()}"
         )
         return timedelta(milliseconds=80 + (seed % 571))
+
+    def _resolve_windows_inbound_service_pid(
+        self,
+        system: System,
+        dst_port: int,
+        time: datetime,
+    ) -> int:
+        """Return a destination-local Windows service PID for inbound audit rows."""
+
+        if _get_os_category(system.os) != "windows":
+            return -1
+
+        system_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in _WINDOWS_INBOUND_SERVICE_PID_CANDIDATES.get(dst_port, ()):
+            pid = int(system_pids.get(role, -1) or -1)
+            if pid > 0 and self._is_pid_active_at(system, pid, time):
+                return pid
+        return -1
+
+    @staticmethod
+    def _should_emit_windows_inbound_wfp(event: SecurityEvent, target_system: System) -> bool:
+        """Return whether a canonical connection should create target-side 5156 evidence."""
+
+        net = event.network
+        if net is None or net.responding_pid <= 0:
+            return False
+        if net.dst_ip == net.src_ip or net.dst_ip != target_system.ip:
+            return False
+        if event.firewall is not None and event.firewall.action == "deny":
+            return False
+        proto = net.protocol.lower()
+        if proto == "tcp":
+            if net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}:
+                return False
+            history = net.history or ""
+            if not net.conn_state and not history:
+                return True
+            return any(marker in history for marker in ("h", "a", "d", "r", "f"))
+        if proto in {"udp", "icmp"}:
+            return net.conn_state not in {"S0", "REJ", "OTH"}
+        return False
 
     def generate_wfp_connection(
         self,
@@ -17426,6 +18021,34 @@ class ActivityGenerator:
         "msedge.exe",
         "iexplore.exe",
     }
+    _WINDOWS_SERVICE_SHELL_CHILDREN = {
+        "arp.exe",
+        "certutil.exe",
+        "dcdiag.exe",
+        "dnscmd.exe",
+        "dsquery.exe",
+        "gpresult.exe",
+        "gpupdate.exe",
+        "hostname.exe",
+        "ipconfig.exe",
+        "klist.exe",
+        "net.exe",
+        "net1.exe",
+        "nltest.exe",
+        "nslookup.exe",
+        "ping.exe",
+        "reg.exe",
+        "repadmin.exe",
+        "route.exe",
+        "sc.exe",
+        "schtasks.exe",
+        "systeminfo.exe",
+        "tasklist.exe",
+        "tracert.exe",
+        "wevtutil.exe",
+        "whoami.exe",
+        "wmic.exe",
+    }
     # GUI apps that users launch from Start Menu / desktop — always parent=explorer.exe
     _WINDOWS_GUI_APPS = {
         "outlook.exe",
@@ -17463,6 +18086,56 @@ class ActivityGenerator:
         if proc is None:
             return False
         return self._is_one_shot_shell_command(proc.image, proc.command_line)
+
+    def _ensure_windows_service_shell_parent(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        child_exe: str,
+        child_command_line: str = "",
+    ) -> int | None:
+        """Create a short-lived SYSTEM shell for service-context admin utilities."""
+        if _get_os_category(system.os) != "windows":
+            return None
+        if child_exe not in self._WINDOWS_SERVICE_SHELL_CHILDREN:
+            return None
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        parent_pid = sys_pids.get(
+            "svchost_netsvcs",
+            sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
+        )
+        shell_time = time - timedelta(
+            milliseconds=120
+            + (_stable_seed(f"windows-service-shell:{system.hostname}:{child_exe}:{time}") % 90)
+        )
+        session = self.state_manager.get_session(logon_id)
+        if session is not None and shell_time <= session.start_time:
+            shell_time = session.start_time + timedelta(milliseconds=40)
+        if shell_time >= time:
+            shell_time = time - timedelta(milliseconds=40)
+
+        rendered_child = child_command_line.strip() or child_exe
+        shell_command = f"C:\\Windows\\System32\\cmd.exe /c {rendered_child}"
+        shell_pid = self.generate_process(
+            user=user,
+            system=system,
+            time=shell_time,
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line=shell_command,
+            parent_pid=parent_pid,
+            ensure_file_event=False,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+        self._record_user_process(system, user, shell_pid, r"C:\Windows\System32\cmd.exe")
+        return shell_pid
 
     def _linux_anchor_pid(self, system: System, time: datetime) -> int:
         """Return a tracked Linux init/systemd process for parent-chain fallbacks."""
@@ -17909,6 +18582,7 @@ class ActivityGenerator:
         time: datetime,
         logon_id: str,
         process_name: str,
+        command_line: str = "",
     ) -> int:
         """Resolve the parent PID for a process using spawn rules.
 
@@ -17952,6 +18626,16 @@ class ActivityGenerator:
                 return sys_pids.get(
                     "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
                 )
+            shell_parent_pid = self._ensure_windows_service_shell_parent(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=logon_id,
+                child_exe=exe_name,
+                child_command_line=command_line,
+            )
+            if shell_parent_pid is not None:
+                return shell_parent_pid
             return sys_pids.get(
                 "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
             )
@@ -18009,6 +18693,16 @@ class ActivityGenerator:
                 return sys_pids.get(
                     "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
                 )
+            shell_parent_pid = self._ensure_windows_service_shell_parent(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=logon_id,
+                child_exe=exe_name,
+                child_command_line=command_line,
+            )
+            if shell_parent_pid is not None:
+                return shell_parent_pid
             return sys_pids.get(
                 "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
             )
@@ -18018,6 +18712,16 @@ class ActivityGenerator:
                     "svchost_netsvcs",
                     sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
                 )
+            shell_parent_pid = self._ensure_windows_service_shell_parent(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=logon_id,
+                child_exe=exe_name,
+                child_command_line=command_line,
+            )
+            if shell_parent_pid is not None:
+                return shell_parent_pid
             return sys_pids.get(
                 "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
             )

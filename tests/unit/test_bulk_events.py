@@ -899,6 +899,78 @@ class TestPortScanTargetResolution:
         assert connection_kwargs["src_ip"] == "185.70.41.45"
         assert connection_kwargs["dst_ip"] == "203.14.220.10"
 
+    def test_external_port_scan_honors_firewall_policy_denial(self):
+        """Public scan probes should not look open when firewall policy denies the port."""
+        from unittest.mock import Mock
+
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        web = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2"],
+            roles=["web_server"],
+        )
+        network = NetworkConfig(
+            public_cidrs=["203.14.220.0/28"],
+            segments=[NetworkSegment(name="dmz", cidr="10.10.3.0/24", exposure="both")],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw-perimeter",
+                    monitoring_segments=["dmz"],
+                    log_formats=["cisco_asa"],
+                    default_action="deny",
+                    drop_mode="drop",
+                )
+            ],
+        )
+
+        class Visibility:
+            _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def get_public_inbound_address(ip: str) -> str | None:
+                return "203.14.220.10" if ip == "10.10.3.10" else None
+
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[web], network=network)
+        )
+        engine.dispatcher = SimpleNamespace(visibility_engine=Visibility())
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {web.ip: web}
+        engine._evaluate_firewall_policy = lambda *args: "deny"
+        engine._resolve_firewall_interface = lambda ip: (
+            "outside" if ip.startswith("185.") else "dmz"
+        )
+
+        spec = PortScanEventSpec(
+            source_ip="185.70.41.45",
+            target_ips=["10.10.3.10"],
+            ports=[8080],
+            scan_rate=10,
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="apache", full_name="Apache", email="apache@example.com"),
+            system=web,
+            time=start,
+            activity="External DMZ scan",
+            explicit_types={"port_scan"},
+        )
+
+        connection_kwargs = engine.activity_generator.generate_connection.call_args.kwargs
+        assert connection_kwargs["dst_ip"] == "203.14.220.10"
+        assert connection_kwargs["dst_port"] == 8080
+        assert connection_kwargs["service"] == ""
+        assert connection_kwargs["conn_state"] == "S0"
+        assert connection_kwargs["resp_bytes"] == 0
+        assert connection_kwargs["firewall"].action == "deny"
+
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────
 

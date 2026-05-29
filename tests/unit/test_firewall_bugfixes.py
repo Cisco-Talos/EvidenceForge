@@ -396,13 +396,13 @@ class TestEvaluateFirewallPolicy:
 
         return FakeMixin()
 
-    def _make_sensor(self, policy, default_action="deny"):
+    def _make_sensor(self, policy, default_action="deny", monitoring_segments=None):
         from evidenceforge.models.scenario import FirewallRule, NetworkSensor
 
         return NetworkSensor(
             type="firewall",
             name="fw01",
-            monitoring_segments=["internal", "dmz"],
+            monitoring_segments=monitoring_segments or ["internal", "dmz"],
             log_formats=["cisco_asa"],
             default_action=default_action,
             policy=[FirewallRule(**rule) for rule in policy],
@@ -412,6 +412,7 @@ class TestEvaluateFirewallPolicy:
         return {
             "internal": ipaddress.ip_network("10.0.10.0/24"),
             "dmz": ipaddress.ip_network("172.16.0.0/24"),
+            "database": ipaddress.ip_network("10.0.20.0/24"),
         }
 
     def test_default_deny_no_rules(self):
@@ -472,3 +473,59 @@ class TestEvaluateFirewallPolicy:
             "203.0.113.1", "172.16.0.5", 445, sensor, self._segment_cidrs()
         )
         assert result == "deny"
+
+    def test_firewall_path_requires_both_internal_segments(self):
+        mixin = self._make_baseline_mixin()
+        sensor = self._make_sensor(policy=[], monitoring_segments=["internal", "dmz"])
+
+        assert (
+            mixin._firewall_controls_connection_path(
+                "10.0.10.50",
+                "10.0.20.5",
+                sensor,
+                self._segment_cidrs(),
+            )
+            is False
+        )
+
+    def test_firewall_path_allows_monitored_internal_pair(self):
+        mixin = self._make_baseline_mixin()
+        sensor = self._make_sensor(policy=[], monitoring_segments=["internal", "dmz"])
+
+        assert (
+            mixin._firewall_controls_connection_path(
+                "10.0.10.50",
+                "172.16.0.5",
+                sensor,
+                self._segment_cidrs(),
+            )
+            is True
+        )
+
+    def test_firewall_path_allows_external_to_monitored_segment(self):
+        mixin = self._make_baseline_mixin()
+        sensor = self._make_sensor(policy=[], monitoring_segments=["dmz"])
+
+        assert (
+            mixin._firewall_controls_connection_path(
+                "203.0.113.45",
+                "172.16.0.5",
+                sensor,
+                self._segment_cidrs(),
+            )
+            is True
+        )
+
+    def test_firewall_path_allows_monitored_segment_to_external(self):
+        mixin = self._make_baseline_mixin()
+        sensor = self._make_sensor(policy=[], monitoring_segments=["internal"])
+
+        assert (
+            mixin._firewall_controls_connection_path(
+                "10.0.10.50",
+                "198.51.100.25",
+                sensor,
+                self._segment_cidrs(),
+            )
+            is True
+        )

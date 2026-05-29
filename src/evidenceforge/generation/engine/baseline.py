@@ -61,7 +61,9 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _linux_foreground_lifetime,
     _linux_uid_for_user,
+    _nmap_target_exposes_port,
     _ntp_association_poll_seconds,
+    _service_for_port,
     _windows_foreground_lifetime,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
@@ -122,6 +124,35 @@ def _ufw_block_ttl(src_ip: str) -> int:
         initial = rng.choices((64, 128, 255), weights=(58, 36, 6), k=1)[0]
         hops = rng.randint(7, 30) if initial == 255 else rng.randint(5, 24)
     return max(32, initial - hops)
+
+
+def _baseline_inbound_ids_probe_profile(
+    *,
+    rng: random.Random,
+    proto: str,
+    dst_port: int,
+    target_system: System | None,
+    policy_denied: bool,
+    deny_conn_state: str,
+) -> tuple[str, str | None, float, int, int]:
+    """Return service/connection fields for an inbound IDS companion connection."""
+    if proto != "tcp":
+        return "", None, rng.uniform(0.001, 5.0), rng.randint(40, 2000), rng.randint(0, 1000)
+
+    if policy_denied or not _nmap_target_exposes_port(dst_port, target_system):
+        conn_state = "REJ" if deny_conn_state == "REJ" else "S0"
+        if conn_state == "REJ":
+            return (
+                "",
+                conn_state,
+                rng.uniform(0.003, 0.18),
+                rng.randint(40, 120),
+                rng.randint(40, 96),
+            )
+        return "", conn_state, rng.uniform(1.2, 7.0), rng.randint(40, 96), 0
+
+    service = _service_for_port(dst_port) or {443: "ssl", 80: "http", 53: "dns"}.get(dst_port, "")
+    return service, None, rng.uniform(0.001, 5.0), rng.randint(40, 2000), rng.randint(0, 1000)
 
 
 def _ntp_sync_interval_seconds(
@@ -409,6 +440,109 @@ def _eligible_for_hourly_module_load(proc: Any, time: datetime) -> bool:
     return time <= max_follow_on
 
 
+def _bounded_lognormal_seconds(
+    rng: random.Random,
+    *,
+    minimum: float,
+    median: float,
+    p95: float,
+    maximum: float,
+) -> float:
+    """Return a bounded heavy-tailed duration in seconds."""
+    sigma = max(0.18, math.log(max(p95, median + 1.0) / max(median, 1.0)) / 1.645)
+    sample = rng.lognormvariate(math.log(max(median, 1.0)), sigma)
+    if rng.random() < 0.08:
+        sample *= rng.uniform(1.2, 2.6)
+    return max(minimum, min(sample, maximum))
+
+
+def _windows_background_process_lifetime_seconds(
+    image: str,
+    command_line: str,
+    rng: random.Random,
+) -> float | None:
+    """Return a source-native background Windows process lifetime when bounded."""
+    foreground_lifetime = _windows_foreground_lifetime(image, command_line)
+    if foreground_lifetime is not None:
+        return rng.uniform(*foreground_lifetime)
+
+    exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    command = command_line.lower()
+    if exe_name == "mpcmdrun.exe":
+        if "-signatureupdate" in command:
+            return _bounded_lognormal_seconds(
+                rng, minimum=4.0, median=28.0, p95=180.0, maximum=420.0
+            )
+        return _bounded_lognormal_seconds(
+            rng, minimum=90.0, median=480.0, p95=1800.0, maximum=3600.0
+        )
+    if exe_name in {"cleanmgr.exe", "hpimageassistant.exe", "dcu-cli.exe"}:
+        return _bounded_lognormal_seconds(
+            rng, minimum=45.0, median=420.0, p95=1800.0, maximum=3600.0
+        )
+    if exe_name in {
+        "adobearm.exe",
+        "adobearmservice.exe",
+        "dropboxupdate.exe",
+        "googleupdate.exe",
+        "zoomupdate.exe",
+        "onedrivestandaloneupdater.exe",
+        "usoclient.exe",
+    }:
+        return _bounded_lognormal_seconds(rng, minimum=4.0, median=45.0, p95=360.0, maximum=900.0)
+    if exe_name == "tiworker.exe":
+        return _bounded_lognormal_seconds(
+            rng, minimum=90.0, median=900.0, p95=3600.0, maximum=7200.0
+        )
+    if exe_name == "wsqmcons.exe":
+        return _bounded_lognormal_seconds(rng, minimum=2.0, median=12.0, p95=75.0, maximum=180.0)
+    if exe_name == "conhost.exe":
+        return _bounded_lognormal_seconds(rng, minimum=1.0, median=18.0, p95=240.0, maximum=900.0)
+    if exe_name == "dllhost.exe":
+        return _bounded_lognormal_seconds(rng, minimum=3.0, median=75.0, p95=900.0, maximum=3600.0)
+    if exe_name == "wmiprvse.exe":
+        return _bounded_lognormal_seconds(
+            rng, minimum=30.0, median=420.0, p95=5400.0, maximum=14400.0
+        )
+    return None
+
+
+def _windows_stale_process_target_lifetime(
+    image: str,
+    command_line: str,
+    rng: random.Random,
+) -> float:
+    """Return a broad target lifetime for stale Windows process cleanup."""
+    bounded = _windows_background_process_lifetime_seconds(image, command_line, rng)
+    if bounded is not None:
+        return bounded
+
+    exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    if exe_name in {"chrome.exe", "firefox.exe", "msedge.exe", "outlook.exe", "teams.exe"}:
+        return _bounded_lognormal_seconds(
+            rng,
+            minimum=20 * 60.0,
+            median=3 * 3600.0,
+            p95=9 * 3600.0,
+            maximum=14 * 3600.0,
+        )
+    if exe_name in {"dropbox.exe", "onedrive.exe", "slack.exe", "zoom.exe", "code.exe"}:
+        return _bounded_lognormal_seconds(
+            rng,
+            minimum=15 * 60.0,
+            median=2.5 * 3600.0,
+            p95=8 * 3600.0,
+            maximum=12 * 3600.0,
+        )
+    return _bounded_lognormal_seconds(
+        rng,
+        minimum=10 * 60.0,
+        median=90 * 60.0,
+        p95=6 * 3600.0,
+        maximum=10 * 3600.0,
+    )
+
+
 def _kernel_uptime_stamp(boot_uptime: float, scenario_start: datetime, timestamp: datetime) -> str:
     """Return source-native kernel monotonic uptime for a syslog timestamp."""
     event_time = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
@@ -471,23 +605,66 @@ def _dns_context_for_ids_signature(
 
     from evidenceforge.events.contexts import DnsContext
 
-    dns_answer = _generate_random_external_ip(rng)
+    response_rng = random.Random(_stable_seed(f"ids_dns_response:{dns_query}"))
+    tld = dns_query.lower().rstrip(".").rsplit(".", 1)[-1]
+    odd_tld_outcomes: dict[str, tuple[tuple[str, int, list[str]], ...]] = {
+        "bit": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("REFUSED", 5, []),
+        ),
+        "cloud": (
+            ("NOERROR", 0, ["0.0.0.0"]),
+            ("NOERROR", 0, ["0.0.0.0"]),
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+        ),
+        "tk": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("NOERROR", 0, ["0.0.0.0"]),
+        ),
+        "to": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("NOERROR", 0, ["0.0.0.0"]),
+        ),
+        "top": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("NOERROR", 0, ["0.0.0.0"]),
+        ),
+    }
+    response_options = odd_tld_outcomes.get(tld)
+    if response_options is None:
+        rcode, rcode_num, answers = "NOERROR", 0, [_generate_random_external_ip(rng)]
+    else:
+        rcode, rcode_num, answers = response_rng.choice(response_options)
+    is_internal = _dns_is_internal_name(dns_query, ad_domain)
     return DnsContext(
         query=dns_query,
         trans_id=rng.randint(1, 65535),
         qtype=1,
         query_type="A",
-        rcode="NOERROR",
-        rcode_num=0,
-        answers=[dns_answer],
+        rcode=rcode,
+        rcode_num=rcode_num,
+        answers=list(answers),
         TTLs=[
             float(
                 _dns_base_ttl(
                     dns_query,
-                    _dns_is_internal_name(dns_query, ad_domain),
+                    is_internal,
                 )
             )
-        ],
+        ]
+        if answers
+        else [],
         rtt=_dns_rtt(rng, dns_server_ip),
     )
 
@@ -3084,7 +3261,6 @@ class BaselineMixin:
             protected_pids = seeded_pids.get(system.hostname, set())
             processes = self.state_manager.get_processes_on_system(system.hostname)
             for proc in list(processes):
-                proc_age_hours = (current_hour - proc.start_time).total_seconds() / 3600
                 image_lower = proc.image.lower()
 
                 # Never terminate seeded system processes (pattern match + PID safety net)
@@ -3097,17 +3273,33 @@ class BaselineMixin:
                     continue
 
                 is_short_lived = any(p in image_lower for p in short_lived)
-                if is_short_lived:
-                    max_hours = rng.uniform(0.08, 0.5)
-                elif any(
-                    p in image_lower
-                    for p in ("chrome", "firefox", "edge", "outlook", "teams", "code")
-                ):
-                    max_hours = rng.uniform(1.0, 4.0)
-                else:
-                    max_hours = rng.uniform(0.5, 2.0)
+                lifetime_rng = random.Random(
+                    _stable_seed(
+                        "windows_stale_process_lifetime:"
+                        f"{system.hostname}:{proc.pid}:{proc.image}:{proc.start_time.isoformat()}"
+                    )
+                )
+                target_lifetime = _windows_stale_process_target_lifetime(
+                    proc.image,
+                    proc.command_line,
+                    lifetime_rng,
+                )
+                target_end = proc.start_time + timedelta(seconds=target_lifetime)
+                if current_hour < target_end:
+                    continue
 
-                if proc_age_hours > max_hours and rng.random() < 0.85:
+                bounded_lifetime = _windows_background_process_lifetime_seconds(
+                    proc.image,
+                    proc.command_line,
+                    random.Random(
+                        _stable_seed(
+                            "windows_bounded_process_lifetime_probe:"
+                            f"{system.hostname}:{proc.pid}:{proc.image}:{proc.start_time.isoformat()}"
+                        )
+                    ),
+                )
+                termination_probability = 0.95 if bounded_lifetime is not None else 0.72
+                if rng.random() < termination_probability:
                     actor = self._find_actor(proc.username)
                     if not actor:
                         continue
@@ -3125,17 +3317,9 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    if is_short_lived:
-                        term_time = proc.start_time + timedelta(seconds=rng.uniform(2.0, 45.0))
-                        if term_time > current_hour + timedelta(seconds=3599):
-                            continue
-                    else:
-                        start_offset = (proc.start_time - current_hour).total_seconds()
-                        lower_bound = max(0.0, start_offset + 1.0)
-                        if lower_bound >= 3599.0:
-                            continue
-                        term_offset = rng.uniform(lower_bound, 3599)
-                        term_time = current_hour + timedelta(seconds=term_offset)
+                    term_time = target_end + timedelta(seconds=rng.uniform(0.2, 75.0))
+                    if is_short_lived and term_time > current_hour + timedelta(hours=1):
+                        continue
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
                     self.state_manager.set_current_time(term_time)
@@ -3211,6 +3395,38 @@ class BaselineMixin:
             return rule.action
 
         return sensor.default_action
+
+    def _firewall_controls_connection_path(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        sensor: Any,
+        segment_cidrs: dict,
+    ) -> bool:
+        """Return whether a firewall sensor plausibly controls this connection path."""
+        import ipaddress as _ipaddress
+
+        def _resolve_segments(ip: str) -> set[str]:
+            try:
+                address = _ipaddress.ip_address(ip)
+            except ValueError:
+                return set()
+            return {seg_name for seg_name, cidr in segment_cidrs.items() if address in cidr}
+
+        src_segments = _resolve_segments(src_ip)
+        dst_segments = _resolve_segments(dst_ip)
+        sensor_segments = set(getattr(sensor, "monitoring_segments", []) or [])
+
+        if src_segments and dst_segments:
+            return bool((src_segments & sensor_segments) and (dst_segments & sensor_segments))
+        if src_segments:
+            return bool(src_segments & sensor_segments)
+        if dst_segments:
+            return bool(dst_segments & sensor_segments)
+
+        # External-to-public-edge traffic has no internal segment on either
+        # endpoint but can still hit the firewall's outside interface.
+        return True
 
     def _generate_firewall_deny_baseline(self, current_hour: datetime) -> None:
         """Generate denied connection events for firewall sensors.
@@ -3367,6 +3583,10 @@ class BaselineMixin:
                 # Resolve VIP back to real_ip; non-VIP public IPs resolve to
                 # "external" segment which always hits default deny.
                 policy_dst_ip = _vip_to_real.get(dst_ip, dst_ip)
+                if not self._firewall_controls_connection_path(
+                    src_ip, policy_dst_ip, sensor, segment_cidrs
+                ):
+                    continue
                 if (
                     self._evaluate_firewall_policy(
                         src_ip, policy_dst_ip, dst_port, sensor, segment_cidrs
@@ -4809,21 +5029,10 @@ class BaselineMixin:
                 return fw_sensor.interfaces.get("_default", "outside")
 
             def _fw_is_on_path(fw_sensor, src_ip: str, dst_ip: str) -> bool:
-                """Check if a firewall monitors segments containing src or dst."""
-                import ipaddress as _ipa_fw
-
-                for seg_name in fw_sensor.monitoring_segments:
-                    cidr = _inbound_segment_cidrs.get(seg_name)
-                    if cidr is None:
-                        continue
-                    try:
-                        addr_s = _ipa_fw.ip_address(src_ip)
-                        addr_d = _ipa_fw.ip_address(dst_ip)
-                        if addr_s in cidr or addr_d in cidr:
-                            return True
-                    except ValueError:
-                        continue
-                return False
+                """Check if a firewall controls the source/destination path."""
+                return self._firewall_controls_connection_path(
+                    src_ip, dst_ip, fw_sensor, _inbound_segment_cidrs
+                )
 
             if not inbound_conns:
                 pass  # All entries were external and host is internal-only
@@ -5659,7 +5868,7 @@ class BaselineMixin:
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
-                    self.activity_generator.generate_system_process(
+                    svc_pid = self.activity_generator.generate_system_process(
                         system=system,
                         time=svc_ts,
                         process_name=svc_image,
@@ -5667,6 +5876,22 @@ class BaselineMixin:
                         parent_pid=svc_parent,
                         username="SYSTEM",
                     )
+                    svc_lifetime = _windows_background_process_lifetime_seconds(
+                        svc_image,
+                        svc_cmd,
+                        rng,
+                    )
+                    if svc_pid and svc_lifetime is not None:
+                        svc_end = svc_ts + timedelta(seconds=svc_lifetime)
+                        self.state_manager.set_current_time(svc_end)
+                        self.activity_generator.generate_system_process_termination(
+                            system=system,
+                            time=svc_end,
+                            pid=svc_pid,
+                            process_name=svc_image,
+                            parent_pid=svc_parent,
+                            username="SYSTEM",
+                        )
 
             self._emit_ecar_file_churn(system, current_hour, rng, os_cat, sys_pids)
 
@@ -5830,7 +6055,7 @@ class BaselineMixin:
                     parent_pid = sys_pids.get(
                         task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
-                    self.activity_generator.generate_system_process(
+                    task_pid = self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
                         process_name=task_image,
@@ -5838,6 +6063,22 @@ class BaselineMixin:
                         parent_pid=parent_pid,
                         username="SYSTEM",
                     )
+                    task_lifetime = _windows_background_process_lifetime_seconds(
+                        task_image,
+                        task_cmd,
+                        rng,
+                    )
+                    if task_pid and task_lifetime is not None:
+                        task_end = ts + timedelta(seconds=task_lifetime)
+                        self.state_manager.set_current_time(task_end)
+                        self.activity_generator.generate_system_process_termination(
+                            system=system,
+                            time=task_end,
+                            pid=task_pid,
+                            process_name=task_image,
+                            parent_pid=parent_pid,
+                            username="SYSTEM",
+                        )
 
             # Service account delegation: svc accounts auth to remote servers
             if os_cat == "windows" and self.scenario.environment.service_accounts:
@@ -6048,6 +6289,7 @@ class BaselineMixin:
                         ssh_user = rng.choice(roster)
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
+                        hour_end = current_hour + timedelta(hours=1)
                         self.state_manager.set_current_time(ts)
                         self.world_planner.bootstrap_user_session(
                             user=ssh_user,
@@ -6056,6 +6298,7 @@ class BaselineMixin:
                             rng=rng,
                             session_kind="ssh",
                             allow_existing=True,
+                            required_until=hour_end,
                         )
 
                         persona_lower = (ssh_user.persona or "").lower()
@@ -6086,7 +6329,6 @@ class BaselineMixin:
                                 4,
                                 persona=ssh_user.persona,
                             )
-                        hour_end = current_hour + timedelta(hours=1)
                         cumulative_gap = 0
                         _SLOW_CMD_KEYWORDS = frozenset(
                             [
@@ -6692,9 +6934,7 @@ class BaselineMixin:
                         auth_method=auth_method,
                         public_key_type=key_type if auth_method == "publickey" else "",
                         public_key_hash=key_hash if auth_method == "publickey" else "",
-                        emit_session_close=(
-                            disconnect_time < self.end_time and rng.random() < 0.92
-                        ),
+                        emit_session_close=disconnect_time < self.end_time,
                         source="baseline_ssh_noise",
                     )
                 elif source_roll < 0.35:
@@ -7069,14 +7309,32 @@ class BaselineMixin:
             from evidenceforge.events.dispatcher import expand_formats
 
             segment_systems: dict[str, list] = {}
+            segment_cidrs = {}
             for seg in self.scenario.environment.network.segments:
+                import ipaddress
+
+                try:
+                    segment_cidrs[seg.name] = ipaddress.ip_network(seg.cidr, strict=False)
+                except ValueError:
+                    pass
                 seg_sys = [s for s in systems if s.hostname in (seg.systems or [])]
                 if not seg_sys:
-                    import ipaddress
-
                     net = ipaddress.ip_network(seg.cidr, strict=False)
                     seg_sys = [s for s in systems if ipaddress.ip_address(s.ip) in net]
                 segment_systems[seg.name] = seg_sys
+            fw_sensor = next(
+                (
+                    candidate
+                    for candidate in self.scenario.environment.network.sensors
+                    if candidate.type == "firewall" and "cisco_asa" in candidate.log_formats
+                ),
+                None,
+            )
+            deny_conn_state = (
+                "REJ"
+                if fw_sensor is not None and getattr(fw_sensor, "drop_mode", "") == "reject"
+                else "S0"
+            )
 
             for sensor in self.scenario.environment.network.sensors:
                 if "snort_alert" not in expand_formats(sensor.log_formats):
@@ -7095,7 +7353,9 @@ class BaselineMixin:
                 alerts_lo, alerts_hi = scale_count_range(5, 15, avg_multiplier)
                 num_alerts = rng.randint(alerts_lo, alerts_hi)
                 # For IDS sensors (typically perimeter), generate alerts with
-                # external source IPs targeting monitored systems.
+                # external source IPs targeting monitored systems. Outbound
+                # false-positive destinations use a separate public-IP role
+                # pool so scanner identities do not double as benign services.
                 _EXTERNAL_SCAN_IPS = getattr(
                     self,
                     "_external_scanner_ips",
@@ -7146,11 +7406,6 @@ class BaselineMixin:
                     sig = rng.choice(_filtered)
                     alert_dst_port = sig["dst_port"]
                     sig_direction = sig["direction"]
-                    _weights = getattr(self, "_external_scanner_weights", None)
-                    if _weights:
-                        ext_ip = rng.choices(_EXTERNAL_SCAN_IPS, weights=_weights, k=1)[0]
-                    else:
-                        ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         if alert_proto in {"udp", "tcp"} and alert_dst_port == 53:
@@ -7161,9 +7416,14 @@ class BaselineMixin:
                             )
                             dst_ip = rng.choice(dns_ips)
                         else:
-                            dst_ip = ext_ip
+                            dst_ip = self._choose_external_outbound_destination_ip(rng)
                         source_system = local_sys
                     else:
+                        _weights = getattr(self, "_external_scanner_weights", None)
+                        if _weights:
+                            ext_ip = rng.choices(_EXTERNAL_SCAN_IPS, weights=_weights, k=1)[0]
+                        else:
+                            ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
                         if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
                             public_target = (
                                 self.dispatcher.visibility_engine.get_public_inbound_address(
@@ -7199,21 +7459,72 @@ class BaselineMixin:
                         )
                     ).execute_with_result()
 
+                    firewall = None
+                    ids_conn_state = None
+                    if sig_direction == "in":
+                        policy_denied = False
+                        if fw_sensor is not None and alert_proto == "tcp":
+                            policy_denied = (
+                                self._evaluate_firewall_policy(
+                                    src_ip,
+                                    local_sys.ip,
+                                    alert_dst_port,
+                                    fw_sensor,
+                                    segment_cidrs,
+                                )
+                                == "deny"
+                            )
+                        service, ids_conn_state, duration, orig_bytes, resp_bytes = (
+                            _baseline_inbound_ids_probe_profile(
+                                rng=rng,
+                                proto=alert_proto,
+                                dst_port=alert_dst_port,
+                                target_system=local_sys,
+                                policy_denied=policy_denied,
+                                deny_conn_state=deny_conn_state,
+                            )
+                        )
+                        if policy_denied:
+                            from evidenceforge.events.contexts import FirewallContext
+
+                            resolve_iface = getattr(self, "_resolve_firewall_interface", None)
+                            src_interface = (
+                                resolve_iface(src_ip) if callable(resolve_iface) else "outside"
+                            )
+                            dst_interface = (
+                                resolve_iface(local_sys.ip) if callable(resolve_iface) else "dmz"
+                            )
+                            firewall = FirewallContext(
+                                action="deny",
+                                msg_id=106023,
+                                connection_id=0,
+                                src_interface=src_interface,
+                                dst_interface=dst_interface,
+                                access_group=f"{src_interface}_access_in",
+                            )
+                    else:
+                        service = {22: "ssh", 80: "http", 443: "ssl", 53: "dns"}.get(
+                            alert_dst_port, ""
+                        )
+                        duration = rng.uniform(0.001, 5.0)
+                        orig_bytes = rng.randint(40, 2000)
+                        resp_bytes = rng.randint(0, 1000)
+
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
                         time=ts,
                         dst_port=alert_dst_port,
                         proto=alert_proto,
-                        service={22: "ssh", 80: "http", 443: "ssl", 53: "dns"}.get(
-                            alert_dst_port, ""
-                        ),
-                        duration=rng.uniform(0.001, 5.0),
-                        orig_bytes=rng.randint(40, 2000),
-                        resp_bytes=rng.randint(0, 1000),
+                        service=service,
+                        duration=duration,
+                        orig_bytes=orig_bytes,
+                        resp_bytes=resp_bytes,
+                        conn_state=ids_conn_state,
                         source_system=source_system,
                         dns=ids_result.dns,
                         ids=ids_result.ids,
+                        firewall=firewall,
                     )
 
         # Web access logs
@@ -7503,6 +7814,12 @@ class BaselineMixin:
                 str(ip) for ip in scanner_ips if isinstance(ip, str) and not _is_private_ip(ip)
             )
 
+        reserved.update(self._external_story_source_ips())
+        return reserved
+
+    def _external_story_source_ips(self) -> set[str]:
+        """Return explicit external source IPs authored by the scenario."""
+        reserved: set[str] = set()
         scenario = getattr(self, "scenario", None)
         for group_name in ("storyline", "red_herrings"):
             group = getattr(scenario, group_name, None)
@@ -7528,6 +7845,70 @@ class BaselineMixin:
             if candidate not in reserved:
                 return candidate
         return fallback
+
+    def _reserved_external_outbound_destination_ips(self) -> set[str]:
+        """Return public IPs that should not be reused as benign outbound destinations."""
+        reserved: set[str] = set()
+        scanner_ips = getattr(self, "_external_scanner_ips", [])
+        if isinstance(scanner_ips, (list, tuple, set)):
+            reserved.update(
+                str(ip) for ip in scanner_ips if isinstance(ip, str) and not _is_private_ip(ip)
+            )
+        reserved.update(self._external_story_source_ips())
+
+        try:
+            from evidenceforge.generation.activity.network_params import public_ntp_ips
+        except ImportError:
+            ntp_ips: list[str] = []
+        else:
+            ntp_ips = public_ntp_ips()
+        reserved.update(str(ip) for ip in ntp_ips if ip and not _is_private_ip(str(ip)))
+        return reserved
+
+    def _external_outbound_destination_pool(self) -> tuple[list[str], list[float]]:
+        """Return a stable public destination pool disjoint from scanner identities."""
+        pool = getattr(self, "_external_outbound_destination_ips", None)
+        weights = getattr(self, "_external_outbound_destination_weights", None)
+        if isinstance(pool, list) and isinstance(weights, list) and len(pool) == len(weights) > 0:
+            return pool, weights
+
+        reserved = self._reserved_external_outbound_destination_ips()
+        pool_rng = random.Random(_stable_seed("external_outbound_destination_pool"))
+        generated: list[str] = []
+        seen: set[str] = set()
+        for _ in range(3000):
+            candidate = self._generate_external_client_ip(pool_rng)
+            if candidate in reserved or candidate in seen:
+                continue
+            seen.add(candidate)
+            generated.append(candidate)
+            if len(generated) >= 96:
+                break
+
+        if not generated:
+            generated = [
+                ip
+                for ip in (
+                    "13.236.8.128",
+                    "20.205.243.166",
+                    "104.16.0.35",
+                    "151.101.0.63",
+                    "34.104.35.123",
+                )
+                if ip not in reserved
+            ]
+        if not generated:
+            generated = ["13.236.8.128"]
+
+        generated_weights = [1.0 / (index + 1) for index in range(len(generated))]
+        self._external_outbound_destination_ips = generated
+        self._external_outbound_destination_weights = generated_weights
+        return generated, generated_weights
+
+    def _choose_external_outbound_destination_ip(self, rng: random.Random) -> str:
+        """Choose a role-safe external destination for outbound false-positive alerts."""
+        ips, weights = self._external_outbound_destination_pool()
+        return rng.choices(ips, weights=weights, k=1)[0]
 
     def _web_visitor_profile_for_client(
         self,

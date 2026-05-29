@@ -76,8 +76,28 @@ def test_external_parser_script_rejects_invalid_output_target(
     assert not external_parser._require_sof_elk_output_target(data_dir)
 
     message = _normalize_console_text(error_output.getvalue())
-    assert "contains unsupported output target 'splunk'" in message
-    assert "expected `sof-elk`" in message
+    assert "is not a valid output target marker" in message
+    assert "invalid output target value" in message
+    assert "splunk" not in message
+
+
+def test_external_parser_script_rejects_symlink_marker_without_leaking_contents(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("SUPER_SECRET_TOKEN=talos-validation-secret\n", encoding="utf-8")
+    (data_dir / "OUTPUT_TARGET.txt").symlink_to(secret_file)
+    error_output = _capture_error_console(monkeypatch)
+
+    assert not external_parser._require_sof_elk_output_target(data_dir)
+
+    message = _normalize_console_text(error_output.getvalue())
+    assert "symlinks are not allowed" in message
+    assert "SUPER_SECRET_TOKEN" not in message
+    assert "talos-validation-secret" not in message
 
 
 def test_external_parser_script_accepts_sof_elk_output_target(

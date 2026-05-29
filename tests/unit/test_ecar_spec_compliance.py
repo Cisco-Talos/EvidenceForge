@@ -43,6 +43,7 @@ from evidenceforge.events.contexts import (
     HostContext,
     NetworkContext,
     ProcessContext,
+    RegistryContext,
     RemoteThreadContext,
 )
 from evidenceforge.formats.loader import load_format
@@ -134,7 +135,13 @@ class TestPidEmission:
                 os_category="linux",
                 system_type="server",
             ),
-            auth=AuthContext(username="alice", logon_id="0x123", logon_type=10),
+            auth=AuthContext(
+                username="alice",
+                logon_id="0x123",
+                logon_type=10,
+                source_ip="10.0.0.10",
+                source_port=55222,
+            ),
             edr=EdrContext(object_id="session-1"),
         )
 
@@ -146,10 +153,13 @@ class TestPidEmission:
         assert row["action"] == "LOGIN"
         assert "logon_type" not in row
         assert row["session_type"] == "ssh"
+        assert row["src_ip"] == "10.0.0.10"
+        assert row["src_port"] == 55222
 
         record = json.loads(emitter._render_event(row))
         assert "logon_type" not in record["properties"]
         assert record["properties"]["session_type"] == "ssh"
+        assert record["properties"]["src_port"] == "55222"
 
     def test_user_session_logon_type_is_declared_ecar_property(self, emitter, ts, caplog):
         """Rendered eCAR login logon_type should be accepted by format validation."""
@@ -264,6 +274,83 @@ class TestFileEventActions:
 
         process_create, file_create = [call.args[0] for call in emitter.emit_event.call_args_list]
         assert file_create["timestamp"] > process_create["timestamp"]
+
+    def test_file_event_carries_known_process_provenance(self, emitter, ts):
+        """eCAR FILE rows should preserve known source process image and command line."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        proc = ProcessContext(
+            pid=4321,
+            parent_pid=4,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line=r"cmd.exe /c type C:\Temp\note.txt",
+            username="jdoe",
+            start_time=ts,
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_file_event(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="file_read",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=proc,
+                file=FileContext(path=r"C:\Temp\note.txt", action="read", pid=4321),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["image_path"] == proc.image
+        assert record["properties"]["command_line"] == proc.command_line
+
+    def test_registry_event_carries_known_process_provenance(self, emitter, ts):
+        """eCAR REGISTRY rows should preserve known source process provenance."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        proc = ProcessContext(
+            pid=4321,
+            parent_pid=4,
+            image=r"C:\Windows\System32\reg.exe",
+            command_line=r"reg.exe add HKCU\Software\Example /v Enabled /d 1",
+            username="jdoe",
+            start_time=ts,
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_registry_event(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="registry_modify",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=proc,
+                registry=RegistryContext(
+                    key=r"HKCU\Software\Example",
+                    value="Enabled=1",
+                    action="modify",
+                    pid=4321,
+                ),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["image_path"] == proc.image
+        assert record["properties"]["command_line"] == proc.command_line
 
 
 class TestRemoteThreadRendering:
@@ -1100,6 +1187,52 @@ class TestChronologicalOutput:
 
         assert emitted[0]["timestamp"] == ts
 
+    def test_paired_endpoint_flows_do_not_share_exact_millisecond(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Paired endpoint FLOW rows should carry host-local observation texture."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="srv01",
+                ip="10.0.0.20",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+                fqdn="srv01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=445,
+                protocol="tcp",
+                conn_state="S0",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
+        assert len(rendered_ms) == 2
+        assert len(set(rendered_ms)) == 2
+        assert all(ts - timedelta(milliseconds=37) <= row["timestamp"] <= ts for row in emitted)
+
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
         emitted: list[dict] = []
@@ -1432,6 +1565,9 @@ class TestChronologicalOutput:
         assert emitted[0]["object"] == "FLOW"
         assert emitted[0]["direction"] == "OUTBOUND"
         assert emitted[0]["principal"] == "alice"
+        record = json.loads(emitter._render_event(emitted[0]))
+        assert record["properties"]["image_path"] == event.process.image
+        assert record["properties"]["command_line"] == event.process.command_line
 
     def test_service_flow_can_omit_principal(self, emitter, monkeypatch, ts):
         """Service-owned FLOW records should still model vendor attribution gaps."""
@@ -1518,6 +1654,7 @@ class TestChronologicalOutput:
             (88, "udp", {"dns": 5300, "lsass": 700}, 700),
             (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
             (445, "tcp", {"system": 4, "lsass": 700}, 4),
+            (8080, "tcp", {"squid": 3128, "apache2": 24118}, 3128),
         ],
     )
     def test_inbound_infrastructure_flow_uses_destination_service_pid(
@@ -2220,6 +2357,45 @@ class TestChronologicalOutput:
         assert child["pid"] > shell["pid"]
         assert child["ppid"] == shell["pid"]
 
+    def test_linux_pid_morphology_rebases_non_main_thread_ids(self):
+        """Linux eCAR PID rewrites should preserve TID offsets, not collapse to pid."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "parent",
+                    "pid": 500,
+                    "tid": 503,
+                    "properties": {"image_path": "/bin/sh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "child",
+                    "pid": 450,
+                    "tid": 455,
+                    "ppid": 500,
+                    "properties": {"image_path": "/usr/bin/tail"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        child = next(row for row in normalized if row.get("objectID") == "child")
+        assert child["pid"] > 500
+        assert child["tid"] == child["pid"] + 5
+        assert child["tid"] != child["pid"]
+
     def test_linux_pid_morphology_preserves_process_open_actor_pid(self):
         """PROCESS/OPEN top-level pid should track actorID (source), not objectID target."""
         lines = [
@@ -2277,6 +2453,74 @@ class TestChronologicalOutput:
         assert target_create["pid"] > source_create["pid"]
         assert process_open["pid"] == source_create["pid"]
         assert process_open["properties"]["target_pid"] == target_create["pid"]
+
+    def test_linux_stable_tid_is_not_universally_pid(self, ts):
+        """Linux eCAR TIDs should include source-native thread texture."""
+        tids = {
+            EcarEmitter._stable_tid("linux-01", 3200, ts + timedelta(seconds=i), salt, "linux")
+            for i, salt in enumerate(
+                [
+                    "process_create",
+                    "process_terminate",
+                    "flow_inbound",
+                    "flow_outbound",
+                    "file",
+                    "module",
+                ]
+            )
+        }
+
+        assert all(tid >= 3200 for tid in tids)
+        assert any(tid != 3200 for tid in tids)
+
+    def test_flow_principal_visibility_is_stable_for_same_process(self, ts):
+        """FLOW principal attribution should be a process-level source decision."""
+        host = HostContext(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        process = ProcessContext(
+            pid=18750,
+            parent_pid=1,
+            image="/usr/sbin/nginx",
+            command_line="nginx: worker process",
+            username="www-data",
+            start_time=ts,
+        )
+        first = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=host,
+            process=process,
+            network=NetworkContext(
+                src_ip="10.10.3.20",
+                src_port=40001,
+                dst_ip="203.0.113.10",
+                dst_port=443,
+                protocol="tcp",
+            ),
+        )
+        second = SecurityEvent(
+            timestamp=ts + timedelta(seconds=30),
+            event_type="connection",
+            src_host=host,
+            process=process,
+            network=NetworkContext(
+                src_ip="10.10.3.20",
+                src_port=40002,
+                dst_ip="203.0.113.11",
+                dst_port=443,
+                protocol="tcp",
+            ),
+        )
+        emitter = object.__new__(EcarEmitter)
+
+        assert emitter._flow_principal_for_process(first, host, process, "OUTBOUND") == (
+            emitter._flow_principal_for_process(second, host, process, "OUTBOUND")
+        )
 
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""

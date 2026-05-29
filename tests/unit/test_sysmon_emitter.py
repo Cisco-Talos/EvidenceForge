@@ -980,8 +980,9 @@ class TestSysmonEventEmitter:
         assert guid1 != guid3  # Different PID → different GUID
         assert guid1.startswith("{") and guid1.endswith("}")
         assert len(guid1) == 38  # {8-4-4-4-12} = 38 chars
-        assert guid1.strip("{}").split("-")[3] != f"{1234:04x}"
-        assert not guid1.strip("{}").split("-")[4].startswith("000000")
+        parts = guid1.strip("{}").split("-")
+        assert parts[3][2:] in {"00", "02"}
+        assert parts[4].startswith(("0000", "0010"))
 
     def test_event1_time_shift_rewrites_process_guid_references(self, format_def, temp_output):
         """Final Event 1 timestamp shifts should not leave stale ProcessGuid references."""

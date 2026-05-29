@@ -652,8 +652,26 @@ class TestSslContextPopulation:
             if event.syslog is not None and "session closed for user deploy" in event.syslog.message
         )
         transport_close = transport_event.timestamp + timedelta(seconds=120)
+        assert close_event.event_type == "logoff"
+        assert close_event.auth is not None
+        assert close_event.auth.source_ip == "10.0.10.50"
+        assert close_event.auth.source_port == 51111
         assert transport_close < close_event.timestamp
         assert close_event.timestamp <= transport_close + timedelta(seconds=3)
+        login_event = next(event for event in events if event.event_type == "ssh_session")
+        assert close_event.edr is not None
+        assert login_event.edr is not None
+        assert close_event.edr.object_id == login_event.edr.object_id
+
+        terminate_event = next(
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == close_event.syslog.pid
+        )
+        assert terminate_event.timestamp > close_event.timestamp
+        assert terminate_event.timestamp <= close_event.timestamp + timedelta(seconds=2)
 
     def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
         def run_bundle_once() -> list[tuple]:
@@ -2009,6 +2027,8 @@ class TestSslContextPopulation:
         )
 
         ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        assert ssh_event.edr is not None
+        assert ssh_event.edr.object_id
         accepted_event = next(
             event
             for event in events
@@ -2031,7 +2051,7 @@ class TestSslContextPopulation:
                 51111,
                 "",
                 10,
-                "",
+                ssh_event.edr.object_id,
                 ssh_event.timestamp,
             ),
         )

@@ -221,6 +221,28 @@ class TestSystemProcessProtection:
         assert journald is not None
         assert journald.parent_pid == 1
 
+    def test_forward_proxy_seeds_squid_without_role_implied_apache(
+        self, state_manager, mock_emitters
+    ):
+        """Forward proxy hosts should have a source-native proxy listener process."""
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.10.20",
+            os="Linux Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+            services=["squid", "ssh"],
+        )
+        _engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, proxy)
+
+        squid = state_manager.get_process(proxy.hostname, pids["squid"])
+
+        assert squid is not None
+        assert squid.image == "/usr/sbin/squid"
+        assert squid.command_line == "/usr/sbin/squid --foreground -YC"
+        assert squid.username == "proxy"
+        assert "apache2" not in pids
+
     def test_user_processes_still_terminate(self, state_manager, mock_emitters, win_system):
         """Non-system user processes should still be terminated normally."""
         engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, win_system)

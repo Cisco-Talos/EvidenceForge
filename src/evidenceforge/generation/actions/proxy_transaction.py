@@ -119,7 +119,7 @@ class ProxyTransactionExecutor(Protocol):
     """Runtime hooks supplied by the current activity generator."""
 
     state_manager: StateManager
-    _explicit_proxy_tunnels: dict[tuple[str, str, str, str, int], tuple[datetime, str]]
+    _explicit_proxy_tunnels: dict[tuple[str, str, str, str, int, str], tuple[datetime, str]]
 
     def _build_proxy_context(
         self,
@@ -293,6 +293,7 @@ class ProxyTransactionActionBundle:
             proxy_context.host,
             dst_ip,
             request.dst_port,
+            " ".join((proxy_context.user_agent or "").lower().split()),
         )
         reuse_safe = (
             request.dst_port == 443
@@ -663,6 +664,8 @@ class ProxyTransactionActionBundle:
                     request.time,
                 )
         else:
+            client_pid = -1
+            client_process_image = None
             owned_client_pid, owned_process_image = executor._ensure_explicit_proxy_client_process(
                 source_system=request.source_system,
                 time=request.time,

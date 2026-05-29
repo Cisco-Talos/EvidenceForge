@@ -409,6 +409,58 @@ def _seed_proxy_client_user_session(generator: ActivityGenerator) -> tuple[User,
     return user, svchost_pid, explorer_pid
 
 
+def _seed_linux_proxy_client_user_session(generator: ActivityGenerator) -> tuple[User, System, int]:
+    user = User(
+        username="alex.morgan",
+        full_name="Alex Morgan",
+        email="alex.morgan@example.org",
+    )
+    linux_system = System(
+        hostname="LINUX-APP-01",
+        ip="10.0.1.10",
+        os="Ubuntu 24.04",
+        type="server",
+        assigned_user=user.username,
+    )
+    generator._users_by_username = {user.username: user}
+    generator._ip_to_system[linux_system.ip] = linux_system
+    generator._proxy_routes[linux_system.ip] = [generator._ip_to_system["10.0.3.10"]]
+
+    start_time = datetime(2024, 1, 15, 9, 45, 0, tzinfo=UTC)
+    generator.state_manager.set_current_time(start_time)
+    systemd_pid = generator.state_manager.create_process(
+        system=linux_system.hostname,
+        parent_pid=0,
+        image="/usr/lib/systemd/systemd",
+        command_line="/usr/lib/systemd/systemd",
+        username="root",
+        integrity_level="System",
+        logon_id="",
+    )
+    logon_id = generator.state_manager.create_session(
+        username=user.username,
+        system=linux_system.hostname,
+        logon_type=10,
+        source_ip="10.0.1.50",
+    )
+    shell_pid = generator.state_manager.create_process(
+        system=linux_system.hostname,
+        parent_pid=systemd_pid,
+        image="/bin/bash",
+        command_line="-bash",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+    session = generator.state_manager.get_session(logon_id)
+    assert session is not None
+    session.session_shell_pid = shell_pid
+    session.process_tree_root = systemd_pid
+    generator._system_pids = {linux_system.hostname: {"systemd": systemd_pid, "bash": shell_pid}}
+    generator.state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+    return user, linux_system, shell_pid
+
+
 def _conn_pairs(emitters: dict[str, Mock]) -> list[tuple[str, str, int]]:
     return [
         (
@@ -1105,6 +1157,679 @@ class TestExplicitProxyVisibility:
         assert client_event.process.pid == client_event.network.initiating_pid
         assert client_event.process.username == "SYSTEM"
         assert client_event.process.command_line.endswith("AA==")
+
+    def test_browser_proxy_user_agent_replaces_unrelated_chat_app_pid(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        slack_image = r"C:\Users\alex.morgan\AppData\Local\slack\slack.exe"
+        slack_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=slack_image,
+            command_line="slack.exe",
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="r.bing.com:443",
+                host="r.bing.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+                ),
+                content_type="",
+                cache_result="NONE",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="204.79.197.200",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=slack_pid,
+            source_system=workstation,
+            hostname="r.bing.com",
+            conn_state="SF",
+            process_image=slack_image,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid != slack_pid
+        assert client_event.process.image.endswith(r"\Microsoft\Edge\Application\msedge.exe")
+
+    def test_browser_proxy_user_agent_replaces_unrelated_dropbox_pid(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        dropbox_image = r"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe"
+        dropbox_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=dropbox_image,
+            command_line=r'"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /systemstartup',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="www.github.com:443",
+                host="www.github.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                ),
+                content_type="",
+                cache_result="NONE",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="140.82.112.4",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=dropbox_pid,
+            source_system=workstation,
+            hostname="www.github.com",
+            conn_state="SF",
+            process_image=dropbox_image,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid != dropbox_pid
+        assert client_event.process.image.endswith(r"\Google\Chrome\Application\chrome.exe")
+
+    def test_linux_package_proxy_user_agent_replaces_unrelated_git_pid(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, linux_system, shell_pid = _seed_linux_proxy_client_user_session(generator)
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        git_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=shell_pid,
+            image="/usr/bin/git",
+            command_line="git status",
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=linux_system.ip,
+                method="CONNECT",
+                url="changelogs.ubuntu.com:443",
+                host="changelogs.ubuntu.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent="apt-http/2.4.11 (amd64)",
+                content_type="",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip="91.189.91.48",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=git_pid,
+            source_system=linux_system,
+            hostname="changelogs.ubuntu.com",
+            conn_state="SF",
+            process_image="/usr/bin/git",
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid != git_pid
+        assert client_event.process.image == "/usr/bin/apt-get"
+        assert client_event.process.command_line == "apt-get update"
+
+    def test_linux_proxy_scrubs_bad_caller_when_matching_process_cannot_be_owned(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        linux_system = System(
+            hostname="LINUX-APP-01",
+            ip="10.0.1.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        generator._ip_to_system[linux_system.ip] = linux_system
+        generator._proxy_routes[linux_system.ip] = [generator._ip_to_system["10.0.3.10"]]
+        generator.state_manager.set_current_time(datetime(2024, 1, 15, 9, 55, 0, tzinfo=UTC))
+        systemd_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd",
+            username="root",
+            integrity_level="System",
+        )
+        bash_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=systemd_pid,
+            image="/bin/bash",
+            command_line="-bash",
+            username="root",
+            integrity_level="Medium",
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=linux_system.ip,
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent="curl/8.4.0",
+                content_type="",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=bash_pid,
+            source_system=linux_system,
+            hostname="example.com",
+            conn_state="SF",
+            process_image="/bin/bash",
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is None
+        assert client_event.network.initiating_pid == -1
+
+    def test_linux_proxy_scrubs_service_daemon_for_tool_user_agent(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        linux_system = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.1.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        generator._ip_to_system[linux_system.ip] = linux_system
+        generator._proxy_routes[linux_system.ip] = [generator._ip_to_system["10.0.3.10"]]
+        generator.state_manager.set_current_time(datetime(2024, 1, 15, 9, 55, 0, tzinfo=UTC))
+        apache_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=0,
+            image="/usr/sbin/apache2",
+            command_line="/usr/sbin/apache2 -DFOREGROUND",
+            username="www-data",
+            integrity_level="Medium",
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=linux_system.ip,
+                method="CONNECT",
+                url="api.github.com:443",
+                host="api.github.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent="python-requests/2.31.0",
+                content_type="",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip="140.82.112.6",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=apache_pid,
+            source_system=linux_system,
+            hostname="api.github.com",
+            conn_state="SF",
+            process_image="/usr/sbin/apache2",
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is None
+        assert client_event.network.initiating_pid == -1
+
+    def test_explicit_proxy_tunnel_reuse_is_user_agent_scoped(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        workstation = generator._ip_to_system["10.0.1.10"]
+        generator._build_proxy_context = Mock(
+            side_effect=[
+                ProxyContext(
+                    client_ip=workstation.ip,
+                    method="CONNECT",
+                    url="example.com:443",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=220,
+                    cs_bytes=340,
+                    time_taken=900,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) "
+                        "Gecko/20100101 Firefox/121.0"
+                    ),
+                    content_type="",
+                    cache_result="MISS",
+                    referrer="-",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+                ProxyContext(
+                    client_ip=workstation.ip,
+                    method="CONNECT",
+                    url="example.com:443",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=220,
+                    cs_bytes=340,
+                    time_taken=900,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                    ),
+                    content_type="",
+                    cache_result="MISS",
+                    referrer="-",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+            ]
+        )
+
+        for second in (0, 10):
+            generator.generate_connection(
+                src_ip=workstation.ip,
+                dst_ip="93.184.216.34",
+                time=datetime(2024, 1, 15, 10, 0, second, tzinfo=UTC),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                source_system=workstation,
+                hostname="example.com",
+                conn_state="SF",
+            )
+
+        client_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == workstation.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        ]
+
+        assert len(client_events) == 2
+        assert client_events[0].network.zeek_uid != client_events[1].network.zeek_uid
+
+    def test_direct_proxy_listener_flow_scrubs_linux_shell_owner(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        linux_system = System(
+            hostname="DB-PROD-01",
+            ip="10.0.1.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+        generator._ip_to_system[linux_system.ip] = linux_system
+        generator.state_manager.set_current_time(datetime(2024, 1, 15, 9, 55, 0, tzinfo=UTC))
+        systemd_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd",
+            username="root",
+            integrity_level="System",
+        )
+        bash_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=systemd_pid,
+            image="/bin/bash",
+            command_line="-bash",
+            username="root",
+            integrity_level="Medium",
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip=proxy.ip,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=bash_pid,
+            source_system=linux_system,
+            hostname=generator._proxy_fqdn(proxy),
+            conn_state="SF",
+            process_image="/bin/bash",
+            http=HttpContext(
+                method="CONNECT",
+                host="example.com",
+                uri="example.com:443",
+                version="1.1",
+                user_agent="Wget/1.21.3",
+                status_code=200,
+                status_msg="Connection Established",
+            ),
+            proxy_bypass=True,
+            preserve_http_outcome=True,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == proxy.ip
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is None
+        assert client_event.network.initiating_pid == -1
+
+    def test_direct_proxy_listener_flow_replaces_mismatched_linux_browser(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, linux_system, shell_pid = _seed_linux_proxy_client_user_session(generator)
+        proxy = generator._ip_to_system["10.0.3.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        firefox_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=shell_pid,
+            image="/usr/bin/firefox",
+            command_line="firefox -P default",
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip=proxy.ip,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=firefox_pid,
+            source_system=linux_system,
+            hostname=generator._proxy_fqdn(proxy),
+            conn_state="SF",
+            process_image="/usr/bin/firefox",
+            http=HttpContext(
+                method="CONNECT",
+                host="example.com",
+                uri="example.com:443",
+                version="1.1",
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                status_code=200,
+                status_msg="Connection Established",
+            ),
+            proxy_bypass=True,
+            preserve_http_outcome=True,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == proxy.ip
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid != firefox_pid
+        assert client_event.process.image == "/usr/bin/google-chrome"
+
+    def test_direct_proxy_listener_flow_replaces_unrelated_linux_kubectl_owner(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, linux_system, shell_pid = _seed_linux_proxy_client_user_session(generator)
+        proxy = generator._ip_to_system["10.0.3.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        kubectl_pid = generator.state_manager.create_process(
+            system=linux_system.hostname,
+            parent_pid=shell_pid,
+            image="/usr/bin/kubectl",
+            command_line="kubectl logs worker-3b4c2 --tail=100",
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+
+        generator.generate_connection(
+            src_ip=linux_system.ip,
+            dst_ip=proxy.ip,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=kubectl_pid,
+            source_system=linux_system,
+            hostname=generator._proxy_fqdn(proxy),
+            conn_state="SF",
+            process_image="/usr/bin/kubectl",
+            http=HttpContext(
+                method="CONNECT",
+                host="example.com",
+                uri="example.com:443",
+                version="1.1",
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                status_code=200,
+                status_msg="Connection Established",
+            ),
+            proxy_bypass=True,
+            preserve_http_outcome=True,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == linux_system.ip
+            and call.args[0].network.dst_ip == proxy.ip
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid != kubectl_pid
+        assert client_event.process.image == "/usr/bin/google-chrome"
 
     def test_one_shot_proxy_client_process_starts_near_request_time(self):
         generator, _emitters = _generator(

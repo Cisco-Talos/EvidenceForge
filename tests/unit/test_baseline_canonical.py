@@ -43,6 +43,7 @@ from evidenceforge.generation.engine.baseline import (
     _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
     _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
     _ambient_registry_entry_allowed,
+    _baseline_inbound_ids_probe_profile,
     _extra_syslog_service_values,
     _linux_ambient_logind_probability,
     _linux_baseline_pam_close_lead,
@@ -238,6 +239,84 @@ class TestModuleLoadProcessMatching:
 
 class TestIdsAlertCorrelation:
     """IDS alerts should produce both Snort alert and Zeek conn records."""
+
+    def test_inbound_ids_probe_uses_closed_profile_for_unexposed_service(self):
+        """IDS companions should not make unexposed services look successfully open."""
+        web = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2", "ssh"],
+            roles=["web_server"],
+        )
+
+        service, conn_state, duration, orig_bytes, resp_bytes = _baseline_inbound_ids_probe_profile(
+            rng=random.Random(7),
+            proto="tcp",
+            dst_port=5432,
+            target_system=web,
+            policy_denied=False,
+            deny_conn_state="S0",
+        )
+
+        assert service == ""
+        assert conn_state == "S0"
+        assert duration >= 1.2
+        assert orig_bytes > 0
+        assert resp_bytes == 0
+
+    def test_inbound_ids_probe_uses_open_profile_for_exposed_service(self):
+        """IDS companions may remain successful when target inventory exposes the service."""
+        db = System(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["postgresql"],
+            roles=["database"],
+        )
+
+        service, conn_state, _duration, _orig_bytes, resp_bytes = (
+            _baseline_inbound_ids_probe_profile(
+                rng=random.Random(8),
+                proto="tcp",
+                dst_port=5432,
+                target_system=db,
+                policy_denied=False,
+                deny_conn_state="S0",
+            )
+        )
+
+        assert service == "postgresql"
+        assert conn_state is None
+        assert resp_bytes >= 0
+
+    def test_inbound_ids_probe_honors_firewall_policy_denial(self):
+        """Firewall-denied IDS companions should not render successful handshakes."""
+        web = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2", "ssh"],
+            roles=["web_server"],
+        )
+
+        service, conn_state, _duration, _orig_bytes, resp_bytes = (
+            _baseline_inbound_ids_probe_profile(
+                rng=random.Random(9),
+                proto="tcp",
+                dst_port=443,
+                target_system=web,
+                policy_denied=True,
+                deny_conn_state="S0",
+            )
+        )
+
+        assert service == ""
+        assert conn_state == "S0"
+        assert resp_bytes == 0
 
     def test_ids_connection_dispatches_to_snort(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1360,7 +1439,7 @@ class TestBaselineSshTiming:
         assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
         assert "max(1.0, ssh_duration)" in source
-        assert "emit_session_close=(" in source
+        assert "emit_session_close=disconnect_time < self.end_time" in source
         assert 'source="baseline_ssh_noise"' in source
 
     def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
@@ -1597,8 +1676,12 @@ class TestWebAccessExternalVisitors:
         engine.scenario = scenario or SimpleNamespace(storyline=[], red_herrings=[])
         engine._external_scanner_ips = scanner_ips or []
         for method_name in (
+            "_external_story_source_ips",
             "_reserved_external_web_client_ips",
             "_generate_external_web_client_ip",
+            "_reserved_external_outbound_destination_ips",
+            "_external_outbound_destination_pool",
+            "_choose_external_outbound_destination_ip",
             "_web_visitor_profile_for_client",
         ):
             setattr(engine, method_name, getattr(BaselineMixin, method_name).__get__(engine))
@@ -2231,6 +2314,36 @@ class TestWebAccessExternalVisitors:
         assert authored_source not in observed_ips
         assert scanner_source not in observed_ips
         assert observed_ips <= {f"8.8.4.{idx}" for idx in range(1, 25)}
+
+    def test_outbound_ids_destinations_avoid_scanner_authored_and_ntp_ips(self):
+        """Outbound false-positive destinations should not reuse scanner/source roles."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        authored_source = "185.70.41.45"
+        scanner_source = "57.219.255.52"
+        public_ntp = "129.6.15.28"
+        generated_ips = [authored_source, scanner_source, public_ntp]
+        generated_ips.extend(f"13.236.8.{idx}" for idx in range(1, 120))
+
+        scenario = SimpleNamespace(
+            storyline=[SimpleNamespace(events=[SimpleNamespace(source_ip=authored_source)])],
+            red_herrings=[],
+        )
+        engine = MagicMock()
+        engine._generate_external_client_ip.side_effect = generated_ips
+        self._attach_web_helpers(engine, scenario=scenario, scanner_ips=[scanner_source])
+
+        pool, _weights = engine._external_outbound_destination_pool()
+        reserved = {authored_source, scanner_source, public_ntp}
+
+        assert reserved.isdisjoint(pool)
+        sampled = {
+            engine._choose_external_outbound_destination_ip(Random(seed)) for seed in range(30)
+        }
+        assert reserved.isdisjoint(sampled)
+        assert sampled <= set(pool)
 
     def test_health_checks_use_server_scoped_internal_sources(self, monkeypatch):
         """Monitoring UAs should not be sourced from ordinary workstations."""

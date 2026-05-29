@@ -354,6 +354,47 @@ signatures:
         assert dns_ctx.query.startswith("sync-")
         assert dns_ctx.query.endswith(".to")
 
+    def test_ids_dns_context_odd_tld_does_not_invent_cdn_answer(self):
+        import random
+
+        from evidenceforge.generation.engine.baseline import _dns_context_for_ids_signature
+
+        dns_ctx = _dns_context_for_ids_signature(
+            {
+                "sid": 2024291,
+                "dns_query_templates": ["resolver-{token}.bit"],
+            },
+            random.Random(42),
+            ad_domain="corp.local",
+            dns_server_ip="10.0.0.1",
+        )
+
+        assert dns_ctx is not None
+        assert dns_ctx.query.endswith(".bit")
+        assert dns_ctx.rcode in {"NXDOMAIN", "SERVFAIL", "REFUSED"}
+        assert dns_ctx.answers == []
+
+    def test_ids_dns_context_sinkholes_random_cloud_queries(self):
+        import random
+
+        from evidenceforge.generation.engine.baseline import _dns_context_for_ids_signature
+
+        answers = [
+            _dns_context_for_ids_signature(
+                {
+                    "sid": 2029706,
+                    "dns_query_templates": ["telemetry-{token}.cloud"],
+                },
+                random.Random(seed),
+                ad_domain="corp.local",
+                dns_server_ip="10.0.0.1",
+            )
+            for seed in range(20)
+        ]
+
+        assert all(ctx is not None for ctx in answers)
+        assert all(not ctx.answers or ctx.answers == ["0.0.0.0"] for ctx in answers)
+
     def test_ids_dns_context_ignores_unsafe_query_template(self):
         import random
 
