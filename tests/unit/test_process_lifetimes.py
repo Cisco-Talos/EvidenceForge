@@ -3,6 +3,7 @@
 
 """Tests for process lifetime realism helpers."""
 
+import random
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -18,6 +19,8 @@ from evidenceforge.generation.activity.generator import (
 from evidenceforge.generation.engine.baseline import (
     _eligible_for_hourly_module_load,
     _session_active_at,
+    _windows_background_process_lifetime_seconds,
+    _windows_stale_process_target_lifetime,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
@@ -45,6 +48,62 @@ def test_sqlcmd_select_query_has_bounded_foreground_lifetime() -> None:
 
     assert lifetime is not None
     assert lifetime[1] <= 25.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line", "maximum"),
+    [
+        (
+            r"C:\Windows\System32\cleanmgr.exe",
+            "cleanmgr.exe /autoclean /d C:",
+            3600.0,
+        ),
+        (
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe",
+            "MpCmdRun.exe -SignatureUpdate",
+            420.0,
+        ),
+        (
+            r"C:\Windows\System32\dllhost.exe",
+            "dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}",
+            3600.0,
+        ),
+        (
+            r"C:\Windows\System32\conhost.exe",
+            "conhost.exe 0x4",
+            900.0,
+        ),
+    ],
+)
+def test_windows_background_process_lifetimes_are_bounded(
+    image: str,
+    command_line: str,
+    maximum: float,
+) -> None:
+    """Maintenance/background process helpers should not fall into stale hourly cleanup."""
+    lifetime = _windows_background_process_lifetime_seconds(
+        image,
+        command_line,
+        random.Random(42),
+    )
+
+    assert lifetime is not None
+    assert 0 < lifetime <= maximum
+
+
+def test_windows_stale_gui_lifetime_has_broad_tail() -> None:
+    """GUI cleanup targets should vary beyond the old one-to-four-hour band."""
+    samples = [
+        _windows_stale_process_target_lifetime(
+            r"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe",
+            '"C:\\Program Files (x86)\\Dropbox\\Client\\Dropbox.exe" /home',
+            random.Random(seed),
+        )
+        for seed in range(40)
+    ]
+
+    assert min(samples) < 2 * 3600
+    assert max(samples) > 5 * 3600
 
 
 @pytest.mark.parametrize(

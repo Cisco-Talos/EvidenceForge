@@ -92,9 +92,9 @@ def test_timing_profiles_load_default_relationship():
         default_max_ms=0,
         default_position="after",
     )
-    assert security_process_window.max_ms >= 4000
+    assert security_process_window.max_ms <= 1000
     assert 0 < security_terminate_window.min_ms < security_terminate_window.max_ms
-    assert sysmon_process_window.max_ms >= 2000
+    assert sysmon_process_window.max_ms <= 1200
     assert 0 < sysmon_terminate_window.min_ms < sysmon_terminate_window.max_ms
     assert ecar_process_window.max_ms >= 900
     assert 0 < ecar_after_sysmon_window.min_ms < ecar_after_sysmon_window.max_ms
@@ -105,8 +105,7 @@ def test_timing_profiles_load_default_relationship():
         default_max_ms=0,
         default_position="after",
     )
-    assert security_gap_window.min_ms >= 250
-    assert security_gap_window.max_ms > security_gap_window.min_ms
+    assert 0 < security_gap_window.min_ms < security_gap_window.max_ms <= 700
     audit_after_command_window = get_timing_window(
         "windows.audit_after_visible_admin_command",
         default_min_ms=0,

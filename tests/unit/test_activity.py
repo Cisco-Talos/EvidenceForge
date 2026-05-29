@@ -146,6 +146,66 @@ def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     assert lifetime is None
 
 
+def test_linux_server_ssh_client_requires_ssh_source_session():
+    """Linux server SSH client telemetry should not attach to invisible local sessions."""
+    state_manager = StateManager()
+    generator = ActivityGenerator(state_manager, {})
+    timestamp = datetime(2024, 3, 18, 15, 33, tzinfo=UTC)
+    user = User(username="aisha.johnson", full_name="Aisha Johnson", email="aisha@example.com")
+    server = System(hostname="DB-PROD-01", ip="10.10.4.10", os="Ubuntu 22.04", type="server")
+    generator._scenario_start_time = timestamp - timedelta(hours=1)
+
+    state_manager.set_current_time(timestamp - timedelta(minutes=30))
+    state_manager.create_session(
+        username=user.username,
+        system=server.hostname,
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+
+    assert generator._active_source_linux_session(user, server, timestamp) is None
+
+
+def test_linux_server_ssh_client_uses_active_ssh_source_session():
+    """Linux server SSH client telemetry can attach to a visible SSH session."""
+    state_manager = StateManager()
+    generator = ActivityGenerator(state_manager, {})
+    timestamp = datetime(2024, 3, 18, 15, 33, tzinfo=UTC)
+    user = User(username="aisha.johnson", full_name="Aisha Johnson", email="aisha@example.com")
+    server = System(hostname="DB-PROD-01", ip="10.10.4.10", os="Ubuntu 22.04", type="server")
+
+    state_manager.set_current_time(timestamp - timedelta(minutes=5))
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=server.hostname,
+        logon_type=10,
+        source_ip="10.10.1.21",
+        source_port=51234,
+        session_kind="ssh",
+    )
+    state_manager.update_session_metadata(
+        logon_id,
+        network_close_time=timestamp + timedelta(minutes=15),
+    )
+
+    session = generator._active_source_linux_session(user, server, timestamp)
+
+    assert session is not None
+    assert session.logon_id == logon_id
+
+
+def test_linux_server_bash_history_requires_visible_session():
+    """Linux server bash history should not be emitted without a session owner."""
+    generator = ActivityGenerator(StateManager(), {})
+    timestamp = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    user = User(username="lina.nguyen", full_name="Lina Nguyen", email="lina@example.com")
+    server = System(hostname="DB-PROD-01", ip="10.10.4.10", os="Ubuntu 22.04", type="server")
+    generator._scenario_start_time = timestamp - timedelta(hours=1)
+
+    assert generator._fit_bash_history_time_to_linux_session(user, server, timestamp) is None
+
+
 def test_zeek_connection_observation_time_varies_submillisecond_suffixes():
     """Burst flows should not preserve one generated microsecond suffix across tuples."""
     base = datetime(2024, 3, 18, 14, 11, 22, 705641, tzinfo=UTC)
@@ -3168,6 +3228,224 @@ class TestActivityGenerator:
 
         assert len(events) == 2
         assert len(set(event_seconds)) == 2
+
+    def test_bash_history_suppresses_command_after_ssh_session_close(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Serialized bash history should not leak past a concrete SSH session close."""
+        linux = System(hostname="DB-PROD-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        close_time = start_time + timedelta(minutes=5)
+        session = state_manager.register_session(
+            logon_id="0xabc100",
+            username=user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            source_port=48222,
+            start_time=start_time,
+            session_kind="ssh",
+        )
+        state_manager.update_session_metadata(
+            session.logon_id,
+            source_ready_time=start_time + timedelta(seconds=3),
+            network_close_time=close_time,
+        )
+        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+            close_time + timedelta(seconds=10)
+        )
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        scheduled = activity_gen.generate_bash_command(
+            user,
+            linux,
+            close_time - timedelta(seconds=20),
+            "exit",
+            emit_process_telemetry=False,
+        )
+
+        assert scheduled is None
+        assert not bash_emitter.emit.called
+
+    def test_bash_history_moves_serialized_command_to_next_ssh_session(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """A delayed command may land in the next visible session, not after the closed one."""
+        linux = System(hostname="WEB-EXT-01", ip="10.0.0.3", os="Ubuntu 22.04", type="server")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        first_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first_close = first_start + timedelta(minutes=5)
+        second_start = first_start + timedelta(minutes=20)
+        second_ready = second_start + timedelta(seconds=4)
+        second_close = second_start + timedelta(minutes=25)
+        first = state_manager.register_session(
+            logon_id="0xabc101",
+            username=user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            source_port=48222,
+            start_time=first_start,
+            session_kind="ssh",
+        )
+        second = state_manager.register_session(
+            logon_id="0xabc102",
+            username=user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.51",
+            source_port=49222,
+            start_time=second_start,
+            session_kind="ssh",
+        )
+        state_manager.update_session_metadata(
+            first.logon_id,
+            source_ready_time=first_start + timedelta(seconds=3),
+            network_close_time=first_close,
+        )
+        state_manager.update_session_metadata(
+            second.logon_id,
+            source_ready_time=second_ready,
+            network_close_time=second_close,
+        )
+        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+            first_close + timedelta(seconds=10)
+        )
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        scheduled = activity_gen.generate_bash_command(
+            user,
+            linux,
+            first_close - timedelta(seconds=20),
+            "systemctl reload apache2",
+            emit_process_telemetry=False,
+        )
+
+        assert scheduled is not None
+        assert second_ready <= scheduled < second_close - timedelta(milliseconds=900)
+        event = bash_emitter.emit.call_args[0][0]
+        assert event.timestamp == scheduled
+
+    def test_bash_history_suppresses_after_recorded_session_close_without_active_session(
+        self, activity_gen, mock_emitters
+    ):
+        """Closed-session memory should block later bash noise until another session exists."""
+        linux = System(hostname="PROXY-01", ip="10.0.0.4", os="Ubuntu 22.04", type="server")
+        user = User(username="marcus.chen", full_name="Marcus Chen", email="marcus@example.com")
+        close_time = datetime(2024, 1, 15, 14, 11, 42, tzinfo=UTC)
+        command_time = close_time + timedelta(seconds=30)
+        activity_gen._linux_shell_last_session_close[(linux.hostname, user.username)] = close_time
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        scheduled = activity_gen.generate_bash_command(
+            user,
+            linux,
+            command_time,
+            "systemctl status sshd",
+            emit_process_telemetry=False,
+        )
+
+        assert scheduled is None
+        assert not bash_emitter.emit.called
+
+    def test_bash_history_updates_owning_session_activity(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Session logoff planning should see serialized bash-history activity."""
+        linux = System(hostname="PROXY-01", ip="10.0.0.4", os="Ubuntu 22.04", type="server")
+        user = User(username="marcus.chen", full_name="Marcus Chen", email="marcus@example.com")
+        start_time = datetime(2024, 1, 15, 13, 24, 8, tzinfo=UTC)
+        command_time = start_time + timedelta(minutes=47)
+        session = state_manager.register_session(
+            logon_id="0xabc103",
+            username=user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            source_port=58031,
+            start_time=start_time,
+            session_kind="ssh",
+        )
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        scheduled = activity_gen.generate_bash_command(
+            user,
+            linux,
+            command_time,
+            "journalctl -u systemd-resolved --since '30 min ago' --no-pager | tail -20",
+            emit_process_telemetry=False,
+        )
+
+        assert scheduled is not None
+        assert session.last_activity_time is not None
+        assert session.last_activity_time >= scheduled
+
+    def test_linux_ssh_client_bash_updates_source_session_activity(
+        self, activity_gen, state_manager, test_user, mock_emitters
+    ):
+        """Source-side ssh commands should keep their local shell session alive."""
+        source = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.0.3",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        target = System(
+            hostname="PROXY-01",
+            ip="10.0.0.4",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        start_time = datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
+        requested_time = start_time + timedelta(minutes=8)
+        state_manager.set_current_time(start_time - timedelta(seconds=30))
+        systemd_pid = state_manager.create_process(
+            source.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc104",
+            username=test_user.username,
+            system=source.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=start_time,
+            session_kind="interactive",
+        )
+        activity_gen._system_pids = {source.hostname: {"systemd": systemd_pid}}
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        result = activity_gen.ensure_linux_ssh_client_process(
+            user=test_user,
+            source_system=source,
+            target_system=target,
+            time=requested_time,
+            process_image="/usr/bin/ssh",
+            source_port=50222,
+        )
+
+        assert result is not None
+        assert session.last_activity_time is not None
+        assert session.last_activity_time >= requested_time
 
     def test_linux_shell_command_bundle_anchor_is_stable(self):
         """Identical shell command requests should have stable action anchors."""

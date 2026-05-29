@@ -21,6 +21,7 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -162,6 +163,44 @@ def test_source_time_after_source_uses_temporal_constraint_graph() -> None:
     )
 
     assert dependent_time >= anchor_time + expected_gap
+
+
+def test_windows_security_process_create_tracks_sysmon_source_time(tmp_path: Path) -> None:
+    """Security 4688 and Sysmon Event 1 for one process should stay source-native-close."""
+    process_start = _base_time()
+    event = SecurityEvent(
+        timestamp=process_start,
+        event_type="process_create",
+        src_host=_host_context(),
+        process=_process_context(process_start),
+        auth=AuthContext(
+            username="alice",
+            user_sid="S-1-5-21-100-200-300-1101",
+            logon_id="0x12345",
+        ),
+    )
+    windows = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "windows_event_security.xml",
+        buffer_size=10,
+    )
+    sysmon = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        tmp_path / "windows_event_sysmon.xml",
+        buffer_size=10,
+    )
+
+    # Render Security first to prove the shared timing plan does not depend on emitter order.
+    windows.emit(event)
+    sysmon.emit(event)
+
+    security_time = next(row for row in windows._event_dicts if row["EventID"] == 4688)[
+        "TimeCreated"
+    ]
+    sysmon_time = next(row for row in sysmon._event_dicts if row["EventID"] == 1)["TimeCreated"]
+    delta_ms = (security_time - sysmon_time).total_seconds() * 1000
+
+    assert 0 < delta_ms <= 700
 
 
 def test_independent_equal_canonical_timestamps_may_share_source_time() -> None:

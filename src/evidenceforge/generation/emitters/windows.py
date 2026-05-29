@@ -789,10 +789,15 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
+        process_seed = (host.hostname, proc.pid, process_start_time)
+        render_time = _SOURCE_TIMING.source_time_after_source(
             event,
             "source.windows_security_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
+            after_source_key="source.sysmon_process_create",
+            gap_key="source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=process_seed,
+            after_seed_parts=process_seed,
+            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -863,10 +868,15 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
-        render_time = _SOURCE_TIMING.source_time(
+        process_seed = (host.hostname, proc.pid, process_start_time)
+        render_time = _SOURCE_TIMING.source_time_after_source(
             event,
             "source.windows_security_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
+            after_source_key="source.sysmon_process_create",
+            gap_key="source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=process_seed,
+            after_seed_parts=process_seed,
+            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -1915,16 +1925,30 @@ class WindowsEventEmitter(LogEmitter):
         self._update_spooled_events_unlocked(updates)
 
     def _shift_spooled_process_terminations_after_dependents_unlocked(self) -> None:
-        """Keep spooled Security 4689 events after visible child-process lifecycle."""
+        """Keep spooled Security 4689 events after visible process dependents."""
         latest_child_create: dict[tuple[str, str], datetime] = {}
+        latest_same_process_dependent: dict[tuple[str, str, str], datetime] = {}
         for _, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
-            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+            if not isinstance(ts, datetime):
                 continue
-            parent_pid = str(event.get("ProcessId") or "")
-            if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
-                key = (str(event.get("Computer", "")), parent_pid.lower())
-                latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            computer = str(event.get("Computer", ""))
+            if event.get("EventID") == 4688:
+                parent_pid = str(event.get("ProcessId") or "")
+                if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                    key = (computer, parent_pid.lower())
+                    latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            elif event.get("EventID") == 5156:
+                key = _security_process_key(
+                    computer,
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                if key is not None:
+                    latest_same_process_dependent[key] = max(
+                        ts,
+                        latest_same_process_dependent.get(key, ts),
+                    )
 
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
@@ -1932,12 +1956,45 @@ class WindowsEventEmitter(LogEmitter):
             if not isinstance(ts, datetime) or event.get("EventID") != 4689:
                 continue
             process_pid = str(event.get("ProcessId") or "")
-            key = (str(event.get("Computer", "")), process_pid.lower())
-            latest = latest_child_create.get(key)
-            if process_pid and latest is not None and ts <= latest:
+            computer = str(event.get("Computer", ""))
+            child_key = (computer, process_pid.lower())
+            process_key = _security_process_key(
+                computer,
+                event.get("ProcessId"),
+                event.get("ProcessName"),
+            )
+            candidates: list[tuple[datetime, str, tuple[Any, ...]]] = []
+            latest_child = latest_child_create.get(child_key)
+            if process_pid and latest_child is not None:
+                candidates.append(
+                    (
+                        latest_child,
+                        "windows.process_exit_after_visible_child",
+                        (child_key[0], child_key[1], latest_child),
+                    )
+                )
+            if process_key is not None:
+                latest_dependent = latest_same_process_dependent.get(process_key)
+                if latest_dependent is not None:
+                    candidates.append(
+                        (
+                            latest_dependent,
+                            "windows.process_exit_after_visible_dependent",
+                            (
+                                process_key[0],
+                                process_key[1],
+                                process_key[2],
+                                latest_dependent,
+                            ),
+                        )
+                    )
+            if not candidates:
+                continue
+            latest, relationship_key, seed_parts = max(candidates, key=lambda item: item[0])
+            if ts <= latest:
                 event["TimeCreated"] = latest + sample_timing_delta(
-                    "windows.process_exit_after_visible_child",
-                    seed_parts=(key[0], key[1], latest),
+                    relationship_key,
+                    seed_parts=seed_parts,
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2313,13 +2370,15 @@ class WindowsEventEmitter(LogEmitter):
                 break
 
     def _shift_process_terminations_after_dependents(self) -> None:
-        """Keep Security 4689 aligned with visible child-process lifecycle.
+        """Keep Security 4689 aligned with visible process lifecycle dependents.
 
         Sysmon Event 5 already moves after visible same-process follow-on
-        telemetry. Security 4689 needs the same source-native lifecycle truth
-        for parent processes that visibly spawn children later in the buffer.
+        telemetry. Security 4689 needs the same source-native lifecycle truth for
+        parent processes that visibly spawn children and for same-process
+        dependents such as WFP 5156 connection rows.
         """
         latest_child_create: dict[tuple[str, str], datetime] = {}
+        latest_same_process_dependent: dict[tuple[str, str, str], datetime] = {}
         terminations: list[tuple[tuple[str, str], dict[str, Any]]] = []
 
         for event in self._event_dicts:
@@ -2333,18 +2392,63 @@ class WindowsEventEmitter(LogEmitter):
                 if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
                     key = (computer, parent_pid.lower())
                     latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            elif event_id == 5156:
+                key = _security_process_key(
+                    computer,
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                if key is not None:
+                    latest_same_process_dependent[key] = max(
+                        ts,
+                        latest_same_process_dependent.get(key, ts),
+                    )
             elif event_id == 4689:
                 process_pid = str(event.get("ProcessId") or "")
                 if process_pid:
                     terminations.append(((computer, process_pid.lower()), event))
 
-        for key, event in terminations:
+        for child_key, event in terminations:
             ts = event.get("TimeCreated")
-            latest = latest_child_create.get(key)
-            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+            if not isinstance(ts, datetime):
+                continue
+            process_key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("ProcessId"),
+                event.get("ProcessName"),
+            )
+            candidates: list[tuple[datetime, str, tuple[Any, ...]]] = []
+            latest_child = latest_child_create.get(child_key)
+            if latest_child is not None:
+                candidates.append(
+                    (
+                        latest_child,
+                        "windows.process_exit_after_visible_child",
+                        (child_key[0], child_key[1], latest_child),
+                    )
+                )
+            if process_key is not None:
+                latest_dependent = latest_same_process_dependent.get(process_key)
+                if latest_dependent is not None:
+                    candidates.append(
+                        (
+                            latest_dependent,
+                            "windows.process_exit_after_visible_dependent",
+                            (
+                                process_key[0],
+                                process_key[1],
+                                process_key[2],
+                                latest_dependent,
+                            ),
+                        )
+                    )
+            if not candidates:
+                continue
+            latest, relationship_key, seed_parts = max(candidates, key=lambda item: item[0])
+            if ts <= latest:
                 event["TimeCreated"] = latest + sample_timing_delta(
-                    "windows.process_exit_after_visible_child",
-                    seed_parts=(key[0], key[1], latest),
+                    relationship_key,
+                    seed_parts=seed_parts,
                 )
 
     def _shift_process_dependents_after_create(self) -> None:

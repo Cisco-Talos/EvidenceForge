@@ -85,8 +85,8 @@ class LinuxShellCommandExecutor(Protocol):
         system: System,
         requested_time: datetime,
         command: str,
-    ) -> datetime:
-        """Return the source-visible bash-history timestamp."""
+    ) -> datetime | None:
+        """Return the source-visible bash-history timestamp, or none if no session can own it."""
         ...
 
     def _is_within_scenario_window(self, time: datetime) -> bool:
@@ -158,6 +158,8 @@ class LinuxShellCommandActionBundle:
             self._request.time,
             command,
         )
+        if scheduled_time is None:
+            return None
         if not self._executor._is_within_scenario_window(scheduled_time):
             return None
         self._executor._emit_bash_command_event(

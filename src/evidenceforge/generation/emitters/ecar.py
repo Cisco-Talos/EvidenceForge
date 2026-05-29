@@ -289,6 +289,18 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["tid"] = event.edr.tid
 
     @staticmethod
+    def _apply_process_provenance(event_data: dict[str, Any], process: Any | None) -> None:
+        """Copy known process provenance onto dependent source-native eCAR rows."""
+        if process is None:
+            return
+        image = str(getattr(process, "image", "") or "")
+        if image and not event_data.get("image_path"):
+            event_data["image_path"] = image
+        command_line = str(getattr(process, "command_line", "") or "")
+        if command_line and not event_data.get("command_line"):
+            event_data["command_line"] = command_line
+
+    @staticmethod
     def _stable_tid(
         hostname: str,
         pid: int,
@@ -300,7 +312,12 @@ class EcarEmitter(HostMultiplexEmitter):
         if pid <= 0:
             return -1
         if os_category == "linux":
-            return pid
+            seed = _stable_seed(
+                f"ecar_linux_tid:{hostname}:{pid}:{salt}:{int(timestamp.timestamp()) // 30}"
+            )
+            if salt in {"process_create", "process_terminate"} and seed % 100 < 55:
+                return pid
+            return pid + 1 + (seed % 997)
         bucket_ms = int(timestamp.timestamp() * 1000)
         tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
         if os_category == "windows":
@@ -539,6 +556,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._host_fqdn(host),
         }
+        self._apply_process_provenance(event_data, proc)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -567,6 +585,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "registry_value": event.registry.value if event.registry else "",
             "_host_fqdn": self._host_fqdn(host),
         }
+        self._apply_process_provenance(event_data, proc)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -677,6 +696,8 @@ class EcarEmitter(HostMultiplexEmitter):
             )
             if principal:
                 event_data["principal"] = principal
+            if process_identity_safe:
+                self._apply_process_provenance(event_data, rendered_source_proc)
             self._apply_flow_edr_context(event_data, event, include_actor=process_identity_safe)
             event_data.setdefault(
                 "tid",
@@ -756,6 +777,8 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
                 if principal:
                     event_data["principal"] = principal
+                if listener_observed and inbound_proc is not None:
+                    self._apply_process_provenance(event_data, inbound_proc)
                 event_data.setdefault(
                     "tid",
                     self._stable_tid(
@@ -884,12 +907,10 @@ class EcarEmitter(HostMultiplexEmitter):
         if not username or username == "-":
             return ""
         pid = int(getattr(process, "pid", -1) or -1)
-        net = event.network
         probability = _flow_principal_probability(username, direction)
         key = (
-            f"ecar_flow_principal:{direction}:{host.hostname}:{pid}:"
-            f"{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
-            f"{int(event.timestamp.timestamp() * 1000)}"
+            f"ecar_flow_principal:{direction}:{host.hostname}:{pid}:{username}:"
+            f"{getattr(process, 'image', '')}"
         )
         return username if _ecar_probability_enabled(key, probability) else ""
 
@@ -1290,9 +1311,12 @@ class EcarEmitter(HostMultiplexEmitter):
             if new_pid is None:
                 return
             old_pid = cls._ecar_int(record.get("pid"))
+            old_tid = cls._ecar_int(record.get("tid"))
             record["pid"] = new_pid
-            if cls._ecar_int(record.get("tid")) == old_pid:
+            if old_tid == old_pid:
                 record["tid"] = new_pid
+            elif old_tid > old_pid:
+                record["tid"] = new_pid + min(old_tid - old_pid, 5000)
 
         def rewrite_parent_field(record: dict[str, Any]) -> None:
             parent_id = str(record.get("actorID") or "")

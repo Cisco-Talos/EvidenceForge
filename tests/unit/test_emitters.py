@@ -719,6 +719,82 @@ class TestWindowsEventEmitter:
         assert termination["TimeCreated"] == child_time + expected_delta
         emitter._cleanup_spool_unlocked()
 
+    def test_process_termination_shifted_after_same_process_wfp(self, format_def, temp_output):
+        """Security 4689 should not visibly terminate before later same-process 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = terminate_time + timedelta(hours=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0xe78",
+                "ProcessName": r"C:\Python311\python.exe",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 3704,
+                "Application": r"\device\harddiskvolume1\python311\python.exe",
+            },
+        ]
+
+        emitter._shift_process_terminations_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_dependent",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0xe78",
+                "python.exe",
+                wfp_time,
+            ),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == wfp_time + expected_delta
+
+    def test_spooled_process_termination_shifted_after_same_process_wfp(
+        self, format_def, temp_output
+    ):
+        """Spooled Security 4689 fixups should account for later same-process 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = terminate_time + timedelta(hours=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0xe78",
+                "ProcessName": r"C:\Python311\python.exe",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 3704,
+                "Application": r"\device\harddiskvolume1\python311\python.exe",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_terminations_after_dependents_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_dependent",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0xe78",
+                "python.exe",
+                wfp_time,
+            ),
+        )
+        termination = next(event for event in events if event["EventID"] == 4689)
+        assert termination["TimeCreated"] == wfp_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
     def test_process_termination_shifted_after_same_pid_create(self, format_def, temp_output):
         """Security 4689 should not visibly precede same-process Security 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)

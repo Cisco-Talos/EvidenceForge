@@ -886,6 +886,34 @@ class TestDualSessionParentSelection:
 
         assert parent_pid == wrapper_pid
 
+    def test_system_admin_utility_gets_service_shell_parent(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Later SYSTEM admin utilities should not flatten directly to services.exe."""
+        system_user = User(
+            username="SYSTEM",
+            full_name="SYSTEM",
+            email="system@example.com",
+            enabled=True,
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        command_line = "net user svc_mhsync MhsSvc!2024 /add /domain"
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            system_user,
+            datetime(2024, 3, 18, 12, 15, 0, tzinfo=UTC),
+            "0x3e7",
+            r"C:\Windows\System32\net.exe",
+            command_line,
+        )
+        parent_proc = state_manager.get_process(win_system.hostname, parent_pid)
+
+        assert parent_proc is not None
+        assert parent_proc.image == r"C:\Windows\System32\cmd.exe"
+        assert parent_proc.command_line == rf"C:\Windows\System32\cmd.exe /c {command_line}"
+        assert parent_proc.parent_pid == pids["svchost_netsvcs"]
+
     def test_interactive_logon_still_gets_explorer_when_network_exists(
         self, state_manager, mock_emitters, win_system, user
     ):
