@@ -694,6 +694,21 @@ or follow-up batch is needed.
   fan-out, and scenario/storyline polish. The 10-loop batch is complete, and
   scenario updates are still deferred until explicitly authorized.
 
+- Loops 248-257 continued the current-dev blind realism loop on
+  `scenarios/iteration-test`. The batch fixed eCAR SSH login/logout source-port
+  symmetry, public DNS PTR/MX/NS/SOA realism, SSH receiver-side lifecycle,
+  forward-proxy daemon identity, DNS answer/packet accounting, Windows Security
+  5156 inbound directionality, firewall deny path ownership, paired endpoint
+  eCAR FLOW millisecond texture, and Windows Security unavailable endpoint port
+  rendering. Loop 256 moved exact same-ms cross-host eCAR FLOW pairs from 1804 to
+  125 and scored 38/38/34/36, average 36.5. Loop 257 moved Windows
+  address-dash/port-zero pairs from 322 to 0 and scored 32/63/34/46, average
+  43.75; Detection's high score came from public DNS answer ownership rather
+  than recurrence of the fixed Windows port issue. Highest-leverage remaining
+  targets are recognizable public DNS answer ownership, generic Linux eCAR
+  `/tmp/.cache-*` daemon file side effects, bash-history command-pool diversity,
+  and source-side SCP flow attribution.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

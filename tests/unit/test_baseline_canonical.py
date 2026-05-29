@@ -1439,7 +1439,7 @@ class TestBaselineSshTiming:
         assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
         assert "max(1.0, ssh_duration)" in source
-        assert "emit_session_close=(" in source
+        assert "emit_session_close=disconnect_time < self.end_time" in source
         assert 'source="baseline_ssh_noise"' in source
 
     def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):

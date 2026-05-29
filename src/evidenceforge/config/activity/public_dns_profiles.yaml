@@ -15,11 +15,47 @@ nameserver_profiles:
       - google.com
       - googleapis.com
       - gstatic.com
+      - googleusercontent.com
+      - googlevideo.com
       - pki.goog
       - youtube.com
     answer_sets:
       - ["ns1.google.com", "ns2.google.com", "ns3.google.com", "ns4.google.com"]
     soa_rnames: ["dns-admin.google.com"]
+
+  - name: canonical
+    weight: 0
+    match_suffixes:
+      - canonical.com
+      - ubuntu.com
+      - snapcraft.io
+    answer_sets:
+      - ["ns1.canonical.com", "ns2.canonical.com", "ns3.canonical.com"]
+      - ["ns1.canonical.com", "ns2.canonical.com", "ns3.canonical.com", "ns4.canonical.com"]
+    soa_rnames: ["hostmaster.canonical.com"]
+
+  - name: meta
+    weight: 0
+    match_suffixes:
+      - facebook.com
+      - facebook.net
+      - fbcdn.net
+    answer_sets:
+      - ["a.ns.facebook.com", "b.ns.facebook.com", "c.ns.facebook.com", "d.ns.facebook.com"]
+      - ["a.ns.facebook.com", "b.ns.facebook.com"]
+    soa_rnames: ["dns.facebook.com"]
+
+  - name: adobe_edge
+    weight: 0
+    match_suffixes:
+      - adobe.com
+      - adobe.io
+      - adobedtm.com
+      - typekit.com
+    answer_sets:
+      - ["a1-217.akam.net", "a7-64.akam.net", "a10-65.akam.net", "a13-66.akam.net"]
+      - ["adobe-dns-01.adobe.com", "adobe-dns-02.adobe.com", "adobe-dns-03.adobe.com"]
+    soa_rnames: ["hostmaster.adobe.com"]
 
   - name: microsoft_azure
     weight: 0
@@ -54,7 +90,7 @@ nameserver_profiles:
     soa_rnames: ["awsdns-hostmaster.amazon.com"]
 
   - name: cloudflare
-    weight: 20
+    weight: 17
     match_suffixes:
       - cloudflare.com
     answer_sets:
@@ -62,10 +98,20 @@ nameserver_profiles:
       - ["amir.ns.cloudflare.com", "daisy.ns.cloudflare.com"]
       - ["elsa.ns.cloudflare.com", "hank.ns.cloudflare.com"]
       - ["jill.ns.cloudflare.com", "norm.ns.cloudflare.com"]
+      - ["brad.ns.cloudflare.com", "lola.ns.cloudflare.com"]
+      - ["coco.ns.cloudflare.com", "paul.ns.cloudflare.com"]
+      - ["gail.ns.cloudflare.com", "todd.ns.cloudflare.com"]
     soa_rnames: ["dns.cloudflare.com"]
 
   - name: akamai
     weight: 11
+    match_suffixes:
+      - akamai.net
+      - akadns.net
+      - akamaiedge.net
+      - akamaihd.net
+      - edgekey.net
+      - edgesuite.net
     answer_sets:
       - ["a1-66.akam.net", "a11-67.akam.net", "a16-64.akam.net", "a18-65.akam.net", "a26-66.akam.net"]
       - ["use1.akam.net", "use2.akam.net", "usw2.akam.net", "eur2.akam.net", "asia1.akam.net"]
@@ -79,12 +125,14 @@ nameserver_profiles:
     soa_rnames: ["hostmaster.fastly.com"]
 
   - name: registrar_dns
-    weight: 17
+    weight: 14
     answer_sets:
       - ["dns1.registrar-servers.com", "dns2.registrar-servers.com"]
       - ["ns1.dnsimple.com", "ns2.dnsimple-edge.net", "ns3.dnsimple.com", "ns4.dnsimple-edge.org"]
       - ["ns1.hover.com", "ns2.hover.com"]
       - ["ns1.name-services.com", "ns2.name-services.com", "ns3.name-services.com", "ns4.name-services.com"]
+      - ["ns-cloud-a1.googledomains.com", "ns-cloud-a2.googledomains.com", "ns-cloud-a3.googledomains.com", "ns-cloud-a4.googledomains.com"]
+      - ["dns1.p01.nsone.net", "dns2.p01.nsone.net", "dns3.p01.nsone.net", "dns4.p01.nsone.net"]
     soa_rnames: ["hostmaster.registrar-servers.com", "admin.dnsimple.com"]
 
   - name: domain_owned
@@ -93,6 +141,22 @@ nameserver_profiles:
       - ["ns1.{domain}", "ns2.{domain}"]
       - ["dns1.{domain}", "dns2.{domain}"]
     soa_rnames: ["dns-admin.{domain}", "hostmaster.{domain}"]
+
+  - name: ultradns
+    weight: 7
+    answer_sets:
+      - ["pdns90.ultradns.com", "pdns90.ultradns.net", "pdns90.ultradns.biz", "pdns90.ultradns.org"]
+      - ["udns1.cscdns.net", "udns2.cscdns.uk"]
+      - ["a1-38.akam.net", "a13-67.akam.net", "a20-64.akam.net", "a24-65.akam.net"]
+    soa_rnames: ["dns-admin.ultradns.com", "premiumdns.support.neustar"]
+
+  - name: managed_edge_dns
+    weight: 6
+    answer_sets:
+      - ["ns1.vercel-dns.com", "ns2.vercel-dns.com"]
+      - ["ns1.netlifydns.com", "ns2.netlifydns.com", "ns3.netlifydns.com", "ns4.netlifydns.com"]
+      - ["ns01.squarespacedns.com", "ns02.squarespacedns.com", "ns03.squarespacedns.com", "ns04.squarespacedns.com"]
+    soa_rnames: ["hostmaster.vercel-dns.com", "dns-admin.netlify.com"]
 
 mail_profiles:
   - name: google_workspace
@@ -114,10 +178,12 @@ mail_profiles:
       - ["0 {domain_hyphen}.mail.protection.outlook.com"]
 
   - name: proofpoint
-    weight: 14
+    weight: 12
     answer_sets:
       - ["5 mxa-001b2d01.gslb.pphosted.com", "5 mxb-001b2d01.gslb.pphosted.com"]
       - ["10 mxa-0023b701.gslb.pphosted.com", "10 mxb-0023b701.gslb.pphosted.com"]
+      - ["10 mxa-0031a901.gslb.pphosted.com", "10 mxb-0031a901.gslb.pphosted.com"]
+      - ["5 mxa-004f5c01.gslb.pphosted.com", "5 mxb-004f5c01.gslb.pphosted.com"]
 
   - name: mimecast
     weight: 11
@@ -130,6 +196,8 @@ mail_profiles:
     answer_sets:
       - ["10 inbound-smtp.us-east-1.amazonaws.com"]
       - ["10 feedback-smtp.us-west-2.amazonses.com"]
+      - ["10 inbound-smtp.us-west-2.amazonaws.com"]
+      - ["10 inbound-smtp.eu-west-1.amazonaws.com"]
 
   - name: fastmail
     weight: 7
@@ -146,3 +214,23 @@ mail_profiles:
     answer_sets:
       - ["10 mx1.{domain}", "20 mx2.{domain}"]
       - ["10 mailhost.{domain}"]
+      - ["10 inbound.{domain}", "20 backup-mx.{domain}"]
+      - ["5 mail1.{domain}", "10 mail2.{domain}"]
+
+  - name: sendgrid
+    weight: 7
+    answer_sets:
+      - ["10 mx.sendgrid.net"]
+      - ["10 mx1.sendgrid.net", "20 mx2.sendgrid.net"]
+
+  - name: mailgun
+    weight: 6
+    answer_sets:
+      - ["10 mxa.mailgun.org", "10 mxb.mailgun.org"]
+      - ["10 mxa.eu.mailgun.org", "10 mxb.eu.mailgun.org"]
+
+  - name: zoho
+    weight: 5
+    answer_sets:
+      - ["10 mx.zoho.com", "20 mx2.zoho.com", "50 mx3.zoho.com"]
+      - ["10 mx.zoho.eu", "20 mx2.zoho.eu", "50 mx3.zoho.eu"]

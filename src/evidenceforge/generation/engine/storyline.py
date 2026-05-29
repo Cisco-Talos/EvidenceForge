@@ -2487,6 +2487,7 @@ class StorylineMixin:
                             orig_bytes=orig_bytes,
                             resp_bytes=resp_bytes,
                             auth_method="publickey",
+                            emit_session_close=True,
                             source="storyline_scp",
                         )
                         self._emit_scp_receiver_artifacts(
@@ -2843,6 +2844,7 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    emit_session_close=True,
                 )
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:

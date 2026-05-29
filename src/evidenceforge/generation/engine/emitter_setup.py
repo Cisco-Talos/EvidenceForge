@@ -813,7 +813,17 @@ class EmitterSetupMixin:
         roles = {role.lower() for role in (system.roles or [])}
         service_defaults = getattr(self, "_system_service_defaults", {})
         services = {svc.lower() for svc in service_defaults.get(system.hostname, [])}
-        web_markers = {"web_server", "forward_proxy", "apache", "apache2", "httpd", "nginx"}
+        proxy_markers = {"forward_proxy", "squid", "proxy"}
+        if roles & proxy_markers or services & proxy_markers:
+            squid_user = "squid" if is_rhel else "proxy"
+            pids["squid"] = _c(
+                pids["systemd"],
+                "/usr/sbin/squid",
+                "/usr/sbin/squid --foreground -YC",
+                squid_user,
+            )
+
+        web_markers = {"web_server", "apache", "apache2", "httpd", "nginx"}
         if roles & web_markers or services & web_markers or "web" in system.hostname.lower():
             if is_rhel:
                 pids["httpd"] = _c(

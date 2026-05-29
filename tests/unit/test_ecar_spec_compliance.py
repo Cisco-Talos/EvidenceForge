@@ -135,7 +135,13 @@ class TestPidEmission:
                 os_category="linux",
                 system_type="server",
             ),
-            auth=AuthContext(username="alice", logon_id="0x123", logon_type=10),
+            auth=AuthContext(
+                username="alice",
+                logon_id="0x123",
+                logon_type=10,
+                source_ip="10.0.0.10",
+                source_port=55222,
+            ),
             edr=EdrContext(object_id="session-1"),
         )
 
@@ -147,10 +153,13 @@ class TestPidEmission:
         assert row["action"] == "LOGIN"
         assert "logon_type" not in row
         assert row["session_type"] == "ssh"
+        assert row["src_ip"] == "10.0.0.10"
+        assert row["src_port"] == 55222
 
         record = json.loads(emitter._render_event(row))
         assert "logon_type" not in record["properties"]
         assert record["properties"]["session_type"] == "ssh"
+        assert record["properties"]["src_port"] == "55222"
 
     def test_user_session_logon_type_is_declared_ecar_property(self, emitter, ts, caplog):
         """Rendered eCAR login logon_type should be accepted by format validation."""
@@ -1178,6 +1187,52 @@ class TestChronologicalOutput:
 
         assert emitted[0]["timestamp"] == ts
 
+    def test_paired_endpoint_flows_do_not_share_exact_millisecond(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Paired endpoint FLOW rows should carry host-local observation texture."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="srv01",
+                ip="10.0.0.20",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+                fqdn="srv01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=445,
+                protocol="tcp",
+                conn_state="S0",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
+        assert len(rendered_ms) == 2
+        assert len(set(rendered_ms)) == 2
+        assert all(ts - timedelta(milliseconds=37) <= row["timestamp"] <= ts for row in emitted)
+
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
         emitted: list[dict] = []
@@ -1599,6 +1654,7 @@ class TestChronologicalOutput:
             (88, "udp", {"dns": 5300, "lsass": 700}, 700),
             (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
             (445, "tcp", {"system": 4, "lsass": 700}, 4),
+            (8080, "tcp", {"squid": 3128, "apache2": 24118}, 3128),
         ],
     )
     def test_inbound_infrastructure_flow_uses_destination_service_pid(

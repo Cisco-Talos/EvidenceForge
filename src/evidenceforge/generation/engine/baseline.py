@@ -605,23 +605,66 @@ def _dns_context_for_ids_signature(
 
     from evidenceforge.events.contexts import DnsContext
 
-    dns_answer = _generate_random_external_ip(rng)
+    response_rng = random.Random(_stable_seed(f"ids_dns_response:{dns_query}"))
+    tld = dns_query.lower().rstrip(".").rsplit(".", 1)[-1]
+    odd_tld_outcomes: dict[str, tuple[tuple[str, int, list[str]], ...]] = {
+        "bit": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("REFUSED", 5, []),
+        ),
+        "cloud": (
+            ("NOERROR", 0, ["0.0.0.0"]),
+            ("NOERROR", 0, ["0.0.0.0"]),
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+        ),
+        "tk": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("NOERROR", 0, ["0.0.0.0"]),
+        ),
+        "to": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("NOERROR", 0, ["0.0.0.0"]),
+        ),
+        "top": (
+            ("NXDOMAIN", 3, []),
+            ("NXDOMAIN", 3, []),
+            ("SERVFAIL", 2, []),
+            ("NOERROR", 0, ["0.0.0.0"]),
+        ),
+    }
+    response_options = odd_tld_outcomes.get(tld)
+    if response_options is None:
+        rcode, rcode_num, answers = "NOERROR", 0, [_generate_random_external_ip(rng)]
+    else:
+        rcode, rcode_num, answers = response_rng.choice(response_options)
+    is_internal = _dns_is_internal_name(dns_query, ad_domain)
     return DnsContext(
         query=dns_query,
         trans_id=rng.randint(1, 65535),
         qtype=1,
         query_type="A",
-        rcode="NOERROR",
-        rcode_num=0,
-        answers=[dns_answer],
+        rcode=rcode,
+        rcode_num=rcode_num,
+        answers=list(answers),
         TTLs=[
             float(
                 _dns_base_ttl(
                     dns_query,
-                    _dns_is_internal_name(dns_query, ad_domain),
+                    is_internal,
                 )
             )
-        ],
+        ]
+        if answers
+        else [],
         rtt=_dns_rtt(rng, dns_server_ip),
     )
 
@@ -3353,6 +3396,38 @@ class BaselineMixin:
 
         return sensor.default_action
 
+    def _firewall_controls_connection_path(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        sensor: Any,
+        segment_cidrs: dict,
+    ) -> bool:
+        """Return whether a firewall sensor plausibly controls this connection path."""
+        import ipaddress as _ipaddress
+
+        def _resolve_segments(ip: str) -> set[str]:
+            try:
+                address = _ipaddress.ip_address(ip)
+            except ValueError:
+                return set()
+            return {seg_name for seg_name, cidr in segment_cidrs.items() if address in cidr}
+
+        src_segments = _resolve_segments(src_ip)
+        dst_segments = _resolve_segments(dst_ip)
+        sensor_segments = set(getattr(sensor, "monitoring_segments", []) or [])
+
+        if src_segments and dst_segments:
+            return bool((src_segments & sensor_segments) and (dst_segments & sensor_segments))
+        if src_segments:
+            return bool(src_segments & sensor_segments)
+        if dst_segments:
+            return bool(dst_segments & sensor_segments)
+
+        # External-to-public-edge traffic has no internal segment on either
+        # endpoint but can still hit the firewall's outside interface.
+        return True
+
     def _generate_firewall_deny_baseline(self, current_hour: datetime) -> None:
         """Generate denied connection events for firewall sensors.
 
@@ -3508,6 +3583,10 @@ class BaselineMixin:
                 # Resolve VIP back to real_ip; non-VIP public IPs resolve to
                 # "external" segment which always hits default deny.
                 policy_dst_ip = _vip_to_real.get(dst_ip, dst_ip)
+                if not self._firewall_controls_connection_path(
+                    src_ip, policy_dst_ip, sensor, segment_cidrs
+                ):
+                    continue
                 if (
                     self._evaluate_firewall_policy(
                         src_ip, policy_dst_ip, dst_port, sensor, segment_cidrs
@@ -4950,21 +5029,10 @@ class BaselineMixin:
                 return fw_sensor.interfaces.get("_default", "outside")
 
             def _fw_is_on_path(fw_sensor, src_ip: str, dst_ip: str) -> bool:
-                """Check if a firewall monitors segments containing src or dst."""
-                import ipaddress as _ipa_fw
-
-                for seg_name in fw_sensor.monitoring_segments:
-                    cidr = _inbound_segment_cidrs.get(seg_name)
-                    if cidr is None:
-                        continue
-                    try:
-                        addr_s = _ipa_fw.ip_address(src_ip)
-                        addr_d = _ipa_fw.ip_address(dst_ip)
-                        if addr_s in cidr or addr_d in cidr:
-                            return True
-                    except ValueError:
-                        continue
-                return False
+                """Check if a firewall controls the source/destination path."""
+                return self._firewall_controls_connection_path(
+                    src_ip, dst_ip, fw_sensor, _inbound_segment_cidrs
+                )
 
             if not inbound_conns:
                 pass  # All entries were external and host is internal-only
@@ -6866,9 +6934,7 @@ class BaselineMixin:
                         auth_method=auth_method,
                         public_key_type=key_type if auth_method == "publickey" else "",
                         public_key_hash=key_hash if auth_method == "publickey" else "",
-                        emit_session_close=(
-                            disconnect_time < self.end_time and rng.random() < 0.92
-                        ),
+                        emit_session_close=disconnect_time < self.end_time,
                         source="baseline_ssh_noise",
                     )
                 elif source_roll < 0.35:

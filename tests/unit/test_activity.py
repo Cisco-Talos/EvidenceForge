@@ -5604,6 +5604,97 @@ class TestActivityGenerator:
         assert wfp_event.network.protocol == "udp"
         assert wfp_event.network.ip_proto == 17
 
+    def test_inbound_windows_service_connection_emits_target_wfp(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Windows server service traffic should include destination-side 5156 evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc_system.ip: dc_system}
+
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        lsass_pid = state_manager.create_process(
+            system=dc_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {dc_system.hostname: {"lsass": lsass_pid}}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=dc_system.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=0.18,
+            orig_bytes=800,
+            resp_bytes=1200,
+            conn_state="SF",
+            emit_dns=False,
+        )
+
+        wfp_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        ]
+        assert len(wfp_events) == 1
+        target_wfp = wfp_events[0]
+        assert target_wfp.src_host.hostname == dc_system.hostname
+        assert target_wfp.network.src_ip == test_system.ip
+        assert target_wfp.network.dst_ip == dc_system.ip
+        assert target_wfp.network.initiating_pid == lsass_pid
+        assert target_wfp.process.image.endswith("lsass.exe")
+
+    def test_failed_inbound_windows_probe_does_not_emit_target_wfp(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Unanswered probes should not become successful inbound 5156 audit rows."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            type="server",
+            roles=["file_server"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, file_server.ip: file_server}
+        activity_gen._system_pids = {file_server.hostname: {"system": 4}}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=file_server.ip,
+            time=timestamp,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=0.02,
+            orig_bytes=0,
+            resp_bytes=0,
+            conn_state="S0",
+            emit_dns=False,
+        )
+
+        wfp_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        ]
+        assert not wfp_events
+
     def test_udp_kerberos_no_payload_failure_has_no_zeek_service(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):

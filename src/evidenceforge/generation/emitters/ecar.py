@@ -93,6 +93,7 @@ _SERVICE_PRINCIPAL_NAMES = {
     "nginx",
     "postgres",
     "postfix",
+    "proxy",
     "squid",
     "sshd",
     "www-data",
@@ -354,6 +355,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "outcome": "success",
             "_host_fqdn": self._host_fqdn(host),
         }
+        if event_data["src_ip"] != "-" and event.auth.source_port:
+            event_data["src_port"] = event.auth.source_port
         if getattr(host, "os_category", "") == "windows":
             event_data["logon_type"] = event.auth.logon_type
         else:
@@ -671,6 +674,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 seed_parts=outbound_seed,
                 not_before=not_before,
                 drop_late_process_identity=(net.protocol == "tcp" and net.dst_port in {22, 3389}),
+                paired_endpoint=event.dst_host is not None,
             )
             rendered_source_proc = source_proc if process_identity_safe else None
             rendered_pid = net.initiating_pid if process_identity_safe else -1
@@ -728,6 +732,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event_ts, _ = self._flow_source_time(
                 event,
                 seed_parts=inbound_seed,
+                paired_endpoint=event.src_host is not None,
             )
             # Host-based EDR sees the local interface IP, not the NAT VIP
             dst_ip = net.dst_ip
@@ -763,6 +768,7 @@ class EcarEmitter(HostMultiplexEmitter):
                         drop_late_process_identity=(
                             net.protocol == "tcp" and net.dst_port in {22, 3389}
                         ),
+                        paired_endpoint=event.src_host is not None,
                     )
                     if not process_identity_safe:
                         inbound_proc = None
@@ -809,6 +815,7 @@ class EcarEmitter(HostMultiplexEmitter):
         seed_parts: tuple[Any, ...],
         not_before: datetime | None = None,
         drop_late_process_identity: bool = False,
+        paired_endpoint: bool = False,
     ) -> tuple[datetime, bool]:
         """Return a FLOW timestamp bounded by the canonical connection interval.
 
@@ -825,21 +832,72 @@ class EcarEmitter(HostMultiplexEmitter):
                 seed_parts=seed_parts,
                 not_after=not_after,
             )
+            flow_time = self._paired_flow_observation_time(
+                event,
+                flow_time,
+                seed_parts=seed_parts,
+                not_before=None,
+                not_after=not_after,
+                enabled=paired_endpoint,
+            )
             if not_before > flow_time:
                 return flow_time, False
             return flow_time, True
 
         process_identity_safe = not_before is None or not_after is None or not_before <= not_after
+        flow_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.ecar_flow",
+            seed_parts=seed_parts,
+            not_before=not_before if process_identity_safe else None,
+            not_after=not_after,
+        )
+        flow_time = self._paired_flow_observation_time(
+            event,
+            flow_time,
+            seed_parts=seed_parts,
+            not_before=not_before if process_identity_safe else None,
+            not_after=not_after,
+            enabled=paired_endpoint,
+        )
+        if process_identity_safe and not_before is not None and flow_time < not_before:
+            process_identity_safe = False
         return (
-            _SOURCE_TIMING.source_time(
-                event,
-                "source.ecar_flow",
-                seed_parts=seed_parts,
-                not_before=not_before if process_identity_safe else None,
-                not_after=not_after,
-            ),
+            flow_time,
             process_identity_safe,
         )
+
+    @staticmethod
+    def _paired_flow_observation_time(
+        event: SecurityEvent,
+        timestamp: datetime,
+        *,
+        seed_parts: tuple[Any, ...],
+        not_before: datetime | None,
+        not_after: datetime | None,
+        enabled: bool,
+    ) -> datetime:
+        """Add host-local texture to paired endpoint FLOW observations."""
+        if not enabled:
+            return timestamp
+        if not_after is None:
+            return timestamp
+
+        lower_bound = not_before
+        seed = _stable_seed(
+            "ecar_paired_flow_observation:"
+            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+        )
+        jitter_ms = 1 + (seed % 37)
+        candidate = timestamp - timedelta(milliseconds=jitter_ms)
+        if lower_bound is not None and candidate < lower_bound:
+            available_ms = int((timestamp - lower_bound).total_seconds() * 1000)
+            if available_ms <= 0:
+                return timestamp
+            candidate = timestamp - timedelta(milliseconds=min(jitter_ms, available_ms))
+        if candidate > not_after:
+            return not_after
+        return candidate
 
     @staticmethod
     def _flow_identity_deadline(event: SecurityEvent) -> datetime:

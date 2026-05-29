@@ -264,6 +264,13 @@ def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
 
 
+def _windows_endpoint_port(address: str | None, port: int | str | None) -> int | str:
+    """Return the native Windows EventData port value for an address field."""
+    if not address or address == "-":
+        return "-"
+    return port if port not in (None, "") else 0
+
+
 def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
     """Return the same-user/source-port key for DC Kerberos ticket ordering checks."""
     if event.get("EventID") not in {4768, 4769}:
@@ -569,6 +576,8 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         workstation_name = _logon_workstation_name(auth, host, event)
         process_pid, process_name = self._logon_caller_process_identity(host, auth)
+        ip_address = self._ipv6_mapped(auth.source_ip)
+        logon_source_port = auth.source_port if auth.logon_type in (3, 10) else None
 
         event_data = {
             "EventID": 4624,
@@ -590,8 +599,8 @@ class WindowsEventEmitter(LogEmitter):
             "WorkstationName": workstation_name,
             "ProcessId": f"0x{process_pid:x}" if process_pid else "0x0",
             "ProcessName": process_name,
-            "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": auth.source_port if auth.logon_type in (3, 10) else 0,
+            "IpAddress": ip_address,
+            "IpPort": _windows_endpoint_port(ip_address, logon_source_port),
             "LogonProcessName": auth.logon_process,
             "AuthenticationPackageName": auth.auth_package,
             "LmPackageName": auth.lm_package,
@@ -746,7 +755,7 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         ip_address = self._ipv6_mapped(auth.source_ip)
         has_source_ip = ip_address != "-"
-        ip_port = auth.source_port if has_source_ip else 0
+        ip_port: int | str = auth.source_port if has_source_ip else "-"
         if not ip_port and has_source_ip and auth.logon_type == 3:
             ip_port = rng.randint(49152, 65535)
 
@@ -913,6 +922,7 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
         workstation = auth.username.rstrip("$") if auth.username.endswith("$") else auth.username
+        ip_address = self._ipv6_mapped(auth.source_ip)
 
         event_data = {
             "EventID": 4624,
@@ -940,8 +950,8 @@ class WindowsEventEmitter(LogEmitter):
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "ProcessId": "0x0",
             "ProcessName": "-",
-            "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": auth.source_port,
+            "IpAddress": ip_address,
+            "IpPort": _windows_endpoint_port(ip_address, auth.source_port),
             "ImpersonationLevel": "%%1833",
             "RestrictedAdminMode": "-",
             "TargetOutboundUserName": "-",
@@ -1002,7 +1012,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketEncryptionType": krb.encryption_type,
             "PreAuthType": krb.pre_auth_type,
             "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpPort": _windows_endpoint_port(krb.source_ip, krb.source_port),
             "CertIssuerName": krb.cert_issuer_name,
             "CertSerialNumber": krb.cert_serial_number,
             "CertThumbprint": krb.cert_thumbprint,
@@ -1034,7 +1044,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketOptions": krb.ticket_options,
             "TicketEncryptionType": krb.encryption_type,
             "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpPort": _windows_endpoint_port(krb.source_ip, krb.source_port),
             "Status": krb.ticket_status,
         }
         self.emit_event(event_data)
@@ -1060,7 +1070,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketOptions": krb.ticket_options,
             "TicketEncryptionType": krb.encryption_type,
             "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpPort": _windows_endpoint_port(krb.source_ip, krb.source_port),
             "Status": "0x0",
         }
         self.emit_event(event_data)
@@ -1114,7 +1124,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
             "NetworkAddress": auth.source_ip or "-",
-            "NetworkPort": auth.source_port or 0,
+            "NetworkPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
         }
         self.emit_event(event_data)
 
@@ -1268,7 +1278,7 @@ class WindowsEventEmitter(LogEmitter):
             "Status": krb.ticket_status,
             "PreAuthType": krb.pre_auth_type,
             "IpAddress": source_ip,
-            "IpPort": source_port,
+            "IpPort": _windows_endpoint_port(source_ip, source_port),
         }
         self.emit_event(event_data)
 

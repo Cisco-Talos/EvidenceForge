@@ -367,6 +367,10 @@ def _normalize_for_validation(
     if format_name in ("web_access", "syslog", "snort_alert", "bash_history"):
         if parsed_timestamp is not None:
             normalized["timestamp"] = parsed_timestamp
+    if format_name == "windows_event_security":
+        for port_field in ("IpPort", "NetworkPort"):
+            if normalized.get(port_field) == "-":
+                normalized[port_field] = 0
     return normalized
 
 

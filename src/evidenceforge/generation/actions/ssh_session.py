@@ -55,7 +55,7 @@ from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -309,6 +309,19 @@ class SshSessionExecutor(Protocol):
         """Remember when tuple-scoped receiver-side SSH child evidence may appear."""
         ...
 
+    def generate_process_termination(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+        from_storyline: bool = False,
+    ) -> None:
+        """Generate source-native process termination evidence."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class SshSessionActionBundle:
@@ -345,7 +358,7 @@ class SshSessionActionBundle:
         if auth_state is not None:
             self._dispatch_linux_auth_messages(state, event, auth_state)
             if self.request.emit_session_close:
-                self._dispatch_linux_session_close_message(state, event, auth_state)
+                self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
 
         logger.debug(
             "Generated SSH session: %s -> %s (UID: %s)",
@@ -503,6 +516,22 @@ class SshSessionActionBundle:
                 state.session_obj_id = executor.state_manager.get_session_object_id(
                     request.logon_id
                 )
+        if not state.session_obj_id:
+            state.session_obj_id = self._stable_session_object_id(state)
+
+    def _stable_session_object_id(self, state: _SshTransportState) -> str:
+        """Return a tuple-stable session object ID for unmanaged SSH sessions."""
+
+        request = self.request
+        return stable_uuid(
+            "ssh-session-object",
+            request.target_system.hostname,
+            request.user.username,
+            request.source_ip,
+            state.source_port,
+            request.time.isoformat(),
+            request.source,
+        )
 
     def _sync_transport_from_connection_state(
         self,
@@ -992,20 +1021,29 @@ class SshSessionActionBundle:
             f"port {state.source_port} ssh2"
         )
 
-    def _dispatch_linux_session_close_message(
+    def _dispatch_linux_session_close_lifecycle(
         self,
         state: _SshTransportState,
         event: SecurityEvent,
         auth_state: _SshLinuxAuthState,
     ) -> None:
-        """Dispatch an optional source-native PAM close message for the SSH session."""
+        """Dispatch source-native close/logout evidence for a modeled SSH session."""
 
         request = self.request
+        close_time = self._source_native_session_close_time(state, auth_state)
         self.executor.dispatcher.dispatch(
             SecurityEvent(
-                timestamp=self._source_native_session_close_time(state, auth_state),
-                event_type="syslog",
-                src_host=event.dst_host,
+                timestamp=close_time,
+                event_type="logoff",
+                dst_host=event.dst_host,
+                auth=AuthContext(
+                    username=request.user.username,
+                    source_ip=request.source_ip,
+                    source_port=state.source_port,
+                    logon_id="",
+                    logon_type=10,
+                ),
+                edr=EdrContext(object_id=state.session_obj_id),
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=auth_state.sshd_pid,
@@ -1016,6 +1054,44 @@ class SshSessionActionBundle:
                     ),
                 ),
             )
+        )
+        self._terminate_receiver_sshd_process(state, auth_state, close_time)
+
+    def _terminate_receiver_sshd_process(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+        close_time: datetime,
+    ) -> None:
+        """Emit receiver-side accepted sshd termination when the tuple child is modeled."""
+
+        request = self.request
+        running = self.executor.state_manager.get_process(
+            request.target_system.hostname,
+            auth_state.sshd_pid,
+        )
+        if running is None:
+            return
+        command_line = running.command_line or ""
+        if "sshd: [accepted]" not in command_line and "sshd:" not in command_line:
+            return
+        seed = _stable_seed(
+            "ssh_session_responder_terminate:"
+            f"{request.target_system.hostname}:{request.source_ip}:{state.source_port}:"
+            f"{auth_state.sshd_pid}:{close_time.isoformat()}"
+        )
+        terminate_time = close_time + timedelta(
+            milliseconds=80 + (seed % 920),
+            microseconds=307 + (seed % 491),
+        )
+        self.executor.generate_process_termination(
+            user=request.user,
+            system=request.target_system,
+            time=terminate_time,
+            pid=auth_state.sshd_pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+            from_storyline=request.source.startswith("storyline"),
         )
 
     def _source_native_session_close_time(

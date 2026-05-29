@@ -681,6 +681,38 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_pkts == 1
         assert event.network.resp_ip_bytes <= 1500
 
+    def test_dns_a_accounting_uses_visible_question_not_caller_placeholder(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Short A queries should not inherit arbitrary alert placeholder byte counts."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="resolver-68xk0duy.bit",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["0.0.0.0"],
+                rtt=0.004,
+            ),
+            orig_bytes=2000,
+            resp_bytes=1000,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_bytes != 260
+        assert event.network.resp_bytes != 512
+        assert event.network.orig_bytes < 80
+        assert event.network.resp_bytes < 140
+
     def test_dns_conn_duration_uses_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
@@ -1066,6 +1098,33 @@ class TestWeirdProtocolConstraint:
         assert event.network.orig_bytes <= 260
         assert event.network.resp_bytes <= 512
         assert event.network.duration <= 0.08
+
+    def test_hostname_synthesized_dns_context_uses_dns_sized_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Hostname-only DNS rows should use the same accounting as explicit DNS contexts."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            hostname="DC-01.meridianhcs.local",
+            duration=0.003,
+            orig_bytes=2000,
+            resp_bytes=2000,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns is not None
+        assert event.dns.query == "DC-01.meridianhcs.local"
+        assert event.network.orig_bytes != 260
+        assert event.network.resp_bytes != 512
+        assert event.network.orig_bytes < 80
+        assert event.network.resp_bytes < 140
 
     def test_udp_dns_with_explicit_conn_state_uses_udp_history(
         self, activity_gen, timestamp, state_manager, mock_emitters

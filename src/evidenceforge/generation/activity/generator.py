@@ -197,6 +197,22 @@ from .network import (
 
 logger = logging.getLogger(__name__)
 
+_WINDOWS_INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
+    53: ("dns", "svchost_netsvcs", "svchost_net_svc"),
+    88: ("lsass",),
+    135: ("svchost_dcom", "svchost_netsvcs"),
+    139: ("system",),
+    389: ("lsass",),
+    445: ("system", "lanmanserver"),
+    464: ("lsass",),
+    636: ("lsass",),
+    3268: ("lsass",),
+    3269: ("lsass",),
+    3389: ("svchost_termservice", "svchost_netsvcs"),
+    5985: ("svchost_netsvcs",),
+    5986: ("svchost_netsvcs",),
+}
+
 
 def _format_windows_account_attribute_time(value: datetime) -> str:
     """Format account-management attribute timestamps like Event Viewer XML data."""
@@ -1631,6 +1647,113 @@ def _windows_foreground_lifetime(
     return None
 
 
+_DNS_QTYPE_RDATA_LENGTHS = {
+    "A": 4,
+    "AAAA": 16,
+}
+
+
+def _dns_name_wire_size(name: str) -> int:
+    """Return the encoded DNS owner-name size, including label lengths and root."""
+    labels = [label for label in name.rstrip(".").split(".") if label]
+    if not labels:
+        return 1
+    return sum(1 + len(label.encode("utf-8", errors="ignore")) for label in labels) + 1
+
+
+def _dns_question_wire_size(query: str) -> int:
+    """Return DNS question section size for one IN-class query."""
+    return _dns_name_wire_size(query) + 4
+
+
+def _dns_payload_padding(*, query: str, query_type: str, response: bool) -> int:
+    """Return stable EDNS/client-padding texture for DNS payload accounting."""
+    seed = _stable_seed(f"dns_payload_padding:{query.lower()}:{query_type}:{response}")
+    rng = random.Random(seed)
+    if query_type in {"TXT", "NULL"}:
+        choices = (0, 11, 23, 47, 71)
+        weights = (30, 35, 20, 10, 5)
+    elif response:
+        choices = (0, 11, 23, 35)
+        weights = (45, 35, 15, 5)
+    else:
+        choices = (0, 11, 23)
+        weights = (35, 50, 15)
+    return rng.choices(choices, weights=weights, k=1)[0]
+
+
+def _dns_rr_rdata_size(query_type: str, answer: str) -> int:
+    """Return an approximate RDATA length for a source-native DNS answer."""
+    if query_type in _DNS_QTYPE_RDATA_LENGTHS:
+        return _DNS_QTYPE_RDATA_LENGTHS[query_type]
+    if query_type in {"CNAME", "PTR", "NS"}:
+        return _dns_name_wire_size(answer)
+    if query_type == "MX":
+        parts = answer.split(maxsplit=1)
+        exchange = parts[1] if len(parts) == 2 else answer
+        return 2 + _dns_name_wire_size(exchange)
+    if query_type == "SRV":
+        parts = answer.split()
+        target = parts[-1] if parts else answer
+        return 6 + _dns_name_wire_size(target)
+    if query_type == "SOA":
+        parts = answer.split()
+        if len(parts) >= 2:
+            return _dns_name_wire_size(parts[0]) + _dns_name_wire_size(parts[1]) + 20
+        return max(24, len(answer.encode("utf-8", errors="ignore")))
+    if query_type == "TXT":
+        text_len = len(answer.encode("utf-8", errors="ignore"))
+        return text_len + max(1, math.ceil(text_len / 255))
+    return max(4, len(answer.encode("utf-8", errors="ignore")))
+
+
+def _dns_response_wire_size(*, dns: DnsContext, question_size: int, query_type: str) -> int:
+    """Return DNS response payload bytes derived from the visible DNS context."""
+    base_size = 12 + question_size
+    answers = dns.answers or []
+    if answers:
+        rr_bytes = 0
+        for answer in answers:
+            rdata_size = _dns_rr_rdata_size(query_type, str(answer))
+            rr_bytes += 2 + 10 + rdata_size  # compressed owner pointer + RR metadata
+        return (
+            base_size
+            + rr_bytes
+            + _dns_payload_padding(
+                query=dns.query,
+                query_type=query_type,
+                response=True,
+            )
+        )
+
+    rcode = (dns.rcode or "").upper()
+    if rcode in {"NXDOMAIN", "SERVFAIL", "REFUSED"} or dns.rcode_num in {2, 3, 5}:
+        failure_seed = _stable_seed(f"dns_failure_payload:{dns.query}:{query_type}:{rcode}")
+        failure_rng = random.Random(failure_seed)
+        authority_bytes = {
+            "NXDOMAIN": failure_rng.randint(36, 92),
+            "SERVFAIL": failure_rng.randint(18, 46),
+            "REFUSED": failure_rng.randint(18, 54),
+        }.get(rcode, failure_rng.randint(18, 54))
+        return (
+            base_size
+            + authority_bytes
+            + _dns_payload_padding(
+                query=dns.query,
+                query_type=query_type,
+                response=True,
+            )
+        )
+
+    if rcode == "NOERROR" or dns.rcode_num == 0:
+        return base_size + _dns_payload_padding(
+            query=dns.query,
+            query_type=query_type,
+            response=True,
+        )
+    return 0
+
+
 def _dns_payload_accounting(
     *,
     dns: DnsContext,
@@ -1648,32 +1771,27 @@ def _dns_payload_accounting(
         or dns.rcode.upper() in response_rcodes
         or dns.rcode_num in {0, 2, 3, 5}
     )
-    answers = dns.answers or []
-
-    query_floor = max(40, len(query.encode("utf-8", errors="ignore")) + 18)
-    if query_type in {"TXT", "NULL"}:
-        query_floor += 18
-        query_ceiling = 1232
-    elif query_type == "SRV":
-        query_floor += 10
-        query_ceiling = 512
-    else:
-        query_ceiling = 260
-
-    normalized_orig = min(max(orig_bytes or 0, query_floor), query_ceiling)
+    question_size = _dns_question_wire_size(query)
+    query_payload_size = (
+        12
+        + question_size
+        + _dns_payload_padding(
+            query=query,
+            query_type=query_type,
+            response=False,
+        )
+    )
+    normalized_orig = max(28, min(query_payload_size, 1232))
 
     if not has_response:
         normalized_resp = 0
     else:
-        answer_bytes = sum(len(str(answer).encode("utf-8", errors="ignore")) for answer in answers)
-        answer_overhead = 18 * max(1, len(answers))
-        response_floor = max(70, query_floor + answer_bytes + answer_overhead + 12)
-        if query_type in {"TXT", "NULL"}:
-            response_slack = max(48, min(240, answer_bytes // 2 + 64))
-            response_ceiling = max(response_floor, min(1232, response_floor + response_slack))
-        else:
-            response_ceiling = max(response_floor, min(512, response_floor + 96))
-        normalized_resp = min(max(resp_bytes or 0, response_floor), response_ceiling)
+        response_payload_size = _dns_response_wire_size(
+            dns=dns,
+            question_size=question_size,
+            query_type=query_type,
+        )
+        normalized_resp = max(40, min(response_payload_size, 1232))
 
     normalized_duration = duration
     if dns.rtt is not None:
@@ -2409,6 +2527,22 @@ def _dns_registrable_domain(hostname: str) -> str:
     return dns_registrable_domain(hostname)
 
 
+def _dns_reverse_query(ip: str) -> str:
+    """Return the in-addr.arpa owner name for an IPv4 address."""
+    octets = ip.split(".")
+    return ".".join(reversed(octets)) + ".in-addr.arpa"
+
+
+def _public_dns_ptr_response(ip: str, forward_hostname: str | None) -> tuple[str, int, list[str]]:
+    """Return a resolver-visible public PTR response for companion lookups."""
+    rng = random.Random(_stable_seed(f"public_dns_ptr:{ip}:{forward_hostname or ''}"))
+    # Public reverse DNS is often absent for SaaS/CDN destinations observed
+    # through enterprise resolvers. Keep that incompleteness stable per tuple.
+    if rng.random() < 0.28:
+        return "NXDOMAIN", 3, []
+    return "NOERROR", 0, [_generate_rdns_name(rng, ip, forward_hostname)]
+
+
 def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
     """Return a stable provider-style public DNS profile for a domain."""
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
@@ -2463,7 +2597,10 @@ def _dns_soa_answer(domain: str, mname: str, rname: str, seed_context: str = "")
     owner = domain.lower().rstrip(".")
     seed = _stable_seed(f"dns_soa:{owner}:{mname}:{rname}:{seed_context}")
     rng = random.Random(seed)
-    serial = 2024000000 + rng.randint(10100, 123199)
+    # Avoid date-coded YYYYMMDDnn serials for generated companion answers.
+    # Without owning the zone's real edit history, arbitrary monotonically
+    # shaped serials are less misleading than future or invalid date encodings.
+    serial = 1_600_000_000 + rng.randint(0, 180_000_000)
     refresh = rng.choice((1800, 3600, 7200, 10800, 14400))
     retry = rng.choice((300, 600, 900, 1200, 1800))
     expire = rng.choice((604800, 1209600, 2419200))
@@ -10502,22 +10639,43 @@ class ActivityGenerator:
                     resp_bytes=resp_bytes,
                 )
         elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
-            duration = min(
-                duration
-                or _jitter_default_connection_duration(
-                    0.02,
-                    caller_provided_duration=False,
-                    seed_parts=(src_ip, dst_ip, dst_port, time, "dns_default"),
-                ),
-                0.08,
-            )
-            orig_bytes = min(max(orig_bytes or 40, 40), 260)
-            if resp_bytes is None:
-                resp_bytes = 120
-            elif resp_bytes <= 0:
-                resp_bytes = 0
+            if hostname and resp_bytes is not None and resp_bytes > 0:
+                dns_query = (
+                    hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
+                )
+                fallback_dns = DnsContext(
+                    query=dns_query,
+                    trans_id=0,
+                    qtype=1,
+                    query_type="A",
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=[dst_ip],
+                    rtt=duration,
+                )
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
+                    dns=fallback_dns,
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                )
             else:
-                resp_bytes = min(max(resp_bytes, 70), 512)
+                duration = min(
+                    duration
+                    or _jitter_default_connection_duration(
+                        0.02,
+                        caller_provided_duration=False,
+                        seed_parts=(src_ip, dst_ip, dst_port, time, "dns_default"),
+                    ),
+                    0.08,
+                )
+                orig_bytes = min(max(orig_bytes or 40, 40), 260)
+                if resp_bytes is None:
+                    resp_bytes = 120
+                elif resp_bytes <= 0:
+                    resp_bytes = 0
+                else:
+                    resp_bytes = min(max(resp_bytes, 70), 512)
 
         if (
             service == "dns"
@@ -10596,8 +10754,8 @@ class ActivityGenerator:
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
-            orig_bytes = max(orig_bytes or 0, rng.randint(35, 95))
-            resp_bytes = max(resp_bytes or 0, rng.randint(80, 220))
+            orig_bytes = max(orig_bytes or 0, 28)
+            resp_bytes = max(resp_bytes or 0, 40)
             if dns.rtt is not None and (duration is None or duration < dns.rtt):
                 duration = dns.rtt
         elif conn_state is not None:
@@ -11050,6 +11208,17 @@ class ActivityGenerator:
         target_has_ssh = target_system is not None and "ssh" in {
             str(service_name).lower() for service_name in (target_system.services or [])
         }
+        if (
+            target_system is not None
+            and dst_host_ctx is not None
+            and dst_host_ctx.os_category == "windows"
+            and responding_pid <= 0
+        ):
+            responding_pid = self._resolve_windows_inbound_service_pid(
+                target_system,
+                dst_port,
+                time,
+            )
         if (
             dst_host_ctx is not None
             and dst_host_ctx.os_category == "linux"
@@ -11895,6 +12064,31 @@ class ActivityGenerator:
                 protocol=proto,
                 pid=pid,
                 application=wfp_application,
+            )
+
+        if (
+            target_system is not None
+            and dst_host_ctx is not None
+            and dst_host_ctx.os_category == "windows"
+            and not event.network.application_layer_only
+            and self._should_emit_windows_inbound_wfp(event, target_system)
+        ):
+            inbound_pid = event.network.responding_pid
+            inbound_application = self._lookup_process_name(
+                target_system.hostname,
+                inbound_pid,
+                "windows",
+            )
+            self.generate_wfp_connection(
+                system=target_system,
+                time=time,
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=target_system.ip,
+                dst_port=dst_port,
+                protocol=proto,
+                pid=inbound_pid,
+                application=inbound_application,
             )
 
         if pid > 0 and resolved_source_system is not None and process_ctx is not None:
@@ -13407,8 +13601,7 @@ class ActivityGenerator:
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
-            octets = dst_ip.split(".")
-            query = ".".join(reversed(octets)) + ".in-addr.arpa"
+            query = _dns_reverse_query(dst_ip)
             if _is_private_ip(dst_ip):
                 answers = [hostname]
             else:
@@ -13530,6 +13723,8 @@ class ActivityGenerator:
             )[0]
             companion_query = hostname
             companion_answers: list[str] = []
+            companion_rcode = "NOERROR"
+            companion_rcode_num = 0
             companion_qtype = 28
             if companion_kind == "AAAA":
                 companion_qtype = 28
@@ -13540,9 +13735,15 @@ class ActivityGenerator:
                 ]
             elif companion_kind == "PTR":
                 companion_qtype = 12
-                octets = dst_ip.split(".")
-                companion_query = ".".join(reversed(octets)) + ".in-addr.arpa"
-                companion_answers = [hostname]
+                companion_query = _dns_reverse_query(dst_ip)
+                if _is_private_ip(dst_ip):
+                    companion_answers = [hostname]
+                else:
+                    (
+                        companion_rcode,
+                        companion_rcode_num,
+                        companion_answers,
+                    ) = _public_dns_ptr_response(dst_ip, hostname)
             elif companion_kind == "NS":
                 companion_qtype = 2
                 companion_query = _dns_registrable_domain(hostname)
@@ -13589,8 +13790,8 @@ class ActivityGenerator:
                 trans_id=rng.randint(1, 65535),
                 qtype=companion_qtype,
                 query_type=companion_kind,
-                rcode="NOERROR",
-                rcode_num=0,
+                rcode=companion_rcode,
+                rcode_num=companion_rcode_num,
                 answers=companion_answers,
                 TTLs=companion_ttls,
                 rtt=_dns_rtt(rng, dns_server_ip),
@@ -15358,6 +15559,47 @@ class ActivityGenerator:
             f"{system.hostname}:{user.username}:{logon_id}:{time.isoformat()}"
         )
         return timedelta(milliseconds=80 + (seed % 571))
+
+    def _resolve_windows_inbound_service_pid(
+        self,
+        system: System,
+        dst_port: int,
+        time: datetime,
+    ) -> int:
+        """Return a destination-local Windows service PID for inbound audit rows."""
+
+        if _get_os_category(system.os) != "windows":
+            return -1
+
+        system_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in _WINDOWS_INBOUND_SERVICE_PID_CANDIDATES.get(dst_port, ()):
+            pid = int(system_pids.get(role, -1) or -1)
+            if pid > 0 and self._is_pid_active_at(system, pid, time):
+                return pid
+        return -1
+
+    @staticmethod
+    def _should_emit_windows_inbound_wfp(event: SecurityEvent, target_system: System) -> bool:
+        """Return whether a canonical connection should create target-side 5156 evidence."""
+
+        net = event.network
+        if net is None or net.responding_pid <= 0:
+            return False
+        if net.dst_ip == net.src_ip or net.dst_ip != target_system.ip:
+            return False
+        if event.firewall is not None and event.firewall.action == "deny":
+            return False
+        proto = net.protocol.lower()
+        if proto == "tcp":
+            if net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}:
+                return False
+            history = net.history or ""
+            if not net.conn_state and not history:
+                return True
+            return any(marker in history for marker in ("h", "a", "d", "r", "f"))
+        if proto in {"udp", "icmp"}:
+            return net.conn_state not in {"S0", "REJ", "OTH"}
+        return False
 
     def generate_wfp_connection(
         self,
