@@ -479,6 +479,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `explicit_credentials` | Windows 4648 (explicit credential usage) | `target_username` | `target_server`, `process_name`, `source_ip` |
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
+| `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + a `GROUND_TRUTH.jsonl` record | `surface`, and exactly one of `family`/`value` | `http_*` surfaces need a `web_server`-role host |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.

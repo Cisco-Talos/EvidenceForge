@@ -186,6 +186,69 @@ def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
         return None, str(e)
 
 
+def _validate_secret_families(result: ValidationResult) -> None:
+    """Validate merged secret-family config used by the spillage event type."""
+    from evidenceforge.config.schemas import SecretFamiliesConfig, validate_entry
+    from evidenceforge.config.secret_families import load_secret_families
+
+    try:
+        data = load_secret_families()
+    except Exception as e:
+        result.issues.append(Issue("ERROR", "secret_families.yaml", f"failed to load: {e}"))
+        return
+    err = validate_entry(data, SecretFamiliesConfig, "secret_families.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "secret_families.yaml", err))
+        return
+
+    # Pre-flight: each family's value_template must synthesize a value that both
+    # matches the family regex and passes the spillage safety guardrails — caught
+    # here at validate-config time rather than later at generation time.
+    from evidenceforge.generation.spillage import (
+        SpillageSafetyError,
+        check_spillage_safety,
+        synthesize_value,
+    )
+
+    for fam in data.get("families", []):
+        name = fam.get("name")
+        # A family synthesizes from a value_template OR an examples list; check both
+        # shapes here (examples-only families were previously skipped and only
+        # caught at generation time, contradicting the "every family" promise).
+        if not (name and (fam.get("value_template") or fam.get("examples"))):
+            continue
+        try:
+            value = synthesize_value(name, f"validate-config:{name}")
+            check_spillage_safety(value, family=name)
+        except SpillageSafetyError as e:
+            result.issues.append(
+                Issue("ERROR", "secret_families.yaml", f"family {name!r} value_template: {e}")
+            )
+
+    # Self-test: the merged config must STILL reject an unmarked real-shaped
+    # credential and a real (non-reserved) host. If a too-loose marker/fake/domain
+    # weakened the guardrails, these would slip through — fail loudly here.
+    for probe, why in (
+        ("AKIAREALLOOKINGKEY99X1", "an unmarked real-shaped credential"),
+        ("EvidenceForgeFake exfil to evil-real-site.com", "a non-reserved bare host"),
+        ("EvidenceForgeFake https://evil-real-site.com/x", "a non-reserved URL host"),
+        ("EvidenceForgeFake user@evil-real-site.com", "a non-reserved userinfo host"),
+        ("EvidenceForgeFake https://8.8.8.8/x", "a non-reserved public IP host"),
+    ):
+        try:
+            check_spillage_safety(probe, family=None)
+        except SpillageSafetyError:
+            continue  # correctly rejected
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "secret_families.yaml",
+                f"safety guardrails accept {why}; markers/vendor_fakes/network_allowlist "
+                "are too permissive",
+            )
+        )
+
+
 def validate_config() -> ValidationResult:
     """Run validation checks across config files.
 
@@ -262,6 +325,11 @@ def validate_config() -> ValidationResult:
         },
         "activity/extra_syslog_messages.yaml": {
             "list_fields": {"programs": None},
+        },
+        "activity/secret_families.yaml": {
+            "list_fields": {"families": "name"},
+            "dict_fields": {"network_allowlist"},
+            "string_list_fields": {"poison_markers", "vendor_fakes"},
         },
         "activity/tls_issuers.yaml": {
             "list_fields": {"issuers": "name"},
@@ -2844,6 +2912,8 @@ def validate_config() -> ValidationResult:
                         f'Tool "{tool_id}" loaded_modules[{i}] path does not look like a Windows path',
                     )
                 )
+
+    _validate_secret_families(result)
 
     seen_issues: set[tuple[str, str, str]] = set()
     deduped: list[Issue] = []

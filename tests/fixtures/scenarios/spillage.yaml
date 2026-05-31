@@ -1,0 +1,128 @@
+version: "1.0"
+name: spillage-test
+description: "Synthetic credential spillage across surfaces/families for scrubber/DLP testing"
+
+environment:
+  description: "Single Linux server for spillage testing"
+
+  users:
+    - username: nina.kapoor
+      full_name: "Nina Kapoor"
+      email: "nina.kapoor@example.com"
+      primary_system: APP-SRV-01
+      enabled: true
+
+  systems:
+    - hostname: APP-SRV-01
+      ip: 192.168.20.30
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      assigned_user: nina.kapoor
+      services: ["SSH"]
+
+    - hostname: WEB-APP-01
+      ip: 192.168.20.40
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      roles: ["web_server"]
+      services: ["HTTP"]
+
+time_window:
+  start: "2024-03-18T14:00:00Z"
+  duration: "2h"
+
+baseline_activity:
+  description: "Light baseline activity"
+  intensity: low
+  variation: low
+
+output:
+  logs:
+    - format: bash_history
+    - format: syslog
+    - format: ecar
+    - format: web_access
+  destination: "./output"
+  compression: false
+
+storyline:
+  - id: spill-aws-bash
+    time: "+20m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "AWS access key leaked via bash history"
+    events:
+      - type: spillage
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        surface: shell_history
+        family: aws_iam
+
+  - id: spill-gh-bash
+    time: "+35m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "GitHub token leaked via bash history"
+    events:
+      - type: spillage
+        surface: shell_history
+        family: github_pat
+
+  - id: spill-db-proc
+    time: "+50m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "Database URI exposed on a process command line"
+    events:
+      - type: spillage
+        surface: process_command_line
+        family: db_uri
+
+  - id: spill-aws-proc
+    time: "+65m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "AWS key passed on a process command line"
+    events:
+      - type: spillage
+        surface: process_command_line
+        family: aws_iam
+
+  - id: spill-slack-syslog
+    time: "+80m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "Slack token logged to syslog"
+    events:
+      - type: spillage
+        surface: syslog_message
+        family: slack_token
+
+  - id: spill-token-syslog
+    time: "+95m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "Internal SSO token (literal) leaked into application syslog"
+    events:
+      - type: spillage
+        surface: syslog_message
+        value: "Bearer EvidenceForgeFake_INTERNAL_SSO_TOKEN_v1"
+
+  - id: spill-gcp-url
+    time: "+105m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "GCP API key leaked in a request URL (captured by web server access log)"
+    events:
+      - type: spillage
+        surface: http_request_url
+        family: gcp_api_key
+
+  - id: spill-jwt-referrer
+    time: "+115m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "JWT leaked in the Referer header of a web request"
+    events:
+      - type: spillage
+        surface: http_referrer
+        family: jwt

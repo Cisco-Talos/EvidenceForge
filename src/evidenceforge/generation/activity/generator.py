@@ -3877,7 +3877,12 @@ class ActivityGenerator:
             os_category=_get_os_category(system.os),
             system_type=system.type,
             domain=ad_domain,
-            fqdn=f"{hostname}.{ad_domain}" if ad_domain else hostname,
+            # Guard against an already-FQDN hostname so we never double the domain
+            # (e.g. "cdn.example.com" -> "cdn.example.com.example.com"), mirroring
+            # the guard in _system_for_hostname.
+            fqdn=(hostname if "." in hostname else f"{hostname}.{ad_domain}")
+            if ad_domain
+            else hostname,
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
             roles=list(system.roles),
         )
@@ -17575,6 +17580,195 @@ class ActivityGenerator:
             raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
+
+    def generate_spillage(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        time: datetime,
+        surface: str,
+        family: str | None,
+        value: str | None,
+        seed_key: str,
+        logon_id: str | None = None,
+        target_system: "System | None" = None,
+    ) -> dict[str, Any]:
+        """Emit one synthetic credential into a semantic surface.
+
+        Resolves a single safety-checked canonical value (synthesized from a
+        family or supplied literally), renders it with surface-appropriate
+        encoding, and routes it through the canonical modeled generation path
+        for that surface. ``target_system`` is the destination web server for the
+        http_* surfaces (whose access log records the credential). Returns a dict
+        of ground-truth fields.
+        """
+        from evidenceforge.generation.spillage import (
+            HTTP_SURFACES,
+            render_for_surface,
+            resolve_value,
+        )
+
+        canonical, resolved_family = resolve_value(family, value, seed_key=seed_key)
+        os_category = _get_os_category(system.os)
+        render = render_for_surface(
+            canonical, surface, resolved_family, seed_key, os_category=os_category
+        )
+
+        emitted_time = time
+        target_fqdn: str | None = None
+        if surface == "shell_history":
+            # bash history dwell/session scheduling can shift the visible time;
+            # use the actual emitted time so ground truth matches the log line.
+            # This surface is the bash-history-FILE exposure (the credential left in
+            # history); v1 does not also emit correlated process/network telemetry
+            # for the carrier — use process_command_line for the EDR-correlated form.
+            result_time = self.generate_bash_command(
+                user=user,
+                system=system,
+                time=time,
+                activity_type_or_command=render.command,
+                emit_process_telemetry=False,
+            )
+            if result_time is None:
+                # The bash command was suppressed (dwell-shifted past the scenario
+                # window, or a non-interactive user) — nothing landed on disk, so
+                # do NOT label it. Signal suppression; the caller skips the record.
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            emitted_time = result_time
+        elif surface == "process_command_line":
+            # The credential rides on a process command line (T1552.001), captured
+            # by EDR/process telemetry via the canonical process-execution bundle as
+            # a standalone process with a durable unique PID. Carriers are LOCAL
+            # commands only (aws configure set, git config, os.environ[...]=, …),
+            # so this live in-window process record is self-consistent and never
+            # implies an outbound connection it doesn't model — see docs/reference/
+            # spillage.md "Correlation scope (v1)". OS-aware: a Windows host renders
+            # a cmd/PowerShell/.exe carrier (not a Linux /usr/bin command line).
+            default_proc = (
+                r"C:\Windows\System32\cmd.exe" if os_category == "windows" else "/usr/bin/sh"
+            )
+            pid = self.generate_process(
+                user=user,
+                system=system,
+                time=time,
+                logon_id=logon_id or "0x0",
+                process_name=render.process_name or default_proc,
+                command_line=render.command,
+                from_storyline=True,
+            )
+            if not pid:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+        elif surface == "syslog_message":
+            self.generate_syslog_event(
+                system=system,
+                time=time,
+                app_name=render.syslog_app,
+                message=render.syslog_message,
+            )
+        elif surface in HTTP_SURFACES:
+            # The credential rides in an outbound HTTP/S request (URL query or
+            # Referer header) from the actor's host to a web server, captured by
+            # that server's access log. Route through the canonical connection
+            # path so the web emitter renders it natively.
+            if target_system is None:
+                # No web server to receive the request — nothing lands on disk, so
+                # do NOT label it (validation flags this case before generation).
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            # Record the destination's FQDN exactly as the web emitter names the
+            # access-log directory, so the sidecar's target_system points a scorer
+            # (and the eval record search) at the right host even for dotted/FQDN
+            # hostnames or external servers.
+            target_fqdn = self._build_host_context(target_system).fqdn or target_system.hostname
+            ua_rng = random.Random(_stable_seed(f"{seed_key}:ua"))
+            if surface == "http_referrer":
+                # A Referer header is sent by browsers, not CLI/library clients; a
+                # browser-class UA keeps the request realistic and source-coherent
+                # (a tool UA would make downstream normalization drop the Referer).
+                # Use an OS-matched browser pool so a Linux/Windows actor gets a
+                # Linux/Windows UA (AGENTS.md rule 3: OS-aware defaults).
+                from evidenceforge.generation.activity.web_session_profiles import (
+                    pick_web_user_agent,
+                )
+
+                user_agent = pick_web_user_agent(
+                    ua_rng,
+                    {
+                        "user_agent_pool": "browser_any",
+                        "user_agent_pool_by_os": {
+                            "windows": "browser_windows",
+                            "linux": "browser_linux",
+                        },
+                    },
+                    source_os=_get_os_category(system.os),
+                )
+            else:
+                user_agent = pick_proxy_user_agent(ua_rng, system, hostname=target_system.hostname)
+            resp_len = random.Random(_stable_seed(f"{seed_key}:bytes")).randint(256, 8192)
+            http_ctx = HttpContext(
+                method=render.http_method or "GET",
+                host=target_system.hostname,
+                uri=render.http_uri or "/",
+                version="1.1",
+                user_agent=user_agent,
+                request_body_len=0,
+                response_body_len=resp_len,
+                status_code=200,
+                status_msg="OK",
+                referrer=render.http_referrer or "",
+            )
+            # Direct request to the web server (proxy_bypass): the spillage contract
+            # is that the credential lands in the target's access log with
+            # client_ip = the actor's host. Routing through an explicit proxy would
+            # rewrite client_ip to the proxy and can scrub the Referer for an
+            # external target, which would mislabel the (unwritten) credential as
+            # landed. Going direct keeps the surface source-coherent.
+            uid = self.generate_connection(
+                src_ip=system.ip,
+                dst_ip=target_system.ip,
+                time=time,
+                dst_port=443,
+                proto="tcp",
+                service="https",
+                source_system=system,
+                http=http_ctx,
+                hostname=target_system.hostname,
+                preserve_dst_ip=True,
+                proxy_bypass=True,
+            )
+            if not uid:
+                # The connection was filtered out (e.g. no sensor observes the
+                # actor->web-server path), so nothing landed on disk — do NOT label
+                # it, mirroring the suppressed shell_history case above.
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+        else:  # pragma: no cover - guarded by render_for_surface/model Literal
+            raise ValueError(f"unsupported spillage surface: {surface!r}")
+
+        return {
+            "surface": surface,
+            "family": resolved_family,
+            "value": canonical,
+            "rendered_value": render.encoded_value,
+            "expected_sources": list(render.expected_sources),
+            "time": emitted_time,
+            "target_system": target_fqdn,
+        }
 
     def _normalize_apache_raw_syslog(
         self,

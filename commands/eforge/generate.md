@@ -105,6 +105,10 @@ scenarios/<scenario-name>/
   ENVIRONMENT.md         ← created by /eforge scenario
   artifacts/             ← optional authored collateral, not eval input
   GROUND_TRUTH.md        ← generated answer key (empty for benign baseline-only runs)
+  GROUND_TRUTH.jsonl     ← generated machine-readable label sidecar; written ONLY when
+                           there are structured records (spillage labels in v1). Absent
+                           when a run produces none. It participates in the overwrite
+                           swap, so re-running a scenario never leaves a stale sidecar.
   OBSERVATION_MANIFEST.json ← generated source-observation sidecar
   OUTPUT_TARGET.txt      ← "default" or "sof-elk"
   data/                  ← generated log files

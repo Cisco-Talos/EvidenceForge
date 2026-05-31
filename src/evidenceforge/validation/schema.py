@@ -200,6 +200,7 @@ class ScenarioValidator:
         self._validate_noise_feasibility()
         self._validate_storyline_format_coverage()
         self._validate_storyline_os_plausibility()
+        self._validate_spillage_events()
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
@@ -1136,6 +1137,141 @@ class ScenarioValidator:
                                     f"(available: {available})"
                                 ),
                                 suggestion="Check the preset name or provide explicit paths",
+                            )
+                        )
+
+    def _validate_spillage_events(self) -> None:
+        """Validate spillage events: surface/OS fit, family, value safety, formats."""
+        if not self.scenario.storyline:
+            return
+        if not any(spec.type == "spillage" for ev in self.scenario.storyline for spec in ev.events):
+            return  # nothing to do — avoid importing the generator below
+
+        from evidenceforge.config.secret_families import family_names
+
+        # Canonical non-interactive bash-user set, reused so the validator cannot
+        # drift from the generator's actual bash-history suppression behaviour.
+        from evidenceforge.generation.activity.generator import _NONINTERACTIVE_BASH_USERS
+        from evidenceforge.generation.spillage import (
+            HTTP_SURFACES,
+            LINUX_ONLY_SURFACES,
+            SURFACE_FORMATS,
+            SpillageSafetyError,
+            check_spillage_safety,
+        )
+
+        known_families = family_names()
+        expanded_formats = self._get_expanded_formats()
+        # http_* surfaces leak into a web server's access log, so one must exist.
+        has_web_server = any(
+            "web_server" in (s.roles or []) for s in self.scenario.environment.systems
+        )
+
+        for idx, event in enumerate(self.scenario.storyline):
+            system = self._get_system(event.system)
+            os_cat = _get_os_category(system.os) if system else "unknown"
+            for spec_idx, spec in enumerate(event.events):
+                if spec.type != "spillage":
+                    continue
+                field_path = f"storyline.{idx}.events.{spec_idx}"
+
+                # shell_history/syslog are Linux-modeled; emitting them on Windows
+                # would silently drop the credential while still labeling it in
+                # ground truth — a phantom positive — so this is a hard error.
+                # (process_command_line is cross-OS, so it is exempt.)
+                if os_cat == "windows" and spec.surface in LINUX_ONLY_SURFACES:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Spillage surface '{spec.surface}' is "
+                                f"Linux-modeled but system '{event.system}' is windows; the "
+                                "credential would not be emitted"
+                            ),
+                            suggestion="Target a Linux host for this spillage surface",
+                        )
+                    )
+
+                # The credential is lost (but still ground-truthed) if the
+                # surface's output format is not collected — phantom positive.
+                required_fmt = SURFACE_FORMATS.get(spec.surface)
+                if required_fmt and required_fmt not in expanded_formats:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Spillage surface '{spec.surface}' needs output "
+                                f"format '{required_fmt}' but it is not in output.logs; the "
+                                "credential would not be emitted"
+                            ),
+                            suggestion=f"Add '{required_fmt}' to output.logs",
+                        )
+                    )
+
+                # An http_* surface needs a web_server-role host to receive the
+                # request and write the access log; without one the credential is
+                # lost but still ground-truthed — phantom positive.
+                if spec.surface in HTTP_SURFACES and not has_web_server:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Spillage surface '{spec.surface}' needs a host "
+                                "with role 'web_server' to record the request, but none exists; "
+                                "the credential would not be emitted"
+                            ),
+                            suggestion="Add a system with roles: [web_server] to the environment",
+                        )
+                    )
+
+                # Non-interactive service accounts get no bash history, so a
+                # shell_history spill for them would never land.
+                if (
+                    spec.surface == "shell_history"
+                    and event.actor.lower() in _NONINTERACTIVE_BASH_USERS
+                ):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Spillage surface 'shell_history' actor "
+                                f"'{event.actor}' is a non-interactive service account with no "
+                                "bash history; the credential would not be emitted"
+                            ),
+                            suggestion="Use an interactive user actor for shell_history spillage",
+                        )
+                    )
+
+                if spec.family is not None and spec.family not in known_families:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Unknown spillage family '{spec.family}' "
+                                f"(known: {sorted(known_families)})"
+                            ),
+                            suggestion="Use a known family or add one to the secret_families overlay",
+                        )
+                    )
+
+                if spec.value is not None:
+                    try:
+                        check_spillage_safety(spec.value, family=None)
+                    except SpillageSafetyError as exc:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=f"[{event.id}] Unsafe spillage value: {exc}",
+                                suggestion=(
+                                    "Mark the value with a poison marker (e.g. "
+                                    "EvidenceForgeFake) or use a vendor-published fake"
+                                ),
                             )
                         )
 

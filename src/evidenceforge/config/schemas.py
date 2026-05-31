@@ -1891,6 +1891,105 @@ class HostActivityProfilesConfig(BaseModel, extra="forbid"):
         return v
 
 
+# --- Secret families (spillage event type) ---
+
+
+class SecretFamilyEntry(BaseModel, extra="forbid"):
+    """One credential family used by the spillage event type."""
+
+    name: str
+    description: str = ""
+    structured: bool = True
+    regex: str
+    value_template: str | None = None
+    examples: list[str] = Field(default_factory=list)
+    default_app: str = "app"
+    surfaces: list[str] = Field(default_factory=list)
+    carriers: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("regex")
+    @classmethod
+    def _regex_compiles(cls, v: str) -> str:
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"invalid family regex: {exc}") from exc
+        return v
+
+    @model_validator(mode="after")
+    def _check_family(self) -> Self:
+        if not self.value_template and not self.examples:
+            raise ValueError(f"family {self.name!r} needs a value_template or examples")
+        pattern = re.compile(self.regex)
+        for ex in self.examples:
+            if not pattern.search(ex):
+                raise ValueError(
+                    f"family {self.name!r} example {ex!r} does not match regex {self.regex!r}"
+                )
+        for surface, lines in self.carriers.items():
+            for line in lines:
+                if "{value}" not in line:
+                    raise ValueError(
+                        f"family {self.name!r} carrier for {surface!r} must contain {{value}}: "
+                        f"{line!r}"
+                    )
+        return self
+
+
+class SecretFamiliesConfig(BaseModel, extra="forbid"):
+    """Top-level schema for secret_families.yaml (merged bundle + overlay)."""
+
+    families: list[SecretFamilyEntry] = Field(default_factory=list, min_length=1)
+    poison_markers: list[str] = Field(default_factory=list, min_length=1)
+    vendor_fakes: list[str] = Field(default_factory=list)
+    network_allowlist: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _unique_family_names(self) -> Self:
+        names = [f.name for f in self.families]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"duplicate family names: {dupes}")
+        return self
+
+    @model_validator(mode="after")
+    def _safe_marker_fake_domain_values(self) -> Self:
+        # A degenerate marker/fake/domain silently weakens the safety guardrails
+        # (e.g. an empty marker makes every value "contain a marker"; a 4-char
+        # fake "AKIA" vouches for any real AWS key; a bare TLD allowlists all of
+        # *.com). Reject these so a typo'd overlay can't defeat the safety contract.
+        for marker in self.poison_markers:
+            if len(marker.strip()) < 3:
+                raise ValueError(
+                    f"poison marker {marker!r} is empty/too short (need >=3 chars); "
+                    "a short marker would mark real secrets as synthetic"
+                )
+        for fake in self.vendor_fakes:
+            if len(fake) < 12:
+                raise ValueError(
+                    f"vendor_fake {fake!r} is too short (need >=12 chars); a short "
+                    "fake would vouch for real credentials that merely share the prefix"
+                )
+        reserved_suffixes = (".example", ".test", ".invalid", ".localhost")
+        reserved_exact = {
+            "example.com",
+            "example.net",
+            "example.org",
+            "example",
+            "test",
+            "invalid",
+            "localhost",
+        }
+        for domain in self.network_allowlist.get("domains", []) or []:
+            normalized = str(domain).lower().strip(".")
+            if normalized not in reserved_exact and not normalized.endswith(reserved_suffixes):
+                raise ValueError(
+                    f"allowlist domain {domain!r} is not an RFC 2606/6761 reserved name; "
+                    "use example.com/.net/.org or a .test/.invalid/.example/.localhost name"
+                )
+        return self
+
+
 # --- Validation helper ---
 
 

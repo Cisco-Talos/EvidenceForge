@@ -4,6 +4,56 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## Unreleased
+
+**`spillage` event type — synthetic credential leakage (RFC #283)**
+
+- Added a typed `spillage` storyline event that emits a synthetic credential into
+  a semantic exposure `surface` (`shell_history`, `process_command_line`,
+  `syslog_message`, `http_request_url`, `http_referrer`) via the canonical modeled
+  generation paths, with surface-appropriate encoding (shell-quoting, syslog
+  control-escaping, URL percent-encoding). The `http_*` surfaces model an outbound
+  request to a `web_server`-role host and land in its `web_access` log.
+- Provide exactly one of `family` or `value` (a literal). For a family, a fresh
+  value is **synthesized per event** from a data-driven `value_template` and
+  rendered into a **varied carrier line** per surface — so no two spills are
+  identical. Ships a curated set of ~10 families (AWS/GCP/GitHub/Slack/Stripe/JWT
+  tokens, DB URIs, generic secrets). Families, value templates, carrier templates,
+  markers, vendor fakes, and the host allowlist are all data in
+  `config/activity/secret_families.yaml` (overlay-customizable, including new
+  families); the template engine, safety, encoding and surface handlers are code
+  in `generation/spillage.py`.
+- Safety guardrails (enforced at `eforge validate` and generation time): a poison
+  marker or vendor-fake requirement applied per credential-shaped token (modeled
+  family shapes plus a generic high-entropy detector); an RFC
+  2606/6761/5737/3849/1918 host allowlist that first normalizes alternate
+  encodings a real client would resolve (percent-encoding, Unicode separators,
+  obfuscated IPv4, IDN/punycode/homoglyph hosts, backslash and scheme-relative
+  URLs, IPv6 zone ids); a family-regex match; and a single-line, control-free
+  check. A surface whose output format/OS cannot actually emit the credential
+  (missing format, Windows host, non-interactive actor) is a hard error and one
+  that fails to emit at generation is skipped, so ground truth never labels a
+  credential that was not written. Unsafe values never reach generation.
+- Per-surface correlation scope is explicit: `http_*` ride a real modeled
+  connection; `process_command_line` is a standalone in-window EDR process record
+  using local-only carriers; `shell_history` is a history-file artifact; and
+  `syslog_message` is a standalone log line — so standalone evidence is never
+  labeled as fully correlated.
+- Added a general machine-readable `GROUND_TRUTH.jsonl` sidecar (`schema_version`,
+  `kind`, `record_id`, `storyline_id`, `surface`, `family`, `value`/`value_sha256`
+  and the on-disk `rendered_value`/`rendered_sha256`, `expected_sources`); times
+  reflect the actual emitted log line. `GROUND_TRUTH.md` shows a redacted preview
+  plus SHA-256 rather than the full value.
+- `eforge eval` recognizes spillage events: the causality pillar reads the
+  `GROUND_TRUTH.jsonl` sidecar and confirms each labeled value landed in the logs
+  (it does not re-run synthesis), so spillage datasets pass acceptance. Scrubber
+  precision/recall scoring is deferred and will fold into `eforge eval`.
+- Updated the scenario authoring skill, scenario reference, and `validate-config`
+  to recognize the new event type and `secret_families` config. See
+  [docs/reference/spillage.md](docs/reference/spillage.md).
+
+---
+
 ## v1.1.1 (2026-05-29)
 
 This patch release promotes the post-1.1.0 current-dev assessment fixes. The
@@ -23,6 +73,8 @@ project moves from `1.1.0` to `1.1.1`.
   command docs to installed command usage, and added Claude instructions as a
   reference to the existing AGENTS.md workflow (`9d59a887`, `617932f1`,
   `11dee4b3`).
+
+---
 
 ## v1.1.0 (2026-05-28)
 

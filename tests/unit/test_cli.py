@@ -398,6 +398,53 @@ output:
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_partial_prior_state_rollback_keeps_matched_set(
+        self, mock_engine_class, scenarios_dir, tmp_path, monkeypatch
+    ):
+        """A swap failure must not leave a NEW GROUND_TRUTH.md orphaned over restored
+        OLD data/ when the prior output was partial (data/ but no GT.md). Rollback
+        strips the just-installed new artifacts unconditionally, restoring the
+        matched set (here: old data/, still no GT.md)."""
+        from pathlib import Path
+
+        def _fake_generate():
+            sd = next(iter(tmp_path.glob(".eforge_staging_*")))
+            (sd / "data").mkdir(exist_ok=True)
+            (sd / "data" / "new.xml").write_text("new data")
+            (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+            (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        # PARTIAL prior state: data/ exists, but GROUND_TRUTH.md does NOT.
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+
+        # Force a failure at the LAST install step (the OUTPUT_TARGET marker) so the
+        # swap fails AFTER new data/ + new GROUND_TRUTH.md were already installed.
+        real_rename = Path.rename
+
+        def boom_rename(self, target):
+            if self.name == OUTPUT_TARGET_FILENAME and ".eforge_staging_" in str(self):
+                raise RuntimeError("injected swap failure")
+            return real_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", boom_rename)
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path), "--force"],
+        )
+
+        assert result.exit_code != EXIT_SUCCESS  # the run failed
+        # No orphaned NEW ground truth, and the OLD data/ is restored intact.
+        assert not (tmp_path / "GROUND_TRUTH.md").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert not (tmp_path / "data" / "new.xml").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_baseline_only_replaces_complete_sidecar_set(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
