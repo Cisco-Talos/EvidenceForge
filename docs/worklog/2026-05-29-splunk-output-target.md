@@ -39,11 +39,19 @@ container on Apple Silicon by running the `splunk/splunk:10.2.3` image as
 runtime inputs, and validates base sourcetype counts, fields, timestamps,
 source/host metadata, and `_internal` parser warnings through REST searches.
 
-Known remaining issue: the latest live smoke still times out waiting for every
-expected sourcetype. Splunk indexes the staged Zeek files and Cisco ASA file,
-but does not pick up files staged under dotted host-directory names such as
-`win01.example.test/windows_event_security.xml`. The next diagnostic/fix should
-stage monitored files under Splunk-safe internal directory names while keeping
-the original EvidenceForge host value in generated `inputs.conf` metadata.
-That would change only the harness staging path, not the generated dataset path
-or host identity seen by Splunk.
+Follow-up fix completed: the harness now stages host-scoped files under
+Splunk-safe internal directory names while keeping the original EvidenceForge
+host value in generated `inputs.conf` metadata. The live smoke also needed
+generated `server.conf` to allow localhost REST validation after the Free
+license activates, a future-tolerant REST search window for scheduled training
+data, and filtering of Splunk search/export informational messages that are not
+actual parser-warning rows.
+
+Validation after the fix:
+
+- `uv run ruff check src/evidenceforge/external_parsers/splunk.py src/evidenceforge/external_parsers/splunk_runtime.py tests/unit/test_splunk_harness.py`
+- `uv run ruff format --check src/evidenceforge/external_parsers/splunk.py src/evidenceforge/external_parsers/splunk_runtime.py tests/unit/test_splunk_harness.py`
+- `uv run pytest --no-cov tests/unit/test_splunk_harness.py`
+- `EFORGE_ACCEPT_SPLUNK_LICENSE=1 uv run pytest --include-external-parsers --no-cov tests/external_parser/test_splunk_harness.py`
+
+The live smoke passed with all expected Splunk sourcetypes indexed.

@@ -75,6 +75,7 @@ class SplunkGeneratedConfig:
     props_conf: Path
     transforms_conf: Path
     indexes_conf: Path
+    server_conf: Path
     supplied_apps_dir: Path
     supplied_app_count: int
 
@@ -273,7 +274,7 @@ def _rest_search_export(compose_run: SplunkComposeRun, search: str) -> list[Json
             "output_mode": "json",
             "exec_mode": "oneshot",
             "earliest_time": "0",
-            "latest_time": "now",
+            "latest_time": "+10y",
         }
     ).encode("utf-8")
     payload = _rest_bytes(compose_run, "/services/search/jobs/export", body)
@@ -335,7 +336,7 @@ def _capture_runtime_artifacts(compose_run: SplunkComposeRun) -> None:
         _compose_logs(compose_run, "splunk"),
         encoding="utf-8",
     )
-    for config_name in ("inputs", "props", "transforms", "indexes"):
+    for config_name in ("inputs", "props", "transforms", "indexes", "server"):
         output = _compose_exec(
             compose_run,
             ["/opt/splunk/bin/splunk", "btool", config_name, "list", "--debug"],
@@ -381,7 +382,7 @@ def _compose_exec(
     check: bool,
 ) -> str:
     completed = subprocess.run(
-        _compose_args(compose_run, ["exec", "-T", "splunk", *args]),
+        _compose_args(compose_run, ["exec", "-T", "--user", "splunk", "splunk", *args]),
         check=False,
         capture_output=True,
         text=True,

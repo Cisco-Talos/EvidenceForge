@@ -24,7 +24,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import shutil
 import tarfile
 import zipfile
@@ -234,6 +236,7 @@ SPLUNK_SOURCE_SPECS_BY_NAME = {
 SPLUNK_UNSUPPORTED_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("snort_alert.log", "ids", "snort", "snort_alert"),
 )
+_SAFE_STAGE_PART_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def _noop_progress(_event_type: str, _data: dict[str, Any]) -> None:
@@ -325,6 +328,7 @@ def stage_splunk_logs(
     logs: list[StagedSplunkLog] = []
     unsupported: list[StagedSplunkLog] = []
     seen: set[Path] = set()
+    staged_paths: set[Path] = set()
 
     for spec in SPLUNK_SOURCE_SPECS:
         for source_name in spec.source_names:
@@ -333,7 +337,8 @@ def stage_splunk_logs(
                     continue
                 seen.add(source)
                 relative = source.relative_to(source_root)
-                staged = data_root / relative
+                staged_relative = _staged_relative_path(relative, staged_paths)
+                staged = data_root / staged_relative
                 staged.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, staged)
                 logs.append(
@@ -414,6 +419,7 @@ def build_splunk_configs(
     props_conf = local_dir / "props.conf"
     transforms_conf = local_dir / "transforms.conf"
     indexes_conf = local_dir / "indexes.conf"
+    server_conf = local_dir / "server.conf"
     inputs_conf.write_text(
         _inputs_conf(staged_logs, work_dir.resolve() / "stage" / "data"),
         encoding="utf-8",
@@ -421,6 +427,7 @@ def build_splunk_configs(
     props_conf.write_text(_props_conf(), encoding="utf-8")
     transforms_conf.write_text(_transforms_conf(), encoding="utf-8")
     indexes_conf.write_text(_indexes_conf(), encoding="utf-8")
+    server_conf.write_text(_server_conf(), encoding="utf-8")
     (app_dir / "metadata").mkdir(exist_ok=True)
     (app_dir / "metadata" / "default.meta").write_text(
         "[]\naccess = read : [ * ], write : [ admin ]\n",
@@ -434,6 +441,7 @@ def build_splunk_configs(
         props_conf=props_conf,
         transforms_conf=transforms_conf,
         indexes_conf=indexes_conf,
+        server_conf=server_conf,
         supplied_apps_dir=supplied_apps_dir,
         supplied_app_count=supplied_app_count,
     )
@@ -482,10 +490,12 @@ def validate_splunk_output(
     )
     failures.extend(_field_failures(field_rows))
 
-    internal_rows = export_search(
-        compose_run,
-        _internal_issue_search(),
-        output_name="internal-parser-issues",
+    internal_rows = _search_result_rows(
+        export_search(
+            compose_run,
+            _internal_issue_search(),
+            output_name="internal-parser-issues",
+        )
     )
     if internal_rows:
         failures.append(f"Splunk _internal reported {len(internal_rows)} parser issue row(s)")
@@ -626,6 +636,12 @@ thawedPath = $SPLUNK_DB/{SPLUNK_INDEX}/thaweddb
 """
 
 
+def _server_conf() -> str:
+    return """[general]
+allowRemoteLogin = always
+"""
+
+
 def _metadata_validation_search(sourcetypes: tuple[str, ...]) -> str:
     quoted = ",".join(json.dumps(sourcetype) for sourcetype in sourcetypes)
     return (
@@ -739,6 +755,10 @@ def _field_failures(rows: list[JsonObject]) -> list[str]:
             if field.startswith("missing_") and _int_value(value) > 0:
                 failures.append(f"{sourcetype}: {value} event(s) missing fields for {field}")
     return failures
+
+
+def _search_result_rows(rows: list[JsonObject]) -> list[JsonObject]:
+    return [row for row in rows if isinstance(row.get("result"), dict)]
 
 
 def _write_failure_report(
@@ -904,6 +924,40 @@ def _host_for_log_path(data_dir: Path, path: Path, spec: SplunkSourceSpec) -> st
     if len(relative.parts) == 1:
         return spec.root_host
     return _host_for_path(data_dir, path)
+
+
+def _staged_relative_path(relative: Path, staged_paths: set[Path]) -> Path:
+    """Return a Splunk-mounted path with safe parent directories.
+
+    EvidenceForge output paths are preserved as the source of truth. The Splunk
+    harness stages copies under an ephemeral monitored tree, so parent directory
+    names can be normalized without changing the generated dataset or Splunk host
+    metadata.
+    """
+    if len(relative.parts) == 1:
+        staged_paths.add(relative)
+        return relative
+
+    parent_parts = tuple(_safe_stage_part(part) for part in relative.parts[:-1])
+    candidate = Path(*parent_parts, relative.name)
+    if candidate not in staged_paths:
+        staged_paths.add(candidate)
+        return candidate
+
+    digest = hashlib.sha256(relative.as_posix().encode("utf-8")).hexdigest()[:8]
+    deduped_parent = (*parent_parts[:-1], f"{parent_parts[-1]}_{digest}")
+    candidate = Path(*deduped_parent, relative.name)
+    suffix = 1
+    while candidate in staged_paths:
+        suffix += 1
+        candidate = Path(*deduped_parent[:-1], f"{deduped_parent[-1]}_{suffix}", relative.name)
+    staged_paths.add(candidate)
+    return candidate
+
+
+def _safe_stage_part(value: str) -> str:
+    safe = _SAFE_STAGE_PART_PATTERN.sub("_", value).strip("_")
+    return safe or "source"
 
 
 def _field_token(value: str) -> str:

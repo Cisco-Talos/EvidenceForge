@@ -36,6 +36,7 @@ from evidenceforge.external_parsers.splunk import (
     _internal_issue_search,
     _metadata_validation_search,
     _required_field_validation_search,
+    _search_result_rows,
     build_splunk_configs,
     stage_splunk_logs,
 )
@@ -71,6 +72,13 @@ def test_stage_splunk_logs_detects_supported_and_v1_unsupported_logs(tmp_path: P
     }
     proxy_log = next(log for log in staged_logs if log.format_name == "proxy_access")
     assert proxy_log.record_count == 1
+    windows_security = next(
+        log for log in staged_logs if log.format_name == "windows_event_security"
+    )
+    assert windows_security.host == "win01.example.test"
+    assert windows_security.staged.relative_to(tmp_path / "stage" / "data") == Path(
+        "win01_example_test/windows_event_security.xml"
+    )
 
 
 def test_stage_splunk_logs_accepts_multifamily_parser_sample(tmp_path: Path) -> None:
@@ -100,13 +108,16 @@ def test_build_splunk_configs_writes_generated_app_and_supplied_apps(
     props = config.props_conf.read_text(encoding="utf-8")
     transforms = config.transforms_conf.read_text(encoding="utf-8")
     indexes = config.indexes_conf.read_text(encoding="utf-8")
-    assert "[monitor:///evidenceforge-data/win01.example.test/windows_event_security.xml]" in inputs
+    server = config.server_conf.read_text(encoding="utf-8")
+    assert "[monitor:///evidenceforge-data/win01_example_test/windows_event_security.xml]" in inputs
+    assert "host = win01.example.test" in inputs
     assert "sourcetype = XmlWinEventLog:Security" in inputs
     assert "[XmlWinEventLog:Security]" in props
     assert "[bro:conn:json]" in props
     assert "EXTRACT-evidenceforge-asa" in props
     assert "[evidenceforge_proxy_comment_drop]" in transforms
     assert "[eforge]" in indexes
+    assert "allowRemoteLogin = always" in server
     assert config.supplied_app_count == 1
     assert (config.supplied_apps_dir / "Splunk_TA_windows" / "default" / "props.conf").exists()
 
@@ -178,6 +189,17 @@ def test_splunk_validation_search_builders_include_core_checks(tmp_path: Path) -
     assert "DateParserVerbose" in internal
     assert "LineBreakingProcessor" in internal
     assert "_raw" in internal
+
+
+def test_splunk_search_result_rows_ignore_export_info_messages() -> None:
+    rows = [
+        {"messages": [{"type": "INFO", "text": "No matching fields exist."}], "lastrow": True},
+        {"result": {"component": "TailReader", "message": "real warning"}},
+    ]
+
+    assert _search_result_rows(rows) == [
+        {"result": {"component": "TailReader", "message": "real warning"}}
+    ]
 
 
 def _splunk_data_dir(tmp_path: Path) -> Path:

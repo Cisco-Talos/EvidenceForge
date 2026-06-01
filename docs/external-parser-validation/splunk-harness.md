@@ -64,12 +64,15 @@ Important files:
 | Path | Purpose |
 | --- | --- |
 | `local/inputs.conf` | File-monitor stanzas for each staged file, with explicit index, host, source, and sourcetype |
-| `local/props.conf` | Line breaking, timestamp hints, XML/JSON modes, and REPORT bindings |
-| `local/transforms.conf` | Search-time extractions for RFC5424, Cisco ASA, web, and proxy logs |
+| `local/props.conf` | Line breaking, timestamp hints, XML/JSON modes, and base search-time extractions |
+| `local/transforms.conf` | Ingest-time filtering for source-native comment/header rows |
 | `local/indexes.conf` | Dedicated `eforge` index paths |
+| `local/server.conf` | Localhost REST login support for the ephemeral Free-license validation container |
 
 The harness mounts that generated app into `/opt/splunk/etc/apps/` and mounts
-staged logs read-only under `/evidenceforge-data`.
+staged logs read-only under `/evidenceforge-data`. Host-scoped source paths are
+copied into Splunk-safe internal staging directories, but generated
+`inputs.conf` preserves the original EvidenceForge host value in Splunk metadata.
 
 ## CIM Mode
 
