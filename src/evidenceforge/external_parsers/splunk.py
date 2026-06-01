@@ -80,6 +80,7 @@ class SplunkSourceSpec:
     required_fields: tuple[str, ...] = ()
     skip_comment_records: bool = False
     root_host: str = "evidenceforge-source"
+    supplied_app_sourcetype: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,10 +117,17 @@ class SplunkStageManifest:
 
     @property
     def expected_sourcetype_counts(self) -> dict[str, int]:
-        """Return expected event counts by Splunk sourcetype."""
+        """Return expected event counts by the indexed Splunk sourcetype."""
         counts: Counter[str] = Counter()
+        use_supplied_app_sourcetypes = self.supplied_app_count > 0
         for log in self.logs:
-            counts[log.sourcetype] += log.record_count
+            spec = SPLUNK_SOURCE_SPECS_BY_FORMAT[log.format_name]
+            counts[
+                _validation_sourcetype(
+                    spec,
+                    use_supplied_app_sourcetypes=use_supplied_app_sourcetypes,
+                )
+            ] += log.record_count
         return dict(sorted(counts.items()))
 
 
@@ -172,6 +180,7 @@ SPLUNK_SOURCE_SPECS: tuple[SplunkSourceSpec, ...] = (
         "XmlWinEventLog:Security",
         required_fields=("EventID", "Computer"),
         root_host="windows-event-source",
+        supplied_app_sourcetype="XmlWinEventLog",
     ),
     SplunkSourceSpec(
         "windows_event_sysmon",
@@ -181,6 +190,7 @@ SPLUNK_SOURCE_SPECS: tuple[SplunkSourceSpec, ...] = (
         "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
         required_fields=("EventID", "Computer"),
         root_host="windows-event-source",
+        supplied_app_sourcetype="XmlWinEventLog",
     ),
     SplunkSourceSpec(
         "syslog",
@@ -485,7 +495,10 @@ def validate_splunk_output(
 
     field_rows = export_search(
         compose_run,
-        _required_field_validation_search(manifest.logs),
+        _required_field_validation_search(
+            manifest.logs,
+            use_supplied_app_sourcetypes=manifest.supplied_app_count > 0,
+        ),
         output_name="required-field-validation",
     )
     failures.extend(_field_failures(field_rows))
@@ -655,8 +668,20 @@ def _metadata_validation_search(sourcetypes: tuple[str, ...]) -> str:
     )
 
 
-def _required_field_validation_search(logs: tuple[StagedSplunkLog, ...]) -> str:
-    sourcetypes = sorted({log.sourcetype for log in logs})
+def _required_field_validation_search(
+    logs: tuple[StagedSplunkLog, ...],
+    *,
+    use_supplied_app_sourcetypes: bool = False,
+) -> str:
+    sourcetypes = sorted(
+        {
+            _validation_sourcetype(
+                SPLUNK_SOURCE_SPECS_BY_FORMAT[log.format_name],
+                use_supplied_app_sourcetypes=use_supplied_app_sourcetypes,
+            )
+            for log in logs
+        }
+    )
     quoted = ",".join(json.dumps(sourcetype) for sourcetype in sourcetypes)
     extractions = [
         'rex field=_raw "<EventID>(?<EventID>\\d+)</EventID>.*<Computer>(?<Computer>[^<]*)</Computer>"',
@@ -666,24 +691,35 @@ def _required_field_validation_search(logs: tuple[StagedSplunkLog, ...]) -> str:
         'rex field=_raw "^(?<date>\\d{4}-\\d{2}-\\d{2})\\s+(?<time>\\d{2}:\\d{2}:\\d{2})\\s+(?<src_ip>\\S+)\\s+(?<user>\\S+)\\s+(?<http_method>\\S+)\\s+(?<uri>\\S+)\\s+(?<http_version>\\S+)\\s+(?<status>\\d{3})\\s+(?<bytes_out>\\d+)\\s+(?<bytes_in>\\d+)\\s+(?<duration_ms>\\d+)\\s+(?<dest_host>\\S+)\\s+(?<user_agent>\\S+)\\s+(?<referrer>\\S+)\\s+(?<content_type>\\S+)\\s+(?<cache_result>\\S+)\\s+(?<proxy_action>\\S+)"',
     ]
     evals = [
+        (
+            spec,
+            _validation_sourcetype(
+                spec,
+                use_supplied_app_sourcetypes=use_supplied_app_sourcetypes,
+            ),
+        )
+        for spec in SPLUNK_SOURCE_SPECS
+        if spec.required_fields
+    ]
+    eval_commands = [
         f"eval missing_{_field_token(spec.format_name)}=if("
-        f"sourcetype={json.dumps(spec.sourcetype)},if("
+        f"sourcetype={json.dumps(sourcetype)},if("
         + " OR ".join(
             f'isnull({_spl_field(field)}) OR {_spl_field(field)}=""'
             for field in spec.required_fields
         )
         + ",1,0),0)"
-        for spec in SPLUNK_SOURCE_SPECS
-        if spec.sourcetype in sourcetypes and spec.required_fields
+        for spec, sourcetype in evals
+        if sourcetype in sourcetypes
     ]
     sums = " ".join(
         f"sum(missing_{_field_token(spec.format_name)}) as missing_{_field_token(spec.format_name)}"
-        for spec in SPLUNK_SOURCE_SPECS
-        if spec.sourcetype in sourcetypes and spec.required_fields
+        for spec, sourcetype in evals
+        if sourcetype in sourcetypes
     )
     return (
         f"search index={SPLUNK_INDEX} sourcetype IN ({quoted}) "
-        + " | ".join(["", *extractions, *evals])
+        + " | ".join(["", *extractions, *eval_commands])
         + f" | stats count {sums} by sourcetype"
     )
 
@@ -759,6 +795,16 @@ def _field_failures(rows: list[JsonObject]) -> list[str]:
 
 def _search_result_rows(rows: list[JsonObject]) -> list[JsonObject]:
     return [row for row in rows if isinstance(row.get("result"), dict)]
+
+
+def _validation_sourcetype(
+    spec: SplunkSourceSpec,
+    *,
+    use_supplied_app_sourcetypes: bool,
+) -> str:
+    if use_supplied_app_sourcetypes and spec.supplied_app_sourcetype:
+        return spec.supplied_app_sourcetype
+    return spec.sourcetype
 
 
 def _write_failure_report(

@@ -73,6 +73,10 @@ The harness mounts that generated app into `/opt/splunk/etc/apps/` and mounts
 staged logs read-only under `/evidenceforge-data`. Host-scoped source paths are
 copied into Splunk-safe internal staging directories, but generated
 `inputs.conf` preserves the original EvidenceForge host value in Splunk metadata.
+When caller-supplied apps are installed, the harness validates known TA-normalized
+sourcetypes. For example, the Splunk Add-on for Microsoft Windows normalizes
+Windows XML channels to indexed `sourcetype=XmlWinEventLog` and preserves the
+specific channel in `source`.
 
 ## CIM Mode
 
@@ -87,6 +91,12 @@ copied into Splunk-safe internal staging directories, but generated
 `--splunk-app <path>` may point to a local Splunk app directory or archive. Apps
 are copied or unpacked only into `<work-dir>/splunk/runtime-config-src/` for the
 run. EvidenceForge does not download, commit, or redistribute those apps.
+
+For current CIM smoke coverage, provide the Splunk Common Information Model app
+plus local TA archives/directories for the source families under test, such as
+Microsoft Windows, Sysmon, Unix/Linux, Cisco ASA, Zeek, and Apache Web Server.
+Proxy and eCAR currently rely on EvidenceForge-owned base validation rather than
+third-party CIM TA mapping.
 
 ## Validation And Artifacts
 

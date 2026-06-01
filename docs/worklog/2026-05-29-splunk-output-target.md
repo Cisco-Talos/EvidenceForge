@@ -55,3 +55,28 @@ Validation after the fix:
 - `EFORGE_ACCEPT_SPLUNK_LICENSE=1 uv run pytest --include-external-parsers --no-cov tests/external_parser/test_splunk_harness.py`
 
 The live smoke passed with all expected Splunk sourcetypes indexed.
+
+## 2026-06-01 CIM Supplied-App Smoke
+
+Local Splunkbase app archives were supplied from `/tmp/SplunkTA`, including
+Splunk CIM, Microsoft Windows, Sysmon, Unix/Linux, Cisco ASA, Zeek, and Apache
+Web Server add-ons. The first CIM-required run against the Windows-only
+`/tmp/eforge-splunk-live/data` dataset showed that the Microsoft Windows TA
+normalizes both `XmlWinEventLog:Security` and
+`XmlWinEventLog:Microsoft-Windows-Sysmon/Operational` to indexed
+`sourcetype=XmlWinEventLog`. The harness now accounts for that known
+TA-normalized sourcetype while preserving base-mode expectations.
+
+Validation after the adjustment:
+
+- Windows-only CIM-required parser run passed with expected/observed
+  `{'XmlWinEventLog': 98}` and visible CIM models.
+- Multi-family CIM-required parser run passed with Windows normalized to
+  `XmlWinEventLog` and all non-Windows supported v1 sourcetypes preserving the
+  base indexed sourcetype.
+
+This proves that supplied apps can be installed ephemerally, CIM data models are
+visible, and base ingest/field validation survives the supplied TAs. It does not
+yet prove that every event populates CIM data-model datasets; that requires the
+next validation layer of source-specific data-model searches and CIM field
+coverage checks.

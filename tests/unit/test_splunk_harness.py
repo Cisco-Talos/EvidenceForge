@@ -33,6 +33,8 @@ from evidenceforge.external_parsers.compose_runtime import ComposeCommand
 from evidenceforge.external_parsers.errors import SplunkHarnessError
 from evidenceforge.external_parsers.splunk import (
     SPLUNK_SOURCE_SPECS,
+    CimMode,
+    SplunkStageManifest,
     _internal_issue_search,
     _metadata_validation_search,
     _required_field_validation_search,
@@ -189,6 +191,29 @@ def test_splunk_validation_search_builders_include_core_checks(tmp_path: Path) -
     assert "DateParserVerbose" in internal
     assert "LineBreakingProcessor" in internal
     assert "_raw" in internal
+
+
+def test_splunk_validation_uses_ta_normalized_windows_sourcetype(tmp_path: Path) -> None:
+    data_dir = _splunk_data_dir(tmp_path)
+    staged_logs, unsupported = stage_splunk_logs(data_dir, tmp_path / "stage")
+    manifest = SplunkStageManifest(
+        data_root=tmp_path / "stage" / "data",
+        logs=staged_logs,
+        unsupported_logs=unsupported,
+        cim_mode=CimMode.REQUIRE,
+        supplied_app_count=1,
+    )
+
+    assert manifest.expected_sourcetype_counts["XmlWinEventLog"] == 2
+    assert "XmlWinEventLog:Security" not in manifest.expected_sourcetype_counts
+
+    fields = _required_field_validation_search(
+        staged_logs,
+        use_supplied_app_sourcetypes=True,
+    )
+
+    assert 'sourcetype IN ("XmlWinEventLog"' in fields
+    assert 'sourcetype="XmlWinEventLog"' in fields
 
 
 def test_splunk_search_result_rows_ignore_export_info_messages() -> None:
