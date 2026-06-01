@@ -171,7 +171,7 @@ def generate(
     target: str = typer.Option(
         "default",
         "--target",
-        help="Output rendering target: default or sof-elk",
+        help="Output rendering target: default, sof-elk, or splunk",
     ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.

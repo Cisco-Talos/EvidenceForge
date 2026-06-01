@@ -157,6 +157,28 @@ name: test
         assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.SOF_ELK
         assert (tmp_path / OUTPUT_TARGET_FILENAME).read_text(encoding="utf-8") == "sof-elk\n"
 
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_accepts_splunk_target(self, mock_engine_class, scenarios_dir, tmp_path):
+        """--target splunk is passed to the generation engine."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--target",
+                "splunk",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.SPLUNK
+        assert (tmp_path / OUTPUT_TARGET_FILENAME).read_text(encoding="utf-8") == "splunk\n"
+
     def test_generate_invalid_target_fails_clearly(self, scenarios_dir, tmp_path):
         """Invalid --target values should fail before generation starts."""
         result = runner.invoke(
@@ -167,7 +189,7 @@ name: test
                 "--output",
                 str(tmp_path),
                 "--target",
-                "splunk",
+                "not-a-target",
             ],
         )
 

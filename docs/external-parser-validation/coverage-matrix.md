@@ -1,12 +1,16 @@
 # Coverage Matrix
 
 This matrix tracks which generated log families currently have third-party
-parser validation and which SOF-ELK® filters are used.
+parser validation and which SOF-ELK® filters or Splunk sourcetypes are used.
 
 The developer-facing SOF-ELK runner requires datasets generated with
 `eforge generate --target sof-elk`. The script reads `OUTPUT_TARGET.txt` and
 exits before discovery/staging if the marker is missing, invalid, or anything
 other than `sof-elk`.
+
+The Splunk runner requires datasets generated with
+`eforge generate --target splunk`. It uses generated EvidenceForge-owned Splunk
+app config and optional caller-supplied apps for CIM checks.
 
 ## Supported
 
@@ -43,6 +47,33 @@ other than `sof-elk`.
 | Proxy access logs | NONE | Detected as unsupported so they are not silently skipped. |
 | eCAR JSON | NONE | Officially unsupported for external-parser validation because there is no stable third-party standard parser target. |
 | Bash history | NONE | Officially unsupported for external-parser validation because command history text is not a parser-normalized log family. |
+
+## Splunk Supported
+
+| EvidenceForge output | Splunk sourcetype | Notes |
+| --- | --- | --- |
+| Zeek `conn` | `bro:conn:json` | JSON line breaking and search-time JSON extraction. |
+| Zeek `dns` | `bro:dns:json` | JSON line breaking and search-time JSON extraction. |
+| Zeek `http` | `bro:http:json` | JSON line breaking and search-time JSON extraction. |
+| Zeek `ssl` | `bro:ssl:json` | JSON line breaking and search-time JSON extraction. |
+| Zeek `files` | `bro:files:json` | JSON line breaking and search-time JSON extraction. |
+| Other Zeek NDJSON logs | `bro:<log>:json` | JSON line breaking and count validation for all EvidenceForge Zeek files. |
+| Windows Security XML stream (`splunk` target) | `XmlWinEventLog:Security` | One XML `<Event>` per line; no binary EVTX in v1. |
+| Sysmon XML stream (`splunk` target) | `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational` | One XML `<Event>` per line; no binary EVTX in v1. |
+| Linux RFC5424 syslog (`splunk` target) | `syslog` | Keeps full timestamp year and generated RFC5424 shape. |
+| Cisco ASA syslog (`splunk` target) | `cisco:asa` | Keeps native ASA `%ASA-...` syslog payload in a flat sensor file. |
+| Web access | `access_combined` | Generated Apache/Nginx combined access log. |
+| Proxy access | `evidenceforge:proxy:w3c` | Generated W3C Extended proxy log with EvidenceForge search-time extractions. |
+| eCAR JSON | `evidenceforge:ecar:json` | JSON line breaking and count validation. |
+
+## Splunk Unsupported
+
+| EvidenceForge output | Notes |
+| --- | --- |
+| Snort/Suricata fast alert | Detected but unsupported in Splunk v1. |
+| Bash history | Detected but unsupported in Splunk v1. |
+| Default-target rooted Windows XML | Regenerate with `--target splunk` so each `<Event>` is line-delimited. |
+| Binary EVTX | Not generated in v1; Linux Docker validates XML file ingest instead. |
 
 Contributor rule: when adding a generated log family with no parser support,
 update this matrix and keep discovery warnings visible.

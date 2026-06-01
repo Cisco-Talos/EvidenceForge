@@ -42,6 +42,7 @@ class OutputTarget(StrEnum):
 
     DEFAULT = "default"
     SOF_ELK = "sof-elk"
+    SPLUNK = "splunk"
 
 
 @dataclass(frozen=True)
@@ -51,12 +52,18 @@ class TargetFormatPolicy:
     format_name: str
     default_variant: str
     sof_elk_variant: str
+    splunk_variant: str | None = None
     notes: str = ""
 
     @property
     def target_dependent(self) -> bool:
         """Return whether the on-disk file shape changes by output target."""
-        return self.default_variant != self.sof_elk_variant
+        return len({self.default_variant, self.sof_elk_variant, self.splunk}) > 1
+
+    @property
+    def splunk(self) -> str:
+        """Return the Splunk target variant, defaulting to the SIEM-neutral shape."""
+        return self.splunk_variant or self.default_variant
 
 
 FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
@@ -64,13 +71,21 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "windows_event_security",
         default_variant="xml",
         sof_elk_variant="snare_syslog",
-        notes="SOF-ELK consumes Windows Security through Snare-over-syslog.",
+        splunk_variant="xml_stream",
+        notes=(
+            "SOF-ELK consumes Windows Security through Snare-over-syslog; "
+            "Splunk consumes one XML <Event> per line."
+        ),
     ),
     "windows_event_sysmon": TargetFormatPolicy(
         "windows_event_sysmon",
         default_variant="xml",
         sof_elk_variant="snare_syslog",
-        notes="SOF-ELK consumes Sysmon through the same Snare-over-syslog family.",
+        splunk_variant="xml_stream",
+        notes=(
+            "SOF-ELK consumes Sysmon through the same Snare-over-syslog family; "
+            "Splunk consumes one XML <Event> per line."
+        ),
     ),
     "zeek_conn": TargetFormatPolicy("zeek_conn", "ndjson", "ndjson"),
     "zeek_dns": TargetFormatPolicy("zeek_dns", "ndjson", "ndjson"),
@@ -95,6 +110,7 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "syslog",
         default_variant="rfc5424_flat",
         sof_elk_variant="rfc3164_year_partitioned",
+        splunk_variant="rfc5424_flat",
     ),
     "bash_history": TargetFormatPolicy(
         "bash_history",
@@ -107,6 +123,7 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "cisco_asa",
         default_variant="flat_syslog",
         sof_elk_variant="year_partitioned_syslog",
+        splunk_variant="flat_syslog",
     ),
     "web_access": TargetFormatPolicy("web_access", "w3c_extended", "w3c_extended"),
     "proxy_access": TargetFormatPolicy("proxy_access", "w3c_extended", "w3c_extended"),
@@ -174,6 +191,11 @@ def read_output_target_marker(path: Path) -> OutputTarget:
 def is_sof_elk_target(target: str | OutputTarget | None) -> bool:
     """Return whether *target* selects SOF-ELK-compatible render variants."""
     return normalize_output_target(target) == OutputTarget.SOF_ELK
+
+
+def is_splunk_target(target: str | OutputTarget | None) -> bool:
+    """Return whether *target* selects Splunk-compatible render variants."""
+    return normalize_output_target(target) == OutputTarget.SPLUNK
 
 
 def target_dependent_formats() -> frozenset[str]:

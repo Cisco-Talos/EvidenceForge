@@ -156,19 +156,16 @@ SOF-ELK then sees that directory mounted as `/logstash`.
 | --- | --- |
 | `<sensor>/conn.json` | `/logstash/zeek/<sensor>/conn.log` |
 | `<sensor>/dns.json` | `/logstash/zeek/<sensor>/dns.log` |
-| `zeek_conn.json` | `/logstash/zeek/default/conn.log` |
-| `zeek_dns.json` | `/logstash/zeek/default/dns.log` |
 | `<host>/web_access.log` | `/logstash/httpd/<host>/web_access.log` |
-| `web_access.log` | `/logstash/httpd/default/web_access.log` |
 | `<host>/<year>/syslog.log` (`sof-elk` target) | `/logstash/syslog/<year>/<host>/syslog.log` |
 | `<sensor>/<year>/cisco_asa.log` (`sof-elk` target) | `/logstash/syslog/<year>/<sensor>/cisco_asa.log` |
 | `<host>/<year>/windows_event_security_snare.log` (`sof-elk` target) | `/logstash/syslog/<year>/<host>/windows_event_security_snare.log` |
 | `<host>/<year>/windows_event_sysmon_snare.log` (`sof-elk` target) | `/logstash/syslog/<year>/<host>/windows_event_sysmon_snare.log` |
-| `<host>/syslog.log` or `<sensor>/cisco_asa.log` (legacy flat) | `/logstash/syslog/<inferred-year>/<source>/<file>` |
 
 For Zeek, the same basename mapping applies for all supported Zeek files:
-`http.json` to `http.log`, `ssl.json` to `ssl.log`, and so on. Flat generated
-files such as `zeek_http.json` are staged under the synthetic `default` sensor.
+`http.json` to `http.log`, `ssl.json` to `ssl.log`, and so on. Zeek files are
+expected below concrete sensor directories; scenarios with no Zeek sensors do
+not emit Zeek logs.
 
 Year-partitioned syslog-family paths matter. SOF-ELK uses the archive path to
 recover the year for RFC3164/BSD timestamps. New target-dependent generated

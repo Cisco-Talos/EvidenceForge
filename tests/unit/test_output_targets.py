@@ -56,9 +56,19 @@ def test_output_target_marker_round_trips_from_scenario_root_or_data_dir(tmp_pat
     assert read_output_target_marker(data_dir) == OutputTarget.SOF_ELK
 
 
+def test_splunk_output_target_marker_round_trips(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    marker = write_output_target_marker(tmp_path, "splunk")
+
+    assert marker.read_text(encoding="utf-8") == "splunk\n"
+    assert read_output_target_marker(data_dir) == OutputTarget.SPLUNK
+
+
 def test_invalid_output_target_raises_clear_error() -> None:
-    with pytest.raises(ValueError, match="expected one of: default, sof-elk"):
-        normalize_output_target("splunk")
+    with pytest.raises(ValueError, match="expected one of: default, sof-elk, splunk"):
+        normalize_output_target("not-a-target")
 
 
 def test_invalid_output_target_error_does_not_echo_input_value() -> None:

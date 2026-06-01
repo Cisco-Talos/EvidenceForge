@@ -70,7 +70,7 @@ def test_external_parser_script_rejects_invalid_output_target(
 ) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (tmp_path / "OUTPUT_TARGET.txt").write_text("splunk\n", encoding="utf-8")
+    (tmp_path / "OUTPUT_TARGET.txt").write_text("not-a-target\n", encoding="utf-8")
     error_output = _capture_error_console(monkeypatch)
 
     assert not external_parser._require_sof_elk_output_target(data_dir)
@@ -78,7 +78,7 @@ def test_external_parser_script_rejects_invalid_output_target(
     message = _normalize_console_text(error_output.getvalue())
     assert "is not a valid output target marker" in message
     assert "invalid output target value" in message
-    assert "splunk" not in message
+    assert "not-a-target" not in message
 
 
 def test_external_parser_script_rejects_symlink_marker_without_leaking_contents(
@@ -111,6 +111,35 @@ def test_external_parser_script_accepts_sof_elk_output_target(
 
     assert external_parser._require_sof_elk_output_target(data_dir)
     assert error_output.getvalue() == ""
+
+
+def test_external_parser_script_auto_selects_splunk_backend(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_output_target_marker(tmp_path, "splunk")
+    error_output = _capture_error_console(monkeypatch)
+
+    assert external_parser._select_backend(data_dir, "auto") == "splunk"
+    assert error_output.getvalue() == ""
+
+
+def test_external_parser_script_rejects_mismatched_backend_target(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_output_target_marker(tmp_path, "splunk")
+    error_output = _capture_error_console(monkeypatch)
+
+    assert external_parser._select_backend(data_dir, "sof-elk") is None
+
+    message = _normalize_console_text(error_output.getvalue())
+    assert "requires `sof-elk`" in message
+    assert "--target sof-elk" in message
 
 
 def _capture_error_console(monkeypatch) -> StringIO:
