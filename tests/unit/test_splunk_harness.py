@@ -32,9 +32,12 @@ from evidenceforge.external_parsers import splunk_runtime
 from evidenceforge.external_parsers.compose_runtime import ComposeCommand
 from evidenceforge.external_parsers.errors import SplunkHarnessError
 from evidenceforge.external_parsers.splunk import (
+    CIM_EXPECTATIONS_BY_FORMAT,
     SPLUNK_SOURCE_SPECS,
     CimMode,
     SplunkStageManifest,
+    _cim_dataset_failures,
+    _cim_dataset_validation_search,
     _internal_issue_search,
     _metadata_validation_search,
     _required_field_validation_search,
@@ -214,6 +217,41 @@ def test_splunk_validation_uses_ta_normalized_windows_sourcetype(tmp_path: Path)
 
     assert 'sourcetype IN ("XmlWinEventLog"' in fields
     assert 'sourcetype="XmlWinEventLog"' in fields
+
+
+def test_splunk_cim_dataset_search_builders_check_models_and_fields() -> None:
+    expectation = CIM_EXPECTATIONS_BY_FORMAT["windows_event_security"]
+
+    search = _cim_dataset_validation_search(expectation, sourcetype="XmlWinEventLog")
+
+    assert "| datamodel Authentication Authentication search" in search
+    assert 'index=eforge sourcetype="XmlWinEventLog" source="XmlWinEventLog:Security"' in search
+    assert "missing_user" in search
+    assert "'Authentication.user'" in search
+    assert "'user'" in search
+
+
+def test_splunk_cim_dataset_failures_report_count_and_field_gaps() -> None:
+    expectation = CIM_EXPECTATIONS_BY_FORMAT["windows_event_security"]
+    rows = [
+        {
+            "result": {
+                "cim_count": "1",
+                "missing_user": "0",
+                "missing_src": "1",
+                "missing_dest": "0",
+                "missing_action": "0",
+                "missing_app": "0",
+            }
+        }
+    ]
+
+    failures = _cim_dataset_failures(expectation, rows, expected_count=2)
+
+    assert failures == [
+        "windows_event_security: expected 2 event(s) in CIM Authentication.Authentication, got 1",
+        "windows_event_security: 1 CIM Authentication.Authentication event(s) missing src",
+    ]
 
 
 def test_splunk_search_result_rows_ignore_export_info_messages() -> None:

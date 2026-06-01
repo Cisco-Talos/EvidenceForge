@@ -98,6 +98,17 @@ class StagedSplunkLog:
 
 
 @dataclass(frozen=True)
+class SplunkCimExpectation:
+    """Expected CIM data-model placement for one generated source family."""
+
+    format_name: str
+    data_model: str
+    object_name: str
+    required_fields: tuple[str, ...]
+    source_filter: str | None = None
+
+
+@dataclass(frozen=True)
 class SplunkStageManifest:
     """Manifest for all generated logs staged into one Splunk run."""
 
@@ -247,6 +258,49 @@ SPLUNK_UNSUPPORTED_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("snort_alert.log", "ids", "snort", "snort_alert"),
 )
 _SAFE_STAGE_PART_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
+CIM_EXPECTATIONS: tuple[SplunkCimExpectation, ...] = (
+    SplunkCimExpectation(
+        format_name="windows_event_security",
+        data_model="Authentication",
+        object_name="Authentication",
+        required_fields=("user", "src", "dest", "action", "app"),
+        source_filter="XmlWinEventLog:Security",
+    ),
+    SplunkCimExpectation(
+        format_name="windows_event_sysmon",
+        data_model="Endpoint",
+        object_name="Processes",
+        required_fields=("process", "process_name", "dest", "user"),
+        source_filter="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
+    ),
+    SplunkCimExpectation(
+        format_name="zeek_conn",
+        data_model="Network_Traffic",
+        object_name="All_Traffic",
+        required_fields=("src", "dest", "dest_port", "transport", "action"),
+    ),
+    SplunkCimExpectation(
+        format_name="zeek_http",
+        data_model="Web",
+        object_name="Web",
+        required_fields=("src", "dest", "url", "http_method", "status"),
+    ),
+    SplunkCimExpectation(
+        format_name="cisco_asa",
+        data_model="Network_Traffic",
+        object_name="All_Traffic",
+        required_fields=("src", "dest", "dest_port", "transport", "action"),
+    ),
+    SplunkCimExpectation(
+        format_name="web_access",
+        data_model="Web",
+        object_name="Web",
+        required_fields=("src", "url", "http_method", "status"),
+    ),
+)
+CIM_EXPECTATIONS_BY_FORMAT = {
+    expectation.format_name: expectation for expectation in CIM_EXPECTATIONS
+}
 
 
 def _noop_progress(_event_type: str, _data: dict[str, Any]) -> None:
@@ -734,6 +788,26 @@ def _internal_issue_search() -> str:
     )
 
 
+def _cim_dataset_validation_search(
+    expectation: SplunkCimExpectation,
+    *,
+    sourcetype: str,
+) -> str:
+    field_missing_counts = [
+        f"count(eval({_missing_cim_field_expr(expectation.object_name, field)})) "
+        f"as missing_{_field_token(field)}"
+        for field in expectation.required_fields
+    ]
+    source_clause = ""
+    if expectation.source_filter:
+        source_clause = f" source={json.dumps(expectation.source_filter)}"
+    return (
+        f"| datamodel {expectation.data_model} {expectation.object_name} search "
+        f"| search index={SPLUNK_INDEX} sourcetype={json.dumps(sourcetype)}{source_clause} "
+        f"| stats count as cim_count {' '.join(field_missing_counts)}"
+    )
+
+
 def _cim_model_search() -> str:
     return (
         "| rest /services/datamodel/model "
@@ -764,7 +838,49 @@ def _validate_cim(
     if not model_names:
         failures.append("CIM mode had supplied apps but no CIM data models were visible")
         return "failed-no-data-models"
-    return f"checked-models:{','.join(sorted(model_names))}"
+    dataset_checks = _validate_cim_datasets(manifest, compose_run, failures)
+    status_parts = [f"checked-models:{','.join(sorted(model_names))}"]
+    if dataset_checks:
+        status_parts.append(f"checked-datasets:{','.join(dataset_checks)}")
+    return ";".join(status_parts)
+
+
+def _validate_cim_datasets(
+    manifest: SplunkStageManifest,
+    compose_run: SplunkComposeRun,
+    failures: list[str],
+) -> tuple[str, ...]:
+    checked: list[str] = []
+    expected_counts = manifest.expected_counts
+    use_supplied_app_sourcetypes = manifest.supplied_app_count > 0
+    for expectation in CIM_EXPECTATIONS:
+        expected_count = expected_counts.get(expectation.format_name, 0)
+        if expected_count == 0:
+            continue
+        spec = SPLUNK_SOURCE_SPECS_BY_FORMAT[expectation.format_name]
+        sourcetype = _validation_sourcetype(
+            spec,
+            use_supplied_app_sourcetypes=use_supplied_app_sourcetypes,
+        )
+        rows = _search_result_rows(
+            export_search(
+                compose_run,
+                _cim_dataset_validation_search(
+                    expectation,
+                    sourcetype=sourcetype,
+                ),
+                output_name=f"cim-{_field_token(expectation.format_name)}",
+            )
+        )
+        checked.append(f"{expectation.data_model}.{expectation.object_name}")
+        failures.extend(
+            _cim_dataset_failures(
+                expectation,
+                rows,
+                expected_count=expected_count,
+            )
+        )
+    return tuple(sorted(set(checked)))
 
 
 def _metadata_failures(rows: list[JsonObject]) -> list[str]:
@@ -790,6 +906,37 @@ def _field_failures(rows: list[JsonObject]) -> list[str]:
         for field, value in result.items():
             if field.startswith("missing_") and _int_value(value) > 0:
                 failures.append(f"{sourcetype}: {value} event(s) missing fields for {field}")
+    return failures
+
+
+def _cim_dataset_failures(
+    expectation: SplunkCimExpectation,
+    rows: list[JsonObject],
+    *,
+    expected_count: int,
+) -> list[str]:
+    dataset = f"{expectation.data_model}.{expectation.object_name}"
+    if not rows:
+        return [
+            f"{expectation.format_name}: expected {expected_count} event(s) in CIM {dataset}, got 0"
+        ]
+    result = rows[0].get("result", rows[0])
+    if not isinstance(result, dict):
+        return [f"{expectation.format_name}: CIM {dataset} returned no result object"]
+
+    failures: list[str] = []
+    cim_count = _int_value(result.get("cim_count"))
+    if cim_count < expected_count:
+        failures.append(
+            f"{expectation.format_name}: expected {expected_count} event(s) in CIM "
+            f"{dataset}, got {cim_count}"
+        )
+    for field in expectation.required_fields:
+        missing = _int_value(result.get(f"missing_{_field_token(field)}"))
+        if missing > 0:
+            failures.append(
+                f"{expectation.format_name}: {missing} CIM {dataset} event(s) missing {field}"
+            )
     return failures
 
 
@@ -1012,6 +1159,15 @@ def _field_token(value: str) -> str:
 
 def _spl_field(value: str) -> str:
     return "'" + value.replace("'", "\\'") + "'"
+
+
+def _cim_field_expr(object_name: str, field: str) -> str:
+    return f"coalesce({_spl_field(f'{object_name}.{field}')},{_spl_field(field)})"
+
+
+def _missing_cim_field_expr(object_name: str, field: str) -> str:
+    value = _cim_field_expr(object_name, field)
+    return f'isnull({value}) OR {value}=""'
 
 
 def _int_value(value: object) -> int:

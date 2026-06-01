@@ -80,3 +80,22 @@ visible, and base ingest/field validation survives the supplied TAs. It does not
 yet prove that every event populates CIM data-model datasets; that requires the
 next validation layer of source-specific data-model searches and CIM field
 coverage checks.
+
+## 2026-06-01 CIM Data-Model Validation
+
+Added the first source-family-specific CIM validation layer. In `--cim require`
+or supplied-app `--cim auto` mode, the Splunk harness now searches the expected
+CIM data-model datasets for source families covered by the supplied-app smoke:
+Windows Security authentication, Sysmon process events, Zeek connection and HTTP
+events, Cisco ASA network traffic, and Apache-style web access logs. Each check
+verifies that the expected event count appears in the CIM dataset and that key
+CIM fields are populated.
+
+A local run with the supplied apps in `/tmp/SplunkTA` still passes base ingest
+and base field validation, but the new CIM dataset checks fail with zero
+matching events for all currently checked families. That is useful signal rather
+than a container/runtime failure: the TAs and CIM app are visible, Splunk indexes
+the staged data, but the generated events are not yet landing in the selected
+CIM data-model datasets. The next implementation work is to adjust generated
+source metadata, sourcetypes, tags/eventtypes, field extractions, or Splunk
+validation app config so source families map into CIM cleanly.
