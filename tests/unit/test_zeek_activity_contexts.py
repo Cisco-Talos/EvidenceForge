@@ -1652,7 +1652,10 @@ class TestSslContextPopulation:
         assert transport_event.network.initiating_pid != source_sshd_pid
         assert transport_event.process is not None
         assert transport_event.process.image == "/usr/bin/ssh"
-        assert transport_event.process.command_line == "ssh admin@linux01"
+        assert transport_event.process.command_line.startswith("ssh ")
+        assert "admin@" in transport_event.process.command_line or "-l admin" in (
+            transport_event.process.command_line
+        )
 
     def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
         gen, events = activity_gen

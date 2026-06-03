@@ -339,7 +339,11 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
         },
         "activity/public_dns_profiles.yaml": {
-            "list_fields": {"nameserver_profiles": "name", "mail_profiles": "name"},
+            "list_fields": {
+                "nameserver_profiles": "name",
+                "mail_profiles": "name",
+                "aaaa_profiles": "name",
+            },
         },
         "activity/smb_file_transfers.yaml": {
             "list_fields": {"mime_types": None, "analyzer_sets": None},
@@ -1846,6 +1850,7 @@ def validate_config() -> ValidationResult:
         "typo_model",
         "workflow_model",
         "workflows",
+        "storyline_friction",
         "dba",
         "webadmin",
         "security",

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Public DNS answer profiles for NS/MX/SOA companion lookups."""
+"""Public DNS answer profiles for public companion lookups."""
 
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ _CACHED_DATA: dict[str, Any] | None = None
 def _merge_public_dns_profiles(default: dict, overlay: dict) -> dict:
     """Merge public DNS profile overlays by profile name."""
     result = dict(default)
-    for key in ("nameserver_profiles", "mail_profiles"):
+    profile_keys = {"nameserver_profiles", "mail_profiles", "aaaa_profiles"}
+    for key in profile_keys:
         if key in overlay:
             result[key] = merge_keyed_list(
                 default.get(key, []),
@@ -25,7 +26,7 @@ def _merge_public_dns_profiles(default: dict, overlay: dict) -> dict:
                 key_field="name",
             )
     for key, value in overlay.items():
-        if key not in {"nameserver_profiles", "mail_profiles"}:
+        if key not in profile_keys:
             result[key] = value
     return result
 

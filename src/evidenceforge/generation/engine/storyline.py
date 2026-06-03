@@ -67,7 +67,7 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
-from evidenceforge.models.scenario import System, User
+from evidenceforge.models.scenario import ConnectionEventSpec, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
@@ -79,6 +79,162 @@ _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
     r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
     re.IGNORECASE,
 )
+_LINUX_STORYLINE_FRICTION_MARKERS = (
+    "mysqldump",
+    "gzip ",
+    "tar ",
+    "zip ",
+    "scp ",
+    "sftp ",
+    "rsync ",
+)
+
+
+def _linux_storyline_tokens(command_line: str) -> list[str]:
+    """Return shell-like tokens for simple Linux storyline command inspection."""
+    try:
+        return shlex.split(command_line)
+    except ValueError:
+        return command_line.split()
+
+
+def _linux_local_path_args(command_line: str) -> list[str]:
+    """Extract local-looking path arguments from a Linux shell command."""
+    paths: list[str] = []
+    skip_next = False
+    for token in _linux_storyline_tokens(command_line)[1:]:
+        token = token.strip().rstrip(";,")
+        if not token:
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        if token in {">", ">>", "1>", "2>", "&>"}:
+            skip_next = True
+            continue
+        if token.startswith((">", "1>", "2>", "&>")):
+            token = token.lstrip("012&>")
+        if not token or token.startswith("-"):
+            continue
+        if "@" in token.split(":", 1)[0] and ":" in token:
+            continue
+        if token.startswith(("/", "~/", "./", "../")) or re.search(
+            r"\.(?:sql|gz|tgz|tar|zip|7z|csv|json|db|sqlite)(?:$|[.])",
+            token,
+            re.IGNORECASE,
+        ):
+            paths.append(token)
+    return paths
+
+
+def _linux_path_directory(path: str | None) -> str:
+    """Return a shell-safe parent directory for Linux path probes."""
+    if not path:
+        return "/tmp"
+    unquoted = path.strip("\"'")
+    if "/" not in unquoted:
+        return "."
+    directory = unquoted.rsplit("/", 1)[0] or "/"
+    return shlex.quote(directory)
+
+
+def _linux_mysqldump_database(command_line: str) -> str:
+    """Extract a conservative database token from a mysqldump command line."""
+    tokens = _linux_storyline_tokens(command_line)
+    for token in tokens[1:]:
+        if token in {">", ">>", "1>", "2>", "&>"}:
+            break
+        if token.startswith("-"):
+            continue
+        candidate = token.strip("\"'")
+        if re.fullmatch(r"[A-Za-z0-9_]+", candidate):
+            return candidate
+    return "mysql"
+
+
+def _storyline_shell_friction_pool(name: str) -> list[str]:
+    """Load a storyline shell-friction template pool from bash_commands.yaml."""
+    from evidenceforge.generation.activity.bash_commands import load_bash_commands
+
+    raw = load_bash_commands().get("storyline_friction", {}).get(name, [])
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, str) and item.strip()]
+
+
+class _StorylineShellTemplateValues(dict[str, str]):
+    """Leave unknown placeholders visible so invalid templates can be skipped."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_storyline_shell_friction_template(
+    template: str,
+    values: dict[str, str],
+) -> str | None:
+    """Render one shell-friction template if all placeholders are known."""
+    rendered = template.format_map(_StorylineShellTemplateValues(values))
+    if re.search(r"{[^{}]+}", rendered):
+        return None
+    rendered = re.sub(r"\s+", " ", rendered).strip()
+    return rendered or None
+
+
+def _linux_storyline_shell_friction_commands(
+    *,
+    username: str,
+    process_name: str,
+    command_line: str,
+    output_file: str | None,
+    rng: random.Random,
+) -> list[str]:
+    """Return small operator-prep commands around high-risk Linux storyline commands."""
+    command_l = command_line.lower()
+    process_base = process_name.rsplit("/", 1)[-1].lower()
+    if username != "root" and not any(
+        marker in command_l for marker in _LINUX_STORYLINE_FRICTION_MARKERS
+    ):
+        return []
+
+    local_paths = _linux_local_path_args(command_line)
+    primary_path = local_paths[0] if local_paths else output_file
+    path_value = shlex.quote(primary_path) if primary_path else ""
+    output_path_value = shlex.quote(output_file) if output_file else path_value
+    directory_value = _linux_path_directory(output_file or primary_path)
+    values = {
+        "database": _linux_mysqldump_database(command_line),
+        "directory": directory_value,
+        "path": path_value or output_path_value,
+        "output_path": output_path_value,
+    }
+
+    templates: list[str] = []
+    if "mysqldump" in command_l or process_base == "mysqldump":
+        common = _storyline_shell_friction_pool("common_probe")
+        if common:
+            templates.append(rng.choice(common))
+        templates.extend(_storyline_shell_friction_pool("before_database_dump"))
+    elif process_base in {"gzip", "tar", "zip", "7z"} or any(
+        marker in command_l for marker in ("gzip ", "tar ", "zip ")
+    ):
+        pool = _storyline_shell_friction_pool("before_archive_transform")
+        templates.extend(rng.sample(pool, k=min(2, len(pool))))
+    elif process_base in {"scp", "sftp", "rsync"} or any(
+        marker in command_l for marker in ("scp ", "sftp ", "rsync ")
+    ):
+        pool = _storyline_shell_friction_pool("before_file_transfer")
+        templates.extend(rng.sample(pool, k=min(2, len(pool))))
+
+    commands: list[str] = []
+    seen: set[str] = set()
+    for template in templates:
+        command = _render_storyline_shell_friction_template(template, values)
+        if command is None or command in seen:
+            continue
+        seen.add(command)
+        commands.append(command)
+    return commands
 
 
 def _is_exfil_connection_spec(spec: Any) -> bool:
@@ -1497,20 +1653,24 @@ class StorylineMixin:
             archive
             for archive in archives
             if not archive.consumed
-            and archive.source_ip == source_ip
             and archive.staged_at <= exfil_time
             and exfil_time - archive.staged_at <= horizon
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda archive: archive.staged_at)
+        exact_source = [archive for archive in candidates if archive.source_ip == source_ip]
+        return max(exact_source or candidates, key=lambda archive: archive.staged_at)
 
     def _emit_storyline_archive_transfer_before_exfil(
         self,
         *,
+        actor: User,
         source_ip: str,
         exfil_time: datetime,
         upload_bytes: int,
+        source_pid: int,
+        source_process: str,
+        source_command: str,
         rng: random.Random,
     ) -> None:
         """Emit the SMB read that moves a staged archive to the upload host."""
@@ -1529,8 +1689,8 @@ class StorylineMixin:
         emitted = StagedArchiveSmbReadActionBundle(
             self,
             StagedArchiveSmbReadRequest(
-                actor=archive.actor,
-                source_ip=archive.source_ip,
+                actor=actor,
+                source_ip=source_ip,
                 staging_ip=archive.staging_ip,
                 archive_path=archive.archive_path,
                 smb_filename=archive.smb_filename,
@@ -1539,12 +1699,99 @@ class StorylineMixin:
                 upload_bytes=upload_bytes,
                 source_system=source_system,
                 target_system=target_system,
+                source_pid=source_pid,
+                source_process=source_process,
+                source_command=source_command,
+                source_file_read_path=archive.smb_filename,
             ),
             rng,
             emit_smb_logon_pair=getattr(self, "_emit_smb_logon_pair", None),
         ).execute()
         if emitted:
             archive.consumed = True
+
+    def _ensure_storyline_upload_process_for_exfil(
+        self,
+        *,
+        actor: User,
+        system: System | None,
+        time: datetime,
+        spec: ConnectionEventSpec,
+        current_pid: int,
+        current_image: str | None,
+        rng: random.Random,
+    ) -> tuple[int, str | None, str]:
+        """Return a source process suitable for a large HTTP upload."""
+
+        if system is None:
+            return current_pid, current_image, current_image or ""
+
+        running = (
+            self.state_manager.get_process(system.hostname, current_pid)
+            if current_pid > 0
+            else None
+        )
+        current_command = running.command_line if running is not None else current_image or ""
+        image_name = (current_image or "").rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if image_name in {"chrome.exe", "msedge.exe", "firefox.exe", "curl", "curl.exe"}:
+            return current_pid, current_image, current_command
+
+        os_category = _get_os_category(system.os)
+        scheme = "https" if spec.dst_port == 443 else "http"
+        host = spec.hostname or spec.dst_ip
+        uri = spec.uri or "/"
+        destination = (
+            uri if re.match(r"^https?://", uri, re.IGNORECASE) else f"{scheme}://{host}{uri}"
+        )
+        if os_category == "windows":
+            process_name = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            command_line = (
+                f'"{process_name}" --profile-directory=Default --new-window "{destination}"'
+            )
+        else:
+            process_name = "/usr/bin/curl"
+            method = spec.method or "POST"
+            command_line = f"curl -fsS -X {method} --data-binary @- {destination}"
+
+        process_time = time - timedelta(
+            minutes=rng.randint(3, 6),
+            seconds=rng.randint(5, 55),
+        )
+        logon_id = self._last_storyline_logon_for_actor_system(
+            actor,
+            system,
+            at_time=process_time,
+        )
+        if logon_id is None:
+            logon_id = self.activity_generator.generate_logon(
+                user=actor,
+                system=system,
+                time=process_time - timedelta(seconds=rng.uniform(0.5, 2.0)),
+                logon_type=2,
+            )
+            self._record_storyline_logon(actor, system, logon_id)
+        parent_pid = self.activity_generator._resolve_parent(
+            system,
+            actor,
+            process_time,
+            logon_id,
+            process_name,
+            command_line,
+        )
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=system,
+            time=process_time,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            ensure_file_event=False,
+            from_storyline=True,
+        )
+        self.activity_generator._record_user_process(system, actor, pid, process_name)
+        self._record_last_storyline_process(system, pid, process_name)
+        return pid, process_name, command_line
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
         """Return the last live storyline process for the same source host."""
@@ -1605,6 +1852,47 @@ class StorylineMixin:
             network_time=event_time,
             rng=rng,
         )
+
+    def _emit_linux_storyline_shell_friction(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+        process_name: str,
+        command_line: str,
+        output_file: str | None,
+        rng: random.Random,
+    ) -> datetime | None:
+        """Emit bash-history and process texture around high-risk Linux commands."""
+        commands = _linux_storyline_shell_friction_commands(
+            username=actor.username,
+            process_name=process_name,
+            command_line=command_line,
+            output_file=output_file,
+            rng=rng,
+        )
+        if not commands:
+            return None
+
+        requested_time = time - timedelta(
+            seconds=max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(5.0, 35.0)
+        )
+        latest_scheduled: datetime | None = None
+        for command in commands:
+            scheduled = self.activity_generator.generate_bash_command(
+                actor,
+                system,
+                requested_time,
+                command,
+                emit_process_telemetry=True,
+            )
+            if isinstance(scheduled, datetime):
+                latest_scheduled = scheduled
+                requested_time = scheduled + timedelta(seconds=rng.uniform(2.0, 14.0))
+            else:
+                requested_time += timedelta(seconds=rng.uniform(4.0, 18.0))
+        return latest_scheduled
 
     def _recent_storyline_process_logon_id(
         self,
@@ -2181,6 +2469,15 @@ class StorylineMixin:
                     process_command_line,
                 )
             if os_category == "linux":
+                self._emit_linux_storyline_shell_friction(
+                    actor=process_actor,
+                    system=system,
+                    time=time,
+                    process_name=process_name,
+                    command_line=command_line,
+                    output_file=output_file,
+                    rng=rng,
+                )
                 reserved_start_time = (
                     self.activity_generator.reserve_linux_foreground_process_start(
                         system=system,
@@ -2516,6 +2813,11 @@ class StorylineMixin:
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
+                            source_path=self._extract_scp_source_path(
+                                command_line,
+                                os_category,
+                            )
+                            or "",
                             target_user=target_user,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
@@ -2760,11 +3062,27 @@ class StorylineMixin:
                 conn_hostname = ""  # suppress — raw IP
                 emit_dns = False
             s_conn_state = spec.conn_state or "SF"
+            story_command = story_image or ""
             if _is_exfil_connection_spec(spec):
+                story_pid, story_image, story_command = (
+                    self._ensure_storyline_upload_process_for_exfil(
+                        actor=actor,
+                        system=src_sys,
+                        time=time,
+                        spec=spec,
+                        current_pid=story_pid,
+                        current_image=story_image,
+                        rng=rng,
+                    )
+                )
                 self._emit_storyline_archive_transfer_before_exfil(
+                    actor=actor,
                     source_ip=source_ip,
                     exfil_time=time,
                     upload_bytes=s_ob,
+                    source_pid=story_pid,
+                    source_process=story_image or "",
+                    source_command=story_command,
                     rng=rng,
                 )
             connection_time = self._clamp_after_storyline_process_source_create(
@@ -4568,7 +4886,7 @@ class StorylineMixin:
             self.state_manager.set_current_time(tick_time)
             path_entry = _next_scan_path()
 
-            method = path_entry.get("method", "GET")
+            method = str(path_entry.get("method", "GET")).upper()
             uri = _web_scan_uri_with_runtime_variation(
                 str(path_entry.get("uri", "/")),
                 request_count,
@@ -4598,18 +4916,21 @@ class StorylineMixin:
                 else ""
             )
 
-            response_body_len = (
-                apply_transfer_size_variance(
-                    response_size_for_status(status, scan_host, uri),
-                    status_code=status,
-                    host=scan_host,
-                    uri=uri,
-                    content_type=mime_type,
-                    variant_key=f"{scan_src_ip}:{scan_ua}",
+            if method == "HEAD":
+                response_body_len = 0
+            else:
+                response_body_len = (
+                    apply_transfer_size_variance(
+                        response_size_for_status(status, scan_host, uri),
+                        status_code=status,
+                        host=scan_host,
+                        uri=uri,
+                        content_type=mime_type,
+                        variant_key=f"{scan_src_ip}:{scan_ua}",
+                    )
+                    if status >= 400 or is_stable_resource_path(uri)
+                    else response_size_for_mime(rng, mime_type)
                 )
-                if status >= 400 or is_stable_resource_path(uri)
-                else response_size_for_mime(rng, mime_type)
-            )
             http_ctx = HttpContext(
                 method=method,
                 host=scan_host,
@@ -4629,7 +4950,7 @@ class StorylineMixin:
                     500: "Internal Server Error",
                 }.get(status, "OK"),
                 referrer=scan_referrer,
-                resp_mime_types=[mime_type] if status == 200 else [],
+                resp_mime_types=[mime_type] if status == 200 and method != "HEAD" else [],
                 tags=[],
             )
 
@@ -4822,6 +5143,38 @@ class StorylineMixin:
         return None
 
     @staticmethod
+    def _extract_scp_source_path(command_line: str, os_category: str) -> str | None:
+        """Extract the first local source path from a Linux SCP upload command line."""
+        if os_category != "linux":
+            return None
+        try:
+            parts = shlex.split(command_line)
+        except ValueError:
+            parts = command_line.split()
+        if not parts:
+            return None
+        exe = parts[0].rsplit("/", 1)[-1].lower()
+        if exe != "scp":
+            return None
+        option_args = {"-B", "-c", "-F", "-i", "-J", "-l", "-o", "-P", "-S"}
+        skip_next = False
+        for token in parts[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token == "--":
+                continue
+            if token in option_args:
+                skip_next = True
+                continue
+            if token.startswith("-"):
+                continue
+            if ":" in token:
+                return None
+            return token
+        return None
+
+    @staticmethod
     def _resolve_scp_target_user(extracted_username: str, fallback_username: str) -> str:
         """Resolve SCP target user to a scenario-compatible username."""
         username = extracted_username.strip()
@@ -4913,6 +5266,7 @@ class StorylineMixin:
         source_pid: int,
         source_process: str,
         source_command: str,
+        source_path: str,
         target_user: str,
         target_path: str,
         transfer_time: datetime,
@@ -4929,6 +5283,7 @@ class StorylineMixin:
                 source_pid=source_pid,
                 source_process=source_process,
                 source_command=source_command,
+                source_path=source_path,
                 target_user=target_user,
                 target_path=target_path,
                 transfer_time=transfer_time,

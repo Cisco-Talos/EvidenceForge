@@ -4701,10 +4701,9 @@ class BaselineMixin:
             ProcessContext,
         )
         from evidenceforge.generation.activity.edr_pools import (
-            file_path_templates_for_user,
             get_file_paths,
             is_service_account,
-            materialize_edr_template,
+            select_ambient_file_churn_effect,
         )
         from evidenceforge.generation.activity.endpoint_noise import ecar_file_churn_config
 
@@ -4757,21 +4756,22 @@ class BaselineMixin:
             ):
                 username = process.username
 
-            candidates = file_path_templates_for_user(path_templates, os_cat, username)
-            if not candidates:
-                continue
-
-            file_action = str(rng.choices(actions, weights=weights, k=1)[0])
-            file_path = materialize_edr_template(
-                str(rng.choice(candidates)),
+            file_effect = select_ambient_file_churn_effect(
+                process.image,
+                process.command_line,
+                os_cat,
                 rng,
                 username,
+                path_templates,
+                actions,
+                weights,
                 host_ip=system.ip,
                 host_key=system.hostname,
                 host_os=system.os,
             )
-            if os_cat == "linux" and username == "root":
-                file_path = file_path.replace("/home/root/", "/root/")
+            if file_effect is None:
+                continue
+            file_action, file_path = file_effect
 
             ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
             if process.start_time and ts <= process.start_time:

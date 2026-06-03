@@ -111,6 +111,26 @@ common:
   - "ls -lah ~/.config 2>/dev/null | head"
   - "ls -lah ~/.local/share 2>/dev/null | head"
 
+storyline_friction:
+  common_probe:
+    - "pwd"
+    - "id"
+    - "hostname -f"
+    - "df -h {directory}"
+  before_database_dump:
+    - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW DATABASES'"
+    - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW TABLES FROM {database}'"
+    - "df -h {directory}"
+  before_archive_transform:
+    - "ls -lh {path}"
+    - "du -h {path}"
+    - "file {path}"
+  before_file_transfer:
+    - "ls -lh {path}"
+    - "du -h {path}"
+    - "sha256sum {path} | cut -c1-16"
+    - "stat -c '%n %s %y' {path}"
+
 sysadmin:
   - "systemctl status sshd"
   - "systemctl status {service}"

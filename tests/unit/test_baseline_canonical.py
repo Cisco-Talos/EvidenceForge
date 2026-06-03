@@ -443,6 +443,29 @@ class TestIdsAlertCorrelation:
         assert event.network.resp_pkts > 0
         assert event.network.resp_ip_bytes > 0
 
+    def test_udp_123_response_infers_ntp_service(self, activity_gen, mock_emitters, timestamp):
+        """Response-bearing UDP/123 conn rows should fan out to Zeek ntp.log."""
+        from evidenceforge.generation.activity.network_params import public_ntp_ips
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="102.192.174.5",
+            time=timestamp,
+            dst_port=123,
+            proto="udp",
+            service="",
+            duration=0.02,
+            orig_bytes=76,
+            resp_bytes=68,
+        )
+
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        ntp_event = mock_emitters["zeek_ntp"].emit.call_args[0][0]
+        assert conn_event.network.service == "ntp"
+        assert conn_event.network.dst_ip in set(public_ntp_ips())
+        assert ntp_event.ntp is not None
+        assert ntp_event.network.zeek_uid == conn_event.network.zeek_uid
+
     def test_ntp_no_response_connection_does_not_emit_ntp_log(
         self,
         activity_gen,

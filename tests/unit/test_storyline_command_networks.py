@@ -682,6 +682,9 @@ class _FakeActivityGenerator:
         self.bash_commands.append(
             {"args": args, "kwargs": kwargs, "scheduled_time": scheduled_time}
         )
+        command = args[3] if len(args) > 3 else ""
+        dwell = timedelta(seconds=6 if command in {"pwd", "id", "hostname -f"} else 12)
+        self._bash_next_time[(system.hostname, actor.username)] = scheduled_time + dwell
         return scheduled_time
 
     def reserve_linux_foreground_process_start(self, **kwargs: Any) -> datetime:
@@ -1110,6 +1113,7 @@ class TestFileTransferActionBundles:
             source_pid=4242,
             source_process="/usr/bin/scp",
             source_command="scp /tmp/a root@DST:/var/tmp/a",
+            source_path="/tmp/a",
             target_user="root",
             target_path="/var/tmp/a",
             transfer_time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
@@ -1120,6 +1124,82 @@ class TestFileTransferActionBundles:
         second = ScpReceiverFileActionBundle(SimpleNamespace(), request, random.Random(99)).anchor
 
         assert first == second
+
+    def test_scp_source_path_extraction_handles_upload_options(self):
+        """SCP upload parsing should return the local source path, not the remote target."""
+
+        assert (
+            StorylineMixin._extract_scp_source_path(
+                "scp -i ~/.ssh/id_ed25519 /tmp/rpt.sql.gz root@10.10.2.30:/tmp/rpt.sql.gz",
+                "linux",
+            )
+            == "/tmp/rpt.sql.gz"
+        )
+        assert (
+            StorylineMixin._extract_scp_source_path(
+                "scp root@10.10.2.30:/tmp/rpt.sql.gz /tmp/rpt.sql.gz",
+                "linux",
+            )
+            is None
+        )
+
+    def test_scp_receiver_bundle_emits_source_read_and_receiver_create(self):
+        """SCP bundle should model source file read plus receiver file creation."""
+
+        state = StateManager()
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(hostname="DB-PROD-01", ip="10.0.0.10", os="Ubuntu 22.04", type="server")
+        target = System(hostname="APP-INT-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server")
+        actor = User(username="root", full_name="Root", email="root@example.local")
+        activity = ActivityGenerator(state, {})
+        activity.dispatcher = SimpleNamespace(dispatch=lambda event: None)
+        state.set_current_time(timestamp)
+        source_pid = state.create_process(
+            source.hostname,
+            0,
+            "/usr/bin/scp",
+            "scp /tmp/rpt.sql.gz root@10.0.0.20:/tmp/rpt.sql.gz",
+            actor.username,
+            "High",
+        )
+        source_object_id = state.get_process_object_id(source.hostname, source_pid)
+        dispatched: list[Any] = []
+        executor = SimpleNamespace(
+            activity_generator=activity,
+            dispatcher=SimpleNamespace(dispatch=dispatched.append),
+            state_manager=state,
+        )
+
+        ScpReceiverFileActionBundle(
+            executor,
+            ScpReceiverFileRequest(
+                source_system=source,
+                target_system=target,
+                actor=actor,
+                source_pid=source_pid,
+                source_process="/usr/bin/scp",
+                source_command="scp /tmp/rpt.sql.gz root@10.0.0.20:/tmp/rpt.sql.gz",
+                source_path="/tmp/rpt.sql.gz",
+                target_user="root",
+                target_path="/tmp/rpt.sql.gz",
+                transfer_time=timestamp + timedelta(seconds=1),
+                source_port=49152,
+            ),
+            random.Random(11),
+        ).execute()
+
+        source_read = next(event for event in dispatched if event.event_type == "file_read")
+        receiver_create = next(event for event in dispatched if event.event_type == "file_create")
+
+        assert source_read.src_host.hostname == source.hostname
+        assert source_read.file.path == "/tmp/rpt.sql.gz"
+        assert source_read.file.action == "read"
+        assert source_read.process.pid == source_pid
+        assert source_read.edr.actor_id == source_object_id
+        assert receiver_create.src_host.hostname == target.hostname
+        assert receiver_create.file.path == "/tmp/rpt.sql.gz"
+        assert receiver_create.file.action == "create"
+        assert source_read.timestamp < receiver_create.timestamp
 
 
 class TestStorylineScpCorrelation:
@@ -1141,7 +1221,11 @@ class TestStorylineScpCorrelation:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
-        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        dispatched: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            visibility_engine=None,
+            dispatch=dispatched.append,
+        )
         event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
         visible_process_time = event_time + timedelta(seconds=4)
         engine.activity_generator.process_source_times[(source.hostname, 4242)] = (
@@ -1544,7 +1628,11 @@ class TestStorylineCommandSideEffects:
             source.ip: source,
             file_server.ip: file_server,
         }
-        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        dispatched: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            visibility_engine=None,
+            dispatch=dispatched.append,
+        )
         smb_logons: list[dict[str, Any]] = []
 
         def capture_smb_logon_pair(
@@ -1628,9 +1716,20 @@ class TestStorylineCommandSideEffects:
         assert smb_transfer["service"] == "smb"
         assert smb_transfer["src_ip"] == source.ip
         assert smb_transfer["dst_ip"] == file_server.ip
+        assert smb_transfer["pid"] > 0
+        assert smb_transfer["process_image"].endswith("chrome.exe")
         assert archive_time < smb_transfer["time"] < upload_time
         assert smb_transfer["resp_bytes"] > 300_000_000
+        source_file_read = next(event for event in dispatched if event.event_type == "file_read")
+        assert source_file_read.src_host.hostname == source.hostname
+        assert source_file_read.auth.username == actor.username
+        assert source_file_read.process.image.endswith("chrome.exe")
+        assert source_file_read.file.path == (
+            r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip"
+        )
+        assert smb_transfer["time"] < source_file_read.timestamp < upload_time
         assert upload["dst_port"] == 443
+        assert upload["pid"] == smb_transfer["pid"]
 
         file_transfer = smb_transfer["file_transfer"]
         assert isinstance(file_transfer, FileTransferContext)
@@ -1645,6 +1744,156 @@ class TestStorylineCommandSideEffects:
                 "emit_network_evidence": False,
                 "source_port": 50000,
                 "src_ip": source.ip,
+            }
+        ]
+
+    def test_compress_archive_exfil_handoff_uses_upload_host_source_read(self):
+        staging_source = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        upload_source = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+        )
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.2.20",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+        )
+        staging_actor = User(
+            username="svc_mhsync",
+            full_name="MHS Sync",
+            email="svc_mhsync@example.com",
+        )
+        upload_actor = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(
+                systems=[staging_source, upload_source, file_server],
+                service_accounts=[],
+            )
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.activity_generator._ip_to_system = {
+            staging_source.ip: staging_source,
+            upload_source.ip: upload_source,
+            file_server.ip: file_server,
+        }
+        dispatched: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            visibility_engine=None,
+            dispatch=dispatched.append,
+        )
+        smb_logons: list[dict[str, Any]] = []
+
+        def capture_smb_logon_pair(
+            actor: User,
+            dst_sys: System,
+            src_ip: str,
+            time: datetime,
+            rng: random.Random,
+            *,
+            source_port: int | None = None,
+            emit_network_evidence: bool = True,
+        ) -> None:
+            _ = time, rng
+            smb_logons.append(
+                {
+                    "actor": actor.username,
+                    "dst": dst_sys.hostname,
+                    "emit_network_evidence": emit_network_evidence,
+                    "source_port": source_port,
+                    "src_ip": src_ip,
+                }
+            )
+
+        engine._emit_smb_logon_pair = capture_smb_logon_pair
+        archive_time = datetime(2026, 5, 18, 14, 1, tzinfo=UTC)
+        upload_time = datetime(2026, 5, 18, 14, 25, tzinfo=UTC)
+        engine.state_manager.sessions["0xabc"] = SimpleNamespace(
+            username=staging_actor.username,
+            system=file_server.hostname,
+            logon_id="0xabc",
+            logon_type=3,
+            source_ip=staging_source.ip,
+            start_time=archive_time - timedelta(minutes=5),
+            network_close_time=upload_time + timedelta(minutes=5),
+        )
+        engine._record_storyline_logon(
+            staging_actor,
+            file_server,
+            "0xabc",
+            source_ip=staging_source.ip,
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name="powershell.exe",
+                command_line=(
+                    'powershell.exe -NoProfile -Command "Compress-Archive '
+                    r"-Path \\FILE-SRV-01\Finance\Q1\* "
+                    r"-DestinationPath C:\ProgramData\Microsoft\cache_7f3a.zip"
+                    '"'
+                ),
+                supplementary="none",
+            ),
+            actor=staging_actor,
+            system=file_server,
+            time=archive_time,
+            activity="Stage archive from app host",
+            explicit_types={"process"},
+        )
+        engine._execute_typed_event(
+            spec=ConnectionEventSpec(
+                dst_ip="45.33.32.30",
+                dst_port=443,
+                hostname="api.westbridge-services.net",
+                service="ssl",
+                source_ip=upload_source.ip,
+                method="POST",
+                uri="/upload/telemetry/7f3a2b19",
+                technique="T1041",
+                description="Exfiltrate staged archive",
+                orig_bytes=314_782_613,
+                resp_bytes=2048,
+            ),
+            actor=upload_actor,
+            system=upload_source,
+            time=upload_time,
+            activity="Upload staged archive",
+            explicit_types={"connection"},
+        )
+
+        smb_transfer, upload = engine.activity_generator.connections
+        assert smb_transfer["src_ip"] == upload_source.ip
+        assert smb_transfer["dst_ip"] == file_server.ip
+        assert smb_transfer["pid"] == upload["pid"]
+        source_file_read = next(event for event in dispatched if event.event_type == "file_read")
+        assert source_file_read.src_host.hostname == upload_source.hostname
+        assert source_file_read.auth.username == upload_actor.username
+        assert source_file_read.process.pid == upload["pid"]
+        assert source_file_read.file.path == (
+            r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip"
+        )
+        assert smb_logons == [
+            {
+                "actor": upload_actor.username,
+                "dst": file_server.hostname,
+                "emit_network_evidence": False,
+                "source_port": 50000,
+                "src_ip": upload_source.ip,
             }
         ]
 
@@ -1684,6 +1933,7 @@ class TestStorylineCommandSideEffects:
             source_pid=4242,
             source_process="/usr/bin/scp",
             source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            source_path="/tmp/archive.tar.gz",
             target_user="root",
             target_path="/var/tmp/archive.tar.gz",
             transfer_time=transfer_time,
@@ -1735,6 +1985,7 @@ class TestStorylineCommandSideEffects:
             source_pid=4242,
             source_process="/usr/bin/scp",
             source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            source_path="/tmp/archive.tar.gz",
             target_user="root",
             target_path="/var/tmp/archive.tar.gz",
             transfer_time=transfer_time,
@@ -1783,6 +2034,7 @@ class TestStorylineCommandSideEffects:
             source_pid=4242,
             source_process="/usr/bin/scp",
             source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            source_path="/tmp/archive.tar.gz",
             target_user="root",
             target_path="/var/tmp/archive.tar.gz",
             transfer_time=transfer_time,
@@ -1892,11 +2144,26 @@ class TestStorylineCommandSideEffects:
                 explicit_types={"process"},
             )
 
+        main_commands = [spec.command_line for spec in specs]
         process_times = [
             item["time"] for item in engine.activity_generator.processes if "time" in item
         ]
-        bash_times = [item["scheduled_time"] for item in engine.activity_generator.bash_commands]
-        assert bash_times == process_times
+        bash_entries = [
+            (item["args"][3], item["scheduled_time"])
+            for item in engine.activity_generator.bash_commands
+        ]
+        main_bash_times = [
+            next(scheduled for command, scheduled in bash_entries if command == main_command)
+            for main_command in main_commands
+        ]
+        prep_commands = [
+            command for command, _scheduled in bash_entries if command not in main_commands
+        ]
+        assert main_bash_times == process_times
+        assert len(prep_commands) >= 6
+        assert any("SHOW TABLES FROM ehr" in command for command in prep_commands)
+        assert any("/tmp/rpt_0318.sql" in command for command in prep_commands)
+        assert any("/tmp/rpt_0318.sql.gz" in command for command in prep_commands)
         assert process_times == sorted(process_times)
         assert process_times[1] > process_times[0] + timedelta(seconds=5)
         assert process_times[2] > process_times[1] + timedelta(seconds=5)

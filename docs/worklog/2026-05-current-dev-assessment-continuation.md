@@ -709,6 +709,30 @@ or follow-up batch is needed.
   `/tmp/.cache-*` daemon file side effects, bash-history command-pool diversity,
   and source-side SCP flow attribution.
 
+- Loops 258-267 continued the current-dev bounded assessment loop on
+  `scenarios/iteration-test` without subagents. The batch fixed public DNS
+  NS/MX/SOA answer ownership, Linux daemon eCAR file side-effect pools,
+  source-side SSH/SCP command texture and file attribution, public AAAA profile
+  ownership, upload source-prep/file-read evidence, Linux operator shell
+  friction, NTP service/analyzer fan-out with public NTP pool selection, Nikto
+  web-scan method diversity, and external port-scan event-presence matching for
+  reset/allowed probe evidence. Loop 267 passed at 97.11049764410731 over
+  81803 records with Event Presence at 35/35 and Storyline Trace Coverage at
+  49/49. Focused tests, config validation, scenario validation, deterministic
+  generation, eval, Ruff checks, and the full `uv run pytest --no-cov` suite
+  passed with 3983 passed and 18 skipped. The next highest-leverage assessment
+  target is now remaining indicator accuracy and pivot linkability: inspect the
+  59 indicator misses and 10 non-pivotable consecutive storyline pairs before
+  deciding whether to fix canonical evidence or scenario-authoredness.
+  A follow-up standalone blind panel was then run against a data-only copy of
+  the current loop-267 output. Reviewer synthetic-confidence scores were Threat
+  Hunter 42, Detection Engineer 28, Network Forensics 31, and Host/EDR
+  Forensics 34, for an average of 33.75. Three reviewers assessed the data as
+  Real and one as Inconclusive. Residual reviewer-backed targets are stable
+  byte lengths for repeated hashed/static web assets, explicit/observable
+  collection texture for small ASA-to-Zeek visibility misses, and tighter Linux
+  eCAR SSH/SCP receiver process lifecycle pairing.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

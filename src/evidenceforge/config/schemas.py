@@ -93,6 +93,7 @@ class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
 
     nameserver_profiles: list[PublicDnsAnswerProfile]
     mail_profiles: list[PublicDnsAnswerProfile]
+    aaaa_profiles: list[PublicDnsAnswerProfile]
 
     @field_validator("nameserver_profiles", "mail_profiles")
     @classmethod
@@ -105,6 +106,16 @@ class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
             raise ValueError(f"{info.field_name} must not be empty")
         if sum(profile.weight for profile in v) <= 0:
             raise ValueError(f"{info.field_name} must include at least one positive weight")
+        return v
+
+    @field_validator("aaaa_profiles")
+    @classmethod
+    def aaaa_profiles_non_empty(
+        cls,
+        v: list[PublicDnsAnswerProfile],
+    ) -> list[PublicDnsAnswerProfile]:
+        if not v:
+            raise ValueError("aaaa_profiles must not be empty")
         return v
 
 

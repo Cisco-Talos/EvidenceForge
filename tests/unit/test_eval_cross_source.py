@@ -1538,6 +1538,93 @@ class TestPortScanSourceIp:
         # Should be indexed under the origin IP
         assert f"185.70.41.45|{bucket}" in index
 
+    def test_port_scan_matcher_accepts_reset_scan_states(self):
+        """Allowed scan probes often show as reset Zeek states, not only S0/REJ."""
+
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="port scan",
+            details={"source_ip": "185.70.41.45", "ports": [80, 443]},
+            event_types=["port_scan"],
+        )
+        scorer = CrossSourceScorer()
+        for conn_state in ("RSTO", "RSTR"):
+            zeek_rec = _record(
+                "zeek_conn",
+                {
+                    "id.orig_h": "185.70.41.45",
+                    "id.resp_h": "10.10.3.10",
+                    "id.resp_p": 80,
+                    "conn_state": conn_state,
+                },
+                ts=T0,
+            )
+            assert scorer._record_matches(zeek_rec, "zeek_conn", event, "port_scan")
+
+    def test_port_scan_matcher_rejects_successful_non_scan_state(self):
+        """A plain successful web flow should not satisfy port_scan presence."""
+
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="port scan",
+            details={"source_ip": "185.70.41.45", "ports": [80, 443]},
+            event_types=["port_scan"],
+        )
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 80,
+                "conn_state": "SF",
+            },
+            ts=T0,
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(zeek_rec, "zeek_conn", event, "port_scan")
+
+    def test_port_scan_matcher_rejects_unlisted_target_port(self):
+        """Source matches alone are insufficient when the event declares target ports."""
+
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="port scan",
+            details={"source_ip": "185.70.41.45", "ports": [80, 443]},
+            event_types=["port_scan"],
+        )
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 22,
+                "conn_state": "RSTR",
+            },
+            ts=T0,
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(zeek_rec, "zeek_conn", event, "port_scan")
+
 
 class TestSyslogYearInference:
     """Legacy BSD syslog eval fallback must infer year from file metadata."""

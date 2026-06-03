@@ -731,6 +731,72 @@ _HTTP_FILE_TRANSFER_MIME_TYPES = {
 }
 _HTTP_FILE_TRANSFER_BODY_THRESHOLD = 64 * 1024
 _HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD = 1_000_000
+_SSH_CLIENT_IDENTITY_FILES = (
+    "~/.ssh/id_ed25519",
+    "~/.ssh/id_rsa",
+    "~/.ssh/work_ed25519",
+)
+
+
+def _linux_ssh_client_command_line(
+    *,
+    exe_name: str,
+    username: str,
+    target_host: str,
+    target_ip: str,
+    source_hostname: str,
+    source_port: int,
+    requested_time: datetime,
+) -> str:
+    """Return a deterministic source-native SSH/SCP client command line."""
+    seed = _stable_seed(
+        "linux_ssh_client_command:"
+        f"{source_hostname}:{username}:{target_host}:{target_ip}:"
+        f"{source_port}:{ensure_utc(requested_time).isoformat()}:{exe_name}"
+    )
+    rng = random.Random(seed)
+    short_host = target_host.split(".", 1)[0]
+    host_forms = [target_host]
+    weights = [6]
+    if short_host and short_host != target_host:
+        host_forms.append(short_host)
+        weights.append(3)
+    if target_ip:
+        host_forms.append(target_ip)
+        weights.append(1)
+    host = rng.choices(host_forms, weights=weights, k=1)[0]
+    identity_file = rng.choice(_SSH_CLIENT_IDENTITY_FILES)
+
+    if exe_name == "scp":
+        remote_path = rng.choice(
+            (
+                "~/remote-file",
+                "/var/tmp/archive.tgz",
+                "/tmp/support-bundle.tgz",
+                "~/logs/support.log",
+            )
+        )
+        local_path = rng.choice(("./remote-file", "./archive.tgz", "/tmp/support-bundle.tgz"))
+        variants = (
+            f"scp {username}@{host}:{remote_path} {local_path}",
+            f"scp -p {username}@{host}:{remote_path} {local_path}",
+            f"scp -i {identity_file} {username}@{host}:{remote_path} {local_path}",
+            f"scp -o ConnectTimeout=10 {username}@{host}:{remote_path} {local_path}",
+        )
+        return rng.choice(variants)
+
+    variants = (
+        f"ssh {username}@{host}",
+        f"ssh {username}@{host}",
+        f"ssh -l {username} {host}",
+        f"ssh -i {identity_file} {username}@{host}",
+        f"ssh -o ConnectTimeout=10 {username}@{host}",
+        f"ssh -o ServerAliveInterval=30 {username}@{host}",
+        f"ssh -A {username}@{host}",
+        f"ssh -tt {username}@{host}",
+        f"ssh -p 22 {username}@{host}",
+    )
+    return rng.choice(variants)
 
 
 def _http_response_requires_file_transfer(http: HttpContext) -> bool:
@@ -2562,6 +2628,19 @@ def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
     return rng.choices(weighted, weights=weights, k=1)[0]
 
 
+def _public_dns_matched_profile(kind: str, domain: str) -> dict[str, Any]:
+    """Return a profile only when the domain matches an explicit suffix."""
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+
+    profiles = load_public_dns_profiles().get(kind, [])
+    lowered = domain.lower().rstrip(".")
+    for profile in profiles:
+        suffixes = [str(suffix).lower().rstrip(".") for suffix in profile.get("match_suffixes", [])]
+        if any(lowered == suffix or lowered.endswith(f".{suffix}") for suffix in suffixes):
+            return profile
+    return {}
+
+
 def _render_public_dns_answer(template: str, domain: str) -> str:
     """Render a public DNS answer template using source-owned domain tokens."""
     from evidenceforge.config.public_dns_templates import render_public_dns_answer_template
@@ -2590,6 +2669,49 @@ def _public_dns_mx_answers(domain: str) -> list[str]:
     """Return realistic public MX answers for a domain."""
     answers = _public_dns_answer_set("mail_profiles", domain)
     return answers or [f"10 mail.{domain}"]
+
+
+def _public_dns_has_explicit_owner_profile(domain: str) -> bool:
+    """Return whether public DNS profile data recognizes this owner family."""
+    return any(
+        _public_dns_matched_profile(kind, domain)
+        for kind in ("nameserver_profiles", "mail_profiles", "aaaa_profiles")
+    )
+
+
+def _public_dns_aaaa_answers(hostname: str, dst_ip: str, *, is_internal: bool = False) -> list[str]:
+    """Return source-owned AAAA answers for a lookup target."""
+    if ":" in dst_ip:
+        return [dst_ip]
+
+    if is_internal or _is_private_ip(dst_ip):
+        ipv6_answer = _IPV6_MAP.get(dst_ip)
+        if ipv6_answer is not None:
+            return [ipv6_answer]
+        return [_ipv4_to_fake_ipv6(dst_ip)]
+
+    owner = _dns_registrable_domain(hostname)
+    profile = _public_dns_matched_profile("aaaa_profiles", hostname) or _public_dns_matched_profile(
+        "aaaa_profiles", owner
+    )
+    if profile:
+        answer_sets = profile.get("answer_sets", [])
+        if not answer_sets:
+            return []
+        rng = random.Random(_stable_seed(f"public_dns_answers:aaaa_profiles:{hostname}:{dst_ip}"))
+        answers = rng.choice(answer_sets)
+        return [_render_public_dns_answer(str(answer), owner) for answer in answers]
+
+    if _public_dns_has_explicit_owner_profile(hostname) or _public_dns_has_explicit_owner_profile(
+        owner
+    ):
+        return []
+
+    ipv6_answer = _IPV6_MAP.get(dst_ip)
+    if ipv6_answer is not None:
+        return [ipv6_answer]
+
+    return [_ipv4_to_fake_ipv6(dst_ip)]
 
 
 def _dns_soa_answer(domain: str, mname: str, rname: str, seed_context: str = "") -> str:
@@ -3381,6 +3503,32 @@ def _ntp_payload_accounting(
     if normalized_resp > 0 and (normalized_duration is None or normalized_duration > 0.25):
         normalized_duration = rng.uniform(0.003, 0.12)
     return normalized_orig, normalized_resp, normalized_duration
+
+
+def _select_public_ntp_ip(src_ip: str, dst_ip: str, time: datetime) -> str | None:
+    """Return a configured public NTP server IP for inferred public NTP traffic."""
+    from evidenceforge.generation.activity.network_params import public_ntp_servers
+
+    servers = [
+        server
+        for server in public_ntp_servers()
+        if isinstance(server.get("ip"), str) and server["ip"]
+    ]
+    if not servers:
+        return None
+    rng = random.Random(
+        _stable_seed(
+            "public_ntp_destination:"
+            f"{src_ip}:{dst_ip}:{time.replace(minute=0, second=0, microsecond=0).isoformat()}"
+        )
+    )
+    weights = [
+        max(0.1, float(server.get("weight", 1.0)))
+        if isinstance(server.get("weight", 1.0), int | float)
+        else 1.0
+        for server in servers
+    ]
+    return str(rng.choices([server["ip"] for server in servers], weights=weights, k=1)[0])
 
 
 def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
@@ -9506,10 +9654,15 @@ class ActivityGenerator:
             exe_name = "ssh"
 
         target_host = self._build_host_context(target_system).fqdn or target_system.hostname
-        if exe_name == "scp":
-            command_line = f"scp {user.username}@{target_host}:~/remote-file ./remote-file"
-        else:
-            command_line = f"ssh {user.username}@{target_host}"
+        command_line = _linux_ssh_client_command_line(
+            exe_name=exe_name,
+            username=user.username,
+            target_host=target_host,
+            target_ip=target_system.ip,
+            source_hostname=source_system.hostname,
+            source_port=source_port,
+            requested_time=requested_time,
+        )
 
         seed = _stable_seed(
             "linux_ssh_client_process:"
@@ -10343,6 +10496,16 @@ class ActivityGenerator:
         # emitted. Keep the empty-string raw-TCP sentinel unchanged.
         if proto == "tcp" and dst_port in (80, 443) and service != "" and not is_tcp_probe:
             service = "http" if dst_port == 80 else "ssl"
+        if proto == "udp" and dst_port == 123 and (service != "" or (resp_bytes or 0) > 0):
+            service = "ntp"
+            if not _is_private_ip(dst_ip):
+                from evidenceforge.generation.activity.network_params import public_ntp_ips
+
+                configured_ntp_ips = set(public_ntp_ips())
+                if configured_ntp_ips and dst_ip not in configured_ntp_ips:
+                    selected_ntp_ip = _select_public_ntp_ip(src_ip, dst_ip, time)
+                    if selected_ntp_ip:
+                        dst_ip = selected_ntp_ip
 
         if (
             proto == "tcp"
@@ -13595,14 +13758,7 @@ class ActivityGenerator:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            ipv6_answer = _IPV6_MAP.get(dst_ip)
-            if ipv6_answer is not None:
-                answers = [ipv6_answer]
-            elif ":" in dst_ip:
-                # Already IPv6 (not present in registry map) — use as-is.
-                answers = [dst_ip]
-            else:
-                answers = [_ipv4_to_fake_ipv6(dst_ip)]
+            answers = _public_dns_aaaa_answers(hostname, dst_ip, is_internal=is_internal)
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
@@ -13733,11 +13889,11 @@ class ActivityGenerator:
             companion_qtype = 28
             if companion_kind == "AAAA":
                 companion_qtype = 28
-                companion_answers = [
-                    dst_ip
-                    if ":" in dst_ip
-                    else (_IPV6_MAP.get(dst_ip) or _ipv4_to_fake_ipv6(dst_ip))
-                ]
+                companion_answers = _public_dns_aaaa_answers(
+                    hostname,
+                    dst_ip,
+                    is_internal=is_internal,
+                )
             elif companion_kind == "PTR":
                 companion_qtype = 12
                 companion_query = _dns_reverse_query(dst_ip)

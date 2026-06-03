@@ -51,6 +51,7 @@ nameserver_profiles:
       - adobe.com
       - adobe.io
       - adobedtm.com
+      - typekit.net
       - typekit.com
     answer_sets:
       - ["a1-217.akam.net", "a7-64.akam.net", "a10-65.akam.net", "a13-66.akam.net"]
@@ -69,12 +70,28 @@ nameserver_profiles:
       - office.com
       - office.net
       - office365.com
+      - officeapps.live.com
+      - onenote.net
+      - powerapps.com
+      - powerbi.com
       - windows.net
       - windowsupdate.com
     answer_sets:
       - ["ns1-39.azure-dns.com", "ns2-39.azure-dns.net", "ns3-39.azure-dns.org", "ns4-39.azure-dns.info"]
       - ["ns1-205.azure-dns.com", "ns2-205.azure-dns.net", "ns3-205.azure-dns.org", "ns4-205.azure-dns.info"]
     soa_rnames: ["azuredns-hostmaster.microsoft.com"]
+
+  - name: cisco
+    weight: 0
+    match_suffixes:
+      - cisco.com
+      - duosecurity.com
+      - webex.com
+      - webexapis.com
+    answer_sets:
+      - ["ns1.cisco.com", "ns2.cisco.com", "ns3.cisco.com"]
+      - ["ns1.webex.com", "ns2.webex.com", "ns3.webex.com"]
+    soa_rnames: ["dns-admin.cisco.com"]
 
   - name: amazon_route53
     weight: 22
@@ -158,6 +175,131 @@ nameserver_profiles:
       - ["ns01.squarespacedns.com", "ns02.squarespacedns.com", "ns03.squarespacedns.com", "ns04.squarespacedns.com"]
     soa_rnames: ["hostmaster.vercel-dns.com", "dns-admin.netlify.com"]
 
+aaaa_profiles:
+  - name: google
+    weight: 0
+    match_suffixes:
+      - google.com
+      - googleapis.com
+      - gstatic.com
+      - googleusercontent.com
+      - googlevideo.com
+      - pki.goog
+      - youtube.com
+    answer_sets:
+      - ["2607:f8b0:4004:806::200e"]
+      - ["2607:f8b0:4006:81a::200e"]
+      - ["2607:f8b0:4005:80a::200e"]
+
+  - name: microsoft_azure
+    weight: 0
+    match_suffixes:
+      - azure.com
+      - bing.com
+      - live.com
+      - microsoft.com
+      - microsoftonline.com
+      - msn.com
+      - office.com
+      - office.net
+      - office365.com
+      - officeapps.live.com
+      - onenote.net
+      - outlook.com
+      - powerapps.com
+      - powerbi.com
+      - sharepoint.com
+      - windows.net
+      - windowsupdate.com
+    answer_sets:
+      - ["2620:1ec:c11::200"]
+      - ["2620:1ec:46::40"]
+      - ["2603:1000:7e1c::13"]
+
+  - name: meta
+    weight: 0
+    match_suffixes:
+      - facebook.com
+      - facebook.net
+      - fbcdn.net
+    answer_sets:
+      - ["2a03:2880:f12f:83:face:b00c:0:25de"]
+      - ["2a03:2880:f003:c07:face:b00c:0:2"]
+
+  - name: adobe_edge
+    weight: 0
+    match_suffixes:
+      - adobe.com
+      - adobe.io
+      - adobedtm.com
+      - typekit.net
+      - typekit.com
+    answer_sets:
+      - ["2a02:26f0:2d00:18f::17d7:440b"]
+      - ["2600:9000:26c7:2c00::17d7:440b"]
+
+  - name: canonical
+    weight: 0
+    match_suffixes:
+      - canonical.com
+      - ubuntu.com
+      - snapcraft.io
+    answer_sets:
+      - ["2620:2d:4000:1::101"]
+      - ["2620:2d:4002:1::101"]
+
+  - name: cisco
+    weight: 0
+    match_suffixes:
+      - cisco.com
+      - duosecurity.com
+      - webex.com
+      - webexapis.com
+    answer_sets:
+      - ["2001:420:1101:1::a"]
+      - ["2a02:26f0:2d00:183::b33"]
+
+  - name: amazon_edge
+    weight: 0
+    match_suffixes:
+      - amazon.com
+      - amazonaws.com
+      - awsstatic.com
+      - cloudfront.net
+    answer_sets:
+      - ["2600:9000:26c7:2c00::5f64"]
+      - ["2600:1f18:2489:8200::1"]
+
+  - name: cloudflare
+    weight: 0
+    match_suffixes:
+      - cloudflare.com
+    answer_sets:
+      - ["2606:4700::6810:84e5"]
+      - ["2606:4700::6810:85e5"]
+
+  - name: akamai
+    weight: 0
+    match_suffixes:
+      - akamai.net
+      - akadns.net
+      - akamaiedge.net
+      - akamaihd.net
+      - edgekey.net
+      - edgesuite.net
+    answer_sets:
+      - ["2a02:26f0:2d00:18f::17d7:440b"]
+      - ["2a02:26f0:3500:1b::1724:a393"]
+
+  - name: fastly
+    weight: 0
+    match_suffixes:
+      - fastly.net
+      - fastly.com
+    answer_sets:
+      - ["2a04:4e42::396"]
+      - ["2a04:4e42:200::396"]
+
 mail_profiles:
   - name: google_workspace
     weight: 24
@@ -170,12 +312,40 @@ mail_profiles:
   - name: microsoft_365
     weight: 23
     match_suffixes:
+      - hotmail.com
+      - live.com
       - microsoft.com
+      - msn.com
       - office.com
       - office365.com
       - microsoftonline.com
+      - outlook.com
     answer_sets:
       - ["0 {domain_hyphen}.mail.protection.outlook.com"]
+
+  - name: adobe_mail
+    weight: 0
+    match_suffixes:
+      - adobe.com
+    answer_sets:
+      - ["10 mxa.adobe.com", "10 mxb.adobe.com"]
+
+  - name: meta_mail
+    weight: 0
+    match_suffixes:
+      - facebook.com
+    answer_sets:
+      - ["10 smtpin.vvv.facebook.com"]
+
+  - name: cisco_mail
+    weight: 0
+    match_suffixes:
+      - cisco.com
+      - duosecurity.com
+      - webex.com
+      - webexapis.com
+    answer_sets:
+      - ["5 alln-mx-01.cisco.com", "5 rcdn-mx-01.cisco.com"]
 
   - name: proofpoint
     weight: 12
@@ -206,6 +376,23 @@ mail_profiles:
 
   - name: null_mx
     weight: 4
+    match_suffixes:
+      - akamaihd.net
+      - awsstatic.com
+      - cloudfront.net
+      - edgekey.net
+      - edgesuite.net
+      - fbcdn.net
+      - googleapis.com
+      - googleusercontent.com
+      - googlevideo.com
+      - gstatic.com
+      - office.net
+      - onenote.net
+      - pki.goog
+      - powerapps.com
+      - powerbi.com
+      - windows.net
     answer_sets:
       - ["0 ."]
 

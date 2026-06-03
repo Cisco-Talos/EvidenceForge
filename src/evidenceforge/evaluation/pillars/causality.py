@@ -384,6 +384,39 @@ class CausalityScorer(DimensionScorer):
                 return 600
         return 0
 
+    @staticmethod
+    def _event_port_set(event: ResolvedEvent) -> set[int]:
+        raw_ports = event.details.get("ports")
+        if raw_ports is None:
+            raw_port = event.details.get("dst_port")
+            raw_ports = [] if raw_port is None else [raw_port]
+        elif not isinstance(raw_ports, list | tuple | set):
+            raw_ports = [raw_ports]
+
+        ports: set[int] = set()
+        for raw_port in raw_ports:
+            try:
+                ports.add(int(raw_port))
+            except (TypeError, ValueError):
+                continue
+        return ports
+
+    @staticmethod
+    def _record_has_expected_port(
+        fields: dict[str, Any],
+        expected_ports: set[int],
+        field_names: tuple[str, ...],
+    ) -> bool:
+        if not expected_ports:
+            return True
+        for field_name in field_names:
+            try:
+                if int(fields.get(field_name)) in expected_ports:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     def _record_matches(
         self,
         record: ParsedRecord,
@@ -576,13 +609,29 @@ class CausalityScorer(DimensionScorer):
             # Use explicit source_ip from spec when present (e.g. external attack origin);
             # fall back to system_ip for internally-sourced scans.
             scan_src = event.details.get("source_ip") or event.system_ip
+            scan_ports = self._event_port_set(event)
             if format_name == "cisco_asa":
                 msg_id = f.get("msg_id")
-                return (msg_id == 106023 and f.get("src_ip") == scan_src) or msg_id == 733100
+                if msg_id == 733100:
+                    return True
+                return (
+                    msg_id in (302013, 302014, 106023)
+                    and f.get("src_ip") == scan_src
+                    and self._record_has_expected_port(
+                        f,
+                        scan_ports,
+                        ("dst_port", "mapped_dst_port"),
+                    )
+                )
             if format_name == "zeek_conn":
-                return f.get("id.orig_h") == scan_src and f.get("conn_state") in (
-                    "S0",
-                    "REJ",
+                return (
+                    f.get("id.orig_h") == scan_src
+                    and f.get("conn_state") in ("S0", "REJ", "RSTO", "RSTR")
+                    and self._record_has_expected_port(
+                        f,
+                        scan_ports,
+                        ("id.resp_p",),
+                    )
                 )
         elif event_type == "beacon":
             expected_dst = event.details.get("dst_ip", "")
