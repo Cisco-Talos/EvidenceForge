@@ -1587,24 +1587,38 @@ class StorylineMixin:
         self._record_storyline_logon(actor, system, target_session.logon_id)
         return target_session.logon_id
 
-    def _select_web_server_for_spillage(self, actor_system: System) -> System | None:
+    def _select_web_server_for_spillage(
+        self, actor_system: System, requested_scheme: str | None
+    ) -> tuple[System | None, str | None]:
         """Pick the destination web server for an http_* spillage surface.
 
         The credential rides in an outbound request from the actor's host and is
         recorded by the destination web server's access log, so a web_server-role
         host must exist. Prefer a server other than the actor's own host (a real
         outbound request), deterministic by hostname; fall back to the actor's
-        host only if it is the sole web server. Returns None when there is none
-        (the validator flags this before generation).
+        host only if it is the sole compatible web server. Returns None when
+        there is none (the validator flags this before generation).
         """
-        web_servers = [
-            s for s in self.scenario.environment.systems if "web_server" in (s.roles or [])
+        from evidenceforge.generation.spillage import choose_web_spillage_scheme
+
+        candidates = [
+            (system, scheme)
+            for system in self.scenario.environment.systems
+            if (scheme := choose_web_spillage_scheme(system, requested_scheme)) is not None
         ]
-        if not web_servers:
-            return None
-        others = [s for s in web_servers if s.hostname != actor_system.hostname]
-        pool = others or web_servers
-        return sorted(pool, key=lambda s: s.hostname)[0]
+        if not candidates:
+            return None, None
+        others = [
+            (system, scheme)
+            for system, scheme in candidates
+            if system.hostname != actor_system.hostname
+        ]
+        pool = others or candidates
+        if requested_scheme is None:
+            https_pool = [(system, scheme) for system, scheme in pool if scheme == "https"]
+            if https_pool:
+                pool = https_pool
+        return sorted(pool, key=lambda candidate: candidate[0].hostname)[0]
 
     def _last_storyline_logon_source_for_actor_system(
         self,
@@ -4574,6 +4588,7 @@ class StorylineMixin:
             self._spillage_seq = seq + 1
             spill_logon_id = None
             spill_target = None
+            spill_scheme = spec.scheme
             # process_command_line spills run as a standalone process-execution
             # record with a durable unique PID, using local carriers only (no
             # implied outbound network). We deliberately do NOT attach the spill to
@@ -4592,7 +4607,9 @@ class StorylineMixin:
             if spec.surface in HTTP_SURFACES:
                 # The credential leaks into a web server's access log; pick the
                 # destination web server (the validator requires one to exist).
-                spill_target = self._select_web_server_for_spillage(system)
+                spill_target, spill_scheme = self._select_web_server_for_spillage(
+                    system, spec.scheme
+                )
             info = self.activity_generator.generate_spillage(
                 user=actor,
                 system=system,
@@ -4600,6 +4617,7 @@ class StorylineMixin:
                 surface=spec.surface,
                 family=spec.family,
                 value=spec.value,
+                scheme=spill_scheme,
                 seed_key=f"spillage:{cluster_id}:{seq}:{spec.surface}:{spec.family or 'literal'}",
                 logon_id=spill_logon_id,
                 target_system=spill_target,
@@ -4621,6 +4639,8 @@ class StorylineMixin:
                     # log; record its FQDN (as the generator names the access-log
                     # directory) so ground truth and eval can locate the trace.
                     malicious_event["target_system"] = info["target_system"]
+                if info.get("scheme"):
+                    malicious_event["scheme"] = info["scheme"]
 
         elif spec.type == "raw":
             self.activity_generator.generate_raw(

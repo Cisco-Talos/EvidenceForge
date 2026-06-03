@@ -64,6 +64,7 @@ class GroundTruthAttributesBase(BaseModel):
     rendered_value: str | None = None
     rendered_sha256: str | None = None
     request_count: int | None = None
+    scheme: str | None = None
     service_file_name: str | None = None
     service_name: str | None = None
     source_ip: str | None = None

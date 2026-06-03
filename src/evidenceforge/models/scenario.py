@@ -989,12 +989,15 @@ class SpillageEventSpec(_EventSpecBase):
     ]
     family: str | None = None
     value: str | None = None
+    scheme: Literal["http", "https"] | None = None
 
     @model_validator(mode="after")
     def spillage_requires_one_source(self) -> "SpillageEventSpec":
         """Require exactly one of family or value (mutually exclusive)."""
         if (self.family is None) == (self.value is None):
             raise ValueError("spillage requires exactly one of 'family' or 'value'")
+        if self.scheme is not None and self.surface not in {"http_request_url", "http_referrer"}:
+            raise ValueError("spillage scheme is only valid for http_request_url/http_referrer")
         return self
 
 

@@ -459,6 +459,118 @@ class TestSpillageAccuracy:
         assert "Mozilla" in ua  # browser-class, not a tool client
         assert "Linux" in ua or "X11" in ua  # OS-coherent with the Linux actor host
 
+    def test_http_scheme_is_cleartext_and_https_scheme_keeps_secret_out_of_zeek_http(
+        self, tmp_path
+    ):
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "spillage",
+                    "surface": "http_request_url",
+                    "family": "gcp_api_key",
+                    "scheme": "http",
+                },
+                {
+                    "type": "spillage",
+                    "surface": "http_referrer",
+                    "family": "jwt",
+                    "scheme": "https",
+                },
+            ],
+            logs=[{"format": "web_access"}, {"format": "zeek"}, {"format": "proxy_access"}],
+            web_server=True,
+            web_server_services=["http", "https"],
+            network=_app_web_zeek_network(),
+        )
+        out = _generate(scenario, tmp_path / "out")
+        recs = {r["surface"]: r for r in _records(out) if r["surface"].startswith("http")}
+        http_rec = recs["http_request_url"]
+        https_rec = recs["http_referrer"]
+        assert http_rec["scheme"] == "http"
+        assert https_rec["scheme"] == "https"
+
+        web_access = "\n".join(p.read_text() for p in out.rglob("web_access.log"))
+        zeek_http = "\n".join(p.read_text() for p in out.rglob("http.json"))
+        zeek_ssl = "\n".join(p.read_text() for p in out.rglob("ssl.json"))
+        proxy_access = "\n".join(p.read_text() for p in out.rglob("proxy_access.log"))
+        conn_rows = [
+            json.loads(line)
+            for p in out.rglob("conn.json")
+            for line in p.read_text().splitlines()
+            if line.strip()
+        ]
+        ssl_rows = [
+            json.loads(line)
+            for p in out.rglob("ssl.json")
+            for line in p.read_text().splitlines()
+            if line.strip()
+        ]
+
+        assert http_rec["rendered_value"] in web_access
+        assert https_rec["rendered_value"] in web_access
+        assert http_rec["rendered_value"] in zeek_http
+        assert https_rec["rendered_value"] not in zeek_http
+        assert https_rec["rendered_value"] not in zeek_ssl
+        assert http_rec["rendered_value"] not in proxy_access
+        assert https_rec["rendered_value"] not in proxy_access
+        assert any(
+            row.get("id.orig_h") == "192.168.20.30"
+            and row.get("id.resp_h") == "192.168.20.40"
+            and row.get("id.resp_p") == 80
+            for row in conn_rows
+        )
+        https_conn_uids = {
+            row.get("uid")
+            for row in conn_rows
+            if row.get("id.orig_h") == "192.168.20.30"
+            and row.get("id.resp_h") == "192.168.20.40"
+            and row.get("id.resp_p") == 443
+        }
+        assert https_conn_uids
+        assert any(row.get("uid") in https_conn_uids for row in ssl_rows)
+
+    def test_omitted_scheme_auto_uses_http_for_http_only_web_server(self, tmp_path):
+        scenario = _linux_scenario(
+            [{"type": "spillage", "surface": "http_request_url", "family": "gcp_api_key"}],
+            logs=[{"format": "web_access"}, {"format": "zeek"}],
+            web_server=True,
+            web_server_services=["http"],
+            network=_app_web_zeek_network(),
+        )
+        out = _generate(scenario, tmp_path / "out")
+        rec = next(r for r in _records(out) if r["surface"] == "http_request_url")
+        zeek_http = "\n".join(p.read_text() for p in out.rglob("http.json"))
+        assert rec["scheme"] == "http"
+        assert rec["rendered_value"] in zeek_http
+
+    def test_omitted_scheme_auto_prefers_https_for_generic_web_server(self, tmp_path):
+        scenario = _linux_scenario(
+            [{"type": "spillage", "surface": "http_request_url", "family": "gcp_api_key"}],
+            logs=[{"format": "web_access"}, {"format": "zeek"}],
+            web_server=True,
+            web_server_services=["nginx"],
+            network=_app_web_zeek_network(),
+        )
+        out = _generate(scenario, tmp_path / "out")
+        rec = next(r for r in _records(out) if r["surface"] == "http_request_url")
+        web_access = "\n".join(p.read_text() for p in out.rglob("web_access.log"))
+        zeek_http = "\n".join(p.read_text() for p in out.rglob("http.json"))
+        conn_rows = [
+            json.loads(line)
+            for p in out.rglob("conn.json")
+            for line in p.read_text().splitlines()
+            if line.strip()
+        ]
+        assert rec["scheme"] == "https"
+        assert rec["rendered_value"] in web_access
+        assert rec["rendered_value"] not in zeek_http
+        assert any(
+            row.get("id.orig_h") == "192.168.20.30"
+            and row.get("id.resp_h") == "192.168.20.40"
+            and row.get("id.resp_p") == 443
+            for row in conn_rows
+        )
+
     def test_process_command_line_spills_survive_interactive_session(self, tmp_path):
         # Regression: multiple process_command_line spills run while the actor has a
         # busy interactive SSH session must all land in eCAR and be matched. They
@@ -883,6 +995,29 @@ class TestSpillageAccuracy:
 # --- Validation ----------------------------------------------------------------
 
 
+def _app_web_zeek_network():
+    return {
+        "segments": [
+            {
+                "name": "lab",
+                "cidr": "192.168.20.0/24",
+                "exposure": "internal",
+                "systems": ["APP-SRV-01", "WEB-01"],
+            }
+        ],
+        "sensors": [
+            {
+                "name": "zeek-lab",
+                "type": "network",
+                "placement": "span",
+                "monitoring_segments": ["lab"],
+                "direction": "bidirectional",
+                "log_formats": ["zeek"],
+            }
+        ],
+    }
+
+
 def _linux_scenario(
     events,
     *,
@@ -892,6 +1027,8 @@ def _linux_scenario(
     web_server=False,
     actor_os="Ubuntu 22.04 LTS",
     web_server_hostname="WEB-01",
+    web_server_services=None,
+    network=None,
 ):
     logs = logs or [{"format": "bash_history"}, {"format": "syslog"}, {"format": "ecar"}]
     systems = [
@@ -911,25 +1048,30 @@ def _linux_scenario(
                 "os": "Ubuntu 22.04 LTS",
                 "type": "server",
                 "roles": ["web_server"],
+                "services": web_server_services or [],
             }
         )
+    environment = {
+        "description": "one linux host",
+        "users": [
+            {
+                "username": actor,
+                "full_name": "Actor",
+                "email": "actor@example.com",
+                "primary_system": "APP-SRV-01",
+                "enabled": True,
+            }
+        ],
+        "systems": systems,
+    }
+    if network is not None:
+        environment["network"] = network
+
     return {
         "version": "1.0",
         "name": "spillage-validate",
         "description": "validation harness",
-        "environment": {
-            "description": "one linux host",
-            "users": [
-                {
-                    "username": actor,
-                    "full_name": "Actor",
-                    "email": "actor@example.com",
-                    "primary_system": "APP-SRV-01",
-                    "enabled": True,
-                }
-            ],
-            "systems": systems,
-        },
+        "environment": environment,
         "time_window": {"start": "2024-03-18T14:00:00Z", "duration": "1h"},
         "baseline_activity": {"description": "x", "intensity": "low", "variation": "low"},
         "output": {"logs": logs, "destination": "./output", "compression": False},
@@ -1013,6 +1155,65 @@ class TestSpillageValidation:
                 [{"type": "spillage", "surface": "http_referrer", "family": "jwt"}],
                 logs=[{"format": "web_access"}],
                 web_server=True,
+            )
+        )
+
+    def test_http_scheme_to_https_only_web_server_is_error(self):
+        errs = _errors(
+            _linux_scenario(
+                [
+                    {
+                        "type": "spillage",
+                        "surface": "http_request_url",
+                        "family": "gcp_api_key",
+                        "scheme": "http",
+                    }
+                ],
+                logs=[{"format": "web_access"}],
+                web_server=True,
+                web_server_services=["https"],
+            )
+        )
+        assert any("compatible with scheme 'http'" in m for m in errs)
+
+    def test_https_scheme_to_http_only_web_server_is_error(self):
+        errs = _errors(
+            _linux_scenario(
+                [
+                    {
+                        "type": "spillage",
+                        "surface": "http_referrer",
+                        "family": "jwt",
+                        "scheme": "https",
+                    }
+                ],
+                logs=[{"format": "web_access"}],
+                web_server=True,
+                web_server_services=["http"],
+            )
+        )
+        assert any("compatible with scheme 'https'" in m for m in errs)
+
+    def test_generic_web_server_supports_http_and_https_spillage(self):
+        assert not _errors(
+            _linux_scenario(
+                [
+                    {
+                        "type": "spillage",
+                        "surface": "http_request_url",
+                        "family": "gcp_api_key",
+                        "scheme": "http",
+                    },
+                    {
+                        "type": "spillage",
+                        "surface": "http_referrer",
+                        "family": "jwt",
+                        "scheme": "https",
+                    },
+                ],
+                logs=[{"format": "web_access"}],
+                web_server=True,
+                web_server_services=["nginx"],
             )
         )
 

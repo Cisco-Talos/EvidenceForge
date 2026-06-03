@@ -66,6 +66,13 @@ validation. Common errors and fixes:
   Fix the literal or switch to a `family:`.
 - **http_request_url/http_referrer with no web_server** — these surfaces send a request
   to a `web_server`-role host; add a system with `roles: [web_server]`.
+- **http_request_url/http_referrer with incompatible `scheme`** — an explicit
+  `scheme: http` needs a web server whose `services` include `http`; an explicit
+  `scheme: https` needs `https`, `ssl`, or `tls`. Generic web servers with no
+  explicit scheme marker support both for legacy compatibility.
+- **`scheme` on a non-HTTP surface** — remove `scheme` from `shell_history`,
+  `process_command_line`, or `syslog_message`; it is only valid on
+  `http_request_url` and `http_referrer`.
 - **shell_history/syslog_message on a Windows host** — these surfaces are Linux-modeled;
   put the actor on a Linux host (process_command_line and http_* are cross-OS).
 

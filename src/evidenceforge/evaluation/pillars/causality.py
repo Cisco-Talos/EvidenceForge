@@ -785,12 +785,12 @@ class CausalityScorer(DimensionScorer):
         "syslog": ("message",),
         "ecar": ("command_line",),
         "web_access": ("path", "referer"),
+        "zeek_http": ("uri", "referrer"),
     }
 
-    # web_access evidence lands on the destination web server (not event.system),
-    # so it is matched by the unique, marked credential value alone — the host of
-    # the actor is the request's client_ip, not the log's owning host.
-    _SPILLAGE_HOST_AGNOSTIC = frozenset({"web_access"})
+    # Web evidence lands on the destination web server / sensor path (not
+    # event.system), so it is matched by the unique, marked credential value alone.
+    _SPILLAGE_HOST_AGNOSTIC = frozenset({"web_access", "zeek_http"})
 
     def _spillage_record_matches(self, f: dict, format_name: str, event: ResolvedEvent) -> bool:
         """Match a spillage event to the record carrying its credential.

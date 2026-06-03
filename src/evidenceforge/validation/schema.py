@@ -1158,14 +1158,17 @@ class ScenarioValidator:
             SURFACE_FORMATS,
             SpillageSafetyError,
             check_spillage_safety,
+            choose_web_spillage_scheme,
+            web_server_supported_schemes,
         )
 
         known_families = family_names()
         expanded_formats = self._get_expanded_formats()
         # http_* surfaces leak into a web server's access log, so one must exist.
-        has_web_server = any(
-            "web_server" in (s.roles or []) for s in self.scenario.environment.systems
-        )
+        web_servers = [
+            s for s in self.scenario.environment.systems if web_server_supported_schemes(s)
+        ]
+        has_web_server = bool(web_servers)
 
         for idx, event in enumerate(self.scenario.storyline):
             system = self._get_system(event.system)
@@ -1226,6 +1229,27 @@ class ScenarioValidator:
                             suggestion="Add a system with roles: [web_server] to the environment",
                         )
                     )
+                elif spec.surface in HTTP_SURFACES:
+                    compatible_targets = [
+                        s for s in web_servers if choose_web_spillage_scheme(s, spec.scheme)
+                    ]
+                    if not compatible_targets:
+                        scheme_text = spec.scheme or "auto-selected http/https"
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] Spillage surface '{spec.surface}' needs a "
+                                    f"web_server host compatible with scheme '{scheme_text}', "
+                                    "but none exists; the credential would not be emitted"
+                                ),
+                                suggestion=(
+                                    "Add a compatible service marker such as 'http', 'https', "
+                                    "or both to a roles: [web_server] host"
+                                ),
+                            )
+                        )
 
                 # Non-interactive service accounts get no bash history, so a
                 # shell_history spill for them would never land.

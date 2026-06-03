@@ -67,6 +67,7 @@ VALID_SURFACES: tuple[str, ...] = (
 # server's access log. Cross-OS, and they require a web_server-role host in the
 # environment to receive the request (the generator/validator enforce this).
 HTTP_SURFACES: frozenset[str] = frozenset({"http_request_url", "http_referrer"})
+HTTP_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 
 # Surfaces that only model on Linux hosts (syslog/bash). process_command_line
 # and the http_* surfaces are cross-OS (process telemetry and web requests exist
@@ -163,6 +164,58 @@ _GENERIC_CARRIERS_WINDOWS: dict[str, tuple[str, ...]] = {
 }
 
 _TOKEN_RE = re.compile(r"\{(\w+)(?::(\d+))?\}")
+
+
+_WEB_HTTP_SERVICE_TOKENS = frozenset({"http"})
+_WEB_HTTPS_SERVICE_TOKENS = frozenset({"https", "ssl", "tls"})
+_WEB_GENERIC_SERVICE_TOKENS = frozenset(
+    {"apache", "apache2", "nginx", "httpd", "iis", "tomcat", "gunicorn"}
+)
+_WEB_SCHEME_ORDER = ("https", "http")
+
+
+def _inventory_token(value: str) -> str:
+    """Normalize scenario inventory labels for lightweight matching."""
+    return value.lower().replace(" ", "-").replace("_", "-")
+
+
+def web_server_supported_schemes(system: object) -> frozenset[str]:
+    """Return HTTP schemes a web-server system plausibly serves.
+
+    Explicit service tokens are authoritative: ``http`` means HTTP-only unless
+    an HTTPS token is also present, and ``https``/``ssl``/``tls`` means
+    HTTPS-only unless ``http`` is also present. Legacy generic web servers keep
+    both schemes unless they opt into explicit scheme markers.
+    """
+    roles = {_inventory_token(str(role)) for role in (getattr(system, "roles", None) or [])}
+    if "web-server" not in roles:
+        return frozenset()
+
+    services = {
+        _inventory_token(str(service)) for service in (getattr(system, "services", None) or [])
+    }
+    explicit: set[str] = set()
+    if services & _WEB_HTTP_SERVICE_TOKENS:
+        explicit.add("http")
+    if services & _WEB_HTTPS_SERVICE_TOKENS:
+        explicit.add("https")
+    if explicit:
+        return frozenset(explicit)
+
+    if not services or services & _WEB_GENERIC_SERVICE_TOKENS or "web-server" in roles:
+        return HTTP_SCHEMES
+    return frozenset()
+
+
+def choose_web_spillage_scheme(system: object, requested_scheme: str | None) -> str | None:
+    """Return the effective scheme for a web spillage target, or None."""
+    supported = web_server_supported_schemes(system)
+    if requested_scheme is not None:
+        return requested_scheme if requested_scheme in supported else None
+    for scheme in _WEB_SCHEME_ORDER:
+        if scheme in supported:
+            return scheme
+    return None
 
 
 def expected_sources_for_surface(surface: str) -> tuple[str, ...]:

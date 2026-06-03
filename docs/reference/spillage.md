@@ -20,6 +20,17 @@ storyline:
         surface: shell_history  # semantic surface, never an emitter name
         family: aws_iam         # synthesize a safe canonical fake, OR:
         # value: "Bearer EvidenceForgeFake_INTERNAL_SSO_TOKEN_v1"  # a literal
+
+  - id: spill-api-key-referrer
+    time: "+24m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "API key leaked in HTTPS Referer header"
+    events:
+      - type: spillage
+        surface: http_referrer
+        family: gcp_api_key
+        scheme: https          # optional; only valid on http_request_url/http_referrer
 ```
 
 Provide **exactly one** of `family` (synthesize a fresh value from a data-driven
@@ -56,6 +67,32 @@ lexicographically-first (by hostname) is chosen deterministically. The destinati
 in the ground-truth record's `target_system` (the same name as its `web_access` output
 directory). `SURFACE_FORMATS` in `generation/spillage.py` is the single extension
 point (renderer + validation + eval all consume it).
+
+### HTTP/HTTPS scheme selection
+
+`http_request_url` and `http_referrer` may include `scheme: http` or
+`scheme: https`. The field is rejected on non-HTTP surfaces. When `scheme` is
+omitted, the generator still chooses a compatible web server and derives an
+effective scheme: HTTPS is preferred when the selected target supports it, but an
+HTTP-only target uses HTTP.
+
+Web-server scheme support comes from `services` on systems with
+`roles: [web_server]`:
+
+- `http` is an explicit HTTP marker.
+- `https`, `ssl`, or `tls` are explicit HTTPS markers.
+- `http` plus any HTTPS marker means both schemes are supported.
+- If no explicit scheme marker is present, legacy generic web markings support
+  both schemes: empty `services`, `roles: [web_server]`, or stack indicators
+  such as `nginx`, `apache2`, `httpd`, or `iis`.
+
+An explicit `scheme` can only target web servers that support that scheme, and
+validation fails when no compatible server exists. Effective HTTP uses port 80
+and service `http`; effective HTTPS uses port 443 and service `https`. Both stay
+direct and proxy-bypassed. HTTP can expose the rendered value in `web_access` and
+Zeek `http` evidence when visible. HTTPS exposes the value in `web_access` while
+network evidence stays at Zeek connection/TLS level, so the secret is not present
+in cleartext Zeek HTTP logs.
 
 ### Correlation scope (v1)
 
@@ -190,9 +227,9 @@ Field notes for scoring a scrubber by hand:
 - For the `http_*` surfaces, `value` and `rendered_value` differ when the
   credential contains URL metacharacters (`attributes.rendered_value` is
   percent-encoded — match that), and the record carries an
-  `attributes.target_system` field with the
-  destination web server's **FQDN** (identical to its `web_access` output
-  directory); the `client_ip` on that line is the actor's host.
+  `attributes.target_system` field with the destination web server's **FQDN**
+  (identical to its `web_access` output directory) plus `attributes.scheme`
+  (`http` or `https`); the `client_ip` on that line is the actor's host.
 - `emitted=false` plus `skipped_reason` means the storyline intended a spill but
   the final generated logs did not contain it (for example, dwell-shifted outside
   the scenario window). Such records remain honest machine-readable ground truth,

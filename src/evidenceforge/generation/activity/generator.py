@@ -17747,6 +17747,7 @@ class ActivityGenerator:
         family: str | None,
         value: str | None,
         seed_key: str,
+        scheme: str | None = None,
         logon_id: str | None = None,
         target_system: "System | None" = None,
     ) -> dict[str, Any]:
@@ -17761,6 +17762,7 @@ class ActivityGenerator:
         """
         from evidenceforge.generation.spillage import (
             HTTP_SURFACES,
+            choose_web_spillage_scheme,
             render_for_surface,
             resolve_value,
         )
@@ -17773,6 +17775,7 @@ class ActivityGenerator:
 
         emitted_time = time
         target_fqdn: str | None = None
+        effective_scheme: str | None = None
         if surface == "shell_history":
             # bash history dwell/session scheduling can shift the visible time;
             # use the actual emitted time so ground truth matches the log line.
@@ -17851,6 +17854,13 @@ class ActivityGenerator:
                     "family": resolved_family,
                     "skipped_reason": "not_emitted",
                 }
+            effective_scheme = choose_web_spillage_scheme(target_system, scheme)
+            if effective_scheme is None:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
             # Record the destination's FQDN exactly as the web emitter names the
             # access-log directory, so the sidecar's target_system points a scorer
             # (and the eval record search) at the right host even for dotted/FQDN
@@ -17903,9 +17913,9 @@ class ActivityGenerator:
                 src_ip=system.ip,
                 dst_ip=target_system.ip,
                 time=time,
-                dst_port=443,
+                dst_port=80 if effective_scheme == "http" else 443,
                 proto="tcp",
-                service="https",
+                service=effective_scheme,
                 source_system=system,
                 http=http_ctx,
                 hostname=target_system.hostname,
@@ -17932,6 +17942,7 @@ class ActivityGenerator:
             "expected_sources": list(render.expected_sources),
             "time": emitted_time,
             "target_system": target_fqdn,
+            "scheme": effective_scheme,
         }
 
     def _spillage_process_parent_pid(

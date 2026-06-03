@@ -7,6 +7,7 @@ per-event synthesis, carrier rendering, and machine-readable ground truth."""
 import hashlib
 import re
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -56,6 +57,21 @@ class TestSpillageModel:
     )
     def test_all_v1_surfaces_accepted(self, surface):
         assert SpillageEventSpec(surface=surface, family="aws_iam").surface == surface
+
+    @pytest.mark.parametrize("surface", ["http_request_url", "http_referrer"])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_http_surfaces_accept_scheme(self, surface, scheme):
+        spec = SpillageEventSpec(surface=surface, family="aws_iam", scheme=scheme)
+        assert spec.scheme == scheme
+
+    @pytest.mark.parametrize("surface", ["shell_history", "process_command_line", "syslog_message"])
+    def test_non_http_surfaces_reject_scheme(self, surface):
+        with pytest.raises(ValidationError, match="scheme is only valid"):
+            SpillageEventSpec(surface=surface, family="aws_iam", scheme="http")
+
+    def test_unknown_scheme_rejected(self):
+        with pytest.raises(ValidationError):
+            SpillageEventSpec(surface="http_request_url", family="aws_iam", scheme="ftp")
 
     @pytest.mark.parametrize("bad", ["proxy_header", "sysmon_cmdline", "windows_4688", ""])
     def test_emitter_specific_surface_rejected(self, bad):
@@ -612,6 +628,36 @@ class TestSynthesisRendering:
         assert sp.SURFACE_FORMATS["http_referrer"] == "web_access"
         assert sp.HTTP_SURFACES == {"http_request_url", "http_referrer"}
         assert not (sp.HTTP_SURFACES & sp.LINUX_ONLY_SURFACES)
+
+    def test_web_server_scheme_support_uses_explicit_service_tokens(self):
+        http_only = SimpleNamespace(roles=["web_server"], services=["http"])
+        https_only = SimpleNamespace(roles=["web_server"], services=["https"])
+        both = SimpleNamespace(roles=["web_server"], services=["http", "https"])
+
+        assert sp.web_server_supported_schemes(http_only) == {"http"}
+        assert sp.web_server_supported_schemes(https_only) == {"https"}
+        assert sp.web_server_supported_schemes(both) == {"http", "https"}
+
+    def test_generic_web_server_scheme_support_preserves_legacy_both(self):
+        generic = SimpleNamespace(roles=["web_server"], services=["nginx"])
+        empty = SimpleNamespace(roles=["web_server"], services=[])
+        app_only = SimpleNamespace(roles=["app_server"], services=["nginx"])
+
+        assert sp.web_server_supported_schemes(generic) == {"http", "https"}
+        assert sp.web_server_supported_schemes(empty) == {"http", "https"}
+        assert sp.web_server_supported_schemes(app_only) == set()
+
+    def test_auto_scheme_prefers_https_then_http(self):
+        generic = SimpleNamespace(roles=["web_server"], services=["nginx"])
+        both = SimpleNamespace(roles=["web_server"], services=["http", "https"])
+        https_only = SimpleNamespace(roles=["web_server"], services=["https"])
+        http_only = SimpleNamespace(roles=["web_server"], services=["http"])
+
+        assert sp.choose_web_spillage_scheme(generic, None) == "https"
+        assert sp.choose_web_spillage_scheme(both, None) == "https"
+        assert sp.choose_web_spillage_scheme(https_only, None) == "https"
+        assert sp.choose_web_spillage_scheme(http_only, None) == "http"
+        assert sp.choose_web_spillage_scheme(http_only, "https") is None
 
     def test_url_surface_percent_encodes_metacharacters(self):
         # A db_uri (with :// and @) must survive as one percent-encoded query
