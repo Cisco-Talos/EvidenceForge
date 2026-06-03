@@ -1374,6 +1374,63 @@ class StorylineMixin:
             return None
         return logon_id
 
+    def _resolve_storyline_process_spill_logon_id(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        rng: random.Random,
+    ) -> str:
+        """Resolve canonical session ownership for a standalone process-command spill."""
+        from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
+
+        os_category = _get_os_category(system.os)
+        service_accounts = set(self.scenario.environment.service_accounts)
+        is_local_account = actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
+        is_interactive_linux_root = os_category == "linux" and actor.username == "root"
+        if is_local_account and not is_interactive_linux_root:
+            linux_daemon_users = {"apache", "www-data", "nginx", "httpd", "tomcat"}
+            if os_category == "linux" and actor.username.lower() in linux_daemon_users:
+                return ""
+            sessions = self.state_manager.get_sessions_for_user_at(actor.username, time)
+            target_session = max(
+                (s for s in sessions if s.system == system.hostname),
+                key=lambda session: session.start_time,
+                default=None,
+            )
+            if target_session is not None:
+                return target_session.logon_id
+            logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
+            return self.activity_generator.generate_service_logon(
+                system=system,
+                time=logon_time,
+                service_account=actor.username,
+            )
+
+        logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=time)
+        if logon_id is not None:
+            return logon_id
+
+        required_until = self._next_storyline_logoff_time_for_actor_system(actor, system, time)
+        if required_until is not None:
+            required_until += timedelta(minutes=2)
+        plan = self.world_model.plan_session(
+            user=actor,
+            target_system=system,
+            rng=rng,
+        )
+        target_session = self.world_planner.ensure_user_session(
+            actor,
+            system,
+            time,
+            rng,
+            session_kind=plan.session_kind,
+            storyline_protected=True,
+            required_until=required_until,
+        )
+        self._record_storyline_logon(actor, system, target_session.logon_id)
+        return target_session.logon_id
+
     def _select_web_server_for_spillage(self, actor_system: System) -> System | None:
         """Pick the destination web server for an http_* spillage surface.
 
@@ -4207,6 +4264,13 @@ class StorylineMixin:
             # can be shifted and dropped during eCAR post-flush normalization —
             # leaving a labeled-but-unwritten credential (a phantom). A standalone
             # process keeps a stable, unique identity and always lands.
+            if spec.surface == "process_command_line":
+                spill_logon_id = self._resolve_storyline_process_spill_logon_id(
+                    actor,
+                    system,
+                    time,
+                    rng,
+                )
             if spec.surface in HTTP_SURFACES:
                 # The credential leaks into a web server's access log; pick the
                 # destination web server (the validator requires one to exist).
