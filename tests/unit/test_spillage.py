@@ -523,9 +523,9 @@ class TestDocsSync:
     def _read(self, rel: str) -> str:
         return (self._ROOT / rel).read_text(encoding="utf-8")
 
-    def test_skill_docs_reference_the_sidecar_and_config(self):
-        assert "GROUND_TRUTH.jsonl" in self._read("commands/eforge/generate.md")
-        assert "GROUND_TRUTH.jsonl" in self._read("commands/eforge/evaluate.md")
+    def test_skill_docs_reference_ground_truth_json_and_config(self):
+        assert "GROUND_TRUTH.json" in self._read("commands/eforge/generate.md")
+        assert "GROUND_TRUTH.json" in self._read("commands/eforge/evaluate.md")
         assert "secret_families.yaml" in self._read("commands/eforge/config.md")
 
     def test_validate_skill_documents_spillage_errors(self):
@@ -685,29 +685,37 @@ def _spill_event(**over):
     return base
 
 
-class TestGroundTruthJsonl:
+class TestGroundTruthJson:
     def test_record_shape_hash_and_rendered(self, scenarios_dir):
-        rec = _gt([_spill_event(rendered_value="'q v'")], scenarios_dir).build_jsonl_records()[0]
-        assert rec["schema_version"] == 1 and rec["kind"] == "spillage"
+        document = _gt([_spill_event(rendered_value="'q v'")], scenarios_dir).build_document()
+        rec = document.model_dump(mode="python", exclude_none=True)["events"][0]
+        assert document.schema_version == 1 and rec["kind"] == "spillage"
         assert rec["storyline_id"] == "spill-1" and rec["record_id"] == "spill-1#0"
-        assert rec["value_sha256"] == hashlib.sha256(b"AKIA8QCYHI724EXAMPLE").hexdigest()
-        assert rec["rendered_value"] == "'q v'"
-        assert rec["rendered_sha256"] == hashlib.sha256(b"'q v'").hexdigest()
+        assert rec["ground_truth_section"] == "storyline" and rec["emitted"] is True
+        assert (
+            rec["attributes"]["value_sha256"] == hashlib.sha256(b"AKIA8QCYHI724EXAMPLE").hexdigest()
+        )
+        assert rec["attributes"]["rendered_value"] == "'q v'"
+        assert rec["attributes"]["rendered_sha256"] == hashlib.sha256(b"'q v'").hexdigest()
 
     def test_literal_has_null_family_and_record_ids_unique(self, scenarios_dir):
-        recs = _gt(
-            [
-                _spill_event(
-                    family=None, value="Bearer EvidenceForgeFake_T", storyline_cluster_id="d"
-                ),
-                _spill_event(storyline_cluster_id="d", surface="syslog_message"),
-            ],
-            scenarios_dir,
-        ).build_jsonl_records()
-        assert recs[0]["family"] is None
+        recs = (
+            _gt(
+                [
+                    _spill_event(
+                        family=None, value="Bearer EvidenceForgeFake_T", storyline_cluster_id="d"
+                    ),
+                    _spill_event(storyline_cluster_id="d", surface="syslog_message"),
+                ],
+                scenarios_dir,
+            )
+            .build_document()
+            .model_dump(mode="python", exclude_none=True)["events"]
+        )
+        assert "family" not in recs[0]["attributes"]
         assert len({r["record_id"] for r in recs}) == 2
 
-    def test_non_spillage_excluded(self, scenarios_dir):
+    def test_non_spillage_records_are_included_under_details(self, scenarios_dir):
         logon = {
             "time": datetime(2024, 3, 18, 14, tzinfo=UTC),
             "actor": "a",
@@ -715,9 +723,17 @@ class TestGroundTruthJsonl:
             "activity": "logon",
             "type": "logon",
             "storyline_cluster_id": "e1",
+            "source_ip": "203.0.113.10",
+            "logon_type": 3,
         }
-        recs = _gt([logon, _spill_event()], scenarios_dir).build_jsonl_records()
-        assert [r["kind"] for r in recs] == ["spillage"]
+        recs = (
+            _gt([logon, _spill_event()], scenarios_dir)
+            .build_document()
+            .model_dump(mode="python", exclude_none=True)["events"]
+        )
+        assert [r["kind"] for r in recs] == ["logon", "spillage"]
+        assert recs[0]["attributes"]["source_ip"] == "203.0.113.10"
+        assert recs[0]["ground_truth_section"] == "storyline"
 
     def test_md_redacts_but_keeps_hash(self, scenarios_dir):
         details = _gt([_spill_event()], scenarios_dir)._format_event_details(_spill_event())

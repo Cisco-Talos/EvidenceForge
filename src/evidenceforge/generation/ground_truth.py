@@ -20,24 +20,38 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Ground truth documentation generator for attack scenarios.
+"""Ground truth documentation generator for attack scenarios."""
 
-This module generates GROUND_TRUTH.md files that document malicious activities,
-timelines, and indicators of compromise (IOCs) for threat hunting training.
-"""
+from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import logging
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
+from evidenceforge.events.ground_truth import (
+    GROUND_TRUTH_SCHEMA_VERSION,
+    GroundTruthDocument,
+    GroundTruthEvent,
+    write_ground_truth_document,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
+from evidenceforge.utils.time import resolve_time_window
 
-GROUND_TRUTH_JSONL_FILENAME = "GROUND_TRUTH.jsonl"
-GROUND_TRUTH_SCHEMA_VERSION = 1
+logger = logging.getLogger(__name__)
+
+_EVENT_BASE_KEYS = {
+    "time",
+    "actor",
+    "system",
+    "activity",
+    "type",
+    "storyline_cluster_id",
+    "explanation",
+    "skipped_reason",
+}
 
 
 def _redact_secret(value: str) -> str:
@@ -49,21 +63,26 @@ def _redact_secret(value: str) -> str:
     return f"{value[:4]}…{value[-2:]} ({len(value)} chars)"
 
 
-logger = logging.getLogger(__name__)
+def _serialize_attr_value(value):
+    """Convert runtime values into stable JSON-serializable ground-truth fields."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        timestamp = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(value, dict):
+        return {str(key): _serialize_attr_value(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_attr_value(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_serialize_attr_value(item) for item in value)
+    return str(value)
 
 
 class GroundTruthGenerator:
-    """Generates GROUND_TRUTH.md documentation for attack scenarios.
-
-    Creates comprehensive documentation of malicious activities including:
-    - Attack narrative (high-level description)
-    - Timeline of key events with timestamps and record IDs
-    - Indicators of Compromise (IOCs) organized by category
-
-    Attributes:
-        scenario: Scenario object with storyline
-        malicious_events: List of malicious event dicts from generation
-    """
+    """Builds canonical ground truth JSON and renders Markdown from it."""
 
     def __init__(
         self,
@@ -72,119 +91,162 @@ class GroundTruthGenerator:
         red_herring_events: list[dict] | None = None,
         source_evidence_status: dict[str, dict[str, dict[str, int]]] | None = None,
     ):
-        """Initialize ground truth generator.
-
-        Args:
-            scenario: Scenario object with storyline
-            malicious_events: List of malicious event dicts tracked during generation
-            red_herring_events: List of red herring event dicts (suspicious but benign)
-        """
         self.scenario = scenario
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
         self.source_evidence_status = source_evidence_status or {}
 
-    def generate(self, output_path: Path) -> None:
-        """Generate GROUND_TRUTH.md file.
-
-        Args:
-            output_path: Path to write GROUND_TRUTH.md
-        """
-        logger.info(f"Generating ground truth documentation: {output_path}")
-
-        content = []
-
-        # Header
+    def build_document(self) -> GroundTruthDocument:
+        """Build the canonical machine-readable ground-truth document."""
         generated_at = self.scenario.time_window.end or self.scenario.time_window.start
         generated_at = (
             generated_at.replace(tzinfo=UTC) if generated_at.tzinfo is None else generated_at
         )
-        content.append(f"# Ground Truth: {self.scenario.name}\n")
-        content.append(f"**Scenario:** {self.scenario.description}\n")
+        generated_at = generated_at.replace(microsecond=0)
+        document = GroundTruthDocument.model_validate(
+            {
+                "schema_version": GROUND_TRUTH_SCHEMA_VERSION,
+                "scenario_name": self.scenario.name,
+                "scenario_description": self.scenario.description,
+                "generated_at": generated_at,
+                "observation_profile": self.scenario.observation_profile,
+                "collection_window": self._collection_window(),
+                "source_evidence_status": self._sorted_source_evidence_status(),
+                "storyline_steps": self._build_storyline_steps(),
+                "red_herring_steps": self._build_red_herring_steps(),
+                "events": self._build_event_records(),
+            }
+        )
+        return document
+
+    def write_json(
+        self,
+        output_path: Path,
+        document: GroundTruthDocument | None = None,
+    ) -> GroundTruthDocument:
+        """Write the canonical machine-readable ground-truth document."""
+        doc = document or self.build_document()
+        write_ground_truth_document(output_path, doc)
+        logger.info("Canonical ground truth written: %s", output_path)
+        return doc
+
+    def generate(
+        self,
+        output_path: Path,
+        document: GroundTruthDocument | None = None,
+    ) -> GroundTruthDocument:
+        """Generate GROUND_TRUTH.md from the canonical document."""
+        doc = document or self.build_document()
+        logger.info("Generating ground truth documentation: %s", output_path)
+
+        content = []
+        content.append(f"# Ground Truth: {doc.scenario_name}\n")
+        content.append(f"**Scenario:** {doc.scenario_description}\n")
         content.append(
-            f"**Generated:** {generated_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+            f"**Generated:** {doc.generated_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         )
 
-        # 1. Attack Summary (narrative from storyline)
         content.append("\n## Attack Summary\n")
-        content.append(self._create_narrative())
+        content.append(self._create_narrative(doc))
 
-        # 2. Timeline of Key Events
         content.append("\n## Timeline\n")
-        content.append(self._create_timeline())
+        content.append(self._create_timeline(doc))
 
-        # 3. Source evidence status for profiles with imperfect observation.
-        if self._include_source_evidence_status():
+        if self._include_source_evidence_status(doc):
             content.append("\n## Source Evidence Status\n")
-            content.append(self._create_source_evidence_status_section())
+            content.append(self._create_source_evidence_status_section(doc))
 
-        # 3. Indicators of Compromise
         content.append("\n## Indicators of Compromise (IOCs)\n")
-        iocs = self._extract_iocs()
-        content.append(self._format_iocs(iocs))
+        content.append(self._format_iocs(self._extract_iocs(doc)))
 
-        # 4. Red Herrings (if present)
-        if self.red_herring_events:
+        if doc.red_herring_steps:
             content.append("\n## Red Herrings\n")
             content.append(
                 "The following events appear suspicious but are benign. "
                 "They are included to make the dataset more realistic.\n"
             )
-            content.append(self._create_red_herring_section())
+            content.append(self._create_red_herring_section(doc))
 
-        # Write to file
         safe_write_text(output_path, "\n".join(content))
-        logger.info(f"Ground truth documentation written: {output_path}")
+        logger.info("Ground truth documentation written: %s", output_path)
+        return doc
 
-    def build_jsonl_records(self) -> list[dict]:
-        """Build machine-readable ground-truth records for the GROUND_TRUTH.jsonl sidecar.
-
-        Scope: in v1 this sidecar contains structured records for **spillage labels
-        only** (``kind: "spillage"``) — it is NOT yet a complete machine-readable
-        mirror of GROUND_TRUTH.md. The ``schema_version`` + ``kind`` fields are
-        deliberately general so other ground-truth record kinds can be added later
-        without breaking existing consumers.
-
-        One record per malicious event that exposes a canonical value on a semantic
-        surface. Byte offsets are intentionally omitted: emitters stream output, so
-        a value's position is not known at ground-truth-writing time.
-        """
-        records: list[dict] = []
-        for event in self.malicious_events:
-            if "surface" not in event or event.get("skipped_reason"):
-                continue
-            value = event.get("value", "")
-            # rendered_value is the exact on-disk byte form (surface-encoded);
-            # match THIS against the logs. value is the canonical secret.
-            rendered = event.get("rendered_value", value)
-            ts = event["time"]
-            ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts
-            records.append(
+    def _build_storyline_steps(self) -> list[dict]:
+        if not (self.scenario.storyline or []):
+            return [
                 {
-                    "schema_version": GROUND_TRUTH_SCHEMA_VERSION,
-                    "kind": event["type"],
-                    "storyline_id": event.get("storyline_cluster_id"),
-                    "time": ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "storyline_id": event.get("storyline_cluster_id") or f"event-{index}",
+                    "index": index,
                     "actor": event["actor"],
                     "system": event["system"],
-                    "surface": event["surface"],
-                    "family": event.get("family") or None,
-                    "value": value,
-                    "value_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
-                    "rendered_value": rendered,
-                    "rendered_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-                    "expected_sources": list(event.get("expected_sources", [])),
-                    # Web surfaces land on a destination server's access log, not
-                    # the actor's host; record where so scorers/eval can locate it.
-                    **(
-                        {"target_system": event["target_system"]}
-                        if event.get("target_system")
-                        else {}
-                    ),
+                    "activity": event.get("activity", ""),
+                    "ground_truth_section": "storyline",
+                    "event_types": [event.get("type", "raw")],
                 }
+                for index, event in enumerate(self.malicious_events)
+                if {"actor", "system"} <= set(event)
+            ]
+        return [
+            {
+                "storyline_id": event.id,
+                "index": index,
+                "actor": event.actor,
+                "system": event.system,
+                "activity": event.activity,
+                "ground_truth_section": "storyline",
+                "event_types": sorted({spec.type for spec in event.events}),
+            }
+            for index, event in enumerate(self.scenario.storyline or [])
+        ]
+
+    def _build_red_herring_steps(self) -> list[dict]:
+        if not (self.scenario.red_herrings or []):
+            return [
+                {
+                    "storyline_id": event.get("storyline_cluster_id") or f"red-herring-{index}",
+                    "index": index,
+                    "actor": event["actor"],
+                    "system": event["system"],
+                    "activity": event.get("activity", ""),
+                    "ground_truth_section": "red_herring",
+                    "event_types": [event.get("type", "process")],
+                    "explanation": event.get("explanation"),
+                }
+                for index, event in enumerate(self.red_herring_events)
+                if {"actor", "system"} <= set(event)
+            ]
+        return [
+            {
+                "storyline_id": event.id,
+                "index": index,
+                "actor": event.actor,
+                "system": event.system,
+                "activity": event.activity,
+                "ground_truth_section": "red_herring",
+                "event_types": sorted({spec.type for spec in event.events}),
+                "explanation": event.explanation,
+            }
+            for index, event in enumerate(self.scenario.red_herrings or [])
+        ]
+
+    def _build_event_records(self) -> list[dict]:
+        records: list[dict] = []
+        for section, events in (
+            ("storyline", self.malicious_events),
+            ("red_herring", self.red_herring_events),
+        ):
+            for event in events:
+                records.append(self._build_event_record(event, section=section))
+
+        records.sort(
+            key=lambda record: (
+                record.get("storyline_id") or "",
+                record["time"],
+                record["kind"],
+                record["ground_truth_section"],
             )
-        records.sort(key=lambda r: (r["storyline_id"] or "", r["time"], r["surface"]))
-        # Stable per-record id so duplicate positives are individually addressable.
+        )
+
         seen: dict[str, int] = {}
         for record in records:
             sid = record["storyline_id"] or ""
@@ -193,77 +255,125 @@ class GroundTruthGenerator:
             record["record_id"] = f"{sid}#{n}"
         return records
 
-    def write_jsonl(self, output_path: Path) -> None:
-        """Write the machine-readable ground-truth sidecar, if any records exist."""
-        records = self.build_jsonl_records()
-        if not records:
-            return
-        lines = [json.dumps(r, sort_keys=True) for r in records]
-        safe_write_text(output_path, "\n".join(lines) + "\n")
-        logger.info(f"Machine-readable ground truth written: {output_path}")
+    def _build_event_record(self, event: dict, *, section: str) -> dict:
+        ts = event["time"]
+        ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts
+        ts = ts.astimezone(UTC).replace(microsecond=0)
+        attributes = {
+            key: _serialize_attr_value(value)
+            for key, value in event.items()
+            if key not in _EVENT_BASE_KEYS
+        }
+        if event.get("type") == "spillage":
+            if event.get("skipped_reason"):
+                for field in ("value", "value_sha256", "rendered_value", "rendered_sha256"):
+                    attributes.pop(field, None)
+            else:
+                value = str(attributes.get("value") or "")
+                rendered = str(attributes.get("rendered_value") or value)
+                attributes["value_sha256"] = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                attributes["rendered_sha256"] = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        record = {
+            "record_id": "",
+            "kind": event["type"],
+            "storyline_id": event.get("storyline_cluster_id"),
+            "time": ts,
+            "actor": event["actor"],
+            "system": event["system"],
+            "activity": event.get("activity", ""),
+            "ground_truth_section": section,
+            "emitted": not bool(event.get("skipped_reason")),
+            "attributes": attributes,
+        }
+        if event.get("skipped_reason"):
+            record["skipped_reason"] = event["skipped_reason"]
+        if section == "red_herring" and event.get("explanation"):
+            record["explanation"] = event["explanation"]
+        return record
 
-    def _create_narrative(self) -> str:
-        """Create attack narrative from storyline events.
+    def _collection_window(self) -> dict[str, str | None]:
+        start, end = resolve_time_window(self.scenario.time_window)
+        start = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
+        end = (
+            end.replace(tzinfo=UTC)
+            if end and end.tzinfo is None
+            else (end.astimezone(UTC) if end else None)
+        )
+        return {
+            "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": end.strftime("%Y-%m-%dT%H:%M:%SZ") if end else None,
+        }
 
-        Converts storyline events into a cohesive narrative description
-        of the attack sequence.
+    def _sorted_source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
+        return {
+            cluster_id: {
+                source: {status: count for status, count in sorted(counts.items())}
+                for source, counts in sorted(source_status.items())
+            }
+            for cluster_id, source_status in sorted(self.source_evidence_status.items())
+        }
 
-        Returns:
-            Formatted narrative string
-        """
-        if not self.scenario.storyline:
+    def _storyline_event_dicts(self, document: GroundTruthDocument) -> list[dict]:
+        return [
+            self._flatten_event(event)
+            for event in document.events
+            if event.ground_truth_section == "storyline"
+        ]
+
+    def _red_herring_event_dicts(self, document: GroundTruthDocument) -> list[dict]:
+        return [
+            self._flatten_event(event)
+            for event in document.events
+            if event.ground_truth_section == "red_herring"
+        ]
+
+    @staticmethod
+    def _flatten_event(event: GroundTruthEvent) -> dict:
+        payload = event.model_dump(mode="python", exclude_none=True)
+        attributes = payload.pop("attributes", {})
+        payload["type"] = payload.pop("kind")
+        payload.update(attributes)
+        return payload
+
+    def _create_narrative(self, document: GroundTruthDocument | None = None) -> str:
+        if document is None:
+            if not self.scenario.storyline:
+                return "*No malicious activities in this scenario.*\n"
+            narrative = ["This scenario simulates the following attack sequence:\n"]
+            for index, event in enumerate(self.scenario.storyline, 1):
+                narrative.append(
+                    f"{index}. **{event.actor}** on **{event.system}**: {event.activity}"
+                )
+            return "\n".join(narrative) + "\n"
+        if not document.storyline_steps:
             return "*No malicious activities in this scenario.*\n"
 
-        narrative = []
-        narrative.append("This scenario simulates the following attack sequence:\n")
-
-        for i, event in enumerate(self.scenario.storyline, 1):
-            narrative.append(f"{i}. **{event.actor}** on **{event.system}**: {event.activity}")
-
+        narrative = ["This scenario simulates the following attack sequence:\n"]
+        for index, step in enumerate(document.storyline_steps, 1):
+            narrative.append(f"{index}. **{step.actor}** on **{step.system}**: {step.activity}")
         return "\n".join(narrative) + "\n"
 
-    def _create_timeline(self) -> str:
-        """Create timeline of malicious events with timestamps.
-
-        Formats malicious events into a chronological timeline table
-        with timestamps, event types, and details.
-
-        Returns:
-            Formatted timeline table (Markdown)
-        """
-        if not self.malicious_events:
+    def _create_timeline(self, document: GroundTruthDocument | None = None) -> str:
+        events = (
+            self.malicious_events if document is None else self._storyline_event_dicts(document)
+        )
+        if not events:
             return "*No malicious events were generated.*\n"
 
-        # Sort events by time
-        sorted_events = sorted(self.malicious_events, key=lambda e: e["time"])
-
-        # Create table
-        lines = []
-        lines.append("| Timestamp | Actor | System | Event Type | Details |")
-        lines.append("|-----------|-------|--------|------------|---------|")
-
+        sorted_events = sorted(events, key=lambda event: event["time"])
+        lines = [
+            "| Timestamp | Actor | System | Event Type | Details |",
+            "|-----------|-------|--------|------------|---------|",
+        ]
         for event in sorted_events:
             timestamp = event["time"].strftime("%Y-%m-%d %H:%M:%S UTC")
-            actor = event["actor"]
-            system = event["system"]
-            event_type = event["type"].title()
-
-            # Format details based on event type
-            details = self._format_event_details(event)
-
-            lines.append(f"| {timestamp} | {actor} | {system} | {event_type} | {details} |")
-
+            lines.append(
+                f"| {timestamp} | {event['actor']} | {event['system']} | "
+                f"{event['type'].title()} | {self._format_event_details(event)} |"
+            )
         return "\n".join(lines) + "\n"
 
     def _format_event_details(self, event: dict) -> str:
-        """Format event details for timeline table.
-
-        Args:
-            event: Malicious event dict
-
-        Returns:
-            Formatted details string
-        """
         event_type = event["type"]
         skipped_reason = event.get("skipped_reason")
         if skipped_reason:
@@ -274,149 +384,130 @@ class GroundTruthGenerator:
             return f"Skipped ({reason}); no evidence emitted"
 
         if event_type == "logon":
-            source_ip = event.get("source_ip", "N/A")
-            logon_id = event.get("logon_id", "N/A")
-            return f"Network logon from {source_ip} (LogonID: {logon_id})"
-
-        elif event_type == "process":
-            process_name = event.get("process_name", "N/A")
-            pid = event.get("pid", "N/A")
-            # Truncate command line if too long
+            return (
+                f"Network logon from {event.get('source_ip', 'N/A')} "
+                f"(LogonID: {event.get('logon_id', 'N/A')})"
+            )
+        if event_type == "process":
             cmd = event.get("command_line", "")
             if len(cmd) > 50:
                 cmd = cmd[:47] + "..."
-            return f"Process: {process_name} (PID: {pid}) - `{cmd}`"
-
-        elif event_type == "connection":
-            dst_ip = event.get("dst_ip", "N/A")
-            dst_port = event.get("dst_port", "N/A")
-            uid = event.get("uid", "N/A")
-            return f"Connection to {dst_ip}:{dst_port} (UID: {uid})"
-
-        elif event_type == "rdp_session":
-            dst_ip = event.get("dst_ip", "N/A")
-            uid = event.get("uid", "N/A")
-            return f"RDP session to {dst_ip}:3389 (UID: {uid})"
-
-        elif event_type == "ssh_session":
-            dst_ip = event.get("dst_ip", "N/A")
-            uid = event.get("uid", "N/A")
-            return f"SSH session to {dst_ip}:22 (UID: {uid})"
-
-        elif event_type == "service_installed":
-            svc = event.get("service_name", "N/A")
-            path = event.get("service_file_name", "N/A")
-            return f"Service installed: {svc} ({path})"
-
-        elif event_type == "scheduled_task_created":
-            task = event.get("task_name", "N/A")
-            return f"Scheduled task created: {task}"
-
-        elif event_type == "create_remote_thread":
-            target = event.get("target_process", "N/A")
-            return f"Remote thread injection into {target}"
-
-        elif event_type in ("account_created", "account_deleted"):
-            target = event.get("target_username", "N/A")
-            action = "created" if event_type == "account_created" else "deleted"
-            return f"Account {action}: {target}"
-
-        elif event_type == "group_member_added":
-            member = event.get("member_name", "N/A")
-            group = event.get("group_name", "N/A")
-            return f"Added {member} to group {group}"
-
-        elif event_type == "port_scan":
-            target_count = event.get("target_count", "N/A")
-            ports = event.get("ports", [])
-            total = event.get("total_connections", "N/A")
             return (
-                f"Port scan: {target_count} targets, ports {ports}, "
-                f"{total} denied connections + ASA threat detection alert (733100)"
+                f"Process: {event.get('process_name', 'N/A')} "
+                f"(PID: {event.get('pid', 'N/A')}) - `{cmd}`"
             )
-
-        elif event_type == "beacon":
-            dst = event.get("dst_ip", "N/A")
-            port = event.get("dst_port", "N/A")
-            attempts = event.get("attempt_count", "N/A")
-            action = event.get("action", "allow")
-            term = event.get("termination", "N/A")
-            label = "Denied beacon" if action == "deny" else "Beacon"
-            return f"{label} to {dst}:{port} ({attempts} attempts, {term})"
-
-        elif event_type == "dns_query":
-            query = event.get("query", "N/A")
-            qtype = event.get("qtype", "A")
-            rcode = event.get("rcode", "NOERROR")
-            return f"DNS query: {query} ({qtype}, {rcode})"
-
-        elif event_type == "web_scan":
-            dst = event.get("dst_ip", "N/A")
-            port = event.get("dst_port", "N/A")
-            preset = event.get("preset", "custom")
-            requests = event.get("request_count", "N/A")
-            return f"Web scan ({preset}) against {dst}:{port} ({requests} requests)"
-
-        elif event_type == "credential_spray":
-            pattern = event.get("pattern", "spray")
-            accounts = event.get("target_accounts", [])
-            attempts = event.get("attempt_count", "N/A")
-            success = event.get("success_account")
-            result = f"Credential {pattern}: {attempts} attempts against {len(accounts)} accounts"
-            if success:
-                at = event.get("success_at_attempt", "?")
-                result += f" (success: {success} at attempt {at})"
+        if event_type == "connection":
+            return (
+                f"Connection to {event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
+                f"(UID: {event.get('uid', 'N/A')})"
+            )
+        if event_type == "rdp_session":
+            return (
+                f"RDP session to {event.get('dst_ip', 'N/A')}:3389 (UID: {event.get('uid', 'N/A')})"
+            )
+        if event_type == "ssh_session":
+            return (
+                f"SSH session to {event.get('dst_ip', 'N/A')}:22 (UID: {event.get('uid', 'N/A')})"
+            )
+        if event_type == "service_installed":
+            return f"Service installed: {event.get('service_name', 'N/A')} ({event.get('service_file_name', 'N/A')})"
+        if event_type == "scheduled_task_created":
+            return f"Scheduled task created: {event.get('task_name', 'N/A')}"
+        if event_type == "create_remote_thread":
+            return f"Remote thread injection into {event.get('target_process', 'N/A')}"
+        if event_type in ("account_created", "account_deleted"):
+            action = "created" if event_type == "account_created" else "deleted"
+            return f"Account {action}: {event.get('target_username', 'N/A')}"
+        if event_type == "group_member_added":
+            return (
+                f"Added {event.get('member_name', 'N/A')} to group {event.get('group_name', 'N/A')}"
+            )
+        if event_type == "port_scan":
+            return (
+                f"Port scan: {event.get('target_count', 'N/A')} targets, ports {event.get('ports', [])}, "
+                f"{event.get('total_connections', 'N/A')} denied connections + ASA threat detection alert (733100)"
+            )
+        if event_type == "beacon":
+            label = "Denied beacon" if event.get("action", "allow") == "deny" else "Beacon"
+            return (
+                f"{label} to {event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
+                f"({event.get('attempt_count', 'N/A')} attempts, {event.get('termination', 'N/A')})"
+            )
+        if event_type == "dns_query":
+            return (
+                f"DNS query: {event.get('query', 'N/A')} "
+                f"({event.get('qtype', 'A')}, {event.get('rcode', 'NOERROR')})"
+            )
+        if event_type == "web_scan":
+            return (
+                f"Web scan ({event.get('preset', 'custom')}) against "
+                f"{event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
+                f"({event.get('request_count', 'N/A')} requests)"
+            )
+        if event_type == "credential_spray":
+            result = (
+                f"Credential {event.get('pattern', 'spray')}: {event.get('attempt_count', 'N/A')} "
+                f"attempts against {len(event.get('target_accounts', []))} accounts"
+            )
+            if event.get("success_account"):
+                result += (
+                    f" (success: {event['success_account']} at attempt "
+                    f"{event.get('success_at_attempt', '?')})"
+                )
             return result
-
-        elif event_type == "dga_queries":
-            count = event.get("total_queries", "N/A")
-            nxd = event.get("nxdomain_count", "N/A")
-            tld = event.get("tld", ".com")
+        if event_type == "dga_queries":
             sample = event.get("domain_sample", [])
-            return f"DGA queries: {count} total ({nxd} NXDOMAIN, TLD: {tld}, sample: {sample[:3]})"
-
-        elif event_type == "dns_tunnel":
-            domain = event.get("base_domain", "N/A")
-            enc = event.get("encoding", "hex")
-            queries = event.get("total_queries", "N/A")
-            exfil = event.get("bytes_exfiltrated", 0)
-            return f"DNS tunnel via {domain} ({enc}, {queries} queries, {exfil} bytes exfiltrated)"
-
-        elif event_type == "explicit_credentials":
-            target = event.get("target_username", "N/A")
-            server = event.get("target_server", "N/A")
-            return f"Explicit credentials: RunAs {target} on {server}"
-
-        elif event_type in ("workstation_lock", "workstation_unlock"):
+            return (
+                f"DGA queries: {event.get('total_queries', 'N/A')} total "
+                f"({event.get('nxdomain_count', 'N/A')} NXDOMAIN, TLD: {event.get('tld', '.com')}, "
+                f"sample: {sample[:3]})"
+            )
+        if event_type == "dns_tunnel":
+            return (
+                f"DNS tunnel via {event.get('base_domain', 'N/A')} "
+                f"({event.get('encoding', 'hex')}, {event.get('total_queries', 'N/A')} queries, "
+                f"{event.get('bytes_exfiltrated', 0)} bytes exfiltrated)"
+            )
+        if event_type == "explicit_credentials":
+            return (
+                f"Explicit credentials: RunAs {event.get('target_username', 'N/A')} "
+                f"on {event.get('target_server', 'N/A')}"
+            )
+        if event_type in ("workstation_lock", "workstation_unlock"):
             action = "Locked" if event_type == "workstation_lock" else "Unlocked"
             return f"Workstation {action}"
-
-        elif event_type == "spillage":
-            surface = event.get("surface", "N/A")
-            family = event.get("family") or "literal"
+        if event_type == "spillage":
             value = event.get("value", "")
-            digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
             return (
-                f"Spillage ({family}) to {surface}: {_redact_secret(value)} (sha256:{digest[:12]})"
+                f"Spillage ({event.get('family') or 'literal'}) to {event.get('surface', 'N/A')}: "
+                f"{_redact_secret(value)} (sha256:{digest[:12]})"
             )
+        return event.get("activity", "N/A")
 
-        else:
-            return event.get("activity", "N/A")
-
-    def _include_source_evidence_status(self) -> bool:
-        """Return True when ground truth should show source observation status."""
-        if not self.source_evidence_status:
+    def _include_source_evidence_status(self, document: GroundTruthDocument | None = None) -> bool:
+        source_evidence_status = (
+            self.source_evidence_status if document is None else document.source_evidence_status
+        )
+        observation_profile = (
+            self.scenario.observation_profile if document is None else document.observation_profile
+        )
+        if not source_evidence_status:
             return False
-        if self.scenario.observation_profile != "complete":
+        if observation_profile != "complete":
             return True
-        for source_status in self.source_evidence_status.values():
+        for source_status in source_evidence_status.values():
             for counts in source_status.values():
                 if any(status != "visible" and count for status, count in counts.items()):
                     return True
         return False
 
-    def _create_source_evidence_status_section(self) -> str:
-        """Create a compact per-storyline source evidence status table."""
+    def _create_source_evidence_status_section(
+        self, document: GroundTruthDocument | None = None
+    ) -> str:
+        source_evidence_status = (
+            self.source_evidence_status if document is None else document.source_evidence_status
+        )
         lines = [
             "Canonical ground truth remains authoritative. Source rows may be "
             "`visible`, `delayed`, `dropped`, `filtered`, or `out_of_window` depending on "
@@ -424,7 +515,7 @@ class GroundTruthGenerator:
             "| Storyline ID | Source | Status Counts |",
             "|--------------|--------|---------------|",
         ]
-        for cluster_id, source_status in sorted(self.source_evidence_status.items()):
+        for cluster_id, source_status in sorted(source_evidence_status.items()):
             for source, counts in sorted(source_status.items()):
                 rendered_counts = ", ".join(
                     f"{status}: {count}" for status, count in sorted(counts.items()) if count
@@ -433,37 +524,18 @@ class GroundTruthGenerator:
                     lines.append(f"| {cluster_id} | {source} | {rendered_counts} |")
         return "\n".join(lines) + "\n"
 
-    def _extract_iocs(self) -> dict[str, set]:
-        """Extract indicators of compromise from malicious events.
-
-        Extracts IOCs organized by category:
-        - network: IPs, domains, ports
-        - processes: Process names, command lines
-        - users: Usernames, accounts
-        - files: File paths (if available)
-
-        Returns:
-            Dict mapping IOC category to set of IOC strings
-        """
-        iocs = {
-            "network": set(),
-            "processes": set(),
-            "users": set(),
-            "files": set(),
-        }
-
-        for event in self.malicious_events:
+    def _extract_iocs(self, document: GroundTruthDocument | None = None) -> dict[str, set]:
+        iocs = {"network": set(), "processes": set(), "users": set(), "files": set()}
+        events = (
+            self.malicious_events if document is None else self._storyline_event_dicts(document)
+        )
+        for event in events:
             if event.get("skipped_reason"):
                 continue
-
-            # Extract actor (user)
             iocs["users"].add(event["actor"])
-
-            # Extract based on event type
             if event["type"] == "logon":
                 if "source_ip" in event:
                     iocs["network"].add(f"{event['source_ip']} (Attacker IP)")
-
             elif event["type"] == "process":
                 if "process_name" in event:
                     iocs["processes"].add(event["process_name"])
@@ -471,12 +543,10 @@ class GroundTruthGenerator:
                     iocs["processes"].add(f"`{event['command_line']}`")
                 if "output_file" in event:
                     iocs["files"].add(event["output_file"])
-
             elif event["type"] == "connection":
                 if "dst_ip" in event:
                     dst_ip = event["dst_ip"]
                     dst_port = event.get("dst_port", "")
-                    # Classify destination: internal server vs external C2
                     try:
                         is_internal = ipaddress.ip_address(dst_ip).is_private
                     except (ValueError, TypeError):
@@ -485,11 +555,9 @@ class GroundTruthGenerator:
                     iocs["network"].add(
                         f"{dst_ip}:{dst_port} ({label})" if dst_port else f"{dst_ip} ({label})"
                     )
-                    # Include Zeek UID if available and not filtered
                     uid = event.get("uid", "")
                     if uid and uid != "(filtered by sensor placement)":
                         iocs["network"].add(f"Zeek UID: {uid}")
-
             elif event["type"] in ("rdp_session", "ssh_session"):
                 dst_ip = event.get("dst_ip", "")
                 dst_port = event.get("dst_port", "")
@@ -498,13 +566,11 @@ class GroundTruthGenerator:
                 uid = event.get("uid", "")
                 if uid and uid != "(filtered by sensor placement)":
                     iocs["network"].add(f"Zeek UID: {uid}")
-
             elif event["type"] == "service_installed":
                 if "service_file_name" in event:
                     iocs["files"].add(event["service_file_name"])
                 if "service_name" in event:
                     iocs["processes"].add(f"Service: {event['service_name']}")
-
             elif event["type"] == "scheduled_task_created":
                 if "task_name" in event:
                     iocs["processes"].add(f"Scheduled Task: {event['task_name']}")
@@ -514,129 +580,84 @@ class GroundTruthGenerator:
                     cmd_match = re.search(r"<Command>(.+?)</Command>", event["task_content"])
                     if cmd_match:
                         iocs["files"].add(cmd_match.group(1))
-
             elif event["type"] == "create_remote_thread":
                 if "target_process" in event:
                     iocs["processes"].add(f"Injection Target: {event['target_process']}")
-
             elif event["type"] in ("account_created", "account_deleted"):
                 if "target_username" in event:
                     iocs["users"].add(event["target_username"])
-
             elif event["type"] == "group_member_added":
                 if "member_name" in event:
                     iocs["users"].add(event["member_name"])
                 if "group_name" in event:
                     iocs["users"].add(f"Group: {event['group_name']}")
-
             elif event["type"] == "port_scan":
                 for port in event.get("ports", []):
                     iocs["network"].add(f"Port {port} (scan target)")
-
             elif event["type"] == "beacon":
                 dst_ip = event.get("dst_ip", "")
                 dst_port = event.get("dst_port", "")
-                action = event.get("action", "allow")
-                label = "Denied Beacon" if action == "deny" else "Beacon"
+                label = "Denied Beacon" if event.get("action", "allow") == "deny" else "Beacon"
                 if dst_ip:
                     iocs["network"].add(f"{dst_ip}:{dst_port} ({label} Target)")
-
             elif event["type"] == "dns_query":
-                query = event.get("query", "")
-                if query:
-                    iocs["network"].add(f"{query} (Malicious DNS Query)")
-
+                if event.get("query"):
+                    iocs["network"].add(f"{event['query']} (Malicious DNS Query)")
             elif event["type"] == "web_scan":
-                dst_ip = event.get("dst_ip", "")
-                dst_port = event.get("dst_port", "")
-                if dst_ip:
-                    iocs["network"].add(f"{dst_ip}:{dst_port} (Web Scan Target)")
-
+                if event.get("dst_ip"):
+                    iocs["network"].add(
+                        f"{event['dst_ip']}:{event.get('dst_port', '')} (Web Scan Target)"
+                    )
             elif event["type"] == "credential_spray":
                 for account in event.get("target_accounts", []):
                     iocs["users"].add(f"{account} (Spray Target)")
-
             elif event["type"] == "dga_queries":
                 for domain in event.get("domain_sample", []):
                     iocs["network"].add(f"{domain} (DGA Domain)")
-
             elif event["type"] == "dns_tunnel":
-                base = event.get("base_domain", "")
-                if base:
-                    iocs["network"].add(f"{base} (DNS Tunnel Endpoint)")
-
+                if event.get("base_domain"):
+                    iocs["network"].add(f"{event['base_domain']} (DNS Tunnel Endpoint)")
             elif event["type"] == "explicit_credentials":
-                target = event.get("target_username", "")
-                if target:
-                    iocs["users"].add(f"{target} (Explicit Credential Target)")
+                if event.get("target_username"):
+                    iocs["users"].add(f"{event['target_username']} (Explicit Credential Target)")
+        return {category: values for category, values in iocs.items() if values}
 
-        # Remove empty categories
-        iocs = {category: values for category, values in iocs.items() if values}
-
-        return iocs
-
-    def _create_red_herring_section(self) -> str:
-        """Create documentation of red herring events with explanations.
-
-        Returns:
-            Formatted red herring section (Markdown)
-        """
-        sorted_events = sorted(self.red_herring_events, key=lambda e: e["time"])
-
-        lines = []
-        lines.append("| Timestamp | Actor | System | Activity | Why It's Benign |")
-        lines.append("|-----------|-------|--------|----------|-----------------|")
-
+    def _create_red_herring_section(self, document: GroundTruthDocument | None = None) -> str:
+        events = (
+            self.red_herring_events if document is None else self._red_herring_event_dicts(document)
+        )
+        sorted_events = sorted(events, key=lambda event: event["time"])
+        lines = [
+            "| Timestamp | Actor | System | Activity | Why It's Benign |",
+            "|-----------|-------|--------|----------|-----------------|",
+        ]
         for event in sorted_events:
             timestamp = event["time"].strftime("%Y-%m-%d %H:%M:%S UTC")
-            actor = event["actor"]
-            system = event["system"]
-            activity = event.get("activity", "N/A")
-            explanation = event.get("explanation", "N/A")
-            lines.append(f"| {timestamp} | {actor} | {system} | {activity} | {explanation} |")
-
+            lines.append(
+                f"| {timestamp} | {event['actor']} | {event['system']} | {event.get('activity', 'N/A')} | "
+                f"{event.get('explanation', 'N/A')} |"
+            )
         return "\n".join(lines) + "\n"
 
     def _format_iocs(self, iocs: dict[str, set]) -> str:
-        """Format IOCs into Markdown sections.
-
-        Args:
-            iocs: Dict mapping IOC category to set of IOC strings
-
-        Returns:
-            Formatted IOC sections (Markdown)
-        """
         if not iocs or not any(values for values in iocs.values()):
             return "*No IOCs extracted.*\n"
 
-        sections = []
-
-        # Network IOCs
+        sections: list[str] = []
         if iocs.get("network"):
             sections.append("### Network IOCs\n")
-            for ioc in sorted(iocs["network"]):
-                sections.append(f"- {ioc}")
+            sections.extend(f"- {ioc}" for ioc in sorted(iocs["network"]))
             sections.append("")
-
-        # Process IOCs
         if iocs.get("processes"):
             sections.append("### Process IOCs\n")
-            for ioc in sorted(iocs["processes"]):
-                sections.append(f"- {ioc}")
+            sections.extend(f"- {ioc}" for ioc in sorted(iocs["processes"]))
             sections.append("")
-
-        # User IOCs
         if iocs.get("users"):
             sections.append("### User IOCs\n")
-            for ioc in sorted(iocs["users"]):
-                sections.append(f"- {ioc} (compromised account)")
+            sections.extend(f"- {ioc} (compromised account)" for ioc in sorted(iocs["users"]))
             sections.append("")
-
-        # File IOCs
         if iocs.get("files"):
             sections.append("### File IOCs\n")
-            for ioc in sorted(iocs["files"]):
-                sections.append(f"- {ioc}")
+            sections.extend(f"- {ioc}" for ioc in sorted(iocs["files"]))
             sections.append("")
-
         return "\n".join(sections)

@@ -194,7 +194,7 @@ The `eforge eval` scoring rules are also YAML-based and can be tuned per-project
 All eval config files live in `src/evidenceforge/config/evaluation/`. They are **not** overlaid from `.eforge/config/` — edit them in-place if you want project-specific tuning, or copy the package files into your project and set the `EFORGE_EVAL_CONFIG_DIR` environment variable to point to your copies.
 
 Generated scenario directories may also include `OBSERVATION_MANIFEST.json` beside
-`GROUND_TRUTH.md`. `eforge eval` loads this sidecar automatically when present. For
+`GROUND_TRUTH.json` and `GROUND_TRUTH.md`. `eforge eval` loads this manifest automatically when present. For
 non-`complete` observation profiles, causality coverage metrics use the manifest to exclude
 source evidence that was intentionally `dropped`, `filtered`, or `out_of_window`, while still
 failing visible contradictions, parse errors, value mismatches, and missing evidence that the

@@ -17,8 +17,9 @@ scenarios/<slug>/
   scenario.yaml                            # Scenario authored by /eforge scenario
   ENVIRONMENT.md                           # Student-facing environment description
   artifacts/                               # Optional authored collateral, e.g. phishing .eml
-  GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
-  OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
+  GROUND_TRUTH.json                        # Canonical machine-readable ground-truth document
+  GROUND_TRUTH.md                          # Human-readable answer key rendered from the JSON document
+  OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   OUTPUT_TARGET.txt                        # "default" or "sof-elk"; missing legacy marker means default
   data/                                    # Generated logs for every output target
     <hostname.domain>/                     # Per-host directories (FQDN)

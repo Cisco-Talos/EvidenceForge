@@ -151,6 +151,116 @@ class TestGroundTruthGenerator:
         assert output_path.is_symlink()
         assert not outside_target.exists()
 
+    def test_build_document_includes_non_spillage_storyline_details(
+        self, minimal_scenario, malicious_events
+    ):
+        """Non-spillage events should appear as machine-readable timeline records."""
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+
+        document = generator.build_document()
+        records = [event.model_dump(mode="python", exclude_none=True) for event in document.events]
+
+        assert [record["kind"] for record in records] == ["process", "connection"]
+        assert records[0]["ground_truth_section"] == "storyline"
+        assert records[0]["emitted"] is True
+        assert records[0]["attributes"] == {
+            "command_line": "powershell.exe -enc <base64_encoded_command>",
+            "pid": 1234,
+            "process_name": "powershell.exe",
+        }
+        assert records[1]["attributes"] == {
+            "dst_ip": "159.65.43.201",
+            "dst_port": 443,
+            "uid": "C12345",
+        }
+
+    def test_build_document_includes_red_herring_explanation(
+        self, minimal_scenario, malicious_events
+    ):
+        """Red herring records should preserve their explanation and section."""
+        red_herring = {
+            "time": datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
+            "actor": "victim",
+            "system": "TEST-01",
+            "activity": "Legitimate admin script",
+            "type": "process",
+            "storyline_cluster_id": "rh-1",
+            "process_name": "powershell.exe",
+            "command_line": "powershell.exe -File rotate-certs.ps1",
+            "explanation": "Normal quarterly certificate rotation.",
+        }
+        generator = GroundTruthGenerator(
+            minimal_scenario,
+            malicious_events,
+            red_herring_events=[red_herring],
+        )
+
+        document = generator.build_document()
+        record = next(
+            event.model_dump(mode="python", exclude_none=True)
+            for event in document.events
+            if event.storyline_id == "rh-1"
+        )
+
+        assert record["ground_truth_section"] == "red_herring"
+        assert record["explanation"] == "Normal quarterly certificate rotation."
+        assert record["attributes"] == {
+            "command_line": "powershell.exe -File rotate-certs.ps1",
+            "process_name": "powershell.exe",
+        }
+
+    def test_build_document_honestly_marks_skipped_events(self, minimal_scenario, malicious_events):
+        """Skipped events should remain labeled but marked as not emitted."""
+        skipped_spill = {
+            "time": datetime(2024, 1, 15, 11, 5, 0, tzinfo=UTC),
+            "actor": "attacker",
+            "system": "TEST-01",
+            "activity": "Missed shell spill",
+            "type": "spillage",
+            "storyline_cluster_id": "spill-skip",
+            "surface": "shell_history",
+            "family": "aws_iam",
+            "expected_sources": ["bash_history"],
+            "skipped_reason": "timestamp moved outside scenario window",
+        }
+        generator = GroundTruthGenerator(minimal_scenario, [skipped_spill])
+
+        document = generator.build_document()
+        records = [event.model_dump(mode="json", exclude_none=True) for event in document.events]
+
+        assert records == [
+            {
+                "record_id": "spill-skip#0",
+                "kind": "spillage",
+                "storyline_id": "spill-skip",
+                "time": "2024-01-15T11:05:00Z",
+                "actor": "attacker",
+                "system": "TEST-01",
+                "activity": "Missed shell spill",
+                "ground_truth_section": "storyline",
+                "emitted": False,
+                "skipped_reason": "timestamp moved outside scenario window",
+                "attributes": {
+                    "surface": "shell_history",
+                    "family": "aws_iam",
+                    "expected_sources": ["bash_history"],
+                },
+            }
+        ]
+
+    def test_write_json_creates_canonical_document(
+        self, minimal_scenario, malicious_events, tmp_path
+    ):
+        """write_json() should create GROUND_TRUTH.json."""
+        output_path = tmp_path / "GROUND_TRUTH.json"
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+
+        document = generator.write_json(output_path)
+
+        assert output_path.exists()
+        assert output_path.stat().st_size > 0
+        assert document.scenario_name == "test-attack"
+
     def test_generate_includes_header(self, minimal_scenario, malicious_events, tmp_path):
         """Generated file should include header with scenario name and description."""
         output_path = tmp_path / "GROUND_TRUTH.md"
@@ -570,6 +680,7 @@ class TestGroundTruthGenerator:
                 "actor": "admin.jones",
                 "system": "SRV-DB-01",
                 "activity": "PowerShell maintenance script",
+                "type": "process",
                 "explanation": "Scheduled weekly database maintenance",
             },
         ]
@@ -591,6 +702,7 @@ class TestGroundTruthGenerator:
                 "actor": "admin.jones",
                 "system": "SRV-DB-01",
                 "activity": "PowerShell maintenance script",
+                "type": "process",
                 "explanation": "Scheduled weekly database maintenance",
             },
             {
@@ -598,6 +710,7 @@ class TestGroundTruthGenerator:
                 "actor": "svc_backup",
                 "system": "SRV-FILE-01",
                 "activity": "Large file transfer to cloud",
+                "type": "connection",
                 "explanation": "Nightly backup to Azure Blob",
             },
         ]
@@ -630,6 +743,7 @@ class TestGroundTruthGenerator:
                 "actor": "admin.jones",
                 "system": "SRV-DB-01",
                 "activity": "Admin PowerShell",
+                "type": "process",
                 "explanation": "Maintenance",
             },
         ]

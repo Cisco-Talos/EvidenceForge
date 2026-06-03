@@ -14,8 +14,9 @@ together.
 
 ```
 output/
-  GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
-  OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
+  GROUND_TRUTH.json                        # Canonical machine-readable ground-truth document
+  GROUND_TRUTH.md                          # Human-readable answer key rendered from the JSON document
+  OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   OUTPUT_TARGET.txt                        # "default" or "sof-elk"; missing legacy marker means default
   ENVIRONMENT.md                           # Optional student-facing environment description
   data/                                    # Generated logs for every output target
