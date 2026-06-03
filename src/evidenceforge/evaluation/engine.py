@@ -157,59 +157,38 @@ class EvaluationEngine:
         self.output_target = read_output_target_marker(output_dir)
 
     def _load_spillage_ground_truth(self) -> dict[str, dict]:
-        """Load spillage labels from GROUND_TRUTH.jsonl, keyed by storyline id.
+        """Load emitted spillage labels from GROUND_TRUTH.json, keyed by storyline id.
 
         Returns ``{storyline_id: {"values": [rendered, ...], "time": datetime}}``.
         Lets the causality pillar verify a spilled credential landed in the logs
         without re-running synthesis, and anchor matching/timing to the *actual*
         emitted time (bash dwell scheduling can shift it past the storyline time).
         """
-        import json
-        from datetime import datetime
-
-        from evidenceforge.generation.ground_truth import GROUND_TRUTH_JSONL_FILENAME
+        from evidenceforge.events.ground_truth import load_ground_truth_document
 
         result: dict[str, dict] = {}
-        for base in (self.output_dir, self.output_dir.parent):
-            path = base / GROUND_TRUTH_JSONL_FILENAME
-            if not path.exists():
+        document = load_ground_truth_document(self.output_dir, self.scenario)
+        if document is None:
+            return result
+        for rec in document.events:
+            if rec.kind != "spillage" or not rec.emitted:
                 continue
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if rec.get("kind") != "spillage":
-                    continue
-                sid = rec.get("storyline_id")
-                value = rec.get("rendered_value") or rec.get("value")
-                if not (sid and value):
-                    continue
-                entry = result.setdefault(sid, {"values": [], "records": [], "time": None})
-                entry["values"].append(value)
-                # Keep one entry PER record with its expected source format(s), so
-                # the presence scorer can require each labeled credential to land in
-                # a DISTINCT trace of its own surface — N identical values need N
-                # landings, and a value spilled to surface A is not credited by a
-                # trace in surface B (the flat `values` list loses both bindings).
-                entry["records"].append(
-                    {"value": value, "expected_sources": list(rec.get("expected_sources") or ())}
-                )
-                # Web surfaces land on a destination server's access log; remember
-                # it so the causality lookup searches that host's records.
-                if rec.get("target_system") and not entry.get("target_system"):
-                    entry["target_system"] = rec["target_system"]
-                if entry["time"] is None and rec.get("time"):
-                    try:
-                        entry["time"] = datetime.strptime(
-                            rec["time"], "%Y-%m-%dT%H:%M:%SZ"
-                        ).replace(tzinfo=UTC)
-                    except ValueError:
-                        pass
-            break
+            sid = rec.storyline_id
+            value = rec.attributes.rendered_value or rec.attributes.value
+            if not (sid and value):
+                continue
+            entry = result.setdefault(sid, {"values": [], "records": [], "time": None})
+            entry["values"].append(value)
+            entry["records"].append(
+                {
+                    "value": value,
+                    "expected_sources": list(rec.attributes.expected_sources or ()),
+                }
+            )
+            if rec.attributes.target_system and not entry.get("target_system"):
+                entry["target_system"] = rec.attributes.target_system
+            if entry["time"] is None:
+                entry["time"] = rec.time.astimezone(UTC)
         return result
 
     def run(self) -> QualityReport:

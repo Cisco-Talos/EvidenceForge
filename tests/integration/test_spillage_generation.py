@@ -48,13 +48,37 @@ def _all_data_text(out: Path) -> str:
     return "\n".join(p.read_text(errors="replace") for p in _data_files(out))
 
 
+def _document(out: Path) -> dict:
+    return json.loads((out / "GROUND_TRUTH.json").read_text())
+
+
+def _flatten_event(event: dict, *, schema_version: int) -> dict:
+    record = {k: v for k, v in event.items() if k != "attributes"}
+    record["type"] = record["kind"]
+    record["schema_version"] = schema_version
+    record.update(event.get("attributes", {}))
+    return record
+
+
 def _records(out: Path) -> list[dict]:
-    return [json.loads(line) for line in (out / "GROUND_TRUTH.jsonl").read_text().splitlines()]
+    document = _document(out)
+    return [
+        _flatten_event(event, schema_version=document["schema_version"])
+        for event in document["events"]
+    ]
 
 
 def _records_or_empty(out: Path) -> list[dict]:
-    p = out / "GROUND_TRUTH.jsonl"
+    p = out / "GROUND_TRUTH.json"
     return _records(out) if p.exists() else []
+
+
+def _spill_records(out: Path) -> list[dict]:
+    return [record for record in _records(out) if record.get("kind") == "spillage"]
+
+
+def _spill_records_or_empty(out: Path) -> list[dict]:
+    return [record for record in _records_or_empty(out) if record.get("kind") == "spillage"]
 
 
 def _iso(epoch: int) -> str:
@@ -159,11 +183,12 @@ class TestSpillageGeneration:
     def test_generation_is_deterministic(self, spillage_scenario, tmp_path):
         a = _generate(spillage_scenario, tmp_path / "a")
         b = _generate(spillage_scenario, tmp_path / "b")
-        assert (a / "GROUND_TRUTH.jsonl").read_text() == (b / "GROUND_TRUTH.jsonl").read_text()
+        assert (a / "GROUND_TRUTH.json").read_text() == (b / "GROUND_TRUTH.json").read_text()
 
     def test_window_edge_shell_spill_is_not_a_phantom_label(self, tmp_path):
         # A shell_history spill whose dwell-shifted time lands past the scenario
-        # window emits no bash line; it must NOT be labeled in ground truth.
+        # window emits no bash line; the canonical document must mark it as not emitted rather
+        # than claiming the value landed on disk.
         scenario = dict(_linux_scenario([]))
         scenario["time_window"] = {"start": "2024-03-18T14:00:00Z", "duration": "1h"}
         scenario["storyline"] = [
@@ -178,14 +203,19 @@ class TestSpillageGeneration:
         ]
         out = _generate(scenario, tmp_path / "out")
         corpus = _all_data_text(out)
-        # No phantom: every labeled credential is actually present on disk.
-        for rec in _records_or_empty(out):
-            assert rec["rendered_value"] in corpus, f"phantom label: {rec['record_id']}"
+        recs = _spill_records_or_empty(out)
+        assert len(recs) == 1
+        assert recs[0]["kind"] == "spillage"
+        # No phantom: skipped labels are explicit, and emitted labels still land on disk.
+        if recs[0]["emitted"]:
+            assert recs[0]["rendered_value"] in corpus, f"phantom label: {recs[0]['record_id']}"
+        else:
+            assert recs[0]["skipped_reason"]
+            assert "rendered_value" not in recs[0]
 
-    def test_overwrite_without_spills_removes_stale_sidecar(self, tmp_path):
-        # The GROUND_TRUTH.jsonl sidecar participates in the CLI overwrite swap: a
-        # run that produces no spills must not leave a stale sidecar from a prior
-        # spillage run in the same output directory.
+    def test_overwrite_without_spills_replaces_canonical_ground_truth(self, tmp_path):
+        # The canonical GROUND_TRUTH.json file participates in the CLI overwrite
+        # swap and remains present even for baseline-only runs.
         import yaml
 
         out = tmp_path / "out"
@@ -202,14 +232,14 @@ class TestSpillageGeneration:
         p1.write_text(yaml.safe_dump(spill))
         r1 = runner.invoke(app, ["generate", str(p1), "--output", str(out), "--force"])
         assert r1.exit_code == 0, r1.output
-        assert (out / "GROUND_TRUTH.jsonl").exists()  # sidecar written for the spill run
+        assert (out / "GROUND_TRUTH.json").exists()  # canonical document written for the spill run
 
-        nospill = _linux_scenario([])  # empty storyline — no spillage, no sidecar
+        nospill = _linux_scenario([])  # empty storyline — canonical document still exists
         p2 = tmp_path / "nospill.yaml"
         p2.write_text(yaml.safe_dump(nospill))
         r2 = runner.invoke(app, ["generate", str(p2), "--output", str(out), "--force"])
         assert r2.exit_code == 0, r2.output
-        assert not (out / "GROUND_TRUTH.jsonl").exists()  # stale sidecar removed by the swap
+        assert (out / "GROUND_TRUTH.json").exists()
 
 
 class TestSpillageEval:
@@ -221,17 +251,17 @@ class TestSpillageEval:
             (c.name, c.actual) for c in hard if not c.passed
         ]
 
-    def test_eval_reads_sidecar_not_synthesis(self, spillage_scenario, tmp_path):
-        # Eval must rely on GROUND_TRUTH.jsonl; with it removed, spillage cannot be matched.
+    def test_eval_reads_canonical_ground_truth_not_synthesis(self, spillage_scenario, tmp_path):
+        # Eval must rely on GROUND_TRUTH.json; with it removed, spillage cannot be matched.
         out = _generate(spillage_scenario, tmp_path / "out")
-        (out / "GROUND_TRUTH.jsonl").unlink()
+        (out / "GROUND_TRUTH.json").unlink()
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**spillage_scenario)).run()
         ep = next(
             (s for p in report.pillars for s in p.sub_scores if s.key == "event_presence"),
             None,
         )
-        assert ep is not None and ep.score < 85  # cannot find traces without the sidecar
-        assert "sidecar" in ep.details.lower()  # and the 0 is explained, not mysterious
+        assert ep is not None and ep.score < 85  # cannot find traces without the canonical document
+        assert "ground_truth.json" in ep.details.lower()  # and the 0 is explained, not mysterious
 
 
 class TestSpillageAccuracy:
@@ -510,7 +540,7 @@ class TestSpillageAccuracy:
             ],
         }
         out = _generate(scenario, tmp_path / "out")
-        recs = [r for r in _records(out) if r["surface"] == "process_command_line"]
+        recs = [r for r in _spill_records(out) if r["surface"] == "process_command_line"]
         assert len(recs) == len(spills)
         ecar = "\n".join(p.read_text() for p in out.rglob("*") if "ecar" in p.name.lower())
         missing = [r["record_id"] for r in recs if r["rendered_value"] not in ecar]
@@ -607,7 +637,9 @@ class TestSpillageAccuracy:
         }
         out = _generate(scenario, tmp_path / "out")
         # No http spillage record is written (both filtered out) — no phantom label…
-        assert [r for r in _records_or_empty(out) if r["surface"].startswith("http")] == []
+        http_recs = [r for r in _spill_records_or_empty(out) if r["surface"].startswith("http")]
+        assert http_recs and all(rec["emitted"] is False for rec in http_recs)
+        assert all("rendered_value" not in rec for rec in http_recs)
         # …and the credential is genuinely absent from every data file.
         assert "EvidenceForgeFake" not in _all_data_text(out)
 
@@ -634,7 +666,7 @@ class TestSpillageAccuracy:
 
     def test_spillage_traces_despite_dwell_drift_beyond_tolerance(self):
         # In a busy scenario, bash dwell scheduling can shift a spill well past the
-        # storyline time (>120s match tolerance). The eval anchors to the sidecar's
+        # storyline time (>120s match tolerance). The eval anchors to the canonical document's
         # emitted time, so the credential is still found. Regression for a realistic
         # multi-event dataset where the storyline time alone missed it.
         from evidenceforge.evaluation.context import EvaluationContext

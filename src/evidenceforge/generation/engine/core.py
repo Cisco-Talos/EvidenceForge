@@ -35,14 +35,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
-from evidenceforge.generation.ground_truth import (
-    GROUND_TRUTH_JSONL_FILENAME,
-    GroundTruthGenerator,
-)
+from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
@@ -135,7 +133,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         2. Generate baseline activity (hour-by-hour iteration)
         3. Execute storyline events (if present)
         4. Finalize and close emitters
-        5. Generate GROUND_TRUTH.md and OBSERVATION_MANIFEST.json sidecars
+        5. Generate ground-truth reports and the observation manifest
         """
         logger.info(f"Starting generation for scenario: {self.scenario.name}")
 
@@ -201,7 +199,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._finalize()
             self._report_progress("phase_end", {"phase": "finalize"})
 
-        # Phase 5: Generate sidecars for every successful run. Baseline-only
+        # Phase 5: Generate ground-truth reports for every successful run. Baseline-only
         # datasets still need an empty GROUND_TRUTH.md so CLI overwrite swaps
         # can keep data and metadata as a matched pair.
         logger.info(
@@ -487,7 +485,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         logger.info("All emitters closed")
 
     def _generate_ground_truth(self) -> None:
-        """Generate GROUND_TRUTH.md and observation manifest sidecars."""
+        """Generate GROUND_TRUTH.json, derived GROUND_TRUTH.md, and the observation manifest."""
         from evidenceforge.events.observation_manifest import (
             OBSERVATION_MANIFEST_FILENAME,
             write_observation_manifest,
@@ -504,8 +502,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             source_evidence_status=source_evidence_status,
         )
 
-        generator.generate(output_path)
-        generator.write_jsonl(self.ground_truth_dir / GROUND_TRUTH_JSONL_FILENAME)
+        document = generator.build_document()
+        generator.write_json(self.ground_truth_dir / GROUND_TRUTH_JSON_FILENAME, document)
+        generator.generate(output_path, document)
         write_observation_manifest(
             self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
             self.scenario,

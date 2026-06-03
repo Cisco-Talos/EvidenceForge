@@ -1,8 +1,8 @@
 # Spillage event type
 
 The `spillage` event type emits a **synthetic** credential/secret into a semantic
-exposure *surface* of the generated logs, and records it in a machine-readable
-ground-truth sidecar. It exists so defenders can score a log scrubber / DLP /
+exposure *surface* of the generated logs, and records it in the canonical
+machine-readable ground-truth document. It exists so defenders can score a log scrubber / DLP /
 pre-ingest masker against labeled positives, train analysts to recognize
 credential disclosure, and validate retroactive log-cleanup.
 
@@ -53,7 +53,7 @@ access-log `client_ip` is always the actor's host and the credential cannot be
 rewritten or scrubbed by an intervening explicit proxy. If multiple `web_server`
 hosts exist, a server other than the actor's own host is preferred, then the
 lexicographically-first (by hostname) is chosen deterministically. The destination server's FQDN is recorded
-in the sidecar's `target_system` (the same name as its `web_access` output
+in the ground-truth record's `target_system` (the same name as its `web_access` output
 directory). `SURFACE_FORMATS` in `generation/spillage.py` is the single extension
 point (renderer + validation + eval all consume it).
 
@@ -146,55 +146,68 @@ At generation time the same guarantee holds dynamically: if a surface cannot
 actually emit (a `shell_history` spill dwell-shifted past the window, or an
 `http_*` request whose actor→web-server path no sensor observes, so the
 connection is filtered out), the event is recorded as `skipped` and **excluded
-from the sidecar** rather than labeled — `GROUND_TRUTH.md` notes it as "Skipped
+from the canonical document** rather than mislabeled as landed evidence — `GROUND_TRUTH.md` notes it as "Skipped
 (not emitted)".
 
 ## Ground truth
 
 Each spillage event is recorded in two complementary places: **full
-machine-readable labels** live in the `GROUND_TRUTH.jsonl` sidecar, and a
-**redacted human-readable summary** (preview + SHA-256, never the full secret)
+machine-readable labels** live in the canonical `GROUND_TRUTH.json` document, and
+a **redacted human-readable summary** (preview + SHA-256, never the full secret)
 lives in `GROUND_TRUTH.md`.
 
-`GROUND_TRUTH.jsonl` is a general, schema-versioned sidecar (`schema_version` +
-`kind`) designed to grow additional ground-truth record kinds over time. In v1 it
-contains records for **spillage labels only** (`kind: "spillage"`) — it is not yet
-a complete machine-readable mirror of everything in `GROUND_TRUTH.md`. Each
-spillage event appends one record:
+`GROUND_TRUTH.json` is the schema-versioned machine-readable companion to
+`GROUND_TRUTH.md`. It stores scenario/report metadata plus an `events` array
+containing one record per tracked storyline or red-herring event. Spillage uses
+the same common event envelope as every other event, with spillage-specific
+scoring fields nested under `attributes`. Each emitted spillage event looks like:
 
 ```json
-{"schema_version":1,"kind":"spillage","record_id":"spill-aws-bash#0",
- "storyline_id":"spill-aws-bash","time":"2024-03-18T14:20:07Z",
- "actor":"nina.kapoor","system":"APP-SRV-01","surface":"shell_history",
- "family":"aws_iam","value":"AKIAIOSFODNN7EXAMPLE","value_sha256":"…",
- "rendered_value":"AKIAIOSFODNN7EXAMPLE","rendered_sha256":"…",
- "expected_sources":["bash_history"]}
+{"schema_version":1,
+ "scenario_name":"spill-demo",
+ "events":[
+   {"record_id":"spill-aws-bash#0","kind":"spillage",
+    "storyline_id":"spill-aws-bash","time":"2024-03-18T14:20:07Z",
+    "actor":"nina.kapoor","system":"APP-SRV-01","activity":"credential spill",
+    "ground_truth_section":"storyline","emitted":true,
+    "attributes":{
+      "surface":"shell_history","family":"aws_iam",
+      "value":"AKIAIOSFODNN7EXAMPLE","value_sha256":"…",
+      "rendered_value":"AKIAIOSFODNN7EXAMPLE","rendered_sha256":"…",
+      "expected_sources":["bash_history"]
+    }}
+ ]}
 ```
 
 Field notes for scoring a scrubber by hand:
 
-- `rendered_value` is the **exact on-disk byte form** (surface-encoded —
+- `attributes.rendered_value` is the **exact on-disk byte form** (surface-encoded —
   shell-quoted for `shell_history`, control-escaped for `syslog_message`). Match
-  **this** against the logs; `value` is the canonical secret (equal for simple
+  **this** against the logs; `attributes.value` is the canonical secret (equal for simple
   values, but they differ when the credential contains shell metacharacters).
 - `time` is the **actual emitted timestamp** of the log line, so records join to
   log lines by timestamp.
 - For the `http_*` surfaces, `value` and `rendered_value` differ when the
-  credential contains URL metacharacters (`rendered_value` is percent-encoded —
-  match that), and the record carries a `target_system` field with the
+  credential contains URL metacharacters (`attributes.rendered_value` is
+  percent-encoded — match that), and the record carries an
+  `attributes.target_system` field with the
   destination web server's **FQDN** (identical to its `web_access` output
   directory); the `client_ip` on that line is the actor's host.
-- Locate a record's file from `expected_sources` + `system` + `actor` (e.g.
+- `emitted=false` plus `skipped_reason` means the storyline intended a spill but
+  the final generated logs did not contain it (for example, dwell-shifted outside
+  the scenario window). Such records remain honest machine-readable ground truth,
+  but they do not carry `attributes.rendered_value` because nothing landed on disk.
+- Locate a record's file from `attributes.expected_sources` + `system` + `actor` (e.g.
   `<system_fqdn>/bash_history/<actor>.bash_history`, `<system_fqdn>/syslog.log`),
-  for `http_*` surfaces directly from `<target_system>/web_access.log`, or simply
-  `grep -rl "<rendered_value>"` the output tree.
+  for `http_*` surfaces directly from `<attributes.target_system>/web_access.log`,
+  or simply `grep -rl "<attributes.rendered_value>"` the output tree.
 - `record_id` (`<storyline_id>#<n>`) uniquely addresses each positive, even when
   the same credential is spilled more than once.
 
 Byte offsets/line numbers are intentionally omitted: emitters stream output, so a
 value's position is not known at ground-truth-writing time.
 
-`eforge eval` reads this sidecar to recognize spillage events: its causality
+`eforge eval` reads this canonical document to recognize spillage events: its causality
 pillar confirms each labeled value actually landed in the logs (so a spillage
 dataset passes acceptance) — it does **not** re-run synthesis. Scrubber
 precision/recall scoring is out of scope for this PR; when added it will fold into

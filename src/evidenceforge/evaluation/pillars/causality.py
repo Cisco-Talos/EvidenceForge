@@ -85,7 +85,7 @@ class CausalityScorer(DimensionScorer):
             context.observation_manifest, scenario
         ):
             context = EvaluationContext(observation_manifest=None)
-        # storyline_id -> rendered spillage values (from GROUND_TRUTH.jsonl), used
+        # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
         storyline = scenario.storyline or []
@@ -93,7 +93,7 @@ class CausalityScorer(DimensionScorer):
 
         if storyline:
             resolved = resolve_storyline(storyline, scenario)
-            # Anchor spillage events to the actual emitted time from the sidecar:
+            # Anchor spillage events to the actual emitted time from the canonical document:
             # bash dwell/session scheduling can shift a credential well past the
             # storyline time, beyond the match tolerance, so search + timing key
             # off where the credential really landed.
@@ -795,7 +795,7 @@ class CausalityScorer(DimensionScorer):
     def _spillage_record_matches(self, f: dict, format_name: str, event: ResolvedEvent) -> bool:
         """Match a spillage event to the record carrying its credential.
 
-        Reads the on-disk rendered value(s) from the GROUND_TRUTH.jsonl sidecar
+        Reads the on-disk rendered value(s) from the canonical GROUND_TRUTH.json
         (loaded into context) and substring-matches them in the record's text
         field(s) on the right host (+actor for shell). The evaluator does not
         re-run generation synthesis — it verifies the labeled value is present.
@@ -841,7 +841,7 @@ class CausalityScorer(DimensionScorer):
         gt = self._spillage_gt.get(event.storyline_id) or {}
         records = gt.get("records")
         if not records:
-            # Legacy/empty sidecar shape: fall back to all-values-present semantics.
+            # Empty record set: fall back to all-values-present semantics.
             expected = gt.get("values", [])
             if not expected:
                 return bool(event.traces)
@@ -1402,10 +1402,10 @@ class CausalityScorer(DimensionScorer):
             raw_total,
             excluded,
         )
-        # Explain, rather than mystify, a 0 caused by a missing spillage sidecar.
+        # Explain, rather than mystify, a 0 caused by a missing ground-truth document.
         if not self._spillage_gt and any("spillage" in e.event_types for e in resolved):
             details += (
-                " — spillage events need a GROUND_TRUTH.jsonl sidecar to match; "
+                " — spillage events need a GROUND_TRUTH.json document to match; "
                 "none was loaded, so they score as untraced"
             )
         return SubScore(
