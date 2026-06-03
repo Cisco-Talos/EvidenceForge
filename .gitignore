@@ -67,6 +67,11 @@ scenarios/*
 !scenarios/branch-office-example/
 scenarios/branch-office-example/*
 !scenarios/branch-office-example/scenario.yaml
+!scenarios/spillage-full-matrix-test/
+scenarios/spillage-full-matrix-test/*
+!scenarios/spillage-full-matrix-test/scenario.yaml
+!scenarios/spillage-full-matrix-test/ENVIRONMENT.md
+!scenarios/spillage-full-matrix-test/README.md
 
 
 # Scan / analysis tool output
