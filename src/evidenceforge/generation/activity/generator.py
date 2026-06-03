@@ -17808,6 +17808,13 @@ class ActivityGenerator:
             default_proc = (
                 r"C:\Windows\System32\cmd.exe" if os_category == "windows" else "/usr/bin/sh"
             )
+            parent_pid = 4
+            if os_category == "linux" and logon_id:
+                parent_pid = self._spillage_process_parent_pid(
+                    system=system,
+                    time=time,
+                    logon_id=logon_id,
+                )
             pid = self.generate_process(
                 user=user,
                 system=system,
@@ -17815,6 +17822,7 @@ class ActivityGenerator:
                 logon_id=logon_id or "0x0",
                 process_name=render.process_name or default_proc,
                 command_line=render.command,
+                parent_pid=parent_pid,
                 from_storyline=True,
             )
             if not pid:
@@ -17925,6 +17933,45 @@ class ActivityGenerator:
             "time": emitted_time,
             "target_system": target_fqdn,
         }
+
+    def _spillage_process_parent_pid(
+        self,
+        *,
+        system: "System",
+        time: datetime,
+        logon_id: str,
+    ) -> int:
+        """Choose a non-shell parent for session-bound Linux process spillage."""
+        if _get_os_category(system.os) != "linux" or not logon_id:
+            return 4
+
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            for candidate in (session.transport_pid, session.process_tree_root):
+                if (
+                    candidate
+                    and self.state_manager.get_process(system.hostname, candidate) is not None
+                    and self._is_pid_active_at(system, candidate, time)
+                ):
+                    parent_proc = self.state_manager.get_process(system.hostname, candidate)
+                    parent_exe = (
+                        parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                        if parent_proc is not None
+                        else ""
+                    )
+                    if parent_exe not in {"bash", "sh", "zsh"}:
+                        return candidate
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("sshd", "systemd", "init"):
+            candidate = sys_pids.get(role)
+            if (
+                candidate
+                and self.state_manager.get_process(system.hostname, candidate) is not None
+                and self._is_pid_active_at(system, candidate, time)
+            ):
+                return candidate
+        return 4
 
     def _normalize_apache_raw_syslog(
         self,

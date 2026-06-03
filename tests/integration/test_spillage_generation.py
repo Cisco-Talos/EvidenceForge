@@ -7,6 +7,7 @@ accurate ground truth, passes `eforge eval`, and validates safely."""
 import datetime
 import json
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,50 @@ def _records_or_empty(out: Path) -> list[dict]:
 
 def _iso(epoch: int) -> str:
     return datetime.datetime.fromtimestamp(epoch, datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_windows_log(file_path: Path) -> list[dict]:
+    with open(file_path) as f:
+        content = f.read()
+
+    root = ET.fromstring(content if "<Events>" in content else f"<Events>{content}</Events>")
+    ns = {"ns": "http://schemas.microsoft.com/win/2004/08/events/event"}
+
+    events = []
+    for event_elem in root.findall("ns:Event", ns):
+        event: dict[str, str | datetime.datetime] = {}
+        system = event_elem.find("ns:System", ns)
+        if system is not None:
+            event["EventID"] = system.findtext("ns:EventID", namespaces=ns) or ""
+            time_created = system.find("ns:TimeCreated", ns)
+            if time_created is not None:
+                time_str = time_created.get("SystemTime")
+                if time_str:
+                    event["TimeCreated"] = datetime.datetime.fromisoformat(
+                        time_str.replace("Z", "+00:00")
+                    )
+            event["Computer"] = system.findtext("ns:Computer", namespaces=ns) or ""
+
+        event_data = event_elem.find("ns:EventData", ns)
+        if event_data is not None:
+            for data in event_data.findall("ns:Data", ns):
+                name = data.get("Name")
+                if name:
+                    event[name] = data.text or ""
+
+        events.append(event)
+
+    return events
+
+
+def _ecar_records(out: Path) -> list[dict]:
+    rows: list[dict] = []
+    for path in out.rglob("ecar.json"):
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
 
 
 @pytest.fixture
@@ -270,6 +315,63 @@ class TestSpillageAccuracy:
         assert url_line.split()[0] == "192.168.20.30"  # client_ip = the Windows actor host
         # …and the process-command-line spill lands in EDR/ecar telemetry.
         assert recs["process_command_line"]["rendered_value"] in ecar
+
+    def test_windows_process_spill_uses_visible_session_logon_context(self, tmp_path):
+        scenario = _linux_scenario(
+            [{"type": "spillage", "surface": "process_command_line", "family": "bearer_token"}],
+            logs=[{"format": "windows_event_security"}, {"format": "ecar"}],
+            actor_os="Windows 11 Pro",
+        )
+        scenario["storyline"].insert(
+            0,
+            {
+                "id": "login",
+                "time": "+5m",
+                "actor": "nina",
+                "system": "APP-SRV-01",
+                "activity": "remote interactive login",
+                "events": [{"type": "logon", "logon_type": 10, "source_ip": "203.0.113.10"}],
+            },
+        )
+        out = _generate(scenario, tmp_path / "out")
+        rec = next(r for r in _records(out) if r["surface"] == "process_command_line")
+
+        windows_events = [
+            event
+            for path in out.rglob("windows_event_security.xml")
+            for event in _parse_windows_log(path)
+        ]
+        proc_event = next(
+            event
+            for event in windows_events
+            if event.get("EventID") == "4688"
+            and rec["rendered_value"] in str(event.get("CommandLine") or "")
+        )
+        subject_logon_id = str(proc_event.get("SubjectLogonId") or "")
+        assert subject_logon_id not in {"", "-", "0x0", "0x3e4", "0x3e5", "0x3e7"}
+        assert any(
+            event.get("EventID") == "4624"
+            and event.get("TargetLogonId") == subject_logon_id
+            and str(event.get("TargetUserName") or "").lower() == "nina"
+            for event in windows_events
+        )
+
+        ecar_rows = _ecar_records(out)
+        proc_row = next(
+            row
+            for row in ecar_rows
+            if row.get("object") == "PROCESS"
+            and row.get("action") == "CREATE"
+            and rec["rendered_value"] in str(row.get("properties", {}).get("command_line") or "")
+        )
+        assert proc_row.get("principal") == "nina"
+        assert any(
+            row.get("object") == "USER_SESSION"
+            and row.get("action") == "LOGIN"
+            and row.get("principal") == "nina"
+            and int(row.get("timestamp_ms", 0)) <= int(proc_row.get("timestamp_ms", 0))
+            for row in ecar_rows
+        )
 
     def test_db_uri_through_http_url_is_percent_encoded_on_disk(self, tmp_path):
         # db_uri is the heaviest-encoding family (:// @ : /). Through http_request_url
