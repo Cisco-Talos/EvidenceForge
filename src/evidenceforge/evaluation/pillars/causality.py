@@ -85,11 +85,29 @@ class CausalityScorer(DimensionScorer):
             context.observation_manifest, scenario
         ):
             context = EvaluationContext(observation_manifest=None)
+        # storyline_id -> rendered spillage values (from GROUND_TRUTH.jsonl), used
+        # by _spillage_record_matches to verify the credential landed in the logs.
+        self._spillage_gt = context.spillage_ground_truth or {}
         storyline = scenario.storyline or []
         resolved: list[ResolvedEvent] = []
 
         if storyline:
             resolved = resolve_storyline(storyline, scenario)
+            # Anchor spillage events to the actual emitted time from the sidecar:
+            # bash dwell/session scheduling can shift a credential well past the
+            # storyline time, beyond the match tolerance, so search + timing key
+            # off where the credential really landed.
+            for event in resolved:
+                gt = self._spillage_gt.get(event.storyline_id)
+                if not (gt and "spillage" in event.event_types):
+                    continue
+                if gt.get("time"):
+                    event.time = gt["time"]
+                if gt.get("target_system"):
+                    # http_* spillage lands on the destination web server's access
+                    # log (not the actor's host), so add that host to the record
+                    # search keys; the value match itself stays host-agnostic.
+                    event.details["hostname"] = gt["target_system"]
             self._proxy_mode = scenario.environment.proxy.mode
             self._proxy_ips = {
                 system.ip
@@ -702,9 +720,110 @@ class CausalityScorer(DimensionScorer):
                     and self._host_matches(f.get("hostname"), event.system)
                     and self._user_matches(f.get("principal"), event.actor)
                 )
+        elif event_type == "spillage":
+            return self._spillage_record_matches(f, format_name, event)
         elif event_type == "raw":
             return self._raw_record_matches(f, format_name, event)
         return False
+
+    # The text field(s) that carry a spilled credential, per parsed log format.
+    # process_command_line requires `ecar` (the cross-OS EDR process source — see
+    # SURFACE_FORMATS), so credentials on a command line are matched there on both
+    # Linux and Windows; no Windows-specific parser arm is needed. web_access
+    # carries the URL surface in `path` and the Referer surface in `referer`.
+    _SPILLAGE_TEXT_FIELD = {
+        "bash_history": ("command",),
+        "syslog": ("message",),
+        "ecar": ("command_line",),
+        "web_access": ("path", "referer"),
+    }
+
+    # web_access evidence lands on the destination web server (not event.system),
+    # so it is matched by the unique, marked credential value alone — the host of
+    # the actor is the request's client_ip, not the log's owning host.
+    _SPILLAGE_HOST_AGNOSTIC = frozenset({"web_access"})
+
+    def _spillage_record_matches(self, f: dict, format_name: str, event: ResolvedEvent) -> bool:
+        """Match a spillage event to the record carrying its credential.
+
+        Reads the on-disk rendered value(s) from the GROUND_TRUTH.jsonl sidecar
+        (loaded into context) and substring-matches them in the record's text
+        field(s) on the right host (+actor for shell). The evaluator does not
+        re-run generation synthesis — it verifies the labeled value is present.
+        """
+        expected = (self._spillage_gt.get(event.storyline_id) or {}).get("values", [])
+        if not expected:
+            return False
+        text_fields = self._SPILLAGE_TEXT_FIELD.get(format_name)
+        if not text_fields:
+            return False
+        if format_name not in self._SPILLAGE_HOST_AGNOSTIC:
+            if not self._host_matches(f.get("hostname"), event.system):
+                return False
+            if format_name == "bash_history" and not self._user_matches(
+                f.get("username"), event.actor
+            ):
+                return False
+        text = "\n".join(str(f.get(field, "") or "") for field in text_fields)
+        return any(value and value in text for value in expected)
+
+    def _event_present(self, event: ResolvedEvent) -> bool:
+        """Whether a storyline event counts as observed in the logs.
+
+        Default: at least one trace. For spillage, EVERY labeled credential for the
+        event's storyline_id must appear in a trace — finding one spill in a
+        multi-spill storyline step does not vouch for the others.
+        """
+        if not event.traces:
+            return False
+        if "spillage" in event.event_types and self._spillage_gt.get(event.storyline_id):
+            return self._all_spillage_values_traced(event)
+        return True
+
+    def _all_spillage_values_traced(self, event: ResolvedEvent) -> bool:
+        """True only if every labeled spillage record for this event is observed.
+
+        Each labeled record must be satisfied by a DISTINCT trace whose source
+        format is one of the record's ``expected_sources`` (consuming each trace at
+        most once). This makes N identical-valued spills require N separate
+        landings (no multiset collapse) and stops a trace in the wrong format from
+        crediting a value spilled to a different surface (no cross-surface credit).
+        """
+        gt = self._spillage_gt.get(event.storyline_id) or {}
+        records = gt.get("records")
+        if not records:
+            # Legacy/empty sidecar shape: fall back to all-values-present semantics.
+            expected = gt.get("values", [])
+            if not expected:
+                return bool(event.traces)
+            observed: list[str] = []
+            for record in event.traces:
+                for field in self._SPILLAGE_TEXT_FIELD.get(record.source_format, ()):
+                    value = record.fields.get(field)
+                    if value:
+                        observed.append(str(value))
+            blob = "\n".join(observed)
+            return all(value and value in blob for value in expected)
+
+        remaining = list(event.traces)
+        for rec in records:
+            wanted = rec.get("value")
+            allowed = set(rec.get("expected_sources") or ())
+            hit: int | None = None
+            for i, trace in enumerate(remaining):
+                if allowed and trace.source_format not in allowed:
+                    continue
+                text = "\n".join(
+                    str(trace.fields.get(field, "") or "")
+                    for field in self._SPILLAGE_TEXT_FIELD.get(trace.source_format, ())
+                )
+                if wanted and wanted in text:
+                    hit = i
+                    break
+            if hit is None:
+                return False
+            remaining.pop(hit)
+        return True
 
     def _raw_record_matches(
         self,
@@ -1209,12 +1328,12 @@ class CausalityScorer(DimensionScorer):
                 details="No storyline events",
             )
         raw_total = len(resolved)
-        raw_found = sum(1 for e in resolved if e.traces)
+        raw_found = sum(1 for e in resolved if self._event_present(e))
         total = 0
         found = 0
         excluded = 0
         for event in resolved:
-            if event.traces:
+            if self._event_present(event):
                 total += 1
                 found += 1
             elif self._event_observation_exempt(event, context):
@@ -1224,10 +1343,22 @@ class CausalityScorer(DimensionScorer):
         failures = [
             f"Event {e.index}: {e.actor}@{e.system} '{e.activity[:60]}' — no traces"
             for e in resolved
-            if not e.traces and not self._event_observation_exempt(e, context)
+            if not self._event_present(e) and not self._event_observation_exempt(e, context)
         ]
         score = (100.0 * found / total) if total > 0 else 100.0
         raw_score = (100.0 * raw_found / raw_total) if raw_total > 0 else 100.0
+        details = self._adjusted_details(
+            f"{found}/{total} expected-visible storyline events have traces in logs",
+            raw_found,
+            raw_total,
+            excluded,
+        )
+        # Explain, rather than mystify, a 0 caused by a missing spillage sidecar.
+        if not self._spillage_gt and any("spillage" in e.event_types for e in resolved):
+            details += (
+                " — spillage events need a GROUND_TRUTH.jsonl sidecar to match; "
+                "none was loaded, so they score as untraced"
+            )
         return SubScore(
             name="Event Presence",
             key="event_presence",
@@ -1235,12 +1366,7 @@ class CausalityScorer(DimensionScorer):
             score=score,
             raw_score=raw_score if excluded else None,
             adjusted=excluded > 0,
-            details=self._adjusted_details(
-                f"{found}/{total} expected-visible storyline events have traces in logs",
-                raw_found,
-                raw_total,
-                excluded,
-            ),
+            details=details,
             sample_failures=failures[:10],
         )
 

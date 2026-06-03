@@ -73,6 +73,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify host activity distribution | `host_activity_profiles.yaml` | (standalone — host/persona/role rate-family multipliers, firewall deny bursts, and artifact variants) |
 | Modify source observation coverage | `observation_profiles.yaml` | Scenario `observation_profile` selects the named profile; generated `OBSERVATION_MANIFEST.json` lets eval account for expected gaps; keep `complete` as the default training profile |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
+| Add/modify spillage credential families | `activity/secret_families.yaml` | Used by the `spillage` event type — add families (regex/value_template/carriers, incl. OS-aware `process_command_line_windows` carriers), poison markers, vendor fakes, and the host allowlist. Keep the marker INSIDE any high-entropy token in a `value_template`. Overlay-merge by family name. Validate with `eforge validate-config`, which samples every template/`examples` family and re-checks safety (no real-looking key, no non-reserved host) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
 

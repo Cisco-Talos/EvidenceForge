@@ -26,13 +26,28 @@ This module generates GROUND_TRUTH.md files that document malicious activities,
 timelines, and indicators of compromise (IOCs) for threat hunting training.
 """
 
+import hashlib
 import ipaddress
+import json
 import logging
 from datetime import UTC
 from pathlib import Path
 
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
+
+GROUND_TRUTH_JSONL_FILENAME = "GROUND_TRUTH.jsonl"
+GROUND_TRUTH_SCHEMA_VERSION = 1
+
+
+def _redact_secret(value: str) -> str:
+    """Return a short, non-reversible preview of a (synthetic) secret value."""
+    if not value:
+        return "(empty)"
+    if len(value) <= 8:
+        return value[:2] + "***"
+    return f"{value[:4]}…{value[-2:]} ({len(value)} chars)"
+
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +135,72 @@ class GroundTruthGenerator:
         # Write to file
         safe_write_text(output_path, "\n".join(content))
         logger.info(f"Ground truth documentation written: {output_path}")
+
+    def build_jsonl_records(self) -> list[dict]:
+        """Build machine-readable ground-truth records for the GROUND_TRUTH.jsonl sidecar.
+
+        Scope: in v1 this sidecar contains structured records for **spillage labels
+        only** (``kind: "spillage"``) — it is NOT yet a complete machine-readable
+        mirror of GROUND_TRUTH.md. The ``schema_version`` + ``kind`` fields are
+        deliberately general so other ground-truth record kinds can be added later
+        without breaking existing consumers.
+
+        One record per malicious event that exposes a canonical value on a semantic
+        surface. Byte offsets are intentionally omitted: emitters stream output, so
+        a value's position is not known at ground-truth-writing time.
+        """
+        records: list[dict] = []
+        for event in self.malicious_events:
+            if "surface" not in event or event.get("skipped_reason"):
+                continue
+            value = event.get("value", "")
+            # rendered_value is the exact on-disk byte form (surface-encoded);
+            # match THIS against the logs. value is the canonical secret.
+            rendered = event.get("rendered_value", value)
+            ts = event["time"]
+            ts = ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts
+            records.append(
+                {
+                    "schema_version": GROUND_TRUTH_SCHEMA_VERSION,
+                    "kind": event["type"],
+                    "storyline_id": event.get("storyline_cluster_id"),
+                    "time": ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "actor": event["actor"],
+                    "system": event["system"],
+                    "surface": event["surface"],
+                    "family": event.get("family") or None,
+                    "value": value,
+                    "value_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+                    "rendered_value": rendered,
+                    "rendered_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                    "expected_sources": list(event.get("expected_sources", [])),
+                    # Web surfaces land on a destination server's access log, not
+                    # the actor's host; record where so scorers/eval can locate it.
+                    **(
+                        {"target_system": event["target_system"]}
+                        if event.get("target_system")
+                        else {}
+                    ),
+                }
+            )
+        records.sort(key=lambda r: (r["storyline_id"] or "", r["time"], r["surface"]))
+        # Stable per-record id so duplicate positives are individually addressable.
+        seen: dict[str, int] = {}
+        for record in records:
+            sid = record["storyline_id"] or ""
+            n = seen.get(sid, 0)
+            seen[sid] = n + 1
+            record["record_id"] = f"{sid}#{n}"
+        return records
+
+    def write_jsonl(self, output_path: Path) -> None:
+        """Write the machine-readable ground-truth sidecar, if any records exist."""
+        records = self.build_jsonl_records()
+        if not records:
+            return
+        lines = [json.dumps(r, sort_keys=True) for r in records]
+        safe_write_text(output_path, "\n".join(lines) + "\n")
+        logger.info(f"Machine-readable ground truth written: {output_path}")
 
     def _create_narrative(self) -> str:
         """Create attack narrative from storyline events.
@@ -309,6 +390,15 @@ class GroundTruthGenerator:
         elif event_type in ("workstation_lock", "workstation_unlock"):
             action = "Locked" if event_type == "workstation_lock" else "Unlocked"
             return f"Workstation {action}"
+
+        elif event_type == "spillage":
+            surface = event.get("surface", "N/A")
+            family = event.get("family") or "literal"
+            value = event.get("value", "")
+            digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            return (
+                f"Spillage ({family}) to {surface}: {_redact_secret(value)} (sha256:{digest[:12]})"
+            )
 
         else:
             return event.get("activity", "N/A")

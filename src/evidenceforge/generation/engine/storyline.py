@@ -1374,6 +1374,25 @@ class StorylineMixin:
             return None
         return logon_id
 
+    def _select_web_server_for_spillage(self, actor_system: System) -> System | None:
+        """Pick the destination web server for an http_* spillage surface.
+
+        The credential rides in an outbound request from the actor's host and is
+        recorded by the destination web server's access log, so a web_server-role
+        host must exist. Prefer a server other than the actor's own host (a real
+        outbound request), deterministic by hostname; fall back to the actor's
+        host only if it is the sole web server. Returns None when there is none
+        (the validator flags this before generation).
+        """
+        web_servers = [
+            s for s in self.scenario.environment.systems if "web_server" in (s.roles or [])
+        ]
+        if not web_servers:
+            return None
+        others = [s for s in web_servers if s.hostname != actor_system.hostname]
+        pool = others or web_servers
+        return sorted(pool, key=lambda s: s.hostname)[0]
+
     def _last_storyline_logon_source_for_actor_system(
         self,
         actor: User,
@@ -4169,6 +4188,57 @@ class StorylineMixin:
                 time=time,
                 logon_id=logon_id,
             )
+
+        elif spec.type == "spillage":
+            from evidenceforge.generation.spillage import HTTP_SURFACES
+
+            cluster_id = malicious_event["storyline_cluster_id"]
+            # Monotonic per-generation sequence makes every spillage value unique
+            # (deterministic order); eval reads the emitted value from ground truth.
+            seq = getattr(self, "_spillage_seq", 0)
+            self._spillage_seq = seq + 1
+            spill_logon_id = None
+            spill_target = None
+            # process_command_line spills run as a standalone process-execution
+            # record with a durable unique PID, using local carriers only (no
+            # implied outbound network). We deliberately do NOT attach the spill to
+            # an interactive shell session: a foreground bash child competes for
+            # that shell's serialized command timeline and, under heavy baseline,
+            # can be shifted and dropped during eCAR post-flush normalization —
+            # leaving a labeled-but-unwritten credential (a phantom). A standalone
+            # process keeps a stable, unique identity and always lands.
+            if spec.surface in HTTP_SURFACES:
+                # The credential leaks into a web server's access log; pick the
+                # destination web server (the validator requires one to exist).
+                spill_target = self._select_web_server_for_spillage(system)
+            info = self.activity_generator.generate_spillage(
+                user=actor,
+                system=system,
+                time=time,
+                surface=spec.surface,
+                family=spec.family,
+                value=spec.value,
+                seed_key=f"spillage:{cluster_id}:{seq}:{spec.surface}:{spec.family or 'literal'}",
+                logon_id=spill_logon_id,
+                target_system=spill_target,
+            )
+            malicious_event["surface"] = info["surface"]
+            malicious_event["family"] = info["family"]
+            if info.get("skipped_reason"):
+                # Credential was not emitted (e.g. dwell-shifted past the window);
+                # mark it so no phantom ground-truth record is written.
+                malicious_event["skipped_reason"] = info["skipped_reason"]
+            else:
+                malicious_event["value"] = info["value"]
+                malicious_event["rendered_value"] = info["rendered_value"]
+                malicious_event["expected_sources"] = info["expected_sources"]
+                # Reflect the actual emitted time (bash dwell scheduling may shift it).
+                malicious_event["time"] = info["time"]
+                if info.get("target_system"):
+                    # http_* surfaces land on the destination web server's access
+                    # log; record its FQDN (as the generator names the access-log
+                    # directory) so ground truth and eval can locate the trace.
+                    malicious_event["target_system"] = info["target_system"]
 
         elif spec.type == "raw":
             self.activity_generator.generate_raw(

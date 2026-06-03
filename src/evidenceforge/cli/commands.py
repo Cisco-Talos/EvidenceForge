@@ -234,7 +234,9 @@ def generate(
 
                 console.print(Text(f"    {issue.message}", style=color))
                 if issue.suggestion:
-                    console.print(f"    💡 {issue.suggestion}", style="dim")
+                    # Wrap in Text() (like the message above) so bracketed tokens
+                    # such as "roles: [web_server]" are not parsed as Rich markup.
+                    console.print(Text(f"    💡 {issue.suggestion}", style="dim"))
 
             if validator.has_errors():
                 console.print(
@@ -283,6 +285,7 @@ def generate(
         ground_truth_dir = scenario_dir
 
     from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+    from evidenceforge.generation.ground_truth import GROUND_TRUTH_JSONL_FILENAME
 
     # Apply --formats filter (intersection with scenario output.logs)
     if formats:
@@ -314,9 +317,15 @@ def generate(
     # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
     existing = []
     gt_path = ground_truth_dir / "GROUND_TRUTH.md"
+    # The machine-readable sidecar is OPTIONAL — written only when there are
+    # structured records (e.g. spillage). It still participates in overwrite
+    # detection, backup/rollback, and the final listing so a stale sidecar from a
+    # prior run cannot survive a run that produces none.
+    jsonl_path = ground_truth_dir / GROUND_TRUTH_JSONL_FILENAME
     manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
+    target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
     try:
-        _reject_generated_sidecar_symlinks([gt_path, manifest_path])
+        _reject_generated_sidecar_symlinks([gt_path, jsonl_path, manifest_path, target_path])
     except PermissionError as e:
         console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
@@ -325,9 +334,10 @@ def generate(
         existing.append(f"  data/           ({data_dir})")
     if _path_exists_or_symlink(gt_path):
         existing.append(f"  GROUND_TRUTH.md ({gt_path})")
+    if _path_exists_or_symlink(jsonl_path):
+        existing.append(f"  {GROUND_TRUTH_JSONL_FILENAME} ({jsonl_path})")
     if _path_exists_or_symlink(manifest_path):
         existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
-    target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
     if _path_exists_or_symlink(target_path):
         existing.append(f"  {OUTPUT_TARGET_FILENAME} ({target_path})")
 
@@ -434,6 +444,7 @@ def generate(
         # as a matched set — partial preservation is never valid.
         if staging_dir:
             staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
+            staged_jsonl = gen_gt_dir / GROUND_TRUTH_JSONL_FILENAME  # optional sidecar
             staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
             staged_target = gen_gt_dir / OUTPUT_TARGET_FILENAME
             if not gen_data_dir.exists():
@@ -460,14 +471,20 @@ def generate(
                     data_dir.rename(rollback_dir / "data")
                 if gt_path.exists():
                     gt_path.rename(rollback_dir / "GROUND_TRUTH.md")
+                if jsonl_path.exists():
+                    jsonl_path.rename(rollback_dir / GROUND_TRUTH_JSONL_FILENAME)
                 if manifest_path.exists():
                     manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
                 if _path_exists_or_symlink(target_path):
                     target_path.rename(rollback_dir / OUTPUT_TARGET_FILENAME)
 
-                # Step 2: Install new output
+                # Step 2: Install new output. The sidecar is optional: if this run
+                # produced none, the old one stays backed up (removed here), so no
+                # stale sidecar survives.
                 gen_data_dir.rename(data_dir)
                 staged_gt.rename(gt_path)
+                if staged_jsonl.exists():
+                    staged_jsonl.rename(jsonl_path)
                 if staged_manifest.exists():
                     staged_manifest.rename(manifest_path)
                 if staged_target.exists():
@@ -475,12 +492,19 @@ def generate(
                 swap_succeeded = True
 
             except BaseException:
-                # Rollback: remove partially-installed new output, restore old
+                # Rollback: remove partially-installed new output, restore old.
+                # Strip whatever new artifact is currently installed UNCONDITIONALLY
+                # — whether a backup of it exists is irrelevant to whether the new
+                # one must go before restore. (A partial prior state, e.g. data/ but
+                # no GROUND_TRUTH.md, must not leave a new GT.md orphaned over
+                # restored old data/ — that breaks the matched-set invariant.)
                 try:
-                    if data_dir.exists() and (rollback_dir / "data").exists():
+                    if data_dir.exists():
                         shutil.rmtree(data_dir)
-                    if gt_path.exists() and (rollback_dir / "GROUND_TRUTH.md").exists():
+                    if gt_path.exists():
                         gt_path.unlink()
+                    if jsonl_path.exists():
+                        jsonl_path.unlink()
                     if manifest_path.exists():
                         manifest_path.unlink()
                     if _path_exists_or_symlink(target_path):
@@ -489,6 +513,9 @@ def generate(
                         (rollback_dir / "data").rename(data_dir)
                     if (rollback_dir / "GROUND_TRUTH.md").exists():
                         (rollback_dir / "GROUND_TRUTH.md").rename(gt_path)
+                    rollback_jsonl = rollback_dir / GROUND_TRUTH_JSONL_FILENAME
+                    if rollback_jsonl.exists():
+                        rollback_jsonl.rename(jsonl_path)
                     rollback_manifest = rollback_dir / OBSERVATION_MANIFEST_FILENAME
                     if rollback_manifest.exists():
                         rollback_manifest.rename(manifest_path)
@@ -514,6 +541,7 @@ def generate(
             for file in sorted(ground_truth_dir.iterdir()):
                 if file.is_file() and file.name in {
                     "GROUND_TRUTH.md",
+                    GROUND_TRUTH_JSONL_FILENAME,
                     OBSERVATION_MANIFEST_FILENAME,
                     OUTPUT_TARGET_FILENAME,
                 }:
@@ -631,7 +659,9 @@ def validate(
 
             console.print(Text(f"    {issue.message}", style=color))
             if issue.suggestion:
-                console.print(f"    💡 {issue.suggestion}", style="dim")
+                # Wrap in Text() so bracketed tokens (e.g. "roles: [web_server]")
+                # are not parsed as Rich markup and dropped.
+                console.print(Text(f"    💡 {issue.suggestion}", style="dim"))
 
         if validator.has_errors():
             console.print("\n[bold red]Validation failed with errors.[/bold red]")

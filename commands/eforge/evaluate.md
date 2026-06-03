@@ -41,6 +41,7 @@ scenarios/<scenario-name>/
   ENVIRONMENT.md
   artifacts/         ← optional authored collateral, not eval input
   GROUND_TRUTH.md
+  GROUND_TRUTH.jsonl ← optional, machine-readable label sidecar (spillage labels in v1)
   OBSERVATION_MANIFEST.json  ← optional, generated for source-observation-aware eval
   data/              ← this is the output_dir for eforge eval
 ```
@@ -48,6 +49,13 @@ scenarios/<scenario-name>/
 If the user provides the scenario directory (e.g., `scenarios/branch-office-example/`), derive:
 - Data directory: `scenarios/<name>/data/`
 - Scenario file: `scenarios/<name>/scenario.yaml`
+
+**Spillage scenarios depend on `GROUND_TRUTH.jsonl`.** The causality pillar reads
+the sidecar to confirm each labeled credential landed in the logs. If the sidecar
+is missing (e.g., it was deleted, or `data/` was copied without it), spillage
+events cannot be matched and score as untraced — the Event Presence detail says
+as much. Keep `GROUND_TRUTH.jsonl` next to (or one level above) the data directory
+when evaluating a spillage dataset.
 
 Ignore optional `artifacts/` contents for evaluation; they are exercise collateral, not generated log output.
 

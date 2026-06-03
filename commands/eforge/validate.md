@@ -50,6 +50,28 @@ Exit codes:
 
 Fix the issue in the scenario file, then re-run `eforge validate` to confirm.
 
+### Spillage event errors
+
+`spillage` events (a credential leaked into a semantic `surface`) have extra
+validation. Common errors and fixes:
+
+- **"exactly one of family or value"** — a spillage event needs `family:` (synthesize
+  from a known family) XOR `value:` (a literal). Remove one.
+- **unknown `family`** — must be a family in `secret_families.yaml` (e.g. `aws_iam`,
+  `db_uri`). Run `eforge validate-config` to list/validate families.
+- **non-allowlisted host / no poison marker / real-looking credential / control
+  character** (`SpillageSafetyError`) — a literal `value:` must be provably fake: carry
+  a poison marker (e.g. `EvidenceForgeFake`) *inside* any credential-shaped token, embed
+  only reserved hosts (RFC 2606/5737/3849/1918), and be single-line and control-free.
+  Fix the literal or switch to a `family:`.
+- **http_request_url/http_referrer with no web_server** — these surfaces send a request
+  to a `web_server`-role host; add a system with `roles: [web_server]`.
+- **shell_history/syslog_message on a Windows host** — these surfaces are Linux-modeled;
+  put the actor on a Linux host (process_command_line and http_* are cross-OS).
+
+These are typically simple, directly-fixable errors. Only escalate to `/eforge scenario`
+if the environment lacks a host of the required OS/role and one cannot be trivially added.
+
 ### Structural problems — escalate to /eforge scenario
 - Network topology that needs redesigning
 - Missing personas that need custom definitions with realistic work hours and activities

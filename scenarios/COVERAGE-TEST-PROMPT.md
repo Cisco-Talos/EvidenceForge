@@ -191,11 +191,15 @@
   29. Logoff (+13h30m): Attacker logs off from compromised systems (logoff events).
 
   Key requirements:
-  - Exercise all 27 storyline event types: process, logon, failed_logon, logoff, connection,
+  - Exercise all 28 storyline event types: process, logon, failed_logon, logoff, connection,
   ssh_session, rdp_session, account_created, account_deleted, group_member_added, service_installed,
   scheduled_task_created, log_cleared, create_remote_thread, process_access, dhcp_lease, port_scan,
   beacon, dns_query, web_scan, credential_spray, dga_queries, dns_tunnel, explicit_credentials,
-  workstation_lock, workstation_unlock, raw
+  workstation_lock, workstation_unlock, spillage, raw
+  - NOTE: spillage emits a synthetic, provably-fake credential into a semantic surface
+  (shell_history/process_command_line/syslog_message, or http_request_url/http_referrer which
+  require a roles:[web_server] host). Full machine-readable labels live in
+  GROUND_TRUTH.jsonl; GROUND_TRUTH.md carries a redacted human-readable summary.
   - NOTE: process_access IS a valid scenario event type and can be declared directly (e.g.,
   for a standalone Sysmon Event 10 probing LSASS without a preceding injection). However,
   when create_remote_thread targets lsass.exe, the causal expansion engine auto-generates

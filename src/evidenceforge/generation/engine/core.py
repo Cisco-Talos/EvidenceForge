@@ -39,7 +39,10 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
-from evidenceforge.generation.ground_truth import GroundTruthGenerator
+from evidenceforge.generation.ground_truth import (
+    GROUND_TRUTH_JSONL_FILENAME,
+    GroundTruthGenerator,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
@@ -502,6 +505,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
 
         generator.generate(output_path)
+        generator.write_jsonl(self.ground_truth_dir / GROUND_TRUTH_JSONL_FILENAME)
         write_observation_manifest(
             self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
             self.scenario,
