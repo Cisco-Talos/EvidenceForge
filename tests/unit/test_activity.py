@@ -113,6 +113,7 @@ from evidenceforge.generation.activity.generator import (
     _http_context_from_process_command,
     _jitter_default_connection_duration,
     _linux_foreground_lifetime,
+    _linux_ssh_client_command_line,
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
     _source_native_http_referrer,
@@ -193,6 +194,28 @@ def test_linux_server_ssh_client_uses_active_ssh_source_session():
 
     assert session is not None
     assert session.logon_id == logon_id
+
+
+def test_linux_ssh_client_command_line_varies_source_native_forms():
+    """Source-side SSH history should not collapse to one bare user@host form."""
+    commands = {
+        _linux_ssh_client_command_line(
+            exe_name="ssh",
+            username="aisha.johnson",
+            target_host="WEB-EXT-01.meridianhcs.local",
+            target_ip="10.10.2.30",
+            source_hostname="WS-OHADDAD-01",
+            source_port=51000 + idx,
+            requested_time=datetime(2024, 3, 18, 12, idx % 60, tzinfo=UTC),
+        )
+        for idx in range(24)
+    }
+
+    assert len(commands) >= 6
+    assert any(command.startswith("ssh -l aisha.johnson ") for command in commands)
+    assert any(" -i " in command for command in commands)
+    assert any(command.startswith("ssh -o ") for command in commands)
+    assert all(command.startswith("ssh ") for command in commands)
 
 
 def test_linux_server_bash_history_requires_visible_session():

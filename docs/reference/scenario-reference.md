@@ -128,6 +128,13 @@ Inbound traffic is constrained by network topology: DMZ hosts receive substantia
 
 For server and infrastructure hosts, pair `roles` with realistic `services` whenever possible. `roles` tell the engine what the host is for; `services` help the world model infer concrete protocols and destinations (for example, PostgreSQL vs MSSQL, web stack vs proxy stack, SSH-capable Linux admin targets, and so on).
 
+For `web_server` hosts, explicit scheme service markers are authoritative for
+`http_*` spillage compatibility: `services: [http]` is HTTP-only, `https`,
+`ssl`, or `tls` means HTTPS-capable, and `http` plus any HTTPS marker means both.
+If no explicit scheme marker exists, generic legacy web markings such as
+`roles: [web_server]`, empty `services`, `nginx`, `apache2`, `httpd`, or `iis`
+support both HTTP and HTTPS.
+
 ### Network Segment Exposure
 
 Segments can declare their internet exposure via the `exposure` field:
@@ -479,6 +486,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `explicit_credentials` | Windows 4648 (explicit credential usage) | `target_username` | `target_server`, `process_name`, `source_ip` |
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
+| `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.

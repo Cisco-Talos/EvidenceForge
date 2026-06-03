@@ -613,6 +613,42 @@ def select_file_side_effect(
     return None
 
 
+def select_ambient_file_churn_effect(
+    process_name: str,
+    command_line: str,
+    os_category: str,
+    rng: random.Random,
+    user: str,
+    path_templates: list[str],
+    actions: list[str],
+    weights: list[int],
+    *,
+    host_ip: str = "",
+    host_key: str = "",
+    host_os: str = "",
+) -> tuple[str, str] | None:
+    """Return an account-compatible ambient FILE churn action and path."""
+    if os_category == "linux" and is_service_account(os_category, user):
+        return select_file_side_effect(process_name, command_line, os_category, rng, user=user)
+
+    candidates = file_path_templates_for_user(path_templates, os_category, user)
+    if not candidates:
+        return None
+
+    action = str(rng.choices(actions, weights=weights, k=1)[0])
+    path = materialize_edr_template(
+        str(rng.choice(candidates)),
+        rng,
+        user,
+        host_ip=host_ip,
+        host_key=host_key,
+        host_os=host_os,
+    )
+    if os_category == "linux" and user == "root":
+        path = path.replace("/home/root/", "/root/")
+    return action, path
+
+
 def select_command_file_side_effect(process_name: str, command_line: str) -> tuple[str, str] | None:
     """Return a guaranteed command-owned file artifact when the syntax identifies one."""
     exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()

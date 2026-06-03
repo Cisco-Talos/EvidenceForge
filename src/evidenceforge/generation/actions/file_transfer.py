@@ -521,6 +521,10 @@ class StagedArchiveSmbReadRequest:
     upload_bytes: int
     source_system: System | None
     target_system: System
+    source_pid: int = -1
+    source_process: str = ""
+    source_command: str = ""
+    source_file_read_path: str = ""
     source: str = "storyline_staged_archive"
 
     @property
@@ -531,7 +535,8 @@ class StagedArchiveSmbReadRequest:
             "action_bundle:staged_archive_smb_read:"
             f"{self.actor.username}:{self.source_ip}:{self.staging_ip}:"
             f"{self.archive_path}:{self.smb_filename}:{self.staged_at.isoformat()}:"
-            f"{self.exfil_time.isoformat()}:{self.upload_bytes}:{self.source}"
+            f"{self.exfil_time.isoformat()}:{self.upload_bytes}:"
+            f"{self.source_pid}:{self.source_file_read_path}:{self.source}"
         )
         return f"staged-archive-smb-read-{seed:016x}"
 
@@ -579,6 +584,9 @@ class StagedArchiveSmbReadActionBundle:
         transfer_time = self._transfer_time(duration)
         if transfer_time is None:
             return False
+        transfer_time = self._clamp_after_source_process(transfer_time, duration)
+        if transfer_time is None:
+            return False
 
         analyzers = ["MD5", "SHA1"]
         fuid = generate_zeek_uid("F")
@@ -600,6 +608,8 @@ class StagedArchiveSmbReadActionBundle:
             conn_state="SF",
             emit_dns=False,
             source_system=self._request.source_system,
+            pid=self._request.source_pid,
+            process_image=self._request.source_process,
             file_transfer=FileTransferContext(
                 fuid=fuid,
                 source="SMB",
@@ -618,6 +628,7 @@ class StagedArchiveSmbReadActionBundle:
                 **hashes,
             ),
         )
+        self._emit_source_file_read(transfer_time)
         smb_source_port = self._last_smb_connection_source_port()
         if self._target_is_file_server() and self._emit_smb_logon_pair is not None:
             self._emit_smb_logon_pair(
@@ -630,6 +641,108 @@ class StagedArchiveSmbReadActionBundle:
                 emit_network_evidence=smb_source_port is None,
             )
         return True
+
+    def _clamp_after_source_process(
+        self,
+        transfer_time: datetime,
+        duration: float,
+    ) -> datetime | None:
+        """Keep source-visible SMB transfer after the upload process exists."""
+
+        if self._request.source_system is None or self._request.source_pid <= 0:
+            return transfer_time
+        source_time_getter = getattr(
+            self._executor.activity_generator,
+            "process_source_create_time",
+            None,
+        )
+        if not callable(source_time_getter):
+            return transfer_time
+        source_process_time = source_time_getter(
+            self._request.source_system.hostname,
+            self._request.source_pid,
+        )
+        if not isinstance(source_process_time, datetime) or transfer_time > source_process_time:
+            return transfer_time
+
+        latest = self._request.exfil_time - timedelta(seconds=duration + 5.0)
+        candidate = source_process_time + timedelta(milliseconds=self._rng.randint(350, 1400))
+        if candidate >= latest:
+            return None
+        return candidate
+
+    def _emit_source_file_read(self, transfer_time: datetime) -> None:
+        """Emit upload-host FILE/READ evidence for the staged archive."""
+
+        if (
+            self._request.source_system is None
+            or self._request.source_pid <= 0
+            or not self._request.source_process
+        ):
+            return
+        source_path = self._request.source_file_read_path or self._request.smb_filename
+        if not source_path:
+            return
+        running_source = self._executor.state_manager.get_process(
+            self._request.source_system.hostname,
+            self._request.source_pid,
+        )
+        parent_pid = running_source.parent_pid if running_source is not None else 0
+        source_actor_id = self._executor.state_manager.get_process_object_id(
+            self._request.source_system.hostname,
+            self._request.source_pid,
+        )
+        file_time = transfer_time + timedelta(milliseconds=self._rng.randint(220, 1200))
+        source_time_getter = getattr(
+            self._executor.activity_generator,
+            "process_source_create_time",
+            None,
+        )
+        if callable(source_time_getter):
+            source_process_time = source_time_getter(
+                self._request.source_system.hostname,
+                self._request.source_pid,
+            )
+            if isinstance(source_process_time, datetime) and file_time <= source_process_time:
+                file_time = source_process_time + timedelta(
+                    milliseconds=self._rng.randint(250, 950)
+                )
+        if file_time >= self._request.exfil_time:
+            return
+
+        self._executor.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=file_time,
+                event_type="file_read",
+                src_host=self._executor.activity_generator._build_host_context(
+                    self._request.source_system
+                ),
+                auth=AuthContext(username=self._request.actor.username),
+                process=ProcessContext(
+                    pid=self._request.source_pid,
+                    parent_pid=parent_pid,
+                    image=self._request.source_process,
+                    command_line=self._request.source_command or self._request.source_process,
+                    username=self._request.actor.username,
+                ),
+                file=FileContext(
+                    path=source_path,
+                    action="read",
+                    pid=self._request.source_pid,
+                ),
+                edr=EdrContext(
+                    object_id=stable_uuid(
+                        "staged-archive-source-file-read-edr",
+                        self._request.source_system.hostname,
+                        self._request.source_pid,
+                        source_path,
+                        self._request.exfil_time.isoformat(),
+                    ),
+                    actor_id=source_actor_id,
+                ),
+                storyline_origin=True,
+            )
+        )
 
     def _last_smb_connection_source_port(self) -> int | None:
         """Return the just-emitted SMB transfer source port when available."""
@@ -677,6 +790,7 @@ class ScpReceiverFileRequest:
     source_pid: int
     source_process: str
     source_command: str
+    source_path: str
     target_user: str
     target_path: str
     transfer_time: datetime
@@ -691,7 +805,7 @@ class ScpReceiverFileRequest:
             "action_bundle:scp_receiver_file:"
             f"{self.actor.username}:{self.source_system.hostname}:{self.target_system.hostname}:"
             f"{self.source_pid}:{self.source_process}:{self.source_command}:"
-            f"{self.target_user}:{self.target_path}:{self.transfer_time.isoformat()}:"
+            f"{self.source_path}:{self.target_user}:{self.target_path}:{self.transfer_time.isoformat()}:"
             f"{self.source_port}:{self.source}"
         )
         return f"scp-receiver-file-{seed:016x}"
@@ -725,6 +839,7 @@ class ScpReceiverFileActionBundle:
 
         transfer_time = self._request.transfer_time
         self._executor.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
+        self._emit_source_file_read()
         sshd_pid = self._ensure_responder_process()
         sshd_actor_id = self._executor.state_manager.get_process_object_id(
             self._request.target_system.hostname,
@@ -793,6 +908,72 @@ class ScpReceiverFileActionBundle:
                         file_time.isoformat(),
                     ),
                     actor_id=sshd_actor_id,
+                ),
+                storyline_origin=True,
+            )
+        )
+
+    def _emit_source_file_read(self) -> None:
+        """Emit sender-side file-read evidence owned by the SCP client process."""
+
+        if not self._request.source_path:
+            return
+        running_source = self._executor.state_manager.get_process(
+            self._request.source_system.hostname,
+            self._request.source_pid,
+        )
+        parent_pid = running_source.parent_pid if running_source is not None else 0
+        source_actor_id = self._executor.state_manager.get_process_object_id(
+            self._request.source_system.hostname,
+            self._request.source_pid,
+        )
+        file_time = self._request.transfer_time + timedelta(
+            milliseconds=self._rng.randint(180, 850)
+        )
+        source_time_getter = getattr(
+            self._executor.activity_generator,
+            "process_source_create_time",
+            None,
+        )
+        if callable(source_time_getter):
+            source_process_time = source_time_getter(
+                self._request.source_system.hostname,
+                self._request.source_pid,
+            )
+            if isinstance(source_process_time, datetime) and file_time <= source_process_time:
+                file_time = source_process_time + timedelta(
+                    milliseconds=self._rng.randint(250, 950)
+                )
+
+        self._executor.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=file_time,
+                event_type="file_read",
+                src_host=self._executor.activity_generator._build_host_context(
+                    self._request.source_system
+                ),
+                auth=AuthContext(username=self._request.actor.username),
+                process=ProcessContext(
+                    pid=self._request.source_pid,
+                    parent_pid=parent_pid,
+                    image=self._request.source_process,
+                    command_line=self._request.source_command,
+                    username=self._request.actor.username,
+                ),
+                file=FileContext(
+                    path=self._request.source_path,
+                    action="read",
+                    pid=self._request.source_pid,
+                ),
+                edr=EdrContext(
+                    object_id=stable_uuid(
+                        "scp-source-file-read-edr",
+                        self._request.source_system.hostname,
+                        self._request.source_pid,
+                        self._request.source_path,
+                        self._request.transfer_time.isoformat(),
+                    ),
+                    actor_id=source_actor_id,
                 ),
                 storyline_origin=True,
             )

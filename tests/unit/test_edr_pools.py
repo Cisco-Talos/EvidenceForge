@@ -20,6 +20,7 @@ from evidenceforge.generation.activity.edr_pools import (
     materialize_edr_template,
     materialize_edr_template_group,
     normalize_defender_platform_path,
+    select_ambient_file_churn_effect,
     select_file_side_effect,
 )
 
@@ -214,6 +215,105 @@ class TestFilePaths:
         assert not any(path.startswith("/var/lib/dpkg/") for path in paths)
         assert not any(path.startswith("/var/lib/apt/") for path in paths)
         assert not any(path.startswith("/var/cache/apt/") for path in paths)
+
+    def test_linux_service_ambient_churn_uses_daemon_profiles_not_generic_temp(self):
+        generic_paths = get_file_paths("linux")
+        actions = ["read", "modify", "create"]
+        weights = [60, 30, 10]
+        cases = [
+            (
+                "/usr/lib/systemd/systemd-timesyncd",
+                "/usr/lib/systemd/systemd-timesyncd",
+                "systemd-timesync",
+            ),
+            (
+                "/usr/lib/systemd/systemd-resolved",
+                "/usr/lib/systemd/systemd-resolved",
+                "systemd-resolve",
+            ),
+            ("/usr/bin/dbus-daemon", "/usr/bin/dbus-daemon --system", "messagebus"),
+            ("/usr/sbin/rsyslogd", "rsyslogd -n", "syslog"),
+            ("/usr/sbin/NetworkManager", "/usr/sbin/NetworkManager --no-daemon", "root"),
+            ("/usr/lib/snapd/snapd", "/usr/lib/snapd/snapd", "root"),
+        ]
+
+        for process_name, command_line, user in cases:
+            effects = {
+                select_ambient_file_churn_effect(
+                    process_name,
+                    command_line,
+                    "linux",
+                    random.Random(seed),
+                    user,
+                    generic_paths,
+                    actions,
+                    weights,
+                )
+                for seed in range(10)
+            }
+
+            assert all(effect is not None for effect in effects)
+            assert all(effect[0] == "modify" for effect in effects if effect is not None)
+            assert not any(
+                effect is not None
+                and (effect[1].startswith(("/tmp/", "/var/tmp/")) or "/.cache-" in effect[1])
+                for effect in effects
+            )
+
+    def test_linux_service_ambient_churn_skips_unprofiled_daemon_temp_fallback(self):
+        effect = select_ambient_file_churn_effect(
+            "/sbin/agetty",
+            "/sbin/agetty --noclear tty1 linux",
+            "linux",
+            random.Random(5),
+            "root",
+            get_file_paths("linux"),
+            ["create"],
+            [1],
+        )
+
+        assert effect is None
+
+    def test_linux_web_daemon_ambient_churn_uses_matching_service_family(self):
+        generic_paths = get_file_paths("linux")
+        actions = ["read", "modify", "create"]
+        weights = [60, 30, 10]
+
+        apache_effects = {
+            select_ambient_file_churn_effect(
+                "/usr/sbin/apache2",
+                "/usr/sbin/apache2 -DFOREGROUND",
+                "linux",
+                random.Random(seed),
+                "www-data",
+                generic_paths,
+                actions,
+                weights,
+            )
+            for seed in range(10)
+        }
+        nginx_effects = {
+            select_ambient_file_churn_effect(
+                "/usr/sbin/nginx",
+                "nginx: worker process",
+                "linux",
+                random.Random(seed),
+                "nginx",
+                generic_paths,
+                actions,
+                weights,
+            )
+            for seed in range(10)
+        }
+
+        assert all(effect is not None for effect in apache_effects)
+        assert all(effect is not None for effect in nginx_effects)
+        assert all("/var/log/apache2/" in effect[1] for effect in apache_effects if effect)
+        assert all(
+            effect[1].startswith(("/var/log/nginx/", "/var/cache/nginx/"))
+            for effect in nginx_effects
+            if effect
+        )
 
 
 class TestRegistryKeys:

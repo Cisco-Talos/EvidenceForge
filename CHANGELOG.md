@@ -4,6 +4,51 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## Unreleased
+
+## v1.2.0 (2026-06-03)
+
+This minor release promotes the new spillage feature family, the canonical
+ground-truth JSON contract, and the final maintainer follow-up fixes from `dev`
+ to `main`. The branch contains non-breaking `feat:` commits since v1.1.1, so
+the project moves from `1.1.1` to `1.2.0`.
+
+**Spillage modeling and ground truth**
+
+- Added the typed `spillage` storyline event for deterministic synthetic
+  credential leakage across shell history, process command line, syslog, and
+  HTTP surfaces, with data-driven secret families, family/literal validation,
+  carrier rendering, URL/syslog/shell-safe encoding, and safety guardrails
+  against real credentials or unsafe hosts (`1a465b27`).
+- Integrated `process_command_line` spillage back into canonical actor
+  session/logon ownership so standalone process evidence still uses the shared
+  auth/session/process architecture (`6e4090b9`).
+- Added scheme-aware HTTP/HTTPS web spillage so `http_request_url` and
+  `http_referrer` surfaces can model explicit cleartext or TLS-backed requests,
+  with validator/runtime support and causality matching for cleartext HTTP
+  observations (`d6d69f3d`).
+- Added the spillage full-matrix scenario and broader coverage for supported
+  surfaces, OS constraints, and source behavior (`190f16d3`).
+
+**Canonical machine-readable ground truth**
+
+- Replaced the spillage-only `GROUND_TRUTH.jsonl` sidecar with canonical
+  `GROUND_TRUTH.json`, backed by strict Pydantic schema models, and made
+  `GROUND_TRUTH.md` a renderer over that validated JSON document rather than a
+  parallel generator path (`e1c9dfc7`).
+- Updated `eforge eval`, CLI output staging/swap logic, docs, and regression
+  tests to consume the canonical ground-truth JSON contract directly
+  (`e1c9dfc7`).
+
+**Generator realism and release automation**
+
+- Improved iteration-test realism fidelity on `dev`, carrying forward the latest
+  generator hardening before this release (`651a11a0`).
+- Added GitHub release-tag automation so `main` merges verify version/tag
+  consistency and publish the annotated release tag automatically (`0e97f738`).
+
+---
+
 ## v1.1.1 (2026-05-29)
 
 This patch release promotes the post-1.1.0 current-dev assessment fixes. The
@@ -23,6 +68,8 @@ project moves from `1.1.0` to `1.1.1`.
   command docs to installed command usage, and added Claude instructions as a
   reference to the existing AGENTS.md workflow (`9d59a887`, `617932f1`,
   `11dee4b3`).
+
+---
 
 ## v1.1.0 (2026-05-28)
 

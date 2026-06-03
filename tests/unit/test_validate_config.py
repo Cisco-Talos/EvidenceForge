@@ -497,6 +497,14 @@ class TestValidateConfig:
                     }
                 ],
                 "mail_profiles": [],
+                "aaaa_profiles": [
+                    {
+                        "name": "valid_aaaa",
+                        "weight": 0,
+                        "match_suffixes": ["example.com"],
+                        "answer_sets": [["2606:4700::6810:84e5"]],
+                    }
+                ],
             }
 
         monkeypatch.setattr(
@@ -566,6 +574,14 @@ class TestValidateConfig:
                         "name": "bad_mx",
                         "weight": 1,
                         "answer_sets": [["0 {domain_hyphen}.mail.example.net"]],
+                    }
+                ],
+                "aaaa_profiles": [
+                    {
+                        "name": "bad_aaaa",
+                        "weight": 0,
+                        "match_suffixes": ["example.com"],
+                        "answer_sets": [["{domain.__class__}"]],
                     }
                 ],
             }

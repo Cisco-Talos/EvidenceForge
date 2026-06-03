@@ -1145,6 +1145,61 @@ class TestWebScanPresets:
         assert nikto is not None
         assert nikto["max_effective_rate"] <= 0.35
 
+    def test_nikto_preset_includes_protocol_probe_methods(self):
+        from evidenceforge.config.web_scan_presets import get_preset
+
+        nikto = get_preset("nikto")
+        assert nikto is not None
+        methods = {path["method"] for path in nikto["paths"] if isinstance(path, dict)}
+        assert {"GET", "HEAD", "OPTIONS", "POST"} <= methods
+
+    def test_web_scan_head_requests_have_no_response_body(self, monkeypatch):
+        from evidenceforge.generation.engine import storyline
+
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        engine = object.__new__(StorylineMixin)
+        captured = []
+        engine.state_manager = SimpleNamespace(
+            set_current_time=lambda _time: None,
+            get_process=lambda _host, _pid: None,
+        )
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.activity_generator = SimpleNamespace(
+            _ip_to_system={},
+            generate_connection=lambda **kwargs: captured.append(kwargs),
+        )
+        monkeypatch.setattr(storyline, "_iter_periodic_ticks", lambda *args: iter([start]))
+        monkeypatch.setattr(
+            storyline,
+            "_web_scan_connection_profile",
+            lambda rng, *, is_tls=False: ("SF", 0.25, 240, 1200),
+        )
+
+        spec = WebScanEventSpec(
+            dst_ip="10.0.0.20",
+            dst_port=80,
+            rate=1.0,
+            count=1,
+            hostname="app.example.test",
+            paths=[{"uri": "/", "method": "HEAD", "status": 200}],
+        )
+        request = WebScanRequest(
+            spec=spec,
+            actor=User(username="scanner", full_name="Scanner", email="scanner@example.com"),
+            system=System(hostname="SCAN-01", ip="10.0.0.5", os="Ubuntu 22.04", type="server"),
+            time=start,
+            rng=random.Random(29),
+            malicious_event={"type": "web_scan"},
+        )
+
+        engine._execute_web_scan_bundle(request)
+
+        assert len(captured) == 1
+        http = captured[0]["http"]
+        assert http.method == "HEAD"
+        assert http.response_body_len == 0
+        assert http.resp_mime_types == []
+
     def test_web_scan_paths_are_shuffled_between_passes(self):
         import inspect
 

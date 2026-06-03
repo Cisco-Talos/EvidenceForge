@@ -1,0 +1,209 @@
+name: Release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release-version:
+    name: Release version guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Read release version
+        id: version
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              raise SystemExit(1)
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          pyproject_version = pyproject["project"]["version"]
+
+          init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
+          init_version = None
+          for node in init_tree.body:
+              if not isinstance(node, ast.Assign):
+                  continue
+              for target in node.targets:
+                  if isinstance(target, ast.Name) and target.id == "__version__":
+                      if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                          init_version = node.value.value
+
+          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+          lock_version = None
+          for package in lock.get("package", []):
+              if package.get("name") == "evidence-forge":
+                  lock_version = package.get("version")
+                  break
+
+          if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
+              fail(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+          if init_version != pyproject_version:
+              fail(
+                  "src/evidenceforge/__init__.py __version__ "
+                  f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
+              )
+          if lock_version != pyproject_version:
+              fail(
+                  f"uv.lock evidence-forge version ({lock_version!r}) "
+                  f"does not match pyproject.toml ({pyproject_version!r})"
+              )
+
+          tag = f"v{pyproject_version}"
+          print(f"Release version: {pyproject_version}")
+          print(f"Release tag: {tag}")
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              print(f"version={pyproject_version}", file=output)
+              print(f"tag={tag}", file=output)
+          PY
+
+      - name: Verify release tag is unused
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Release tag ${TAG} already exists. Bump the version before merging to main."
+            exit 1
+          fi
+          echo "Release tag ${TAG} is available."
+
+  publish-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Read release version
+        id: version
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              raise SystemExit(1)
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          pyproject_version = pyproject["project"]["version"]
+
+          init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
+          init_version = None
+          for node in init_tree.body:
+              if not isinstance(node, ast.Assign):
+                  continue
+              for target in node.targets:
+                  if isinstance(target, ast.Name) and target.id == "__version__":
+                      if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                          init_version = node.value.value
+
+          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+          lock_version = None
+          for package in lock.get("package", []):
+              if package.get("name") == "evidence-forge":
+                  lock_version = package.get("version")
+                  break
+
+          if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
+              fail(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+          if init_version != pyproject_version:
+              fail(
+                  "src/evidenceforge/__init__.py __version__ "
+                  f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
+              )
+          if lock_version != pyproject_version:
+              fail(
+                  f"uv.lock evidence-forge version ({lock_version!r}) "
+                  f"does not match pyproject.toml ({pyproject_version!r})"
+              )
+
+          tag = f"v{pyproject_version}"
+          print(f"Release version: {pyproject_version}")
+          print(f"Release tag: {tag}")
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              print(f"version={pyproject_version}", file=output)
+              print(f"tag={tag}", file=output)
+          PY
+
+      - name: Verify release tag is unused
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Release tag ${TAG} already exists. Refusing to overwrite release history."
+            exit 1
+          fi
+          echo "Release tag ${TAG} is available."
+
+      - name: Create annotated release tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" "${GITHUB_SHA}" -m "EvidenceForge ${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "EvidenceForge ${TAG}" \
+            --verify-tag \
+            --fail-on-no-commits \
+            --generate-notes

@@ -731,6 +731,72 @@ _HTTP_FILE_TRANSFER_MIME_TYPES = {
 }
 _HTTP_FILE_TRANSFER_BODY_THRESHOLD = 64 * 1024
 _HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD = 1_000_000
+_SSH_CLIENT_IDENTITY_FILES = (
+    "~/.ssh/id_ed25519",
+    "~/.ssh/id_rsa",
+    "~/.ssh/work_ed25519",
+)
+
+
+def _linux_ssh_client_command_line(
+    *,
+    exe_name: str,
+    username: str,
+    target_host: str,
+    target_ip: str,
+    source_hostname: str,
+    source_port: int,
+    requested_time: datetime,
+) -> str:
+    """Return a deterministic source-native SSH/SCP client command line."""
+    seed = _stable_seed(
+        "linux_ssh_client_command:"
+        f"{source_hostname}:{username}:{target_host}:{target_ip}:"
+        f"{source_port}:{ensure_utc(requested_time).isoformat()}:{exe_name}"
+    )
+    rng = random.Random(seed)
+    short_host = target_host.split(".", 1)[0]
+    host_forms = [target_host]
+    weights = [6]
+    if short_host and short_host != target_host:
+        host_forms.append(short_host)
+        weights.append(3)
+    if target_ip:
+        host_forms.append(target_ip)
+        weights.append(1)
+    host = rng.choices(host_forms, weights=weights, k=1)[0]
+    identity_file = rng.choice(_SSH_CLIENT_IDENTITY_FILES)
+
+    if exe_name == "scp":
+        remote_path = rng.choice(
+            (
+                "~/remote-file",
+                "/var/tmp/archive.tgz",
+                "/tmp/support-bundle.tgz",
+                "~/logs/support.log",
+            )
+        )
+        local_path = rng.choice(("./remote-file", "./archive.tgz", "/tmp/support-bundle.tgz"))
+        variants = (
+            f"scp {username}@{host}:{remote_path} {local_path}",
+            f"scp -p {username}@{host}:{remote_path} {local_path}",
+            f"scp -i {identity_file} {username}@{host}:{remote_path} {local_path}",
+            f"scp -o ConnectTimeout=10 {username}@{host}:{remote_path} {local_path}",
+        )
+        return rng.choice(variants)
+
+    variants = (
+        f"ssh {username}@{host}",
+        f"ssh {username}@{host}",
+        f"ssh -l {username} {host}",
+        f"ssh -i {identity_file} {username}@{host}",
+        f"ssh -o ConnectTimeout=10 {username}@{host}",
+        f"ssh -o ServerAliveInterval=30 {username}@{host}",
+        f"ssh -A {username}@{host}",
+        f"ssh -tt {username}@{host}",
+        f"ssh -p 22 {username}@{host}",
+    )
+    return rng.choice(variants)
 
 
 def _http_response_requires_file_transfer(http: HttpContext) -> bool:
@@ -2562,6 +2628,19 @@ def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
     return rng.choices(weighted, weights=weights, k=1)[0]
 
 
+def _public_dns_matched_profile(kind: str, domain: str) -> dict[str, Any]:
+    """Return a profile only when the domain matches an explicit suffix."""
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+
+    profiles = load_public_dns_profiles().get(kind, [])
+    lowered = domain.lower().rstrip(".")
+    for profile in profiles:
+        suffixes = [str(suffix).lower().rstrip(".") for suffix in profile.get("match_suffixes", [])]
+        if any(lowered == suffix or lowered.endswith(f".{suffix}") for suffix in suffixes):
+            return profile
+    return {}
+
+
 def _render_public_dns_answer(template: str, domain: str) -> str:
     """Render a public DNS answer template using source-owned domain tokens."""
     from evidenceforge.config.public_dns_templates import render_public_dns_answer_template
@@ -2590,6 +2669,49 @@ def _public_dns_mx_answers(domain: str) -> list[str]:
     """Return realistic public MX answers for a domain."""
     answers = _public_dns_answer_set("mail_profiles", domain)
     return answers or [f"10 mail.{domain}"]
+
+
+def _public_dns_has_explicit_owner_profile(domain: str) -> bool:
+    """Return whether public DNS profile data recognizes this owner family."""
+    return any(
+        _public_dns_matched_profile(kind, domain)
+        for kind in ("nameserver_profiles", "mail_profiles", "aaaa_profiles")
+    )
+
+
+def _public_dns_aaaa_answers(hostname: str, dst_ip: str, *, is_internal: bool = False) -> list[str]:
+    """Return source-owned AAAA answers for a lookup target."""
+    if ":" in dst_ip:
+        return [dst_ip]
+
+    if is_internal or _is_private_ip(dst_ip):
+        ipv6_answer = _IPV6_MAP.get(dst_ip)
+        if ipv6_answer is not None:
+            return [ipv6_answer]
+        return [_ipv4_to_fake_ipv6(dst_ip)]
+
+    owner = _dns_registrable_domain(hostname)
+    profile = _public_dns_matched_profile("aaaa_profiles", hostname) or _public_dns_matched_profile(
+        "aaaa_profiles", owner
+    )
+    if profile:
+        answer_sets = profile.get("answer_sets", [])
+        if not answer_sets:
+            return []
+        rng = random.Random(_stable_seed(f"public_dns_answers:aaaa_profiles:{hostname}:{dst_ip}"))
+        answers = rng.choice(answer_sets)
+        return [_render_public_dns_answer(str(answer), owner) for answer in answers]
+
+    if _public_dns_has_explicit_owner_profile(hostname) or _public_dns_has_explicit_owner_profile(
+        owner
+    ):
+        return []
+
+    ipv6_answer = _IPV6_MAP.get(dst_ip)
+    if ipv6_answer is not None:
+        return [ipv6_answer]
+
+    return [_ipv4_to_fake_ipv6(dst_ip)]
 
 
 def _dns_soa_answer(domain: str, mname: str, rname: str, seed_context: str = "") -> str:
@@ -3383,6 +3505,32 @@ def _ntp_payload_accounting(
     return normalized_orig, normalized_resp, normalized_duration
 
 
+def _select_public_ntp_ip(src_ip: str, dst_ip: str, time: datetime) -> str | None:
+    """Return a configured public NTP server IP for inferred public NTP traffic."""
+    from evidenceforge.generation.activity.network_params import public_ntp_servers
+
+    servers = [
+        server
+        for server in public_ntp_servers()
+        if isinstance(server.get("ip"), str) and server["ip"]
+    ]
+    if not servers:
+        return None
+    rng = random.Random(
+        _stable_seed(
+            "public_ntp_destination:"
+            f"{src_ip}:{dst_ip}:{time.replace(minute=0, second=0, microsecond=0).isoformat()}"
+        )
+    )
+    weights = [
+        max(0.1, float(server.get("weight", 1.0)))
+        if isinstance(server.get("weight", 1.0), int | float)
+        else 1.0
+        for server in servers
+    ]
+    return str(rng.choices([server["ip"] for server in servers], weights=weights, k=1)[0])
+
+
 def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
     """Return deterministic Zeek files.log hashes for requested analyzers."""
 
@@ -3877,7 +4025,12 @@ class ActivityGenerator:
             os_category=_get_os_category(system.os),
             system_type=system.type,
             domain=ad_domain,
-            fqdn=f"{hostname}.{ad_domain}" if ad_domain else hostname,
+            # Guard against an already-FQDN hostname so we never double the domain
+            # (e.g. "cdn.example.com" -> "cdn.example.com.example.com"), mirroring
+            # the guard in _system_for_hostname.
+            fqdn=(hostname if "." in hostname else f"{hostname}.{ad_domain}")
+            if ad_domain
+            else hostname,
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
             roles=list(system.roles),
         )
@@ -9501,10 +9654,15 @@ class ActivityGenerator:
             exe_name = "ssh"
 
         target_host = self._build_host_context(target_system).fqdn or target_system.hostname
-        if exe_name == "scp":
-            command_line = f"scp {user.username}@{target_host}:~/remote-file ./remote-file"
-        else:
-            command_line = f"ssh {user.username}@{target_host}"
+        command_line = _linux_ssh_client_command_line(
+            exe_name=exe_name,
+            username=user.username,
+            target_host=target_host,
+            target_ip=target_system.ip,
+            source_hostname=source_system.hostname,
+            source_port=source_port,
+            requested_time=requested_time,
+        )
 
         seed = _stable_seed(
             "linux_ssh_client_process:"
@@ -10338,6 +10496,16 @@ class ActivityGenerator:
         # emitted. Keep the empty-string raw-TCP sentinel unchanged.
         if proto == "tcp" and dst_port in (80, 443) and service != "" and not is_tcp_probe:
             service = "http" if dst_port == 80 else "ssl"
+        if proto == "udp" and dst_port == 123 and (service != "" or (resp_bytes or 0) > 0):
+            service = "ntp"
+            if not _is_private_ip(dst_ip):
+                from evidenceforge.generation.activity.network_params import public_ntp_ips
+
+                configured_ntp_ips = set(public_ntp_ips())
+                if configured_ntp_ips and dst_ip not in configured_ntp_ips:
+                    selected_ntp_ip = _select_public_ntp_ip(src_ip, dst_ip, time)
+                    if selected_ntp_ip:
+                        dst_ip = selected_ntp_ip
 
         if (
             proto == "tcp"
@@ -13590,14 +13758,7 @@ class ActivityGenerator:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            ipv6_answer = _IPV6_MAP.get(dst_ip)
-            if ipv6_answer is not None:
-                answers = [ipv6_answer]
-            elif ":" in dst_ip:
-                # Already IPv6 (not present in registry map) — use as-is.
-                answers = [dst_ip]
-            else:
-                answers = [_ipv4_to_fake_ipv6(dst_ip)]
+            answers = _public_dns_aaaa_answers(hostname, dst_ip, is_internal=is_internal)
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
@@ -13728,11 +13889,11 @@ class ActivityGenerator:
             companion_qtype = 28
             if companion_kind == "AAAA":
                 companion_qtype = 28
-                companion_answers = [
-                    dst_ip
-                    if ":" in dst_ip
-                    else (_IPV6_MAP.get(dst_ip) or _ipv4_to_fake_ipv6(dst_ip))
-                ]
+                companion_answers = _public_dns_aaaa_answers(
+                    hostname,
+                    dst_ip,
+                    is_internal=is_internal,
+                )
             elif companion_kind == "PTR":
                 companion_qtype = 12
                 companion_query = _dns_reverse_query(dst_ip)
@@ -17575,6 +17736,253 @@ class ActivityGenerator:
             raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
+
+    def generate_spillage(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        time: datetime,
+        surface: str,
+        family: str | None,
+        value: str | None,
+        seed_key: str,
+        scheme: str | None = None,
+        logon_id: str | None = None,
+        target_system: "System | None" = None,
+    ) -> dict[str, Any]:
+        """Emit one synthetic credential into a semantic surface.
+
+        Resolves a single safety-checked canonical value (synthesized from a
+        family or supplied literally), renders it with surface-appropriate
+        encoding, and routes it through the canonical modeled generation path
+        for that surface. ``target_system`` is the destination web server for the
+        http_* surfaces (whose access log records the credential). Returns a dict
+        of ground-truth fields.
+        """
+        from evidenceforge.generation.spillage import (
+            HTTP_SURFACES,
+            choose_web_spillage_scheme,
+            render_for_surface,
+            resolve_value,
+        )
+
+        canonical, resolved_family = resolve_value(family, value, seed_key=seed_key)
+        os_category = _get_os_category(system.os)
+        render = render_for_surface(
+            canonical, surface, resolved_family, seed_key, os_category=os_category
+        )
+
+        emitted_time = time
+        target_fqdn: str | None = None
+        effective_scheme: str | None = None
+        if surface == "shell_history":
+            # bash history dwell/session scheduling can shift the visible time;
+            # use the actual emitted time so ground truth matches the log line.
+            # This surface is the bash-history-FILE exposure (the credential left in
+            # history); v1 does not also emit correlated process/network telemetry
+            # for the carrier — use process_command_line for the EDR-correlated form.
+            result_time = self.generate_bash_command(
+                user=user,
+                system=system,
+                time=time,
+                activity_type_or_command=render.command,
+                emit_process_telemetry=False,
+            )
+            if result_time is None:
+                # The bash command was suppressed (dwell-shifted past the scenario
+                # window, or a non-interactive user) — nothing landed on disk, so
+                # do NOT label it. Signal suppression; the caller skips the record.
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            emitted_time = result_time
+        elif surface == "process_command_line":
+            # The credential rides on a process command line (T1552.001), captured
+            # by EDR/process telemetry via the canonical process-execution bundle as
+            # a standalone process with a durable unique PID. Carriers are LOCAL
+            # commands only (aws configure set, git config, os.environ[...]=, …),
+            # so this live in-window process record is self-consistent and never
+            # implies an outbound connection it doesn't model — see docs/reference/
+            # spillage.md "Correlation scope (v1)". OS-aware: a Windows host renders
+            # a cmd/PowerShell/.exe carrier (not a Linux /usr/bin command line).
+            default_proc = (
+                r"C:\Windows\System32\cmd.exe" if os_category == "windows" else "/usr/bin/sh"
+            )
+            parent_pid = 4
+            if os_category == "linux" and logon_id:
+                parent_pid = self._spillage_process_parent_pid(
+                    system=system,
+                    time=time,
+                    logon_id=logon_id,
+                )
+            pid = self.generate_process(
+                user=user,
+                system=system,
+                time=time,
+                logon_id=logon_id or "0x0",
+                process_name=render.process_name or default_proc,
+                command_line=render.command,
+                parent_pid=parent_pid,
+                from_storyline=True,
+            )
+            if not pid:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+        elif surface == "syslog_message":
+            self.generate_syslog_event(
+                system=system,
+                time=time,
+                app_name=render.syslog_app,
+                message=render.syslog_message,
+            )
+        elif surface in HTTP_SURFACES:
+            # The credential rides in an outbound HTTP/S request (URL query or
+            # Referer header) from the actor's host to a web server, captured by
+            # that server's access log. Route through the canonical connection
+            # path so the web emitter renders it natively.
+            if target_system is None:
+                # No web server to receive the request — nothing lands on disk, so
+                # do NOT label it (validation flags this case before generation).
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            effective_scheme = choose_web_spillage_scheme(target_system, scheme)
+            if effective_scheme is None:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            # Record the destination's FQDN exactly as the web emitter names the
+            # access-log directory, so the sidecar's target_system points a scorer
+            # (and the eval record search) at the right host even for dotted/FQDN
+            # hostnames or external servers.
+            target_fqdn = self._build_host_context(target_system).fqdn or target_system.hostname
+            ua_rng = random.Random(_stable_seed(f"{seed_key}:ua"))
+            if surface == "http_referrer":
+                # A Referer header is sent by browsers, not CLI/library clients; a
+                # browser-class UA keeps the request realistic and source-coherent
+                # (a tool UA would make downstream normalization drop the Referer).
+                # Use an OS-matched browser pool so a Linux/Windows actor gets a
+                # Linux/Windows UA (AGENTS.md rule 3: OS-aware defaults).
+                from evidenceforge.generation.activity.web_session_profiles import (
+                    pick_web_user_agent,
+                )
+
+                user_agent = pick_web_user_agent(
+                    ua_rng,
+                    {
+                        "user_agent_pool": "browser_any",
+                        "user_agent_pool_by_os": {
+                            "windows": "browser_windows",
+                            "linux": "browser_linux",
+                        },
+                    },
+                    source_os=_get_os_category(system.os),
+                )
+            else:
+                user_agent = pick_proxy_user_agent(ua_rng, system, hostname=target_system.hostname)
+            resp_len = random.Random(_stable_seed(f"{seed_key}:bytes")).randint(256, 8192)
+            http_ctx = HttpContext(
+                method=render.http_method or "GET",
+                host=target_system.hostname,
+                uri=render.http_uri or "/",
+                version="1.1",
+                user_agent=user_agent,
+                request_body_len=0,
+                response_body_len=resp_len,
+                status_code=200,
+                status_msg="OK",
+                referrer=render.http_referrer or "",
+            )
+            # Direct request to the web server (proxy_bypass): the spillage contract
+            # is that the credential lands in the target's access log with
+            # client_ip = the actor's host. Routing through an explicit proxy would
+            # rewrite client_ip to the proxy and can scrub the Referer for an
+            # external target, which would mislabel the (unwritten) credential as
+            # landed. Going direct keeps the surface source-coherent.
+            uid = self.generate_connection(
+                src_ip=system.ip,
+                dst_ip=target_system.ip,
+                time=time,
+                dst_port=80 if effective_scheme == "http" else 443,
+                proto="tcp",
+                service=effective_scheme,
+                source_system=system,
+                http=http_ctx,
+                hostname=target_system.hostname,
+                preserve_dst_ip=True,
+                proxy_bypass=True,
+            )
+            if not uid:
+                # The connection was filtered out (e.g. no sensor observes the
+                # actor->web-server path), so nothing landed on disk — do NOT label
+                # it, mirroring the suppressed shell_history case above.
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+        else:  # pragma: no cover - guarded by render_for_surface/model Literal
+            raise ValueError(f"unsupported spillage surface: {surface!r}")
+
+        return {
+            "surface": surface,
+            "family": resolved_family,
+            "value": canonical,
+            "rendered_value": render.encoded_value,
+            "expected_sources": list(render.expected_sources),
+            "time": emitted_time,
+            "target_system": target_fqdn,
+            "scheme": effective_scheme,
+        }
+
+    def _spillage_process_parent_pid(
+        self,
+        *,
+        system: "System",
+        time: datetime,
+        logon_id: str,
+    ) -> int:
+        """Choose a non-shell parent for session-bound Linux process spillage."""
+        if _get_os_category(system.os) != "linux" or not logon_id:
+            return 4
+
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            for candidate in (session.transport_pid, session.process_tree_root):
+                if (
+                    candidate
+                    and self.state_manager.get_process(system.hostname, candidate) is not None
+                    and self._is_pid_active_at(system, candidate, time)
+                ):
+                    parent_proc = self.state_manager.get_process(system.hostname, candidate)
+                    parent_exe = (
+                        parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                        if parent_proc is not None
+                        else ""
+                    )
+                    if parent_exe not in {"bash", "sh", "zsh"}:
+                        return candidate
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("sshd", "systemd", "init"):
+            candidate = sys_pids.get(role)
+            if (
+                candidate
+                and self.state_manager.get_process(system.hostname, candidate) is not None
+                and self._is_pid_active_at(system, candidate, time)
+            ):
+                return candidate
+        return 4
 
     def _normalize_apache_raw_syslog(
         self,

@@ -255,10 +255,10 @@ output:
         assert callable(call_kwargs["progress_callback"])
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
-    def test_generate_rejects_dangling_sidecar_symlink(
+    def test_generate_rejects_dangling_generated_report_symlink(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
-        """Dangling generated sidecar symlinks should be rejected before generation."""
+        """Dangling generated report symlinks should be rejected before generation."""
         mock_engine = Mock()
         mock_engine_class.return_value = mock_engine
         ground_truth = tmp_path / "GROUND_TRUTH.md"
@@ -302,6 +302,7 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
@@ -323,6 +324,7 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert "Existing output found" in result.stdout
         assert mock_engine.generate.called
+        assert (tmp_path / "GROUND_TRUTH.json").exists()
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
         # ENVIRONMENT.md is authored by /eforge scenario, not the engine — must be preserved
         assert (tmp_path / "ENVIRONMENT.md").exists()
@@ -363,6 +365,7 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
@@ -390,6 +393,7 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert "Overwrite existing output?" not in result.stdout
         assert mock_engine.generate.called
+        assert (tmp_path / "GROUND_TRUTH.json").exists()
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
         assert (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text() == '{"schema_version": 1}'
         assert (tmp_path / "data" / "new.xml").read_text() == "new data"
@@ -398,10 +402,58 @@ output:
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
-    def test_generate_force_baseline_only_replaces_complete_sidecar_set(
+    def test_partial_prior_state_rollback_keeps_matched_set(
+        self, mock_engine_class, scenarios_dir, tmp_path, monkeypatch
+    ):
+        """A swap failure must not leave a NEW GROUND_TRUTH.md orphaned over restored
+        OLD data/ when the prior output was partial (data/ but no GT.md). Rollback
+        strips the just-installed new artifacts unconditionally, restoring the
+        matched set (here: old data/, still no GT.md)."""
+        from pathlib import Path
+
+        def _fake_generate():
+            sd = next(iter(tmp_path.glob(".eforge_staging_*")))
+            (sd / "data").mkdir(exist_ok=True)
+            (sd / "data" / "new.xml").write_text("new data")
+            (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
+            (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+            (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        # PARTIAL prior state: data/ exists, but GROUND_TRUTH.md does NOT.
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+
+        # Force a failure at the LAST install step (the OUTPUT_TARGET marker) so the
+        # swap fails AFTER new data/ + new GROUND_TRUTH.md were already installed.
+        real_rename = Path.rename
+
+        def boom_rename(self, target):
+            if self.name == OUTPUT_TARGET_FILENAME and ".eforge_staging_" in str(self):
+                raise RuntimeError("injected swap failure")
+            return real_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", boom_rename)
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path), "--force"],
+        )
+
+        assert result.exit_code != EXIT_SUCCESS  # the run failed
+        # No orphaned NEW ground truth, and the OLD data/ is restored intact.
+        assert not (tmp_path / "GROUND_TRUTH.md").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert not (tmp_path / "data" / "new.xml").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_force_baseline_only_replaces_complete_report_set(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
-        """--force should swap baseline-only outputs with data, ground truth, and manifest."""
+        """--force should swap baseline-only outputs with data, reports, and manifest."""
 
         def _fake_generate():
             staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
@@ -409,6 +461,9 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "baseline.log").write_text("new baseline data")
+                (sd / "GROUND_TRUTH.json").write_text(
+                    '{"schema_version": 1, "scenario_name": "baseline-only", "events": []}'
+                )
                 (sd / "GROUND_TRUTH.md").write_text(
                     "# Ground Truth: baseline-only\n\n*No malicious activities in this scenario.*\n"
                 )
@@ -440,6 +495,7 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert not (tmp_path / "data" / "old.log").exists()
         assert (tmp_path / "data" / "baseline.log").read_text() == "new baseline data"
+        assert "baseline-only" in (tmp_path / "GROUND_TRUTH.json").read_text()
         assert "No malicious activities" in (tmp_path / "GROUND_TRUTH.md").read_text()
         assert "baseline-only" in (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text()
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "scenario-authored"
@@ -505,6 +561,7 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
@@ -557,6 +614,7 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
@@ -628,6 +686,7 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
@@ -742,6 +801,7 @@ output:
                 sd = staging_dirs[0]
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 

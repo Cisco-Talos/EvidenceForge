@@ -1,0 +1,393 @@
+version: "1.0"
+name: spillage-full-matrix-test
+description: |
+  Compact EvidenceForge harness for exercising every built-in data-driven
+  spillage family across every semantic spillage surface. The scenario is not a
+  realistic hunt narrative; it is a quick compatibility matrix for verifying
+  world-model target selection, canonical event/context routing, source
+  visibility, native renderers, and GROUND_TRUTH.json labeling.
+
+environment:
+  description: "Cedar Ridge Labs spillage matrix lab with mixed OS hosts, explicit proxy, and scheme-marked web servers"
+  domain: "matrixlab.local"
+
+  timezone:
+    default: "America/New_York"
+
+  proxy:
+    mode: explicit
+    listener_port: 8080
+
+  users:
+    - username: jordan.lee
+      full_name: "Jordan Lee"
+      email: "jordan.lee@matrixlab.example.com"
+      persona: developer
+      primary_system: WS-JLEE-01
+      groups: ["engineering"]
+      enabled: true
+      browsing_intensity: light
+
+    - username: nina.kapoor
+      full_name: "Nina Kapoor"
+      email: "nina.kapoor@matrixlab.example.com"
+      persona: sysadmin
+      primary_system: WS-NKAPOOR-01
+      groups: ["it-admins", "domain-admins"]
+      enabled: true
+      browsing_intensity: light
+
+  service_accounts:
+    - svc-proxy
+    - svc-web
+    - www-data
+
+  groups:
+    - name: engineering
+      members: ["jordan.lee"]
+    - name: it-admins
+      members: ["nina.kapoor"]
+    - name: domain-admins
+      members: ["nina.kapoor"]
+
+  systems:
+    - hostname: WS-JLEE-01
+      ip: "10.66.10.23"
+      os: "Ubuntu 22.04 LTS"
+      type: workstation
+      assigned_user: jordan.lee
+      services: ["ssh", "systemd-resolved"]
+
+    - hostname: WS-NKAPOOR-01
+      ip: "10.66.10.24"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: nina.kapoor
+      services: ["dns-client", "w32time"]
+
+    - hostname: DC-MTX-01
+      ip: "10.66.20.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+      services: ["ad-ds", "dns", "kerberos", "ldap", "smb", "w32time"]
+      roles: ["domain_controller", "dns_server"]
+
+    - hostname: APP-MTX-01
+      ip: "10.66.20.30"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["ssh", "gunicorn", "systemd-resolved"]
+      roles: ["app_server"]
+
+    - hostname: PROXY-MTX-01
+      ip: "10.66.20.40"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["squid", "ssh", "systemd-resolved"]
+      roles: ["forward_proxy"]
+      public_hostnames: ["proxy.matrixlab.example.com"]
+
+    - hostname: WEB-01-HTTPONLY
+      ip: "10.66.30.10"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["http", "nginx", "php-fpm", "ssh", "systemd-resolved"]
+      roles: ["web_server"]
+      public_hostnames: ["plain.matrixlab.example.com"]
+
+    - hostname: WEB-02-HTTPSONLY
+      ip: "10.66.30.20"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["https", "nginx", "php-fpm", "ssh", "systemd-resolved"]
+      roles: ["web_server"]
+      public_hostnames: ["secure.matrixlab.example.com"]
+
+    - hostname: WEB-03-LEGACY
+      ip: "10.66.30.30"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["nginx", "php-fpm", "ssh", "systemd-resolved"]
+      roles: ["web_server"]
+      public_hostnames: ["legacy.matrixlab.example.com"]
+
+    - hostname: WEB-04-BOTH
+      ip: "10.66.30.40"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["http", "https", "apache2", "php-fpm", "ssh", "systemd-resolved"]
+      roles: ["web_server"]
+      public_hostnames: ["dual.matrixlab.example.com"]
+
+  network:
+    public_cidrs:
+      - "203.0.113.32/28"
+
+    segments:
+      - name: workstations
+        cidr: "10.66.10.0/24"
+        description: "User workstation VLAN"
+        exposure: internal
+        systems: [WS-JLEE-01, WS-NKAPOOR-01]
+
+      - name: servers
+        cidr: "10.66.20.0/24"
+        description: "Internal infrastructure and app server VLAN"
+        exposure: internal
+        systems: [DC-MTX-01, APP-MTX-01, PROXY-MTX-01]
+
+      - name: dmz
+        cidr: "10.66.30.0/24"
+        description: "Local web server segment used by scheme-aware spillage tests"
+        exposure: both
+        external_ratio: 0.1
+        systems: [WEB-01-HTTPONLY, WEB-02-HTTPSONLY, WEB-03-LEGACY, WEB-04-BOTH]
+
+    sensors:
+      - type: network
+        name: zeek-matrix-span
+        hostname: ZEEK-MTX-01
+        monitoring_segments: [workstations, servers, dmz]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+        description: "Full-path SPAN for verifying direct HTTP/HTTPS spillage connections"
+
+      - type: firewall
+        name: fw-matrix-edge
+        hostname: FW-MTX-01
+        monitoring_segments: [workstations, servers, dmz]
+        direction: bidirectional
+        placement: tap
+        log_formats: [cisco_asa]
+        interfaces:
+          workstations: inside
+          servers: inside
+          dmz: dmz
+        default_action: deny
+        deny_ratio: 1.0
+        threat_detection_rate: 2
+        nat_rules:
+          - type: dynamic_pat
+            src: [workstations, servers]
+            mapped_ip: "203.0.113.33"
+          - type: static
+            src: dmz
+            real_ip: "10.66.30.10"
+            mapped_ip: "203.0.113.34"
+        policy:
+          - {src: external, dst: dmz, ports: [80, 443], action: permit}
+          - {src: workstations, dst: dmz, ports: [80, 443], action: permit}
+          - {src: servers, dst: dmz, ports: [80, 443], action: permit}
+          - {src: workstations, dst: servers, ports: [53, 88, 389, 445, 8080, 3389], action: permit}
+          - {src: servers, dst: servers, ports: [22, 53, 88, 389, 445], action: permit}
+          - {src: workstations, dst: external, ports: [80, 443, 53], action: permit}
+          - {src: servers, dst: external, ports: [80, 443, 53, 123], action: permit}
+
+time_window:
+  start: "2024-05-16T13:00:00Z"
+  duration: "2h"
+  warmup: "1h"
+
+baseline_activity:
+  description: "Low-volume baseline so all matrix positives stay quick to inspect."
+  intensity: low
+  variation: low
+  suspicious_noise: low
+  traffic_rates:
+    web: low
+    user_activity: low
+    persona_connections: low
+
+observation_profile: complete
+logon_grace_period: "30m"
+
+storyline:
+  - id: setup-linux-ssh-session
+    time: "+10m"
+    actor: jordan.lee
+    system: APP-MTX-01
+    activity: "Jordan opens an SSH administration session to the Linux app server"
+    events:
+      - type: ssh_session
+        source_ip: "10.66.10.23"
+        technique: "Benign - Test Setup"
+        description: "Creates coherent Linux session context before Linux process spills"
+
+  - id: setup-windows-local-logon
+    time: "+12m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "Nina signs in to the Windows workstation"
+    events:
+      - type: logon
+        logon_type: 2
+        source_ip: "10.66.10.24"
+        technique: "Benign - Test Setup"
+        description: "Creates Windows logon context before Windows process spills"
+
+  - id: spill-shell-aws-iam
+    time: "+20m"
+    actor: jordan.lee
+    system: WS-JLEE-01
+    activity: "AWS IAM key lands in Linux bash history"
+    events:
+      - type: spillage
+        surface: shell_history
+        family: aws_iam
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family aws_iam on shell_history"
+
+  - id: spill-shell-github-pat
+    time: "+25m"
+    actor: jordan.lee
+    system: WS-JLEE-01
+    activity: "GitHub PAT lands in Linux bash history"
+    events:
+      - type: spillage
+        surface: shell_history
+        family: github_pat
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family github_pat on shell_history"
+
+  - id: spill-linux-process-db-uri
+    time: "+30m"
+    actor: jordan.lee
+    system: APP-MTX-01
+    activity: "Database URI lands in Linux process command-line telemetry"
+    events:
+      - type: spillage
+        surface: process_command_line
+        family: db_uri
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family db_uri on Linux process_command_line"
+
+  - id: spill-windows-process-bearer-token
+    time: "+35m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "Bearer token lands in Windows process command-line telemetry"
+    events:
+      - type: spillage
+        surface: process_command_line
+        family: bearer_token
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family bearer_token on Windows process_command_line"
+
+  - id: spill-syslog-slack-token
+    time: "+40m"
+    actor: jordan.lee
+    system: APP-MTX-01
+    activity: "Slack token lands in Linux syslog"
+    events:
+      - type: spillage
+        surface: syslog_message
+        family: slack_token
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family slack_token on syslog_message"
+
+  - id: spill-syslog-password-generic
+    time: "+45m"
+    actor: jordan.lee
+    system: APP-MTX-01
+    activity: "Generic password lands in Linux syslog"
+    events:
+      - type: spillage
+        surface: syslog_message
+        family: password_generic
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family password_generic on syslog_message"
+
+  - id: spill-http-url-gcp-api-key-http
+    time: "+50m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "GCP API key lands in a direct HTTP request URL"
+    events:
+      - type: spillage
+        surface: http_request_url
+        family: gcp_api_key
+        scheme: http
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family gcp_api_key on http_request_url with explicit HTTP"
+
+  - id: spill-http-url-github-fine-pat-https
+    time: "+55m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "GitHub fine-grained PAT lands in a direct HTTPS request URL"
+    events:
+      - type: spillage
+        surface: http_request_url
+        family: github_fine_pat
+        scheme: https
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family github_fine_pat on http_request_url with explicit HTTPS"
+
+  - id: spill-http-referrer-stripe-key-http
+    time: "+1h"
+    actor: jordan.lee
+    system: APP-MTX-01
+    activity: "Stripe key lands in the Referer header of a direct HTTP request"
+    events:
+      - type: spillage
+        surface: http_referrer
+        family: stripe_key
+        scheme: http
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family stripe_key on http_referrer with explicit HTTP"
+
+  - id: spill-http-referrer-jwt-https
+    time: "+1h5m"
+    actor: jordan.lee
+    system: APP-MTX-01
+    activity: "JWT lands in the Referer header of a direct HTTPS request"
+    events:
+      - type: spillage
+        surface: http_referrer
+        family: jwt
+        scheme: https
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Family jwt on http_referrer with explicit HTTPS"
+
+  - id: spill-http-url-auto-scheme
+    time: "+1h10m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "Bearer token lands in a URL with scheme omitted for auto-selection"
+    events:
+      - type: spillage
+        surface: http_request_url
+        family: bearer_token
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Omitted scheme should auto-select HTTPS because compatible HTTPS servers exist"
+
+  - id: control-proxy-beacon
+    time: "+1h20m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "Control event: ordinary HTTPS beacon through the explicit proxy"
+    events:
+      - type: beacon
+        dst_ip: "203.0.113.41"
+        dst_port: 443
+        hostname: "updates.matrixlab.example.net"
+        service: ssl
+        interval: "3m"
+        duration: "9m"
+        action: allow
+        technique: "Benign - Test Control"
+        description: "Provides non-spillage proxy_access evidence for comparison"
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: web_access
+    - format: proxy_access
+    - format: cisco_asa
+  destination: scenarios/spillage-full-matrix-test
+  compression: false

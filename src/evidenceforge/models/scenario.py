@@ -965,6 +965,42 @@ class WorkstationUnlockEventSpec(_EventSpecBase):
     type: Literal["workstation_unlock"] = "workstation_unlock"
 
 
+class SpillageEventSpec(_EventSpecBase):
+    """Emit a synthetic credential into a log surface for scrubber/DLP testing.
+
+    Provide exactly one of:
+      - ``family``: synthesize a safe canonical fake from a data-driven family
+        definition (see config/activity/secret_families.yaml), or
+      - ``value``: a literal credential that must pass the spillage safety
+        guardrails (poison marker or vendor allowlist, per-token marker, host
+        allowlist, family-regex match, single-line).
+
+    The single canonical value is rendered with surface-appropriate encoding.
+    ``surface`` is the *semantic* exposure surface, never an emitter name.
+    """
+
+    type: Literal["spillage"] = "spillage"
+    surface: Literal[
+        "shell_history",
+        "process_command_line",
+        "syslog_message",
+        "http_request_url",
+        "http_referrer",
+    ]
+    family: str | None = None
+    value: str | None = None
+    scheme: Literal["http", "https"] | None = None
+
+    @model_validator(mode="after")
+    def spillage_requires_one_source(self) -> "SpillageEventSpec":
+        """Require exactly one of family or value (mutually exclusive)."""
+        if (self.family is None) == (self.value is None):
+            raise ValueError("spillage requires exactly one of 'family' or 'value'")
+        if self.scheme is not None and self.surface not in {"http_request_url", "http_referrer"}:
+            raise ValueError("spillage scheme is only valid for http_request_url/http_referrer")
+        return self
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -1006,6 +1042,7 @@ EventSpec = Annotated[
     | ExplicitCredentialsEventSpec
     | WorkstationLockEventSpec
     | WorkstationUnlockEventSpec
+    | SpillageEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

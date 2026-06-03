@@ -119,6 +119,45 @@ class TestEvalScorerFirewallEvents:
         )
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
 
+    def test_port_scan_matches_allowed_cisco_asa_probe_lifecycle(self):
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
+        )
+
+        scorer = SignalIntegrityScorer()
+        event = self._make_resolved_event(
+            "port_scan",
+            "10.0.10.50",
+            {"source_ip": "185.70.41.45", "ports": [80, 443]},
+        )
+
+        for msg_id in (302013, 302014):
+            record = ParsedRecord(
+                source_format="cisco_asa",
+                raw="test",
+                fields={"msg_id": msg_id, "src_ip": "185.70.41.45", "dst_port": 80},
+            )
+            assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
+
+    def test_port_scan_allowed_cisco_asa_probe_requires_declared_port(self):
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
+        )
+
+        scorer = SignalIntegrityScorer()
+        event = self._make_resolved_event(
+            "port_scan",
+            "10.0.10.50",
+            {"source_ip": "185.70.41.45", "ports": [80, 443]},
+        )
+        record = ParsedRecord(
+            source_format="cisco_asa",
+            raw="test",
+            fields={"msg_id": 302013, "src_ip": "185.70.41.45", "dst_port": 22},
+        )
+
+        assert scorer._record_matches(record, record.source_format, event, "port_scan") is False
+
     def test_port_scan_matches_zeek_rej(self):
         from evidenceforge.evaluation.pillars.causality import (
             CausalityScorer as SignalIntegrityScorer,

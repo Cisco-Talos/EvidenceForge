@@ -56,20 +56,26 @@ presets:
       threshold: 20
     paths:
       - {uri: "/", method: "GET", status: 200}
+      - {uri: "/", method: "HEAD", status: 200}
+      - {uri: "/", method: "OPTIONS", status: 200}
       - uri: "/robots.txt"
         method: "GET"
         status: 200
         ids: {sid: 2101852, rev: 5, message: "GPL WEB_SERVER robots.txt access", classification: "web-application-activity", priority: 3}
+      - {uri: "/robots.txt", method: "HEAD", status: 200}
       - {uri: "/sitemap.xml", method: "GET", status: 404}
+      - {uri: "/sitemap.xml", method: "HEAD", status: 404}
       - uri: "/admin/"
         method: "GET"
         status: 403
         ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
+      - {uri: "/admin/", method: "OPTIONS", status: 403}
       - {uri: "/admin/login", method: "GET", status: 404}
       - uri: "/.env"
         method: "GET"
         status: 403
         ids: {sid: 2034567, rev: 2, message: "ET WEB_SERVER .env File Access Attempt", classification: "attempted-recon", priority: 2}
+      - {uri: "/.env", method: "HEAD", status: 403}
       - uri: "/.git/HEAD"
         method: "GET"
         status: 404
@@ -83,6 +89,7 @@ presets:
       - {uri: "/wp-content/", method: "GET", status: 404}
       - {uri: "/wp-includes/", method: "GET", status: 404}
       - {uri: "/xmlrpc.php", method: "GET", status: 404}
+      - {uri: "/xmlrpc.php", method: "POST", status: 404}
       - uri: "/phpmyadmin/"
         method: "GET"
         status: 404
@@ -93,6 +100,7 @@ presets:
         status: 403
         ids: {sid: 2101234, rev: 4, message: "GPL WEB_SERVER Apache server-status access", classification: "web-application-activity", priority: 2}
       - {uri: "/server-info", method: "GET", status: 403}
+      - {uri: "/server-info", method: "HEAD", status: 403}
       - uri: "/.htaccess"
         method: "GET"
         status: 403
@@ -103,6 +111,7 @@ presets:
         ids: {sid: 2101071, rev: 7, message: "GPL WEB_SERVER .htpasswd access", classification: "attempted-recon", priority: 2}
       - {uri: "/cgi-bin/", method: "GET", status: 403}
       - {uri: "/cgi-bin/test-cgi", method: "GET", status: 404}
+      - {uri: "/cgi-bin/test-cgi", method: "HEAD", status: 404}
       - {uri: "/icons/", method: "GET", status: 403}
       - {uri: "/CHANGELOG.txt", method: "GET", status: 404}
       - {uri: "/LICENSE.txt", method: "GET", status: 404}
@@ -122,6 +131,7 @@ presets:
       - {uri: "/test.php", method: "GET", status: 404}
       - {uri: "/info.php", method: "GET", status: 200}
       - {uri: "/phpinfo.php", method: "GET", status: 404}
+      - {uri: "/phpinfo.php", method: "HEAD", status: 404}
 
   dirb:
     description: "DIRB directory brute-force scanner"

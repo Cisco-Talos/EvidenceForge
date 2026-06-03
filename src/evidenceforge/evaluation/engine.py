@@ -156,6 +156,41 @@ class EvaluationEngine:
         self._thresholds = load_thresholds()
         self.output_target = read_output_target_marker(output_dir)
 
+    def _load_spillage_ground_truth(self) -> dict[str, dict]:
+        """Load emitted spillage labels from GROUND_TRUTH.json, keyed by storyline id.
+
+        Returns ``{storyline_id: {"values": [rendered, ...], "time": datetime}}``.
+        Lets the causality pillar verify a spilled credential landed in the logs
+        without re-running synthesis, and anchor matching/timing to the *actual*
+        emitted time (bash dwell scheduling can shift it past the storyline time).
+        """
+        from evidenceforge.events.ground_truth import load_ground_truth_document
+
+        result: dict[str, dict] = {}
+        document = load_ground_truth_document(self.output_dir, self.scenario)
+        if document is None:
+            return result
+        for rec in document.events:
+            if rec.kind != "spillage" or not rec.emitted:
+                continue
+            sid = rec.storyline_id
+            value = rec.attributes.rendered_value or rec.attributes.value
+            if not (sid and value):
+                continue
+            entry = result.setdefault(sid, {"values": [], "records": [], "time": None})
+            entry["values"].append(value)
+            entry["records"].append(
+                {
+                    "value": value,
+                    "expected_sources": list(rec.attributes.expected_sources or ()),
+                }
+            )
+            if rec.attributes.target_system and not entry.get("target_system"):
+                entry["target_system"] = rec.attributes.target_system
+            if entry["time"] is None:
+                entry["time"] = rec.time.astimezone(UTC)
+        return result
+
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
         # 1. Discover and parse all log files
@@ -173,7 +208,10 @@ class EvaluationEngine:
 
         logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
         observation_manifest = load_observation_manifest(self.output_dir, self.scenario)
-        context = EvaluationContext(observation_manifest=observation_manifest)
+        context = EvaluationContext(
+            observation_manifest=observation_manifest,
+            spillage_ground_truth=self._load_spillage_ground_truth(),
+        )
 
         # 2. Run each available pillar scorer
         total_pillars = len(DIMENSION_SCORERS)

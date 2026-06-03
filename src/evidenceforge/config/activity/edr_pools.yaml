@@ -56,6 +56,90 @@ file_side_effect_profiles:
       - "/var/lib/dpkg/status"
       - "/var/lib/dnf/history.sqlite"
 
+  - name: linux_systemd_timesync_state
+    executables: ["systemd-timesyncd"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/lib/systemd/timesync/clock"
+      - "/run/systemd/timesync/synchronized"
+
+  - name: linux_chrony_state
+    executables: ["chronyd"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/lib/chrony/drift"
+      - "/run/chrony/chronyd.pid"
+
+  - name: linux_resolved_state
+    executables: ["systemd-resolved"]
+    actions: ["modify"]
+    paths_linux:
+      - "/run/systemd/resolve/resolv.conf"
+      - "/run/systemd/resolve/stub-resolv.conf"
+
+  - name: linux_journal_state
+    executables: ["systemd-journald"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/journal/{hex}/system.journal"
+      - "/run/log/journal/{hex}/system.journal"
+
+  - name: linux_syslog_state
+    executables: ["rsyslogd", "syslog-ng"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/syslog"
+      - "/var/log/auth.log"
+      - "/var/spool/rsyslog/imjournal.state"
+
+  - name: linux_dbus_state
+    executables: ["dbus-daemon"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/lib/dbus/machine-id"
+      - "/run/dbus/system_bus_socket"
+
+  - name: linux_networkmanager_state
+    executables: ["NetworkManager"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/lib/NetworkManager/NetworkManager.state"
+      - "/run/NetworkManager/no-stub-resolv.conf"
+
+  - name: linux_snapd_state
+    executables: ["snapd"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/lib/snapd/state.json"
+      - "/var/cache/snapd/names"
+
+  - name: linux_sshd_listener_state
+    executables: ["sshd"]
+    actions: ["modify"]
+    paths_linux:
+      - "/run/sshd.pid"
+      - "/var/log/auth.log"
+
+  - name: linux_proxy_service_state
+    executables: ["squid"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/squid/access.log"
+      - "/var/spool/squid/swap.state"
+
+  - name: linux_apache_service_state
+    executables: ["apache2", "httpd"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/apache2/access.log"
+
+  - name: linux_nginx_service_state
+    executables: ["nginx"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/nginx/access.log"
+      - "/var/cache/nginx/client_temp/{rand}"
+
   - name: installer_update
     executables: ["msiexec.exe", "tiworker.exe", "usoclient.exe"]
     executable_contains: ["install", "setup", "update", "patch"]

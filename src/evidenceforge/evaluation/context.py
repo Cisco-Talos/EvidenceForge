@@ -15,3 +15,7 @@ class EvaluationContext:
     """Additional dataset metadata available to scorers."""
 
     observation_manifest: ObservationManifest | None = None
+    # storyline_id -> {"values": [rendered on-disk credentials], "time": datetime},
+    # from GROUND_TRUTH.json. Lets the causality pillar match spillage events
+    # without re-running synthesis, anchored to the actual emitted time.
+    spillage_ground_truth: dict[str, dict] | None = None

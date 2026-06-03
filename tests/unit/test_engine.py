@@ -894,7 +894,7 @@ class TestGenerationEngine:
         minimal_scenario,
         tmp_path,
     ):
-        """Baseline-only scenarios should still generate matched sidecars."""
+        """Baseline-only scenarios should still generate the matched report set."""
         mock_format_def = Mock()
         mock_format_def.output.file_extension = ".log"
         mock_load_format.return_value = mock_format_def
@@ -954,7 +954,7 @@ class TestGenerationEngine:
         minimal_scenario,
         tmp_path,
     ):
-        """A successful baseline-only generation writes the complete sidecar set."""
+        """A successful baseline-only generation writes the complete report set."""
         mock_format_def = Mock()
         mock_format_def.output.file_extension = ".log"
         mock_load_format.return_value = mock_format_def

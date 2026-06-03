@@ -7,6 +7,7 @@ from evidenceforge.generation.activity.generator import (
     _dns_registrable_domain,
     _dns_reverse_query,
     _dns_soa_answer,
+    _public_dns_aaaa_answers,
     _public_dns_mx_answers,
     _public_dns_ns_answers,
     _public_dns_ptr_response,
@@ -130,6 +131,84 @@ def test_public_dns_profiles_preserve_known_authority_ownership():
     assert all(
         answer.endswith(".google.com") for answer in _public_dns_ns_answers("googleusercontent.com")
     )
+
+
+def test_public_dns_mail_profiles_preserve_recognizable_owner_families():
+    assert _public_dns_mx_answers("gstatic.com") == ["0 ."]
+    assert _public_dns_mx_answers("akamaihd.net") == ["0 ."]
+    assert _public_dns_mx_answers("office.net") == ["0 ."]
+    assert _public_dns_mx_answers("live.com") == ["0 live-com.mail.protection.outlook.com"]
+    assert _public_dns_mx_answers("powerapps.com") != [
+        "10 mx1.sendgrid.net",
+        "20 mx2.sendgrid.net",
+    ]
+    assert all(answer.endswith(".adobe.com") for answer in _public_dns_mx_answers("adobe.com"))
+    assert all(
+        answer.endswith(".facebook.com") for answer in _public_dns_mx_answers("facebook.com")
+    )
+    assert all(
+        answer.endswith(".cisco.com") for answer in _public_dns_mx_answers("duosecurity.com")
+    )
+
+
+def test_public_dns_nameserver_profiles_preserve_saas_owner_families():
+    azure_dns_suffixes = (".azure-dns.com", ".azure-dns.net", ".azure-dns.org", ".azure-dns.info")
+    assert all(
+        answer.endswith(azure_dns_suffixes) for answer in _public_dns_ns_answers("onenote.net")
+    )
+    assert all(
+        answer.endswith(azure_dns_suffixes) for answer in _public_dns_ns_answers("powerapps.com")
+    )
+    assert all(answer.endswith(".cisco.com") for answer in _public_dns_ns_answers("webex.com"))
+    assert all(
+        answer.endswith(".adobe.com") or answer.endswith(".akam.net")
+        for answer in _public_dns_ns_answers("typekit.net")
+    )
+
+
+def test_public_dns_aaaa_profiles_preserve_recognizable_owner_families():
+    assert all(
+        answer.startswith("2607:f8b0:")
+        for answer in _public_dns_aaaa_answers("static.gstatic.com", "23.45.118.80")
+    )
+    assert all(
+        answer.startswith(("2620:1ec:", "2603:1000:"))
+        for answer in _public_dns_aaaa_answers("statics.teams.cdn.office.net", "23.45.118.80")
+    )
+    assert all(
+        answer.startswith("2a03:2880:")
+        for answer in _public_dns_aaaa_answers("static.xx.fbcdn.net", "23.45.118.80")
+    )
+    assert all(
+        answer.startswith(("2a02:26f0:", "2600:9000:"))
+        for answer in _public_dns_aaaa_answers("auth.services.adobe.com", "23.45.118.80")
+    )
+
+
+def test_public_dns_aaaa_known_owner_without_profile_uses_nodata_not_fake_ipv6(monkeypatch):
+    from evidenceforge.generation.activity import public_dns_profiles
+
+    real_loader = public_dns_profiles.load_public_dns_profiles
+
+    def load_without_cisco_aaaa():
+        data = real_loader()
+        return {
+            **data,
+            "aaaa_profiles": [
+                profile for profile in data["aaaa_profiles"] if profile["name"] != "cisco"
+            ],
+        }
+
+    monkeypatch.setattr(public_dns_profiles, "load_public_dns_profiles", load_without_cisco_aaaa)
+
+    assert _public_dns_aaaa_answers("api.webexapis.com", "23.45.118.80") == []
+
+
+def test_public_dns_aaaa_generic_unknown_domain_keeps_deterministic_fallback():
+    answers = _public_dns_aaaa_answers("api.wellbridge-services.net", "45.56.88.10")
+
+    assert len(answers) == 1
+    assert ":" in answers[0]
 
 
 def test_public_dns_soa_serials_do_not_look_future_date_coded():

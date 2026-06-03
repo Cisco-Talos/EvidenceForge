@@ -50,7 +50,7 @@ Generates log files from a validated scenario.
 eforge generate <scenario.yaml> [options]
 
 Options:
-  --output, -o <dir>     Override the bundle root for generated sidecars and data.
+  --output, -o <dir>     Override the bundle root for generated reports and data.
                          By default, current eforge writes beside the scenario file.
   --formats, -F <list>   Comma-separated format filter. Only generates formats present in both
                          this list and the scenario's output.logs. Supports group names (zeek,
@@ -104,8 +104,12 @@ scenarios/<scenario-name>/
   scenario.yaml          ← input
   ENVIRONMENT.md         ← created by /eforge scenario
   artifacts/             ← optional authored collateral, not eval input
-  GROUND_TRUTH.md        ← generated answer key (empty for benign baseline-only runs)
-  OBSERVATION_MANIFEST.json ← generated source-observation sidecar
+  GROUND_TRUTH.md        ← generated human-readable answer key (baseline-only runs
+                           still include the standard "no malicious events" report)
+  GROUND_TRUTH.json      ← generated canonical machine-readable ground-truth document;
+                           written for every successful run and used to derive
+                           GROUND_TRUTH.md
+  OBSERVATION_MANIFEST.json ← generated source-observation manifest for eval
   OUTPUT_TARGET.txt      ← "default" or "sof-elk"
   data/                  ← generated log files
     <host>/
@@ -122,14 +126,14 @@ scenarios/<scenario-name>/
     ...
 ```
 
-If generated output (`data/`, `GROUND_TRUTH.md`, or `OBSERVATION_MANIFEST.json`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
+If generated output (`data/`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, or `OBSERVATION_MANIFEST.json`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
 
 ### 3. Post-Generation
 
 After successful generation:
 - List the generated files and their sizes
 - Check that expected formats were produced
-- Note that `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
+- Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
 - Optional `artifacts/` contents are exercise collateral created by `/eforge scenario`, not generated log output
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, auth/session-bundle validation, Kerberos/DC-bundle TGT/TGS evidence before domain logons, Windows-audit-bundle events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML

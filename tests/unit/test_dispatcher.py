@@ -1394,6 +1394,30 @@ class TestBuildHostContext:
         assert ctx.fqdn == "WS-01.corp.local"
         assert ctx.netbios_domain == "CORP"
 
+    def test_build_host_context_already_fqdn_hostname_not_doubled(self):
+        """An already-dotted hostname must not get the AD domain appended twice."""
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+
+        sm = StateManager()
+        gen = ActivityGenerator(state_manager=sm, emitters={})
+        gen._ad_domain = "example.com"
+
+        system = MagicMock()
+        system.hostname = "cdn.internal.example.com"
+        system.ip = "203.0.113.50"
+        system.os = "Ubuntu 22.04 LTS"
+        system.type = "server"
+
+        ctx = gen._build_host_context(system)
+
+        # Regression: was "cdn.internal.example.com.example.com" before the guard
+        # (mirrors the guard in _system_for_hostname). The FQDN of an already-FQDN
+        # hostname is itself.
+        assert ctx.fqdn == "cdn.internal.example.com"
+
     def test_build_host_context_linux(self):
         """_build_host_context() correctly detects Linux OS."""
         from unittest.mock import MagicMock
