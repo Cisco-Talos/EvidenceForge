@@ -6,51 +6,46 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
-**`spillage` event type — synthetic credential leakage (RFC #283)**
+## v1.2.0 (2026-06-03)
 
-- Added a typed `spillage` storyline event that emits a synthetic credential into
-  a semantic exposure `surface` (`shell_history`, `process_command_line`,
-  `syslog_message`, `http_request_url`, `http_referrer`) via the canonical modeled
-  generation paths, with surface-appropriate encoding (shell-quoting, syslog
-  control-escaping, URL percent-encoding). The `http_*` surfaces model an outbound
-  request to a `web_server`-role host and land in its `web_access` log.
-- Provide exactly one of `family` or `value` (a literal). For a family, a fresh
-  value is **synthesized per event** from a data-driven `value_template` and
-  rendered into a **varied carrier line** per surface — so no two spills are
-  identical. Ships a curated set of ~10 families (AWS/GCP/GitHub/Slack/Stripe/JWT
-  tokens, DB URIs, generic secrets). Families, value templates, carrier templates,
-  markers, vendor fakes, and the host allowlist are all data in
-  `config/activity/secret_families.yaml` (overlay-customizable, including new
-  families); the template engine, safety, encoding and surface handlers are code
-  in `generation/spillage.py`.
-- Safety guardrails (enforced at `eforge validate` and generation time): a poison
-  marker or vendor-fake requirement applied per credential-shaped token (modeled
-  family shapes plus a generic high-entropy detector); an RFC
-  2606/6761/5737/3849/1918 host allowlist that first normalizes alternate
-  encodings a real client would resolve (percent-encoding, Unicode separators,
-  obfuscated IPv4, IDN/punycode/homoglyph hosts, backslash and scheme-relative
-  URLs, IPv6 zone ids); a family-regex match; and a single-line, control-free
-  check. A surface whose output format/OS cannot actually emit the credential
-  (missing format, Windows host, non-interactive actor) is a hard error and one
-  that fails to emit at generation is skipped, so ground truth never labels a
-  credential that was not written. Unsafe values never reach generation.
-- Per-surface correlation scope is explicit: `http_*` ride a real modeled
-  connection; `process_command_line` is a standalone in-window EDR process record
-  using local-only carriers; `shell_history` is a history-file artifact; and
-  `syslog_message` is a standalone log line — so standalone evidence is never
-  labeled as fully correlated.
-- Added a general machine-readable `GROUND_TRUTH.jsonl` sidecar (`schema_version`,
-  `kind`, `record_id`, `storyline_id`, `surface`, `family`, `value`/`value_sha256`
-  and the on-disk `rendered_value`/`rendered_sha256`, `expected_sources`); times
-  reflect the actual emitted log line. `GROUND_TRUTH.md` shows a redacted preview
-  plus SHA-256 rather than the full value.
-- `eforge eval` recognizes spillage events: the causality pillar reads the
-  `GROUND_TRUTH.jsonl` sidecar and confirms each labeled value landed in the logs
-  (it does not re-run synthesis), so spillage datasets pass acceptance. Scrubber
-  precision/recall scoring is deferred and will fold into `eforge eval`.
-- Updated the scenario authoring skill, scenario reference, and `validate-config`
-  to recognize the new event type and `secret_families` config. See
-  [docs/reference/spillage.md](docs/reference/spillage.md).
+This minor release promotes the new spillage feature family, the canonical
+ground-truth JSON contract, and the final maintainer follow-up fixes from `dev`
+ to `main`. The branch contains non-breaking `feat:` commits since v1.1.1, so
+the project moves from `1.1.1` to `1.2.0`.
+
+**Spillage modeling and ground truth**
+
+- Added the typed `spillage` storyline event for deterministic synthetic
+  credential leakage across shell history, process command line, syslog, and
+  HTTP surfaces, with data-driven secret families, family/literal validation,
+  carrier rendering, URL/syslog/shell-safe encoding, and safety guardrails
+  against real credentials or unsafe hosts (`1a465b27`).
+- Integrated `process_command_line` spillage back into canonical actor
+  session/logon ownership so standalone process evidence still uses the shared
+  auth/session/process architecture (`6e4090b9`).
+- Added scheme-aware HTTP/HTTPS web spillage so `http_request_url` and
+  `http_referrer` surfaces can model explicit cleartext or TLS-backed requests,
+  with validator/runtime support and causality matching for cleartext HTTP
+  observations (`d6d69f3d`).
+- Added the spillage full-matrix scenario and broader coverage for supported
+  surfaces, OS constraints, and source behavior (`190f16d3`).
+
+**Canonical machine-readable ground truth**
+
+- Replaced the spillage-only `GROUND_TRUTH.jsonl` sidecar with canonical
+  `GROUND_TRUTH.json`, backed by strict Pydantic schema models, and made
+  `GROUND_TRUTH.md` a renderer over that validated JSON document rather than a
+  parallel generator path (`e1c9dfc7`).
+- Updated `eforge eval`, CLI output staging/swap logic, docs, and regression
+  tests to consume the canonical ground-truth JSON contract directly
+  (`e1c9dfc7`).
+
+**Generator realism and release automation**
+
+- Improved iteration-test realism fidelity on `dev`, carrying forward the latest
+  generator hardening before this release (`651a11a0`).
+- Added GitHub release-tag automation so `main` merges verify version/tag
+  consistency and publish the annotated release tag automatically (`0e97f738`).
 
 ---
 
