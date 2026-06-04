@@ -325,6 +325,40 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_package_manager_model(self, monkeypatch):
+        from evidenceforge.generation.activity import bash_commands
+
+        real_loader = bash_commands.load_bash_commands
+
+        def load_invalid_bash_commands():
+            data = real_loader()
+            return {
+                **data,
+                "package_manager_model": {
+                    "families": {
+                        "debian": {
+                            "os_keywords": ["ubuntu"],
+                            "command_prefixes": ["apt "],
+                        },
+                        "rpm": {
+                            "os_keywords": ["centos"],
+                            "command_prefixes": ["apt "],
+                        },
+                    }
+                },
+            }
+
+        monkeypatch.setattr(bash_commands, "load_bash_commands", load_invalid_bash_commands)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "bash_commands.yaml"
+            and "package-manager command prefix 'apt '" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_third_party_module_with_microsoft_identity(self, monkeypatch):
         from evidenceforge.generation.activity import application_catalog
 

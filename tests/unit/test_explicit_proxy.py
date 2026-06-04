@@ -1376,8 +1376,8 @@ class TestExplicitProxyVisibility:
 
         assert client_event.process is not None
         assert client_event.process.pid != git_pid
-        assert client_event.process.image == "/usr/bin/apt-get"
-        assert client_event.process.command_line == "apt-get update"
+        assert client_event.process.image == "/usr/lib/apt/methods/https"
+        assert client_event.process.command_line == "/usr/lib/apt/methods/https"
 
     def test_linux_proxy_scrubs_bad_caller_when_matching_process_cannot_be_owned(self):
         generator, emitters = _generator(

@@ -271,6 +271,18 @@ _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
 _COMMAND_GLOBAL_LOW_REPEAT_COUNTS: Counter[str] = Counter()
 _WORKFLOW_SELECTION_PROBABILITY = 0.65
 _MAX_WORKFLOW_WEIGHT = 1_000_000.0
+_DEFAULT_PACKAGE_MANAGER_MODEL: dict[str, Any] = {
+    "families": {
+        "debian": {
+            "os_keywords": ["ubuntu", "debian"],
+            "command_prefixes": ["apt ", "apt-get ", "apt-cache ", "dpkg "],
+        },
+        "rpm": {
+            "os_keywords": ["centos", "fedora", "red hat", "rhel", "rocky", "alma"],
+            "command_prefixes": ["yum ", "dnf ", "rpm "],
+        },
+    }
+}
 _LOW_REPEAT_EXACT_COMMANDS = {
     "cat /proc/cpuinfo | grep 'model name' | head -1",
     "df -h /tmp",
@@ -376,19 +388,90 @@ def _is_workstation_like_system(system_hostname: str, system_services: list[str]
     return False
 
 
+def _string_list(value: Any) -> list[str]:
+    """Return stripped strings from a YAML value."""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip().lower() for item in value if str(item).strip()]
+
+
+def _package_manager_model(commands: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the package-manager compatibility model from config."""
+    if commands is None:
+        commands = load_bash_commands()
+    model = commands.get("package_manager_model")
+    return model if isinstance(model, dict) else _DEFAULT_PACKAGE_MANAGER_MODEL
+
+
+def package_manager_family_for_os(
+    system_os: str | None,
+    commands: dict[str, Any] | None = None,
+) -> str | None:
+    """Return the configured package-manager family for an OS string."""
+    if not system_os:
+        return None
+    os_lower = system_os.lower()
+    families = _package_manager_model(commands).get("families", {})
+    if not isinstance(families, dict):
+        return None
+    for family, config in families.items():
+        if not isinstance(config, dict):
+            continue
+        keywords = _string_list(config.get("os_keywords"))
+        if any(keyword in os_lower for keyword in keywords):
+            return str(family)
+    return None
+
+
+def _command_package_family(command: str, commands: dict[str, Any] | None = None) -> str | None:
+    """Return the configured package-manager family for a command string."""
+    normalized = " ".join(command.strip().lower().split())
+    if normalized.startswith("sudo "):
+        normalized = normalized[5:]
+    for prefix in ("/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    families = _package_manager_model(commands).get("families", {})
+    if not isinstance(families, dict):
+        return None
+    for family, config in families.items():
+        if not isinstance(config, dict):
+            continue
+        prefixes = _string_list(config.get("command_prefixes"))
+        if any(normalized.startswith(prefix) for prefix in prefixes):
+            return str(family)
+    return None
+
+
 def _filter_pool_for_system(
     pool: list[str],
     system_hostname: str,
     system_services: list[str] | None,
+    system_os: str | None = None,
 ) -> list[str]:
-    """Remove workstation-only commands from server command pools."""
+    """Remove host-incompatible commands from command pools."""
     if _is_workstation_like_system(system_hostname, system_services):
-        return pool
-    filtered = [
-        command
-        for command in pool
-        if not any(marker in command.lower() for marker in _WORKSTATION_ONLY_COMMAND_MARKERS)
-    ]
+        filtered = list(pool)
+    else:
+        filtered = [
+            command
+            for command in pool
+            if not any(marker in command.lower() for marker in _WORKSTATION_ONLY_COMMAND_MARKERS)
+        ]
+
+    commands = load_bash_commands()
+    os_package_family = package_manager_family_for_os(system_os, commands)
+    if os_package_family:
+        distro_filtered = [
+            command
+            for command in filtered
+            if (family := _command_package_family(command, commands)) is None
+            or family == os_package_family
+        ]
+        if distro_filtered:
+            filtered = distro_filtered
+
     return filtered or pool
 
 
@@ -410,6 +493,9 @@ def _remember_command(system_hostname: str, username: str, command: str) -> None
 def _low_repeat_group(command: str) -> str | None:
     """Return a canonical low-repeat budget key for equivalent diagnostic commands."""
     normalized = " ".join(command.split())
+    if family := _command_package_family(normalized):
+        if any(token in normalized for token in ("update", "upgradable", "makecache")):
+            return f"package_manager_{family}_refresh"
     if normalized in _LOW_REPEAT_EXACT_COMMANDS:
         return normalized.replace(" ", "_").replace("/", "_")
     if normalized.startswith("cat /proc/cpuinfo | grep 'model name'"):
@@ -488,9 +574,10 @@ def _choose_template_with_memory(
     system_services: list[str] | None,
     system_hostname: str,
     username: str,
+    system_os: str | None = None,
 ) -> str:
     """Pick a command while suppressing recent and globally overused exact repeats."""
-    pool = _filter_pool_for_system(pool, system_hostname, system_services)
+    pool = _filter_pool_for_system(pool, system_hostname, system_services, system_os)
     if not pool:
         return "ls"
 
@@ -534,9 +621,10 @@ def _try_choose_fresh_workflow_template(
     system_services: list[str] | None,
     system_hostname: str,
     username: str,
+    system_os: str | None = None,
 ) -> str | None:
     """Pick a workflow step only while its exact variants still have repeat budget."""
-    pool = _filter_pool_for_system(pool, system_hostname, system_services)
+    pool = _filter_pool_for_system(pool, system_hostname, system_services, system_os)
     if not pool:
         return None
 
@@ -630,6 +718,7 @@ def _pick_workflow_commands(
     system_hostname: str,
     username: str,
     command_count: int,
+    system_os: str | None = None,
 ) -> list[str]:
     """Materialize a configured workflow into source-native bash commands."""
     commands: list[str] = []
@@ -647,6 +736,7 @@ def _pick_workflow_commands(
             system_services,
             system_hostname,
             username,
+            system_os,
         )
         if command is not None:
             commands.append(command)
@@ -660,6 +750,7 @@ def pick_bash_session_commands(
     system_services: list[str],
     username: str,
     command_count: int,
+    system_os: str | None = None,
 ) -> list[tuple[str, bool]]:
     """Pick a coherent shell-session command list.
 
@@ -696,6 +787,7 @@ def pick_bash_session_commands(
                 system_hostname,
                 username,
                 command_count,
+                system_os,
             ):
                 selected.append((command, False))
 
@@ -709,6 +801,7 @@ def pick_bash_session_commands(
             username=username,
             session_command_count=command_count,
             prior_typo_count=typo_count,
+            system_os=system_os,
         )
         selected.append((command, is_typo))
         if is_typo:
@@ -724,6 +817,7 @@ def pick_bash_command(
     username: str = "",
     session_command_count: int | None = None,
     prior_typo_count: int = 0,
+    system_os: str | None = None,
 ) -> str:
     """Pick a bash command appropriate for the user's role on this server.
 
@@ -739,6 +833,7 @@ def pick_bash_command(
         username=username,
         session_command_count=session_command_count,
         prior_typo_count=prior_typo_count,
+        system_os=system_os,
     )
     return command
 
@@ -751,6 +846,7 @@ def pick_bash_command_entry(
     username: str = "",
     session_command_count: int | None = None,
     prior_typo_count: int = 0,
+    system_os: str | None = None,
 ) -> tuple[str, bool]:
     """Pick a bash command and return whether it is a generated typo."""
     commands = load_bash_commands()
@@ -786,6 +882,7 @@ def pick_bash_command_entry(
                 system_services,
                 system_hostname,
                 username,
+                system_os,
             ),
             False,
         )
@@ -800,6 +897,7 @@ def pick_bash_command_entry(
             system_services,
             system_hostname,
             username,
+            system_os,
         ),
         False,
     )

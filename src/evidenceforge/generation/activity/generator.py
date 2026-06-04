@@ -1584,6 +1584,14 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     command = command_line.lower()
     if any(pattern in command for pattern in ("tail -f", "watch ", "--follow", " -f ")):
         return None
+    if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
+        "/usr/lib/apt/methods/"
+    ):
+        return (20.0, 180.0)
+    if exe_name in {"apt", "apt-get", "dnf", "yum"} and any(
+        token in command for token in ("update", "upgradable", "makecache", "check-update")
+    ):
+        return (20.0, 180.0)
     if exe_name in {
         "cat",
         "date",
@@ -5380,6 +5388,13 @@ class ActivityGenerator:
         )
 
         if os_category == "linux":
+            package_hint = self._linux_package_manager_proxy_client_hint(
+                user_agent=user_agent,
+                source_system=source_system,
+                dst_port=dst_port,
+            )
+            if package_hint is not None:
+                return package_hint
             if "firefox/" in ua:
                 return "/usr/bin/firefox", f"firefox --new-window {target_url}"
             if "edg/" in ua or "edge/" in ua:
@@ -5408,10 +5423,6 @@ class ActivityGenerator:
                 return "/usr/bin/java", (
                     f"java -jar /opt/meridian/integration-worker.jar --check-url {target_url}"
                 )
-            if "apt-http" in ua:
-                return "/usr/bin/apt-get", "apt-get update"
-            if "libdnf" in ua:
-                return "/usr/bin/dnf", "dnf makecache"
             if "powershell" in ua or "invoke-webrequest" in ua:
                 return "/usr/bin/pwsh", f"pwsh -NoProfile -Command Invoke-WebRequest {target_url}"
             return None
@@ -5437,6 +5448,37 @@ class ActivityGenerator:
                 f'powershell.exe -NoProfile -Command "Invoke-WebRequest '
                 f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
             )
+        return None
+
+    @staticmethod
+    def _linux_package_manager_proxy_client_hint(
+        *,
+        user_agent: str,
+        source_system: System | None,
+        dst_port: int,
+    ) -> tuple[str, str] | None:
+        """Return source-native Linux package-manager socket owner process details."""
+        if source_system is None:
+            return None
+        ua = (user_agent or "").lower()
+        if not ua:
+            return None
+
+        from evidenceforge.generation.activity.bash_commands import (
+            package_manager_family_for_os,
+        )
+
+        package_family = package_manager_family_for_os(source_system.os)
+        if "apt-http" in ua:
+            if package_family != "debian":
+                return None
+            method = "https" if dst_port == 443 else "http"
+            image = f"/usr/lib/apt/methods/{method}"
+            return image, image
+        if "libdnf" in ua:
+            if package_family != "rpm":
+                return None
+            return "/usr/bin/dnf", "dnf makecache --timer"
         return None
 
     @staticmethod
@@ -8529,6 +8571,8 @@ class ActivityGenerator:
             return _windows_foreground_lifetime(proc.image, proc.command_line)
         if os_category == "linux":
             exe_name = proc.image.rsplit("/", 1)[-1].lower()
+            if "/usr/lib/apt/methods/" in str(proc.image).lower():
+                return _linux_foreground_lifetime(proc.image, proc.command_line)
             if exe_name not in _LINUX_ONE_SHOT_NETWORK_EXES:
                 return None
             return _linux_foreground_lifetime(proc.image, proc.command_line)
@@ -13264,6 +13308,7 @@ class ActivityGenerator:
                 username=user.username,
                 session_command_count=n_noise + 1,
                 prior_typo_count=typo_count,
+                system_os=system.os,
             )
             if is_typo:
                 typo_count += 1
