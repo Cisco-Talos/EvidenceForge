@@ -762,6 +762,22 @@ or follow-up batch is needed.
   Sysmon metadata, repeated `apt-get update` commands, and missing network
   evidence for a metadata-service curl.
 
+- Loop 270 fixed eCAR `USER_SESSION/LOGOUT` correlation properties by declaring
+  `logon_id`, `session_id`, and `logon_guid` eCAR fields, rendering durable
+  session identifiers on login/logout rows, and propagating Linux SSH logind
+  session IDs through SSH bundle eCAR events. Focused eCAR/session, SSH bundle,
+  logoff, and object-graph tests passed; config validation, Ruff checks, fresh
+  generation, eval, and the full `uv run pytest --no-cov` suite passed (`4182
+  passed, 18 skipped`). Automated eval stayed at 96.88559994042029 over 90394
+  records. The hard probe found 618 eCAR logout rows with 0 empty property maps,
+  0 missing logon/session IDs, and 0 missing logon/session types. Blind initial
+  scores were 68/46/28/46, average 47.0; deliberation settled at 70/52/32/54,
+  average 51.5 (mixed/inconclusive). The strongest next target is now repeated
+  host command/package-manager texture: 74 exact `apt-get update` creates,
+  `yum` commands on apt/Ubuntu-like hosts, repeated bash-history command pools,
+  plus related eCAR FLOW principal attribution gaps and hard-edged collection
+  boundaries.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
