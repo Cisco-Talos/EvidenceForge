@@ -318,53 +318,73 @@ _LINUX_COMMAND_IMAGE_OVERRIDES = {
     "cat": "/usr/bin/cat",
     "chmod": "/usr/bin/chmod",
     "chown": "/usr/bin/chown",
+    "code": "/usr/bin/code",
     "cp": "/usr/bin/cp",
     "curl": "/usr/bin/curl",
+    "cut": "/usr/bin/cut",
     "date": "/usr/bin/date",
     "df": "/usr/bin/df",
     "docker": "/usr/bin/docker",
     "du": "/usr/bin/du",
+    "emacs": "/usr/bin/emacs",
     "file": "/usr/bin/file",
     "find": "/usr/bin/find",
     "free": "/usr/bin/free",
     "gcc": "/usr/bin/gcc",
     "git": "/usr/bin/git",
+    "google-chrome": "/usr/bin/google-chrome",
     "grep": "/usr/bin/grep",
+    "groups": "/usr/bin/groups",
     "gzip": "/usr/bin/gzip",
     "head": "/usr/bin/head",
+    "hostname": "/usr/bin/hostname",
+    "hostnamectl": "/usr/bin/hostnamectl",
     "id": "/usr/bin/id",
     "ip": "/usr/sbin/ip",
     "journalctl": "/usr/bin/journalctl",
     "kubectl": "/usr/local/bin/kubectl",
     "last": "/usr/bin/last",
+    "loginctl": "/usr/bin/loginctl",
     "ls": "/usr/bin/ls",
+    "lsblk": "/usr/bin/lsblk",
     "make": "/usr/bin/make",
     "mount": "/usr/bin/mount",
     "mysql": "/usr/bin/mysql",
     "mysqldump": "/usr/bin/mysqldump",
+    "nano": "/usr/bin/nano",
+    "nginx": "/usr/sbin/nginx",
     "nmap": "/usr/bin/nmap",
+    "nmcli": "/usr/bin/nmcli",
     "npm": "/usr/bin/npm",
     "ps": "/usr/bin/ps",
     "psql": "/usr/bin/psql",
     "python": "/usr/bin/python",
     "python3": "/usr/bin/python3",
     "redis-cli": "/usr/bin/redis-cli",
+    "resolvectl": "/usr/bin/resolvectl",
     "rm": "/usr/bin/rm",
     "scp": "/usr/bin/scp",
     "sed": "/usr/bin/sed",
+    "sha256sum": "/usr/bin/sha256sum",
     "shred": "/usr/bin/shred",
     "sqlite3": "/usr/bin/sqlite3",
     "ss": "/usr/sbin/ss",
     "ssh": "/usr/bin/ssh",
+    "stat": "/usr/bin/stat",
     "systemctl": "/usr/bin/systemctl",
     "tail": "/usr/bin/tail",
     "tar": "/usr/bin/tar",
+    "timedatectl": "/usr/bin/timedatectl",
     "top": "/usr/bin/top",
+    "uname": "/usr/bin/uname",
     "uptime": "/usr/bin/uptime",
+    "users": "/usr/bin/users",
     "vim": "/usr/bin/vim",
+    "vmstat": "/usr/bin/vmstat",
     "w": "/usr/bin/w",
     "wc": "/usr/bin/wc",
     "wget": "/usr/bin/wget",
+    "who": "/usr/bin/who",
     "whoami": "/usr/bin/whoami",
 }
 _LINUX_ALIAS_COMMANDS = {
@@ -12967,32 +12987,11 @@ class ActivityGenerator:
             return
         session = max(sessions, key=lambda candidate: candidate.start_time)
 
-        suspicious_markers = (
-            "/etc/shadow",
-            "curl ",
-            "wget ",
-            "scp ",
-            "ssh ",
-            "nmap",
-            "mysqldump",
-            "gzip",
-            "python ",
-            "python3 ",
-            "tar ",
-            "shred",
-            "chmod ",
-            "chown ",
-        )
         rng = random.Random(
             _stable_seed(
                 f"bash_process_telemetry:{system.hostname}:{user.username}:{time}:{command}"
             )
         )
-        if (
-            not any(marker in command.lower() for marker in suspicious_markers)
-            and rng.random() > 0.65
-        ):
-            return
 
         shell_release_times: list[tuple[int, datetime, str]] = []
         base_process_time: datetime | None = None
