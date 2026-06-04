@@ -651,14 +651,23 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None and "session closed for user deploy" in event.syslog.message
         )
+        logind_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("New session ")
+        )
+        logind_session_id = int(logind_event.syslog.message.split()[2])
         transport_close = transport_event.timestamp + timedelta(seconds=120)
         assert close_event.event_type == "logoff"
         assert close_event.auth is not None
         assert close_event.auth.source_ip == "10.0.10.50"
         assert close_event.auth.source_port == 51111
+        assert close_event.auth.session_id == logind_session_id
         assert transport_close < close_event.timestamp
         assert close_event.timestamp <= transport_close + timedelta(seconds=3)
         login_event = next(event for event in events if event.event_type == "ssh_session")
+        assert login_event.auth is not None
+        assert login_event.auth.session_id == logind_session_id
         assert close_event.edr is not None
         assert login_event.edr is not None
         assert close_event.edr.object_id == login_event.edr.object_id

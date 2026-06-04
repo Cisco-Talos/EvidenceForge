@@ -193,6 +193,7 @@ class _SshLinuxAuthState:
     """Source-native Linux SSH authentication lifecycle timestamps."""
 
     sshd_pid: int
+    logind_session_id: int
     syslog_seed: tuple[Any, ...]
     connection_time: datetime
     accepted_time: datetime
@@ -349,8 +350,9 @@ class SshSessionActionBundle:
             state,
             responding_pid=auth_plan.sshd_pid if auth_plan is not None else self.request.sshd_pid,
         )
-        event = self._build_session_event(state)
-        auth_state = self._plan_linux_auth(state, event, auth_plan)
+        planning_event = self._build_session_event(state)
+        auth_state = self._plan_linux_auth(state, planning_event, auth_plan)
+        event = self._build_session_event(state, auth_state)
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             self._mark_edr_login_readiness(state, event, auth_state)
@@ -594,7 +596,11 @@ class SshSessionActionBundle:
                 )
         return None
 
-    def _build_session_event(self, state: _SshTransportState) -> SecurityEvent:
+    def _build_session_event(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState | None = None,
+    ) -> SecurityEvent:
         """Build the canonical SSH session occurrence.
 
         The TCP transport is a separate canonical ``connection`` occurrence owned by
@@ -613,6 +619,7 @@ class SshSessionActionBundle:
                 source_ip=request.source_ip,
                 source_port=state.source_port,
                 logon_id=request.logon_id,
+                session_id=auth_state.logind_session_id if auth_state is not None else 0,
                 logon_type=10,
             ),
             process=state.source_process,
@@ -652,8 +659,14 @@ class SshSessionActionBundle:
                 event,
                 resolved_times["logind"] + timedelta(milliseconds=1),
             )
+        logind_session_id = executor.state_manager.next_linux_logind_session_id(
+            request.target_system.hostname,
+            state.rng,
+            resolved_times["logind"],
+        )
         return _SshLinuxAuthState(
             sshd_pid=plan.sshd_pid,
+            logind_session_id=logind_session_id,
             syslog_seed=plan.syslog_seed,
             connection_time=resolved_times["connection"],
             accepted_time=resolved_times["accepted"],
@@ -982,11 +995,7 @@ class SshSessionActionBundle:
             )
         )
         hostname = request.target_system.hostname
-        session_id = executor.state_manager.next_linux_logind_session_id(
-            hostname,
-            state.rng,
-            auth_state.logind_time,
-        )
+        session_id = auth_state.logind_session_id
         executor.dispatcher.dispatch(
             SecurityEvent(
                 timestamp=auth_state.logind_time,
@@ -1040,7 +1049,8 @@ class SshSessionActionBundle:
                     username=request.user.username,
                     source_ip=request.source_ip,
                     source_port=state.source_port,
-                    logon_id="",
+                    logon_id=request.logon_id,
+                    session_id=auth_state.logind_session_id,
                     logon_type=10,
                 ),
                 edr=EdrContext(object_id=state.session_obj_id),

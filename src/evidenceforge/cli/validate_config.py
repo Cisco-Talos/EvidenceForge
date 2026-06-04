@@ -1850,6 +1850,7 @@ def validate_config() -> ValidationResult:
         "typo_model",
         "workflow_model",
         "workflows",
+        "package_manager_model",
         "storyline_friction",
         "dba",
         "webadmin",
@@ -1893,6 +1894,66 @@ def validate_config() -> ValidationResult:
                             f"typo_model.{field_name} must be a non-negative integer",
                         )
                     )
+        package_manager_model = bash_data.get("package_manager_model", {})
+        if package_manager_model and not isinstance(package_manager_model, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "package_manager_model must be a mapping")
+            )
+        elif isinstance(package_manager_model, dict):
+            families = package_manager_model.get("families", {})
+            if not isinstance(families, dict) or not families:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "bash_commands.yaml",
+                        "package_manager_model.families must be a non-empty mapping",
+                    )
+                )
+            else:
+                seen_prefixes: dict[str, str] = {}
+                for family_name, family_config in families.items():
+                    if not isinstance(family_config, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"package_manager_model.families.{family_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    for field_name in ("os_keywords", "command_prefixes"):
+                        values = family_config.get(field_name)
+                        if (
+                            not isinstance(values, list)
+                            or not values
+                            or not all(isinstance(value, str) and value.strip() for value in values)
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "bash_commands.yaml",
+                                    "package_manager_model.families."
+                                    f"{family_name}.{field_name} must be a non-empty "
+                                    "list of strings",
+                                )
+                            )
+                    prefixes = family_config.get("command_prefixes", [])
+                    if isinstance(prefixes, list):
+                        for prefix in prefixes:
+                            if not isinstance(prefix, str) or not prefix.strip():
+                                continue
+                            normalized = prefix.strip().lower()
+                            owner = seen_prefixes.get(normalized)
+                            if owner and owner != str(family_name):
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        "bash_commands.yaml",
+                                        f"package-manager command prefix {prefix!r} belongs to "
+                                        f"both {owner!r} and {family_name!r}",
+                                    )
+                                )
+                            seen_prefixes[normalized] = str(family_name)
         for role_key in bash_data:
             if role_key in _BASH_SPECIAL_KEYS:
                 continue

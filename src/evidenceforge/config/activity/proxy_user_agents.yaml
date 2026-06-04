@@ -163,13 +163,22 @@ workstation:
         - "Debian APT-HTTP/1.3 (2.4.11)"
 
     fedora:
-      os_keywords: ["fedora", "red hat", "rhel"]
+      os_keywords: ["fedora"]
       hosts:
         - download.fedoraproject.org
         - mirrors.fedoraproject.org
         - dl.fedoraproject.org
       user_agents:
         - "libdnf (Fedora Linux 39; workstation; Linux.x86_64)"
+
+    rpm:
+      os_keywords: ["centos", "red hat", "rhel", "rocky", "alma"]
+      hosts:
+        - download.fedoraproject.org
+        - mirrors.fedoraproject.org
+        - dl.fedoraproject.org
+      user_agents:
+        - "libdnf (CentOS Linux 8; workstation; Linux.x86_64)"
 
 server:
   roles:
@@ -205,10 +214,19 @@ server:
         - "Debian APT-HTTP/1.3 (2.4.11)"
 
     fedora:
-      os_keywords: ["fedora", "red hat", "rhel"]
+      os_keywords: ["fedora"]
       hosts:
         - download.fedoraproject.org
         - mirrors.fedoraproject.org
         - dl.fedoraproject.org
       user_agents:
         - "libdnf (Fedora Linux 39; server; Linux.x86_64)"
+
+    rpm:
+      os_keywords: ["centos", "red hat", "rhel", "rocky", "alma"]
+      hosts:
+        - download.fedoraproject.org
+        - mirrors.fedoraproject.org
+        - dl.fedoraproject.org
+      user_agents:
+        - "libdnf (CentOS Linux 8; server; Linux.x86_64)"

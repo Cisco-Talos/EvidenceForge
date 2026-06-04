@@ -154,7 +154,19 @@ def test_success_response_size_is_stable_for_same_resource():
     assert first != sibling
 
 
-def test_transfer_variant_changes_static_resource_bytes_by_client_profile():
+def test_static_response_size_is_stable_across_virtual_hosts():
+    first = response_size_for_status(200, "portal.example.com", "/assets/main.css")
+    second = response_size_for_status(200, "www.example.net", "/assets/main.css")
+    cache_busted = response_size_for_status(200, "www.example.net", "/assets/main.css?v=2")
+    dynamic_first = response_size_for_status(200, "portal.example.com", "/api/v1/events")
+    dynamic_second = response_size_for_status(200, "www.example.net", "/api/v1/events")
+
+    assert first == second
+    assert first == cache_busted
+    assert dynamic_first != dynamic_second
+
+
+def test_transfer_variant_keeps_static_resource_bytes_stable_across_clients():
     base = response_size_for_status(200, "portal.example.com", "/assets/main.css")
     client_a = apply_transfer_size_variance(
         base,
@@ -182,8 +194,7 @@ def test_transfer_variant_changes_static_resource_bytes_by_client_profile():
     )
 
     assert client_a == client_a_repeat
-    assert client_a != client_b
-    assert 1 <= client_a < base
+    assert client_a == client_b == base
     assert (
         apply_transfer_size_variance(
             0,

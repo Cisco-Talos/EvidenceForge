@@ -597,7 +597,13 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:
-        """Return lines with monotonic logind New-session IDs for one host."""
+        """Return lines with monotonic logind New-session IDs for one host.
+
+        Canonical SSH sessions can expose the same logind session ID in eCAR.
+        Preserve already-monotonic syslog IDs so renderer finalization does not
+        split that cross-source identity; only repair invalid, duplicate, or
+        backward-moving rows.
+        """
         first_by_pid: dict[str, int] = {}
         for line in lines:
             match = _LOGIND_NEW_SESSION_RE.search(line)
@@ -612,7 +618,7 @@ class SyslogEmitter(HostMultiplexEmitter):
         if not first_by_pid:
             return lines
 
-        next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
+        latest_new_by_pid: dict[str, int] = {}
         prewindow_next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
         rewritten_by_original: dict[tuple[str, str], int] = {}
         prewindow_seen_by_original: set[tuple[str, str]] = set()
@@ -622,20 +628,25 @@ class SyslogEmitter(HostMultiplexEmitter):
             if new_match is not None:
                 pid = _logind_pid(new_match)
                 original_session = new_match.group("session")
-                if _parse_logind_session_id(original_session) is None:
+                parsed_session = _parse_logind_session_id(original_session)
+                if parsed_session is None:
                     normalized.append(line)
                     continue
-                step_seed = _stable_seed(
-                    f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
-                )
-                next_by_pid[pid] = next_by_pid.get(pid, first_by_pid[pid] - 1) + 1 + (step_seed % 3)
-                rewritten = next_by_pid[pid]
+                latest_session = latest_new_by_pid.get(pid)
+                if latest_session is None or parsed_session > latest_session:
+                    rewritten = parsed_session
+                else:
+                    step_seed = _stable_seed(
+                        f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
+                    )
+                    rewritten = latest_session + 1 + (step_seed % 3)
+                    line = (
+                        f"{line[: new_match.start('session')]}"
+                        f"{rewritten}"
+                        f"{line[new_match.end('session') :]}"
+                    )
+                latest_new_by_pid[pid] = rewritten
                 rewritten_by_original[(pid, original_session)] = rewritten
-                line = (
-                    f"{line[: new_match.start('session')]}"
-                    f"{rewritten}"
-                    f"{line[new_match.end('session') :]}"
-                )
                 normalized.append(line)
                 continue
 

@@ -318,53 +318,74 @@ _LINUX_COMMAND_IMAGE_OVERRIDES = {
     "cat": "/usr/bin/cat",
     "chmod": "/usr/bin/chmod",
     "chown": "/usr/bin/chown",
+    "code": "/usr/bin/code",
     "cp": "/usr/bin/cp",
     "curl": "/usr/bin/curl",
+    "cut": "/usr/bin/cut",
     "date": "/usr/bin/date",
     "df": "/usr/bin/df",
     "docker": "/usr/bin/docker",
     "du": "/usr/bin/du",
+    "emacs": "/usr/bin/emacs",
     "file": "/usr/bin/file",
     "find": "/usr/bin/find",
     "free": "/usr/bin/free",
     "gcc": "/usr/bin/gcc",
     "git": "/usr/bin/git",
+    "google-chrome": "/usr/bin/google-chrome",
     "grep": "/usr/bin/grep",
+    "groups": "/usr/bin/groups",
     "gzip": "/usr/bin/gzip",
     "head": "/usr/bin/head",
+    "hostname": "/usr/bin/hostname",
+    "hostnamectl": "/usr/bin/hostnamectl",
     "id": "/usr/bin/id",
     "ip": "/usr/sbin/ip",
     "journalctl": "/usr/bin/journalctl",
     "kubectl": "/usr/local/bin/kubectl",
     "last": "/usr/bin/last",
+    "loginctl": "/usr/bin/loginctl",
     "ls": "/usr/bin/ls",
+    "lsblk": "/usr/bin/lsblk",
     "make": "/usr/bin/make",
     "mount": "/usr/bin/mount",
     "mysql": "/usr/bin/mysql",
     "mysqldump": "/usr/bin/mysqldump",
+    "nano": "/usr/bin/nano",
+    "nginx": "/usr/sbin/nginx",
     "nmap": "/usr/bin/nmap",
+    "nmcli": "/usr/bin/nmcli",
     "npm": "/usr/bin/npm",
     "ps": "/usr/bin/ps",
     "psql": "/usr/bin/psql",
+    "pt-query-digest": "/usr/bin/pt-query-digest",
     "python": "/usr/bin/python",
     "python3": "/usr/bin/python3",
     "redis-cli": "/usr/bin/redis-cli",
+    "resolvectl": "/usr/bin/resolvectl",
     "rm": "/usr/bin/rm",
     "scp": "/usr/bin/scp",
     "sed": "/usr/bin/sed",
+    "sha256sum": "/usr/bin/sha256sum",
     "shred": "/usr/bin/shred",
     "sqlite3": "/usr/bin/sqlite3",
     "ss": "/usr/sbin/ss",
     "ssh": "/usr/bin/ssh",
+    "stat": "/usr/bin/stat",
     "systemctl": "/usr/bin/systemctl",
     "tail": "/usr/bin/tail",
     "tar": "/usr/bin/tar",
+    "timedatectl": "/usr/bin/timedatectl",
     "top": "/usr/bin/top",
+    "uname": "/usr/bin/uname",
     "uptime": "/usr/bin/uptime",
+    "users": "/usr/bin/users",
     "vim": "/usr/bin/vim",
+    "vmstat": "/usr/bin/vmstat",
     "w": "/usr/bin/w",
     "wc": "/usr/bin/wc",
     "wget": "/usr/bin/wget",
+    "who": "/usr/bin/who",
     "whoami": "/usr/bin/whoami",
 }
 _LINUX_ALIAS_COMMANDS = {
@@ -1584,6 +1605,14 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     command = command_line.lower()
     if any(pattern in command for pattern in ("tail -f", "watch ", "--follow", " -f ")):
         return None
+    if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
+        "/usr/lib/apt/methods/"
+    ):
+        return (20.0, 180.0)
+    if exe_name in {"apt", "apt-get", "dnf", "yum"} and any(
+        token in command for token in ("update", "upgradable", "makecache", "check-update")
+    ):
+        return (20.0, 180.0)
     if exe_name in {
         "cat",
         "date",
@@ -5129,10 +5158,18 @@ class ActivityGenerator:
         domain_tags = get_domain_tags(proxy_hostname)
         proxy_ua_override = None
         if http is not None:
+            from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
+
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             proxy_method = http.method
             url = f"{scheme}://{proxy_hostname}{http.uri}"
-            proxy_content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
+            if http.resp_mime_types or http.status_code == 304:
+                proxy_content_type = normalize_mime_type_for_path(
+                    http.uri,
+                    http.resp_mime_types[0] if http.resp_mime_types else "text/html",
+                )
+            else:
+                proxy_content_type = "text/html"
             user_agent = http.user_agent
             proxy_referrer = http.referrer
         elif explicit_mode and dst_port == 443:
@@ -5234,7 +5271,9 @@ class ActivityGenerator:
         if http is not None:
             # When the request already carries canonical HTTP outcome data,
             # proxy rendering should not independently invent a policy denial.
-            if proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
+            if proxy_cacheable and http.status_code == 304:
+                cache_result = "REVALIDATED"
+            elif proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
                 cache_result = "HIT"
             else:
                 cache_result = "MISS"
@@ -5380,6 +5419,13 @@ class ActivityGenerator:
         )
 
         if os_category == "linux":
+            package_hint = self._linux_package_manager_proxy_client_hint(
+                user_agent=user_agent,
+                source_system=source_system,
+                dst_port=dst_port,
+            )
+            if package_hint is not None:
+                return package_hint
             if "firefox/" in ua:
                 return "/usr/bin/firefox", f"firefox --new-window {target_url}"
             if "edg/" in ua or "edge/" in ua:
@@ -5408,10 +5454,6 @@ class ActivityGenerator:
                 return "/usr/bin/java", (
                     f"java -jar /opt/meridian/integration-worker.jar --check-url {target_url}"
                 )
-            if "apt-http" in ua:
-                return "/usr/bin/apt-get", "apt-get update"
-            if "libdnf" in ua:
-                return "/usr/bin/dnf", "dnf makecache"
             if "powershell" in ua or "invoke-webrequest" in ua:
                 return "/usr/bin/pwsh", f"pwsh -NoProfile -Command Invoke-WebRequest {target_url}"
             return None
@@ -5437,6 +5479,37 @@ class ActivityGenerator:
                 f'powershell.exe -NoProfile -Command "Invoke-WebRequest '
                 f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
             )
+        return None
+
+    @staticmethod
+    def _linux_package_manager_proxy_client_hint(
+        *,
+        user_agent: str,
+        source_system: System | None,
+        dst_port: int,
+    ) -> tuple[str, str] | None:
+        """Return source-native Linux package-manager socket owner process details."""
+        if source_system is None:
+            return None
+        ua = (user_agent or "").lower()
+        if not ua:
+            return None
+
+        from evidenceforge.generation.activity.bash_commands import (
+            package_manager_family_for_os,
+        )
+
+        package_family = package_manager_family_for_os(source_system.os)
+        if "apt-http" in ua:
+            if package_family != "debian":
+                return None
+            method = "https" if dst_port == 443 else "http"
+            image = f"/usr/lib/apt/methods/{method}"
+            return image, image
+        if "libdnf" in ua:
+            if package_family != "rpm":
+                return None
+            return "/usr/bin/dnf", "dnf makecache --timer"
         return None
 
     @staticmethod
@@ -8529,6 +8602,8 @@ class ActivityGenerator:
             return _windows_foreground_lifetime(proc.image, proc.command_line)
         if os_category == "linux":
             exe_name = proc.image.rsplit("/", 1)[-1].lower()
+            if "/usr/lib/apt/methods/" in str(proc.image).lower():
+                return _linux_foreground_lifetime(proc.image, proc.command_line)
             if exe_name not in _LINUX_ONE_SHOT_NETWORK_EXES:
                 return None
             return _linux_foreground_lifetime(proc.image, proc.command_line)
@@ -11599,12 +11674,24 @@ class ActivityGenerator:
                 # generator), derive proxy fields from it.  The proxy emitter
                 # handles CONNECT tunnel deduplication automatically.
                 if event.http is not None:
+                    from evidenceforge.generation.activity.http_content import (
+                        normalize_mime_type_for_path,
+                    )
+
                     scheme = "https" if dst_port == 443 else "http"
                     proxy_method = event.http.method
                     url = f"{scheme}://{proxy_hostname}{event.http.uri}"
-                    proxy_content_type = (
-                        event.http.resp_mime_types[0] if event.http.resp_mime_types else "text/html"
-                    )
+                    if event.http.resp_mime_types or event.http.status_code == 304:
+                        proxy_content_type = normalize_mime_type_for_path(
+                            event.http.uri,
+                            (
+                                event.http.resp_mime_types[0]
+                                if event.http.resp_mime_types
+                                else "text/html"
+                            ),
+                        )
+                    else:
+                        proxy_content_type = "text/html"
                     proxy_ua_override = None  # session UA is already on HttpContext
                     user_agent = event.http.user_agent
                     proxy_referrer = event.http.referrer
@@ -11704,7 +11791,9 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
                 if event.http is not None:
-                    if proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
+                    if proxy_cacheable and event.http.status_code == 304:
+                        cache_result = "REVALIDATED"
+                    elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
                         cache_result = "HIT"
                     else:
                         cache_result = "MISS"
@@ -12923,32 +13012,11 @@ class ActivityGenerator:
             return
         session = max(sessions, key=lambda candidate: candidate.start_time)
 
-        suspicious_markers = (
-            "/etc/shadow",
-            "curl ",
-            "wget ",
-            "scp ",
-            "ssh ",
-            "nmap",
-            "mysqldump",
-            "gzip",
-            "python ",
-            "python3 ",
-            "tar ",
-            "shred",
-            "chmod ",
-            "chown ",
-        )
         rng = random.Random(
             _stable_seed(
                 f"bash_process_telemetry:{system.hostname}:{user.username}:{time}:{command}"
             )
         )
-        if (
-            not any(marker in command.lower() for marker in suspicious_markers)
-            and rng.random() > 0.65
-        ):
-            return
 
         shell_release_times: list[tuple[int, datetime, str]] = []
         base_process_time: datetime | None = None
@@ -13011,6 +13079,63 @@ class ActivityGenerator:
                 termination_time=termination_time,
                 seed_text=process_command_line,
             )
+
+    def _prepare_bash_process_session(
+        self,
+        user: User,
+        system: System,
+        requested_time: datetime,
+        command: str,
+    ) -> None:
+        """Ensure assigned Linux workstation shell commands have session ownership."""
+        if _get_os_category(system.os) != "linux":
+            return
+        if (system.type or "workstation").lower() != "workstation":
+            return
+        if system.assigned_user != user.username:
+            return
+        if not _linux_command_processes_from_shell(
+            command,
+            max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES,
+            username=user.username,
+        ):
+            return
+
+        requested_time = ensure_utc(requested_time)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type not in {3, 5}
+            and _session_active_for_activity(session, requested_time, margin_seconds=1.5)
+        ]
+        if sessions:
+            return
+
+        seed = _stable_seed(
+            "linux_workstation_bash_session:"
+            f"{system.hostname}:{user.username}:{requested_time.isoformat()}:{command}"
+        )
+        logon_time = requested_time - timedelta(minutes=5 + (seed % 11), seconds=seed % 47)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+            if requested_time >= scenario_start and logon_time < scenario_start:
+                logon_time = scenario_start + timedelta(milliseconds=350 + (seed % 3200))
+        if logon_time >= requested_time:
+            logon_time = requested_time - timedelta(seconds=2, milliseconds=seed % 500)
+        if not self._is_within_scenario_window(logon_time):
+            return
+
+        self.generate_logon(
+            user=user,
+            system=system,
+            time=logon_time,
+            logon_type=2,
+            source_ip="-",
+            emit_network_evidence=False,
+        )
 
     def _schedule_bash_history_time(
         self,
@@ -13264,6 +13389,7 @@ class ActivityGenerator:
                 username=user.username,
                 session_command_count=n_noise + 1,
                 prior_typo_count=typo_count,
+                system_os=system.os,
             )
             if is_typo:
                 typo_count += 1

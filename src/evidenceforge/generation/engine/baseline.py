@@ -6355,6 +6355,7 @@ class BaselineMixin:
                             system.services,
                             username=ssh_user.username,
                             command_count=n_cmds,
+                            system_os=system.os,
                         )
                         for cmd, _is_typo in command_entries:
                             cmd_offset = rng.randint(30, 600)
@@ -6414,6 +6415,7 @@ class BaselineMixin:
                         system.services,
                         username=ws_user.username,
                         command_count=n_cmds,
+                        system_os=system.os,
                     )
                     for cmd, _is_typo in command_entries:
                         gap = rng.randint(30, 300)

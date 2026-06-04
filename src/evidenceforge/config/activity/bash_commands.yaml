@@ -159,6 +159,7 @@ sysadmin:
   - "dmesg | tail -30"
   - "apt list --upgradable 2>/dev/null"
   - "yum check-update 2>/dev/null"
+  - "dnf check-update 2>/dev/null"
   - "cat /proc/meminfo | head -5"
   - "lsblk"
   - "ip -o addr show scope global"
@@ -496,6 +497,15 @@ typo_model:
   short_history_threshold: 10
   short_history_max_typos: 0
   correction_probability: 0.85
+
+package_manager_model:
+  families:
+    debian:
+      os_keywords: ["ubuntu", "debian"]
+      command_prefixes: ["apt ", "apt-get ", "apt-cache ", "dpkg "]
+    rpm:
+      os_keywords: ["centos", "fedora", "red hat", "rhel", "rocky", "alma"]
+      command_prefixes: ["yum ", "dnf ", "rpm "]
 
 keyboard_adjacency:
   q: [w, a, "1", "2"]

@@ -677,17 +677,31 @@ class StateManager:
                     0,
                     int((normalized_time - ensure_utc(epoch)).total_seconds()),
                 )
-                elapsed_quarters = elapsed_seconds // 900
-                minute_in_quarter = (elapsed_seconds % 900) // 60
-                block = elapsed_quarters // 16
-                quarter_in_block = elapsed_quarters % 16
-                block_offset = self._linux_logind_session_block_offset(system, block)
-                stride = 4 + (_stable_seed(f"logind_session_stride:{system}:{block}") % 3)
-                candidate = (
-                    initial + block_offset + (quarter_in_block * stride) + (minute_in_quarter // 5)
+                elapsed_minutes = elapsed_seconds // 60
+                second_slot = normalized_time.second // 10
+                stride = 8 + (_stable_seed(f"logind_session_minute_stride:{system}") % 2)
+                minute_jitter = (
+                    _stable_seed(f"logind_session_minute_jitter:{system}:{elapsed_minutes}") % 2
                 )
+                candidate = initial + (elapsed_minutes * stride) + second_slot + minute_jitter
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
                 allocations = self._linux_logind_session_allocations.setdefault(system, [])
+                earlier_max = max(
+                    (
+                        session_id
+                        for allocated_time, session_id in allocations
+                        if allocated_time <= normalized_time
+                    ),
+                    default=None,
+                )
+                if earlier_max is not None and candidate <= earlier_max:
+                    bump = 1 + (
+                        _stable_seed(
+                            f"logind_session_lower_bound:{system}:{normalized_time}:{candidate}"
+                        )
+                        % 3
+                    )
+                    candidate = earlier_max + bump
                 salt = 0
                 while candidate in used or self._linux_logind_matches_elapsed_delta(
                     allocations,

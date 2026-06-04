@@ -1368,7 +1368,7 @@ class EdrFileSideEffectProfile(BaseModel, extra="forbid"):
     executables: list[str] = Field(default_factory=list)
     executable_contains: list[str] = Field(default_factory=list)
     command_contains: list[str] = Field(default_factory=list)
-    actions: list[Literal["create", "modify", "delete"]]
+    actions: list[Literal["create", "modify", "delete", "read"]]
     paths_windows: list[str] = Field(default_factory=list)
     paths_linux: list[str] = Field(default_factory=list)
     probability: float = 1.0

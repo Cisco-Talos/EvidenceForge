@@ -290,6 +290,19 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["tid"] = event.edr.tid
 
     @staticmethod
+    def _apply_session_properties(event_data: dict[str, Any], event: SecurityEvent) -> None:
+        """Copy durable source-native session identifiers onto USER_SESSION rows."""
+        auth = event.auth
+        if auth is None:
+            return
+        if auth.logon_id:
+            event_data["logon_id"] = auth.logon_id
+        if auth.session_id:
+            event_data["session_id"] = auth.session_id
+        if auth.logon_guid:
+            event_data["logon_guid"] = auth.logon_guid
+
+    @staticmethod
     def _apply_process_provenance(event_data: dict[str, Any], process: Any | None) -> None:
         """Copy known process provenance onto dependent source-native eCAR rows."""
         if process is None:
@@ -361,6 +374,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["logon_type"] = event.auth.logon_type
         else:
             event_data["session_type"] = _ecar_non_windows_session_type(event)
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -380,8 +394,11 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["src_ip"] = source_ip
         if source_ip != "-" and event.auth.source_port:
             event_data["src_port"] = event.auth.source_port
-        if getattr(host, "os_category", "") != "windows":
+        if getattr(host, "os_category", "") == "windows":
+            event_data["logon_type"] = event.auth.logon_type
+        else:
             event_data["session_type"] = _ecar_non_windows_session_type(event)
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -881,22 +898,109 @@ class EcarEmitter(HostMultiplexEmitter):
         if not enabled:
             return timestamp
         if not_after is None:
-            return timestamp
+            return EcarEmitter._unbounded_paired_flow_observation_time(
+                event,
+                seed_parts=seed_parts,
+                not_before=not_before,
+            )
 
+        short_interval = not_after <= event.timestamp + timedelta(milliseconds=5)
         lower_bound = not_before
+        if not short_interval and not_after > event.timestamp:
+            lower_bound = (
+                event.timestamp if lower_bound is None else max(lower_bound, event.timestamp)
+            )
+
         seed = _stable_seed(
             "ecar_paired_flow_observation:"
             + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
         )
-        jitter_ms = 1 + (seed % 37)
+        direction = str(seed_parts[0]) if seed_parts else ""
+        if short_interval and direction == "inbound":
+            min_jitter_ms = 22
+            max_jitter_ms = 55
+        elif short_interval and direction == "outbound":
+            min_jitter_ms = 1
+            max_jitter_ms = 16
+        elif direction == "inbound":
+            min_jitter_ms = 75
+            max_jitter_ms = 540
+        elif direction == "outbound":
+            min_jitter_ms = 12
+            max_jitter_ms = 220
+        else:
+            min_jitter_ms = 12
+            max_jitter_ms = 360
+
+        jitter_ms = min_jitter_ms + (seed % (max_jitter_ms - min_jitter_ms + 1))
         candidate = timestamp - timedelta(milliseconds=jitter_ms)
         if lower_bound is not None and candidate < lower_bound:
             available_ms = int((timestamp - lower_bound).total_seconds() * 1000)
             if available_ms <= 0:
                 return timestamp
-            candidate = timestamp - timedelta(milliseconds=min(jitter_ms, available_ms))
-        if candidate > not_after:
+            if available_ms < min_jitter_ms:
+                if direction == "inbound" and available_ms >= 4:
+                    slice_min_ms = max(1, (available_ms * 2) // 3)
+                    slice_max_ms = available_ms
+                elif direction == "outbound" and available_ms >= 4:
+                    slice_min_ms = 1
+                    slice_max_ms = max(1, available_ms // 3)
+                else:
+                    slice_min_ms = 1
+                    slice_max_ms = available_ms
+                bounded_jitter_ms = slice_min_ms + (seed % (slice_max_ms - slice_min_ms + 1))
+            else:
+                bounded_jitter_ms = min_jitter_ms + (seed % (available_ms - min_jitter_ms + 1))
+            candidate = timestamp - timedelta(milliseconds=bounded_jitter_ms)
+        if not_after is not None and candidate > not_after:
             return not_after
+        return candidate
+
+    @staticmethod
+    def _unbounded_paired_flow_observation_time(
+        event: SecurityEvent,
+        *,
+        seed_parts: tuple[Any, ...],
+        not_before: datetime | None,
+    ) -> datetime:
+        """Return coordinated host-local timing for paired FLOWs with no close bound."""
+        net = event.network
+        if net is None:
+            return event.timestamp
+
+        tuple_seed = _stable_seed(
+            "ecar_paired_flow_base:"
+            + ":".join(
+                str(part)
+                for part in (
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    net.protocol,
+                    event.timestamp.isoformat(),
+                )
+            )
+        )
+        base_delay_ms = 220 + (tuple_seed % 900)
+
+        direction = str(seed_parts[0]) if seed_parts else ""
+        host = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+        offset_seed = _stable_seed(
+            "ecar_paired_flow_host_offset:"
+            + ":".join(str(part) for part in (direction, host, *seed_parts))
+        )
+        if direction == "inbound":
+            offset_ms = 300 + (offset_seed % 360)
+        elif direction == "outbound":
+            offset_ms = 20 + (offset_seed % 180)
+        else:
+            offset_ms = 80 + (offset_seed % 420)
+
+        candidate = event.timestamp + timedelta(milliseconds=base_delay_ms + offset_ms)
+        if not_before is not None and candidate < not_before:
+            gap_ms = 6 + (offset_seed % 180)
+            candidate = not_before + timedelta(milliseconds=gap_ms)
         return candidate
 
     @staticmethod
@@ -1660,6 +1764,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "printenv",
         "ps",
         "psql",
+        "pt-query-digest",
         "pwd",
         "python",
         "python3",
@@ -1802,18 +1907,29 @@ class EcarEmitter(HostMultiplexEmitter):
                     shift_ms = shifted_ms - group_start_ms
 
                 group_latest_ms = next_available_ms
-                for record in group_records:
+                next_stage_ms = 0
+                for index in sorted(group):
+                    record = records[index]
+                    if record is None:
+                        continue
                     timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
                     object_id = str(record.get("objectID") or "")
+                    total_shift_ms = shift_ms
                     if shift_ms:
                         timestamp_ms += shift_ms
                         record["timestamp_ms"] = timestamp_ms
-                        if object_id:
-                            shift_by_object_id[object_id] = shift_ms
+                    if next_stage_ms and timestamp_ms < next_stage_ms:
+                        stage_shift_ms = next_stage_ms - timestamp_ms
+                        timestamp_ms = next_stage_ms
+                        total_shift_ms += stage_shift_ms
+                        record["timestamp_ms"] = timestamp_ms
+                    next_stage_ms = timestamp_ms + 15
+                    if object_id and total_shift_ms:
+                        shift_by_object_id[object_id] = total_shift_ms
                     if object_id and object_id in terminate_ms_by_object_id:
                         group_latest_ms = max(
                             group_latest_ms,
-                            terminate_ms_by_object_id[object_id] + shift_ms,
+                            terminate_ms_by_object_id[object_id] + total_shift_ms,
                         )
                     else:
                         group_latest_ms = max(group_latest_ms, timestamp_ms)
@@ -2137,7 +2253,10 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_value",
         "failure_reason",
         "outcome",
+        "logon_id",
         "logon_type",
+        "session_id",
+        "logon_guid",
         "session_type",
         "session_lifecycle",
         "status_code",

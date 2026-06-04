@@ -6,6 +6,36 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.2.1 (2026-06-04)
+
+This patch release promotes the current-dev realism assessment fixes from loops
+268-277. The branch contains only fixes, documentation handoffs, and dependency
+maintenance since v1.2.0, so the project moves from `1.2.0` to `1.2.1`.
+
+**Linux session and process realism**
+
+- Stabilized Linux shell, SSH, and package-manager evidence so workstation shell
+  sessions bootstrap correctly, bash-history commands correlate to process
+  telemetry, package-manager activity renders through a more coherent pipeline,
+  logind session identity is preserved, and SSH auth logs no longer create
+  synthetic file-write churn (`ececd460`, `e1896675`, `67470420`,
+  `91893cb0`, `146e12ae`, `77a169fe`, `cd073fef`).
+
+**Proxy, HTTP, and endpoint telemetry**
+
+- Improved cache revalidation, static web asset sizing, proxy package-manager
+  behavior, paired eCAR flow timing, and eCAR session logout identifiers so
+  proxy and endpoint records stay more source-native and internally consistent
+  across the final assessment loops (`3628d636`, `8e669384`, `42bb09ab`,
+  `8f22356a`).
+
+**Assessment handoff**
+
+- Recorded loop-by-loop blind-review and automated-score handoff notes for
+  loops 268-277 in the current-dev assessment worklog (`2ea6c6d6`,
+  `a57f1a99`, `0920f70d`, `97c828ac`, `0074292e`, `2bbcfd27`,
+  `1f1e36bf`, `0c223d24`, `3a0c3464`, `fb17b5d2`).
+
 ## v1.2.0 (2026-06-03)
 
 This minor release promotes the new spillage feature family, the canonical

@@ -159,10 +159,25 @@ fields:
     constraints:
       allowed_values: [success, failure]
 
+  - name: logon_id
+    type: string
+    required: false
+    description: "Source-native session/logon identifier for USER_SESSION events"
+
   - name: logon_type
     type: string
     required: false
-    description: "Windows-style logon type for USER_SESSION/LOGIN events, string in properties"
+    description: "Windows-style logon type for USER_SESSION events, string in properties"
+
+  - name: session_id
+    type: string
+    required: false
+    description: "OS/source session identifier for USER_SESSION events, string in properties"
+
+  - name: logon_guid
+    type: string
+    required: false
+    description: "Windows LogonGuid for USER_SESSION events when available"
 
   - name: session_type
     type: string

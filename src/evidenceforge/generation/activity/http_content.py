@@ -157,24 +157,18 @@ def apply_transfer_size_variance(
     content_type: str | None = None,
     variant_key: str | None = None,
 ) -> int:
-    """Return source-visible transfer bytes for a stable response variant.
+    """Return source-visible transfer bytes for a response variant.
 
-    Static web resources have stable origin content, but source logs often record
-    bytes after client/cache/compression negotiation. Keep the default content
-    size stable while allowing callers with a client/session key to model those
-    source-visible variants deterministically.
+    Stable web resources should keep one source-visible body size for a given
+    path unless the source format also exposes the variant dimension. The current
+    web/proxy logs do not record content-encoding or cache variant fields, so
+    avoid per-client byte mutation for immutable static assets.
     """
-    if (
-        not variant_key
-        or body_size <= 0
-        or status_code != 200
-        or not is_stable_resource_path(uri)
-        or is_health_endpoint_path(uri)
-    ):
+    if not variant_key or body_size <= 0 or status_code != 200 or is_health_endpoint_path(uri):
         return body_size
 
     mime_type = content_type or normalize_mime_type_for_path(uri, "text/html")
-    if is_download_scale_mime(mime_type):
+    if is_stable_resource_path(uri) or is_download_scale_mime(mime_type):
         return body_size
 
     rng = random.Random(
@@ -298,7 +292,10 @@ def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     if status_code < 400 and is_health_endpoint_path(uri):
         return response_size_for_health_endpoint(status_code, host, uri)
     if status_code < 400:
-        rng = random.Random(_stable_seed(f"web_response:{status_code}:{host}:{uri}"))
+        stable_resource = is_stable_resource_path(uri)
+        seed_host = "static-resource" if stable_resource else host
+        seed_uri = uri.split("?", 1)[0].split("#", 1)[0] if stable_resource else uri
+        rng = random.Random(_stable_seed(f"web_response:{status_code}:{seed_host}:{seed_uri}"))
         return response_size_for_mime(rng, normalize_mime_type_for_path(uri, "text/html"))
 
     ranges = {

@@ -103,6 +103,56 @@ def _pick_package_manager_agent(
     return None
 
 
+def _package_manager_keys_matching_os(data: dict[str, Any], os_name: str) -> set[str]:
+    """Return package-manager config keys compatible with the source OS."""
+    compatible: set[str] = set()
+    os_lower = os_name.lower()
+    for role_key in ("workstation", "server"):
+        managers = data.get(role_key, {}).get("package_managers", {})
+        if not isinstance(managers, dict):
+            continue
+        for manager_key, manager in managers.items():
+            if not isinstance(manager, dict):
+                continue
+            keywords = manager.get("os_keywords", [])
+            if not isinstance(keywords, list):
+                continue
+            if any(str(keyword).lower() in os_lower for keyword in keywords):
+                compatible.add(str(manager_key))
+    return compatible
+
+
+def _package_manager_key_for_user_agent(data: dict[str, Any], user_agent: str) -> str | None:
+    """Return the package-manager config key that owns a User-Agent string."""
+    normalized = " ".join(user_agent.strip().lower().split())
+    if not normalized:
+        return None
+    for role_key in ("workstation", "server"):
+        managers = data.get(role_key, {}).get("package_managers", {})
+        if not isinstance(managers, dict):
+            continue
+        for manager_key, manager in managers.items():
+            if not isinstance(manager, dict):
+                continue
+            agents = manager.get("user_agents", [])
+            if not isinstance(agents, list):
+                continue
+            if normalized in {" ".join(str(agent).strip().lower().split()) for agent in agents}:
+                return str(manager_key)
+    return None
+
+
+def _generic_agent_pool_for_source(source_system: "System", data: dict[str, Any]) -> list[str]:
+    """Return a generic fallback UA pool for the source host."""
+    if _is_server_source(source_system, data):
+        server_pool = _pool(data, "server", "generic")
+        if server_pool:
+            return server_pool
+    if _get_os_category(source_system.os) == "linux":
+        return _pool(data, "workstation", "linux")
+    return _pool(data, "workstation", "windows")
+
+
 def _pick_domain_override_agent(
     rng: random.Random,
     source_system: "System",
@@ -169,12 +219,23 @@ def normalize_proxy_user_agent_for_os(
     hostname: str | None = None,
     domain_tags: list[str] | None = None,
 ) -> str:
-    """Replace browser User-Agents that contradict the source host OS."""
+    """Replace User-Agents that contradict the source host OS or distro family."""
     if source_system is None or not user_agent:
         return user_agent
+    data = load_proxy_user_agents()
+    package_key = _package_manager_key_for_user_agent(data, user_agent)
+    if package_key is not None:
+        compatible_package_keys = _package_manager_keys_matching_os(data, source_system.os)
+        if compatible_package_keys and package_key not in compatible_package_keys:
+            replacement = _pick_package_manager_agent(rng, source_system, hostname, data)
+            if replacement:
+                return replacement
+            generic_pool = _generic_agent_pool_for_source(source_system, data)
+            return rng.choice(generic_pool) if generic_pool else user_agent
+
     os_category = _get_os_category(source_system.os)
     if os_category == "linux" and _ua_looks_windows(user_agent):
-        linux_pool = _pool(load_proxy_user_agents(), "workstation", "linux")
+        linux_pool = _pool(data, "workstation", "linux")
         return (
             rng.choice(linux_pool)
             if linux_pool
@@ -186,7 +247,7 @@ def normalize_proxy_user_agent_for_os(
             )
         )
     if os_category == "windows" and _ua_looks_linux(user_agent):
-        windows_pool = _pool(load_proxy_user_agents(), "workstation", "windows")
+        windows_pool = _pool(data, "workstation", "windows")
         return (
             rng.choice(windows_pool)
             if windows_pool

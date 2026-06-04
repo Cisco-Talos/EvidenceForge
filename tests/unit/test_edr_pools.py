@@ -315,6 +315,25 @@ class TestFilePaths:
             if effect
         )
 
+    def test_linux_sshd_churn_does_not_write_auth_log_directly(self):
+        """Routine SSH auth-log writes should be owned by syslog/journald."""
+        generic_paths = get_file_paths("linux")
+        effects = {
+            select_ambient_file_churn_effect(
+                "/usr/sbin/sshd",
+                "/usr/sbin/sshd -D [listener]",
+                "linux",
+                random.Random(seed),
+                "root",
+                generic_paths,
+                ["read", "modify", "create"],
+                [60, 30, 10],
+            )
+            for seed in range(20)
+        }
+
+        assert effects == {("read", "/etc/ssh/sshd_config")}
+
 
 class TestRegistryKeys:
     """Test registry key pool content."""

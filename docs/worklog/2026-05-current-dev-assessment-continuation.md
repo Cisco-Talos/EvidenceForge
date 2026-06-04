@@ -733,6 +733,185 @@ or follow-up batch is needed.
   collection texture for small ASA-to-Zeek visibility misses, and tighter Linux
   eCAR SSH/SCP receiver process lifecycle pairing.
 
+- Loop 268 fixed stable static web asset body-size texture by making full-200
+  static resource sizes independent of client/User-Agent, virtual host, and
+  cache-busting query strings. Focused tests, Ruff checks, and the full
+  `uv run pytest --no-cov` suite passed (`4178 passed, 18 skipped`), generation
+  and eval succeeded at 96.83561790479325 over 90396 records, and the hard probe
+  found 91 stable asset paths with zero variable-size full-200 paths. The
+  standalone blind panel scored 49/68/66/74, average 64.25; deliberation
+  triggered on verdict disagreement and converged to Synthetic with final
+  average 69.0. The fixed static-asset family stayed clean, but reviewers
+  surfaced a stronger next target: source timing/observation texture for paired
+  endpoint eCAR FLOW rows, plus neighboring Sysmon-before-4688 and Linux
+  server-role desktop/journald texture.
+
+- Loop 269 partially improved paired endpoint eCAR FLOW timing texture by adding
+  host-local timing offsets for unbounded paired FLOWs and separate handling for
+  very short bounded intervals. Focused eCAR/source-timing tests, Ruff checks,
+  and the full `uv run pytest --no-cov` suite passed (`4179 passed, 18
+  skipped`). Automated eval stayed high at 96.88559994042029 over 90394 records.
+  The hard probe moved exact same-ms cross-host FLOW tuple groups from 95 to 84
+  and <=5ms groups from 1011 to 851, leaving residual Kerberos/short-service
+  timing pairs. Blind initial scores were 46/38/68/58, average 52.5;
+  deliberation triggered and settled at 50/44/63/60, final average 54.25
+  (mixed/inconclusive). Reviewers no longer anchored on exact same-ms eCAR
+  mirroring, but now cluster around flattened/too-clean eCAR FLOW semantics,
+  missing eCAR logout/session correlation properties, pristine Zeek/network
+  collection texture, incomplete normalized eCAR parent graph, placeholder
+  Sysmon metadata, repeated `apt-get update` commands, and missing network
+  evidence for a metadata-service curl.
+
+- Loop 270 fixed eCAR `USER_SESSION/LOGOUT` correlation properties by declaring
+  `logon_id`, `session_id`, and `logon_guid` eCAR fields, rendering durable
+  session identifiers on login/logout rows, and propagating Linux SSH logind
+  session IDs through SSH bundle eCAR events. Focused eCAR/session, SSH bundle,
+  logoff, and object-graph tests passed; config validation, Ruff checks, fresh
+  generation, eval, and the full `uv run pytest --no-cov` suite passed (`4182
+  passed, 18 skipped`). Automated eval stayed at 96.88559994042029 over 90394
+  records. The hard probe found 618 eCAR logout rows with 0 empty property maps,
+  0 missing logon/session IDs, and 0 missing logon/session types. Blind initial
+  scores were 68/46/28/46, average 47.0; deliberation settled at 70/52/32/54,
+  average 51.5 (mixed/inconclusive). The strongest next target is now repeated
+  host command/package-manager texture: 74 exact `apt-get update` creates,
+  `yum` commands on apt/Ubuntu-like hosts, repeated bash-history command pools,
+  plus related eCAR FLOW principal attribution gaps and hard-edged collection
+  boundaries.
+
+- Loop 271 fixed Linux package-manager activity alignment across bash command
+  selection, proxy User-Agent selection, and endpoint process ownership by
+  adding data-driven distro-family package-manager metadata, filtering
+  incompatible bash/package commands by host OS, normalizing explicit-proxy
+  package-manager User-Agents to the source distro family, and rendering apt
+  proxy traffic through `/usr/lib/apt/methods/http(s)` helpers instead of
+  repeated direct `apt-get update` process creates. Config validation,
+  scenario validation, focused package/proxy/bash tests, Ruff checks, and the
+  full `uv run pytest --no-cov` suite passed (`4190 passed, 18 skipped`).
+  Automated eval passed at 96.97008227799 over 85916 records. The hard probe
+  moved exact `apt-get update` eCAR process creates from 74 in loop 270 to 0,
+  direct package-manager process creates to 0, known-source package User-Agent
+  rows to 168, and distro/package-family mismatches to 0. Blind initial scores
+  were 32/34/27/46, average 34.75 (mostly realistic); deliberation settled at
+  36/36/29/43, final average 36.0. The old apt/yum/package-manager finding did
+  not recur. The strongest next target is the broader Linux shell/session
+  execution contract: timestamped bash-history commands such as `git status`,
+  `docker logs`, `google-chrome`, `vmstat`, and `nginx -t` can still lack
+  nearby eCAR PROCESS CREATE evidence, while comparable commands sometimes
+  have it. Lower-impact follow-ups include Linux DBus/polkit management-service
+  repetition, Zeek core/DMZ collection-profile texture, DB SCP file-size/byte
+  consistency, and SMB filename vocabulary.
+
+- Loop 272 fixed the broader Linux shell/session execution contract by mapping
+  common bash-pool commands such as `vmstat`, `nginx`, `google-chrome`,
+  `sha256sum | cut`, and `code` to source-native Linux executables, removing
+  the random history-only drop for resolvable external shell commands, and
+  bootstrapping assigned-user Linux workstation sessions before emitting
+  workstation bash process telemetry. Focused shell/activity/eCAR tests, Ruff
+  checks, and the full `uv run pytest --no-cov` suite passed (`4193 passed,
+  18 skipped`). Automated eval passed at 96.97973723618829 over 84975 records,
+  with Parseability 100.0, Plausibility 97.127289821273, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe moved
+  bash-history-to-eCAR PROCESS CREATE matching from 99/126 in the loop-271
+  reference to 181/185 in loop 272, leaving 4 missing expected process
+  instances. Blind initial scores were 67/63/39/38, average 52.0; deliberation
+  settled at 67/64/39/40, final average 52.5 (split, modest synthetic lean).
+  The old shell/process gap improved substantially. The strongest next target
+  is SSH/proxy source-native texture: stop repeated `/run/sshd.pid` writes for
+  ordinary SSH sessions, preserve realistic MIME/cache semantics for proxy
+  304 static-asset rows, and tighten eCAR SSH FLOW-before-accepted/session
+  ordering or explicitly model source-local collection delay.
+
+- Loop 273 fixed repeated sshd pid-file churn by removing `/run/sshd.pid` from
+  routine Linux sshd listener file side-effect pools so ordinary SSH activity
+  renders as auth-log texture rather than repeated pid-file writes. Focused EDR
+  pool tests, broader system-process/eCAR/emitter tests, config validation,
+  scenario validation, Ruff checks, and the full `uv run pytest --no-cov` suite
+  passed (`4194 passed, 18 skipped`). Automated eval held at
+  96.97973723618829 over 84975 records, with Parseability 100.0,
+  Plausibility 97.127289821273, Causality 95.09527754763877, and Timing
+  94.62047696980169. The hard probe found 0 `/run/sshd.pid` samples in sshd
+  churn output and 13 sshd auth-log style rows. Blind initial scores were
+  58/36/57/62, average 53.75; deliberation settled at 56/54/59/56, final
+  average 56.25, with all reviewers inconclusive leaning synthetic. The next
+  target is proxy/CDN/browser and collection-imperfection texture, starting
+  with proxy 304 static-asset rows that still appeared as `text/html MISS`
+  instead of object-type cache revalidations.
+
+- Loop 274 fixed proxy 304 cache revalidation semantics by rendering cacheable
+  304 rows as object-type `REVALIDATED` responses while keeping Zeek 304 HTTP
+  rows free of response MIME metadata because no response body is observable.
+  Focused proxy/HTTP tests, config validation, scenario validation, Ruff checks,
+  generation, eval, and the full `uv run pytest --no-cov` suite passed (`4196
+  passed, 18 skipped`). Automated eval held at 96.97973723618829 over 84975
+  records, with Parseability 100.0, Plausibility 97.127289821273, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe found 36/36
+  static-asset 304 proxy rows rendered `REVALIDATED`, 0 `text/html MISS` rows,
+  and 0 Zeek 304 rows with nonempty response MIME metadata. Blind initial scores
+  were 62/62/38/58, average 55.0; deliberation settled at 64/64/44/60, final
+  average 58.0. The fixed proxy 304 family improved enough that the consensus
+  next target is Linux SSH/eCAR session identity and lifecycle ownership: unify
+  syslog and eCAR session IDs, source tuples, sshd/shell process chains,
+  login/logout boundaries, and flow principal behavior for modeled SSH sessions.
+
+- Loop 275 fixed Linux SSH/eCAR session identity by preserving already-monotonic
+  canonical systemd-logind IDs during syslog finalization and by making the
+  `StateManager` Linux logind allocator timestamp-ordered down to coarse
+  same-minute seconds. Focused StateManager/syslog/SSH/eCAR tests, Ruff checks,
+  generation, eval, and the full `uv run pytest --no-cov` suite passed (`4200
+  passed, 18 skipped`). Automated eval held at 96.97973723618829 over 84975
+  records, with Parseability 100.0, Plausibility 97.127289821273, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe found 91
+  visible syslog SSH sessions, 87 eCAR SSH login sessions, 87 matched tuple
+  sessions, 0 session-ID mismatches, 4 syslog-only sessions, and 0 eCAR-only
+  sessions. Blind initial scores were 31/28/38/44, average 35.25; deliberation
+  settled at 32/30/38/42, final average 35.0. No reviewer called the data
+  Synthetic, and the loop-274 SSH identity finding did not recur. The next
+  target is shell pipeline/eCAR process completeness: emit complete eCAR child
+  process evidence for both sides of bash-history pipelines, or make missing
+  sides explainable through source-native failure or collection behavior.
+  Queued behind that are Zeek capture imperfections, TLS/proxy variance, and
+  host-specific Windows endpoint source-mix variation.
+
+- Loop 276 fixed shell pipeline/eCAR process completeness by adding
+  `pt-query-digest` mapping/foreground classification and preserving pipeline
+  stage order during Linux shell foreground eCAR timing normalization. Focused
+  shell/activity/source-timing tests, Ruff checks, generation, eval, and the
+  full `uv run pytest --no-cov` suite passed (`4201 passed, 18 skipped`).
+  Automated eval passed at 96.97978666252297 over 84978 records, with
+  Parseability 100.0, Plausibility 97.12748752661176, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe found 31
+  bash-history pipeline commands with 56 expected mapped process stages, 56
+  matched eCAR PROCESS CREATE rows, 0 missing stages, and 0 stage-order
+  inversions, including the previously cited `pt-query-digest ... | head -50`
+  and `find ... | head` cases. Blind initial scores were 44/28/31/34, average
+  34.25; deliberation settled at 42/30/32/35, final average 34.25. Three
+  reviewers called the data Real and one called it Inconclusive leaning Real.
+  The pipeline finding did not recur. The next target is Linux eCAR auth-log
+  file ownership: avoid rendering `/var/log/auth.log` writes as direct `sshd`
+  listener writes; prefer syslog/journald/rsyslog ownership or source-profile
+  suppression, and add a rendered-output probe for auth-log FILE WRITE actor
+  ownership.
+
+- Loop 277 fixed Linux eCAR auth-log file ownership by moving routine sshd
+  listener side effects from `/var/log/auth.log` WRITE rows to
+  `/etc/ssh/sshd_config` READ rows, while allowing `read` as a validated EDR
+  side-effect action. Focused EDR/spillage tests, config validation, scenario
+  validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4201 passed, 18 skipped`). Automated
+  eval passed at 96.9797858555115 over 84978 records, with Parseability 100.0,
+  Plausibility 97.12748429856588, Causality 95.09527754763877, and Timing
+  94.62047696980169. The hard probe found 4 `/var/log/auth.log` eCAR FILE rows,
+  0 sshd-owned auth-log rows, 4 syslog-family auth-log rows, and 13 sshd config
+  READ rows; the generated Linux syslog corpus also contained 7 `syslog.log`
+  files and 373 sshd rows. Blind initial scores were 36/42/36/61, average
+  43.75; deliberation settled at 38/43/37/52, final average 42.5 after
+  fact-checking one reviewer's mistaken claim that Linux syslog/auth logs were
+  absent. The 10-loop batch requested by the user is complete. If another loop
+  is run, prioritize collection imperfection and Linux bash texture: selective
+  endpoint drops, delayed ingestion, missing proxy enrichment, sparse Zeek
+  child-log gaps, fewer one-command SSH history stubs, denser primary-user bash
+  histories, and the isolated Zeek files/protocol timestamp edge case.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

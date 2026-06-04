@@ -142,6 +142,48 @@ def test_normalize_sshd_child_pids_does_not_let_orphan_closes_rewrite_session_op
     assert pids == [784323, 784323, 784329, 784327, 784327]
 
 
+def test_normalize_logind_session_ids_preserves_monotonic_canonical_ids() -> None:
+    """Canonical SSH session IDs must survive syslog finalization for eCAR joins."""
+    lines = [
+        "<86>1 2024-03-18T13:23:51.023330Z DB-PROD-01 systemd-logind 29479 - - New session 18495 of user aisha.johnson.",
+        "<86>1 2024-03-18T13:23:58.501845Z DB-PROD-01 systemd-logind 29479 - - New session 18505 of user aisha.johnson.",
+        "<86>1 2024-03-18T13:33:52.571996Z DB-PROD-01 systemd-logind 29479 - - Removed session 18505.",
+        "<86>1 2024-03-18T13:46:21.216183Z DB-PROD-01 systemd-logind 29479 - - Removed session 18495.",
+    ]
+
+    normalized = SyslogEmitter._normalize_logind_session_ids_for_lines(
+        lines,
+        "DB-PROD-01.meridianhcs.local",
+    )
+
+    assert normalized == lines
+
+
+def test_normalize_logind_session_ids_repairs_backward_new_session() -> None:
+    """Out-of-order generator paths still need final source-native monotonicity."""
+    lines = [
+        "<86>1 2024-03-18T12:04:40.000000Z linux01 systemd-logind 22523 - - New session 7616 of user root.",
+        "<86>1 2024-03-18T12:10:09.000000Z linux01 systemd-logind 22523 - - New session 7608 of user admin.",
+        "<86>1 2024-03-18T12:12:00.000000Z linux01 systemd-logind 22523 - - Removed session 7616.",
+    ]
+
+    normalized = SyslogEmitter._normalize_logind_session_ids_for_lines(
+        lines,
+        "linux01.example.test",
+    )
+
+    new_sessions = [
+        int(line.split("New session ", 1)[1].split(" ", 1)[0])
+        for line in normalized
+        if "New session" in line
+    ]
+    removed_session = int(normalized[2].split("Removed session ", 1)[1].rstrip("."))
+    assert new_sessions == sorted(new_sessions)
+    assert new_sessions[0] == 7616
+    assert new_sessions[1] > 7616
+    assert removed_session == 7616
+
+
 def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
     lines = [
         "<30>1 2024-03-18T12:00:00.000000Z app unattended-upgr 100 - - Packages checked",

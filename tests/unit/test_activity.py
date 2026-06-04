@@ -7885,6 +7885,122 @@ class TestActivityGenerator:
         assert terminate_events
         assert process_events[-1].timestamp < terminate_events[-1].timestamp
 
+    def test_generate_bash_command_emits_ordinary_external_process(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Ordinary executable shell commands should not be arbitrary history-only rows."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc124"
+        state_manager.set_current_time(command_time - timedelta(seconds=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=command_time - timedelta(seconds=20),
+            session_kind="interactive",
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "git status")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "git status"
+        ]
+        assert process_events
+        assert process_events[-1].process.image == "/usr/bin/git"
+        assert process_events[-1].process.parent_pid == bash_pid
+
+    def test_workstation_bash_command_bootstraps_local_session_process_telemetry(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Assigned Linux workstation shell commands should not render as history-only rows."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._scenario_start_time = command_time - timedelta(minutes=30)
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid}}
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "git status")
+
+        sessions = [
+            session
+            for session in state_manager.get_sessions_for_user(test_user.username)
+            if session.system == linux.hostname and session.logon_type == 2
+        ]
+        assert sessions
+        assert sessions[-1].session_kind == "interactive"
+        assert sessions[-1].start_time < command_time
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        shell_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/bin/bash"
+        ]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "git status"
+        ]
+        assert shell_events
+        assert process_events
+        assert process_events[-1].process.image == "/usr/bin/git"
+        assert process_events[-1].process.parent_pid == shell_events[-1].process.pid
+
     def test_generate_bash_command_serializes_foreground_children(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -8388,6 +8504,39 @@ class TestActivityGenerator:
             "/usr/bin/tail",
             "tail -50 /home/aisha.johnson/.xsession-errors",
         )
+
+    def test_linux_shell_process_resolves_common_bash_pool_commands(self):
+        """Common commands from bash pools should map to source-native executable paths."""
+        expected = {
+            "vmstat 1 5": [("/usr/bin/vmstat", "vmstat 1 5")],
+            "nginx -t": [("/usr/sbin/nginx", "nginx -t")],
+            "google-chrome --new-tab https://jira.example.test/browse/PROJ-1951": [
+                (
+                    "/usr/bin/google-chrome",
+                    "google-chrome --new-tab https://jira.example.test/browse/PROJ-1951",
+                )
+            ],
+            "sha256sum /tmp/rpt.sql.gz | cut -c1-16": [
+                ("/usr/bin/sha256sum", "sha256sum /tmp/rpt.sql.gz"),
+                ("/usr/bin/cut", "cut -c1-16"),
+            ],
+            "pt-query-digest /var/log/mysql/slow.log | head -50": [
+                (
+                    "/usr/bin/pt-query-digest",
+                    "pt-query-digest /var/log/mysql/slow.log",
+                ),
+                ("/usr/bin/head", "head -50"),
+            ],
+            "code --no-sandbox /home/lina.nguyen/projects/data-pipeline": [
+                (
+                    "/usr/bin/code",
+                    "code --no-sandbox /home/lina.nguyen/projects/data-pipeline",
+                )
+            ],
+        }
+
+        for command, processes in expected.items():
+            assert generator_module._linux_command_processes_from_shell(command) == processes
 
     def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
         """Background markers belong to shell history, not child process argv."""

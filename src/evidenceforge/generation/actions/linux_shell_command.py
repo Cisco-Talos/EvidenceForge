@@ -89,6 +89,16 @@ class LinuxShellCommandExecutor(Protocol):
         """Return the source-visible bash-history timestamp, or none if no session can own it."""
         ...
 
+    def _prepare_bash_process_session(
+        self,
+        user: User,
+        system: System,
+        requested_time: datetime,
+        command: str,
+    ) -> None:
+        """Create prerequisite session state needed for correlated process telemetry."""
+        ...
+
     def _is_within_scenario_window(self, time: datetime) -> bool:
         """Return true when the timestamp is within the generation window."""
         ...
@@ -152,6 +162,13 @@ class LinuxShellCommandActionBundle:
             return None
 
         command = self._executor._prepare_bash_history_command(self._request.system, command)
+        if self._request.emit_process_telemetry:
+            self._executor._prepare_bash_process_session(
+                self._request.user,
+                self._request.system,
+                self._request.time,
+                command,
+            )
         scheduled_time = self._executor._schedule_bash_history_time(
             self._request.user,
             self._request.system,

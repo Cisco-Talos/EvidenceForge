@@ -98,7 +98,47 @@ class TestStateManagerInit:
 
         assert second > first
         assert second - first != 985
-        assert second - first < 80
+        assert second - first < 200
+
+    def test_linux_logind_session_ids_order_same_minute_out_of_generation_order(self):
+        """Same-minute IDs should still sort by rendered syslog time."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(17)
+
+        later_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=14, seconds=41),
+        )
+        earlier_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=14, seconds=31),
+        )
+
+        assert earlier_id < later_id
+
+    def test_linux_logind_session_ids_follow_prior_collision_bumps(self):
+        """Later sessions should not dip below earlier IDs inflated by collision repair."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(19)
+        earlier_time = start + timedelta(minutes=10)
+        later_time = start + timedelta(minutes=20)
+        sm._linux_logind_session_initials["linux01"] = 100
+        sm._linux_logind_session_used_ids["linux01"] = {180}
+        sm._linux_logind_session_allocations["linux01"] = [(earlier_time, 180)]
+
+        later_id = sm.next_linux_logind_session_id("linux01", rng, later_time)
+
+        assert later_id > 180
 
     def test_sessions_for_user_at_stops_at_transport_close(self):
         """Transport-backed sessions should not own activity after their close time."""

@@ -1376,8 +1376,8 @@ class TestExplicitProxyVisibility:
 
         assert client_event.process is not None
         assert client_event.process.pid != git_pid
-        assert client_event.process.image == "/usr/bin/apt-get"
-        assert client_event.process.command_line == "apt-get update"
+        assert client_event.process.image == "/usr/lib/apt/methods/https"
+        assert client_event.process.command_line == "/usr/lib/apt/methods/https"
 
     def test_linux_proxy_scrubs_bad_caller_when_matching_process_cannot_be_owned(self):
         generator, emitters = _generator(
@@ -2864,6 +2864,124 @@ class TestExplicitProxyVisibility:
         assert proxy_context.cache_result == "HIT"
         assert proxy_context.sc_bytes == 5050
         assert proxy_context.cs_bytes == 580
+
+    def test_proxy_304_revalidation_keeps_object_mime_and_cache_label(self, monkeypatch):
+        import evidenceforge.generation.activity.generator as generator_module
+
+        generator, _ = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy_system = generator._ip_to_system["10.0.3.10"]
+
+        class FixedRng:
+            def random(self) -> float:
+                return 0.8
+
+            def randint(self, low: int, high: int) -> int:
+                return low
+
+            def choice(self, values):
+                return values[0]
+
+            def uniform(self, low: float, _high: float) -> float:
+                return low
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: FixedRng())
+        monkeypatch.setattr(generator_module, "pick_proxy_domain_user_agent", lambda *a, **k: None)
+
+        proxy_context = generator._build_proxy_context(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            dst_port=443,
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=0,
+            hostname="cdn.example.com",
+            source_system=generator._ip_to_system["10.0.1.10"],
+            proxy_sys=proxy_system,
+            http=HttpContext(
+                method="GET",
+                host="cdn.example.com",
+                uri="/assets/app.bundle.js",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=0,
+                status_code=304,
+                status_msg="Not Modified",
+                resp_mime_types=[],
+            ),
+            explicit_mode=True,
+        )
+
+        assert proxy_context.status_code == 304
+        assert proxy_context.cache_result == "REVALIDATED"
+        assert proxy_context.content_type == "application/javascript"
+        assert proxy_context.sc_bytes == 50
+
+    def test_proxy_304_revalidation_keeps_origin_and_omits_zeek_response_mime(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=0,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="cdn.example.com",
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="cdn.example.com",
+                uri="/assets/app.bundle.js",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=0,
+                status_code=304,
+                status_msg="Not Modified",
+                resp_mime_types=[],
+            ),
+        )
+
+        origin_ip = resolve_domain_ip("cdn.example.com", src_host="PROXY-01")
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.status_code == 304
+        assert proxy_event.proxy.cache_result == "REVALIDATED"
+        assert proxy_event.proxy.content_type == "application/javascript"
+        assert ("10.0.3.10", origin_ip, 443) in _conn_pairs(emitters)
+
+        http_events = [
+            call.args[0]
+            for call in emitters["zeek_http"].emit.call_args_list
+            if call.args[0].http.uri == "/assets/app.bundle.js"
+        ]
+        assert len(http_events) == 1
+        assert all(event.http.status_code == 304 for event in http_events)
+        assert all(event.http.response_body_len == 0 for event in http_events)
+        assert all(event.http.resp_mime_types == [] for event in http_events)
 
     def test_supplied_http_user_agent_survives_domain_override(self, monkeypatch):
         """Proxy context must preserve caller-owned request metadata for correlated egress."""

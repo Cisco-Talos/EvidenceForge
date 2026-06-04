@@ -484,6 +484,87 @@ class TestBaselineLinuxBashHistory:
 
         assert command == "journalctl -u sshd --since '1 hour ago'"
 
+    def test_bash_picker_filters_package_managers_by_linux_distribution(self):
+        """Package-manager commands should match the Linux distribution family."""
+        from evidenceforge.generation.activity import bash_commands
+
+        pool = [
+            "yum check-update 2>/dev/null",
+            "dnf check-update 2>/dev/null",
+            "apt list --upgradable 2>/dev/null",
+            "journalctl -u sshd --since '1 hour ago'",
+        ]
+
+        class PreferFirst(random.Random):
+            def choice(self, values):
+                return values[0]
+
+        bash_commands.reset_bash_command_memory()
+        ubuntu_command = bash_commands._choose_template_with_memory(
+            PreferFirst(5),
+            pool,
+            {},
+            ["ssh", "gunicorn"],
+            "APP-INT-01",
+            "aisha.johnson",
+            system_os="Ubuntu 22.04",
+        )
+
+        bash_commands.reset_bash_command_memory()
+        centos_command = bash_commands._choose_template_with_memory(
+            PreferFirst(5),
+            pool,
+            {},
+            ["ssh", "mysql"],
+            "DB-PROD-01",
+            "marcus.chen",
+            system_os="CentOS 8",
+        )
+
+        assert ubuntu_command.startswith("apt ")
+        assert centos_command.startswith(("yum ", "dnf "))
+
+    def test_package_manager_refresh_variants_share_repeat_budget(self):
+        """Equivalent package refresh commands should not become fleet-wide fingerprints."""
+        from evidenceforge.generation.activity import bash_commands
+
+        targets = (
+            "apt list --upgradable 2>/dev/null",
+            "apt-get update",
+            "dnf check-update 2>/dev/null",
+            "yum check-update 2>/dev/null",
+        )
+        pool = [*targets, *(f"echo host-check-{index}" for index in range(30))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(41)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 2 and targets[self.calls % len(targets)] in values:
+                    return targets[self.calls % len(targets)]
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(90)
+        ]
+
+        counts = Counter(picked)
+        assert counts["apt list --upgradable 2>/dev/null"] + counts["apt-get update"] <= 2
+        assert counts["dnf check-update 2>/dev/null"] + counts["yum check-update 2>/dev/null"] <= 2
+
     def test_bash_session_picker_prefers_coherent_workflows(self, monkeypatch):
         """A shell session should be able to emit a related command sequence."""
         from evidenceforge.generation.activity import bash_commands
