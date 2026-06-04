@@ -837,6 +837,22 @@ or follow-up batch is needed.
   with proxy 304 static-asset rows that still appeared as `text/html MISS`
   instead of object-type cache revalidations.
 
+- Loop 274 fixed proxy 304 cache revalidation semantics by rendering cacheable
+  304 rows as object-type `REVALIDATED` responses while keeping Zeek 304 HTTP
+  rows free of response MIME metadata because no response body is observable.
+  Focused proxy/HTTP tests, config validation, scenario validation, Ruff checks,
+  generation, eval, and the full `uv run pytest --no-cov` suite passed (`4196
+  passed, 18 skipped`). Automated eval held at 96.97973723618829 over 84975
+  records, with Parseability 100.0, Plausibility 97.127289821273, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe found 36/36
+  static-asset 304 proxy rows rendered `REVALIDATED`, 0 `text/html MISS` rows,
+  and 0 Zeek 304 rows with nonempty response MIME metadata. Blind initial scores
+  were 62/62/38/58, average 55.0; deliberation settled at 64/64/44/60, final
+  average 58.0. The fixed proxy 304 family improved enough that the consensus
+  next target is Linux SSH/eCAR session identity and lifecycle ownership: unify
+  syslog and eCAR session IDs, source tuples, sshd/shell process chains,
+  login/logout boundaries, and flow principal behavior for modeled SSH sessions.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
