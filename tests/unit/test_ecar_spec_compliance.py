@@ -158,8 +158,108 @@ class TestPidEmission:
 
         record = json.loads(emitter._render_event(row))
         assert "logon_type" not in record["properties"]
+        assert record["properties"]["logon_id"] == "0x123"
         assert record["properties"]["session_type"] == "ssh"
         assert record["properties"]["src_port"] == "55222"
+
+    def test_windows_logout_preserves_session_properties(self, emitter, ts):
+        """Logout rows should retain source-native session correlation fields."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="logoff",
+            dst_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            auth=AuthContext(
+                username="alice",
+                logon_id="0x123",
+                session_id=2,
+                logon_type=3,
+                logon_guid="{11111111-2222-3333-4444-555555555555}",
+                source_ip="10.0.0.20",
+                source_port=54433,
+            ),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        assert row["object"] == "USER_SESSION"
+        assert row["action"] == "LOGOUT"
+        assert row["logon_id"] == "0x123"
+        assert row["logon_type"] == 3
+        assert row["session_id"] == 2
+        assert row["logon_guid"] == "{11111111-2222-3333-4444-555555555555}"
+        assert row["src_ip"] == "10.0.0.20"
+        assert row["src_port"] == 54433
+
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["logon_id"] == "0x123"
+        assert record["properties"]["logon_type"] == "3"
+        assert record["properties"]["session_id"] == "2"
+        assert record["properties"]["logon_guid"] == "{11111111-2222-3333-4444-555555555555}"
+
+    def test_machine_logout_preserves_logon_id_without_remote_source(self, emitter, ts):
+        """Machine-account logouts should not render empty eCAR properties."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="logoff",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+            ),
+            auth=AuthContext(username="WS-01$", logon_id="0x456", logon_type=3),
+            edr=EdrContext(object_id="session-2"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        assert "src_ip" not in row
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["logon_id"] == "0x456"
+        assert record["properties"]["logon_type"] == "3"
+
+    def test_linux_logout_without_logon_id_preserves_logind_session_id(self, emitter, ts):
+        """Unmanaged SSH logouts should still carry a source-native session identifier."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="logoff",
+            dst_host=HostContext(
+                hostname="LINUX-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="alice",
+                session_id=742,
+                logon_type=10,
+                source_ip="10.0.0.10",
+                source_port=55222,
+            ),
+            edr=EdrContext(object_id="session-3"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        record = json.loads(emitter._render_event(row))
+        assert "logon_id" not in record["properties"]
+        assert record["properties"]["session_id"] == "742"
+        assert record["properties"]["session_type"] == "ssh"
 
     def test_user_session_logon_type_is_declared_ecar_property(self, emitter, ts, caplog):
         """Rendered eCAR login logon_type should be accepted by format validation."""

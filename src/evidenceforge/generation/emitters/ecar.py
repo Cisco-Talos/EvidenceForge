@@ -290,6 +290,19 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["tid"] = event.edr.tid
 
     @staticmethod
+    def _apply_session_properties(event_data: dict[str, Any], event: SecurityEvent) -> None:
+        """Copy durable source-native session identifiers onto USER_SESSION rows."""
+        auth = event.auth
+        if auth is None:
+            return
+        if auth.logon_id:
+            event_data["logon_id"] = auth.logon_id
+        if auth.session_id:
+            event_data["session_id"] = auth.session_id
+        if auth.logon_guid:
+            event_data["logon_guid"] = auth.logon_guid
+
+    @staticmethod
     def _apply_process_provenance(event_data: dict[str, Any], process: Any | None) -> None:
         """Copy known process provenance onto dependent source-native eCAR rows."""
         if process is None:
@@ -361,6 +374,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["logon_type"] = event.auth.logon_type
         else:
             event_data["session_type"] = _ecar_non_windows_session_type(event)
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -380,8 +394,11 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["src_ip"] = source_ip
         if source_ip != "-" and event.auth.source_port:
             event_data["src_port"] = event.auth.source_port
-        if getattr(host, "os_category", "") != "windows":
+        if getattr(host, "os_category", "") == "windows":
+            event_data["logon_type"] = event.auth.logon_type
+        else:
             event_data["session_type"] = _ecar_non_windows_session_type(event)
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -2224,7 +2241,10 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_value",
         "failure_reason",
         "outcome",
+        "logon_id",
         "logon_type",
+        "session_id",
+        "logon_guid",
         "session_type",
         "session_lifecycle",
         "status_code",
