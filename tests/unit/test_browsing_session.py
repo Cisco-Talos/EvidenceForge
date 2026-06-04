@@ -463,7 +463,7 @@ class TestResponseSizes:
             successful_favicons[0].response_body_len
         }
 
-    def test_static_asset_transfer_size_can_vary_by_client_variant(self):
+    def test_static_asset_transfer_size_is_stable_across_client_variants(self):
         requests_a = generate_browsing_session(
             random.Random(9),
             "portal.customer.example",
@@ -493,7 +493,7 @@ class TestResponseSizes:
         favicon_b = next(r for r in requests_b if r.path == "/favicon.ico" and r.status_code == 200)
 
         assert favicon_a.response_body_len == favicon_a_repeat.response_body_len
-        assert favicon_a.response_body_len != favicon_b.response_body_len
+        assert favicon_a.response_body_len == favicon_b.response_body_len
 
     def test_sessions_include_non_success_http_outcomes(self):
         statuses = []
