@@ -821,6 +821,22 @@ or follow-up batch is needed.
   304 static-asset rows, and tighten eCAR SSH FLOW-before-accepted/session
   ordering or explicitly model source-local collection delay.
 
+- Loop 273 fixed repeated sshd pid-file churn by removing `/run/sshd.pid` from
+  routine Linux sshd listener file side-effect pools so ordinary SSH activity
+  renders as auth-log texture rather than repeated pid-file writes. Focused EDR
+  pool tests, broader system-process/eCAR/emitter tests, config validation,
+  scenario validation, Ruff checks, and the full `uv run pytest --no-cov` suite
+  passed (`4194 passed, 18 skipped`). Automated eval held at
+  96.97973723618829 over 84975 records, with Parseability 100.0,
+  Plausibility 97.127289821273, Causality 95.09527754763877, and Timing
+  94.62047696980169. The hard probe found 0 `/run/sshd.pid` samples in sshd
+  churn output and 13 sshd auth-log style rows. Blind initial scores were
+  58/36/57/62, average 53.75; deliberation settled at 56/54/59/56, final
+  average 56.25, with all reviewers inconclusive leaning synthetic. The next
+  target is proxy/CDN/browser and collection-imperfection texture, starting
+  with proxy 304 static-asset rows that still appeared as `text/html MISS`
+  instead of object-type cache revalidations.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
