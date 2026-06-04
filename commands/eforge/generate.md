@@ -63,6 +63,12 @@ Options:
   --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
+  --oob-host <host>      LIVE-CALLBACK out-of-band testing for adversarial_payload events:
+                         register an operator-controlled host (Burp Collaborator /
+                         interactsh / sinkhole) so a vulnerable target calls back to YOU.
+                         Replaces the inert canary; allowlists your fuzzer payloads.
+                         Repeatable. Requires --i-am-authorized. Off by default.
+  --i-am-authorized      Acknowledge authorization to test the target (required with --oob-host).
 ```
 
 Exit codes:

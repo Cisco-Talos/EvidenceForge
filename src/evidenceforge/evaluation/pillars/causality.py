@@ -36,7 +36,7 @@ import logging
 import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 from evidenceforge.evaluation._shared import _condition_matches, _extract_hostname, _normalize_ts
@@ -88,26 +88,46 @@ class CausalityScorer(DimensionScorer):
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
+        # storyline_id -> adversarial-payload labels (from the canonical GROUND_TRUTH.json)
+        # + per-format searchable text (parsed fields + raw lines, newline-normalized)
+        # so a labeled payload — including a CRLF split that spans two physical
+        # lines — can be verified present without re-running synthesis.
+        self._adversarial_payload_gt = context.adversarial_payload_ground_truth or {}
+        self._ap_search_text = self._build_ap_search_text(records)
         storyline = scenario.storyline or []
         resolved: list[ResolvedEvent] = []
 
         if storyline:
             resolved = resolve_storyline(storyline, scenario)
-            # Anchor spillage events to the actual emitted time from the canonical document:
-            # bash dwell/session scheduling can shift a credential well past the
-            # storyline time, beyond the match tolerance, so search + timing key
-            # off where the credential really landed.
+            # Anchor spillage / adversarial_payload events to the actual emitted time
+            # from the canonical document: dwell/session scheduling can shift evidence
+            # past the storyline time, beyond the match tolerance, so search + timing
+            # key off where the evidence really landed.
+            # A single storyline step can carry BOTH a spillage and an adversarial_payload
+            # event, anchored at different emitted times/hosts. Stash a PER-TYPE anchor so
+            # the trace search keys each type off its own evidence (a shared event.time
+            # would let the later writer clobber the other and falsely miss it). The shared
+            # event.time/hostname are still set for single-type steps and other consumers.
             for event in resolved:
                 gt = self._spillage_gt.get(event.storyline_id)
-                if not (gt and "spillage" in event.event_types):
-                    continue
-                if gt.get("time"):
-                    event.time = gt["time"]
-                if gt.get("target_system"):
-                    # http_* spillage lands on the destination web server's access
-                    # log (not the actor's host), so add that host to the record
-                    # search keys; the value match itself stays host-agnostic.
-                    event.details["hostname"] = gt["target_system"]
+                if gt and "spillage" in event.event_types:
+                    if gt.get("time"):
+                        event.time = gt["time"]
+                        event.details["_anchor_time_spillage"] = gt["time"]
+                    if gt.get("target_system"):
+                        # http_* spillage lands on the destination web server's access
+                        # log (not the actor's host), so add that host to the record
+                        # search keys; the value match itself stays host-agnostic.
+                        event.details["hostname"] = gt["target_system"]
+                        event.details["_anchor_host_spillage"] = gt["target_system"]
+                apgt = self._adversarial_payload_gt.get(event.storyline_id)
+                if apgt and "adversarial_payload" in event.event_types:
+                    if apgt.get("time"):
+                        event.time = apgt["time"]
+                        event.details["_anchor_time_adversarial_payload"] = apgt["time"]
+                    if apgt.get("target_system"):
+                        event.details["hostname"] = apgt["target_system"]
+                        event.details["_anchor_host_adversarial_payload"] = apgt["target_system"]
             self._proxy_mode = scenario.environment.proxy.mode
             self._proxy_ips = {
                 system.ip
@@ -304,7 +324,9 @@ class CausalityScorer(DimensionScorer):
         host_time_index: dict[str, dict[str, list[ParsedRecord]]],
     ) -> list[ParsedRecord]:
         found: list[ParsedRecord] = []
-        evt_time = event.time
+        # Prefer a per-type anchor time when set (a step carrying both spillage and
+        # adversarial_payload anchors each type to its own emitted time); else event.time.
+        evt_time = event.details.get(f"_anchor_time_{event_type}") or event.time
         if evt_time.tzinfo is None:
             evt_time = evt_time.replace(tzinfo=UTC)
         evt_bucket = int(evt_time.timestamp()) // 60
@@ -340,7 +362,11 @@ class CausalityScorer(DimensionScorer):
         explicit_dst = event.details.get("dst_ip")
         if explicit_dst:
             lookup_keys.append(str(explicit_dst))
-        expected_hostname = event.details.get("hostname")
+        # Per-type destination host (the spillage/adversarial web server) takes
+        # precedence over the shared hostname slot when both types share a step.
+        expected_hostname = event.details.get(f"_anchor_host_{event_type}") or event.details.get(
+            "hostname"
+        )
         if expected_hostname:
             lookup_keys.append(str(expected_hostname).lower())
 
@@ -771,6 +797,8 @@ class CausalityScorer(DimensionScorer):
                 )
         elif event_type == "spillage":
             return self._spillage_record_matches(f, format_name, event)
+        elif event_type == "adversarial_payload":
+            return self._adversarial_payload_record_matches(f, format_name, event)
         elif event_type == "raw":
             return self._raw_record_matches(f, format_name, event)
         return False
@@ -821,13 +849,19 @@ class CausalityScorer(DimensionScorer):
 
         Default: at least one trace. For spillage, EVERY labeled credential for the
         event's storyline_id must appear in a trace — finding one spill in a
-        multi-spill storyline step does not vouch for the others.
+        multi-spill storyline step does not vouch for the others. The same holds for
+        adversarial_payload; when a step carries BOTH families, both must be present.
         """
         if not event.traces:
             return False
+        present = True
         if "spillage" in event.event_types and self._spillage_gt.get(event.storyline_id):
-            return self._all_spillage_values_traced(event)
-        return True
+            present = present and self._all_spillage_values_traced(event)
+        if "adversarial_payload" in event.event_types and self._adversarial_payload_gt.get(
+            event.storyline_id
+        ):
+            present = present and self._all_adversarial_payloads_landed(event)
+        return present
 
     def _all_spillage_values_traced(self, event: ResolvedEvent) -> bool:
         """True only if every labeled spillage record for this event is observed.
@@ -872,6 +906,119 @@ class CausalityScorer(DimensionScorer):
             if hit is None:
                 return False
             remaining.pop(hit)
+        return True
+
+    # The parsed text field(s) that can carry an adversarial payload, per format.
+    # web_access adds `user_agent` over the spillage set because http_user_agent is
+    # a first-class adversarial surface (the classic Log4Shell/UA vector).
+    _ADVERSARIAL_TEXT_FIELD: ClassVar[dict[str, tuple[str, ...]]] = {
+        "syslog": ("message",),
+        "ecar": ("command_line",),
+        "web_access": ("path", "referer", "user_agent"),
+        # A plaintext-http payload is also visible on the wire (Zeek http.log); an
+        # https one is not. The server's web_access log stays the authoritative
+        # landing (expected_sources), but recognizing the value in zeek_http lets a
+        # defender forcing `scheme: http` see it matched in network evidence too.
+        "zeek_http": ("uri", "referrer", "user_agent"),
+    }
+
+    # Web/network http evidence lands on the destination server / sensor path (not
+    # event.system), so it is matched by the unique, marked payload value alone.
+    _ADVERSARIAL_HOST_AGNOSTIC = frozenset({"web_access", "zeek_http"})
+
+    @staticmethod
+    def _normalize_nl(text: str) -> str:
+        """Collapse CRLF/CR to LF so a forged-line split matches its source text."""
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    def _build_ap_search_text(self, records: dict[str, list[ParsedRecord]]) -> dict[str, str]:
+        """Build a per-format, newline-normalized search blob for payload presence.
+
+        Concatenates each record's parsed text field(s) AND its raw line, in file
+        order, then normalizes newlines. The raw lines are what let a crlf_log_forging
+        payload — whose rendered value spans two physical syslog lines (the injected
+        line plus the forged ``forged-entry`` line, which fails to parse and so carries
+        no ``message`` field) — be found as a single contiguous substring even though
+        no single parsed record contains it.
+        """
+        blobs: dict[str, str] = {}
+        for fmt, recs in records.items():
+            text_fields = self._ADVERSARIAL_TEXT_FIELD.get(fmt, ())
+            parts: list[str] = []
+            for rec in recs:
+                for field in text_fields:
+                    val = rec.fields.get(field)
+                    if val:
+                        parts.append(str(val))
+                if rec.raw:
+                    parts.append(rec.raw)
+            blobs[fmt] = self._normalize_nl("\n".join(parts))
+        return blobs
+
+    def _adversarial_payload_record_matches(
+        self, f: dict, format_name: str, event: ResolvedEvent
+    ) -> bool:
+        """Link a single parsed record to an adversarial_payload event as a trace.
+
+        Lenient by design: matches if the record's text carries the full rendered
+        value OR any substantial physical line of it. The full-span correctness
+        check (that a forged second line also landed) is done against the per-format
+        search blob in :meth:`_all_adversarial_payloads_landed`; here we only need to
+        anchor the event to at least one observed record so it is not orphaned.
+        """
+        records = (self._adversarial_payload_gt.get(event.storyline_id) or {}).get("records", [])
+        if not records:
+            return False
+        if format_name not in self._ADVERSARIAL_HOST_AGNOSTIC:
+            if not self._host_matches(f.get("hostname"), event.system):
+                return False
+        text_fields = self._ADVERSARIAL_TEXT_FIELD.get(format_name)
+        if not text_fields:
+            return False
+        text = self._normalize_nl("\n".join(str(f.get(field, "") or "") for field in text_fields))
+        for rec in records:
+            value = rec.get("value")
+            allowed = rec.get("expected_sources") or ()
+            if not value or (allowed and format_name not in allowed):
+                continue
+            norm = self._normalize_nl(value)
+            # A line ≥8 chars cannot be benign: every payload line carries the marker
+            # (≥3 chars) plus distinctive content by the generation safety contract.
+            candidates = [ln for ln in norm.split("\n") if len(ln.strip()) >= 8] or [norm]
+            if any(c in text for c in candidates):
+                return True
+        return False
+
+    def _all_adversarial_payloads_landed(self, event: ResolvedEvent) -> bool:
+        """True only if every labeled payload for this event is present, intact.
+
+        Each labeled rendered value (newline-normalized) must appear as a contiguous
+        substring of the search blob for one of its ``expected_sources`` — verifying
+        the full injection, including a forged CRLF second line, survived to disk.
+        Paired with the trace requirement in :meth:`_event_present`, this also stops
+        a value that landed for a different event from crediting one that did not.
+
+        Match is by value presence, not distinct-landing consumption: per-event
+        synthesis gives every family payload a unique ``{alnum}`` token, so distinct
+        labels have distinct values. Residual: two byte-identical *literal* payloads in
+        one step (an unusual authoring choice) where only one lands would over-credit —
+        the blob cannot consume per-landing because a single line contributes the value
+        to both its parsed field and its raw text.
+        """
+        records = (self._adversarial_payload_gt.get(event.storyline_id) or {}).get("records", [])
+        if not records:
+            return bool(event.traces)
+        for rec in records:
+            value = rec.get("value")
+            if not value:
+                return False
+            norm = self._normalize_nl(value)
+            allowed = rec.get("expected_sources") or ()
+            blobs = [self._ap_search_text.get(fmt, "") for fmt in allowed]
+            if not blobs:
+                blobs = list(self._ap_search_text.values())
+            if not any(norm and norm in blob for blob in blobs):
+                return False
         return True
 
     def _raw_record_matches(
@@ -1408,6 +1555,13 @@ class CausalityScorer(DimensionScorer):
                 " — spillage events need a GROUND_TRUTH.json document to match; "
                 "none was loaded, so they score as untraced"
             )
+        if not self._adversarial_payload_gt and any(
+            "adversarial_payload" in e.event_types for e in resolved
+        ):
+            details += (
+                " — adversarial_payload events need a GROUND_TRUTH.json document to match; "
+                "none was loaded, so they score as untraced"
+            )
         return SubScore(
             name="Event Presence",
             key="event_presence",
@@ -1709,7 +1863,19 @@ class CausalityScorer(DimensionScorer):
 
             total += 1
             earliest = min(trace_times)
-            time_ok = abs((earliest - event.time).total_seconds()) <= TIME_TOLERANCE.total_seconds()
+            # A step can carry both a spillage and an adversarial_payload event anchored
+            # at different emitted times; credit the trace if it is near ANY of the
+            # event's candidate anchors (the shared event.time plus per-type anchors),
+            # not only the last-written event.time.
+            anchors = [event.time]
+            for _anchor_key in ("_anchor_time_spillage", "_anchor_time_adversarial_payload"):
+                _anchor = event.details.get(_anchor_key)
+                if _anchor is not None:
+                    anchors.append(
+                        _anchor.replace(tzinfo=UTC) if _anchor.tzinfo is None else _anchor
+                    )
+            anchor_delta = min(((earliest - anchor).total_seconds() for anchor in anchors), key=abs)
+            time_ok = abs(anchor_delta) <= TIME_TOLERANCE.total_seconds()
             # Storyline events can overlap, and source-specific telemetry can arrive after the
             # action began. Treat a later event as ordered when its evidence does not predate the
             # previous event's intended time, rather than requiring it to follow the previous
@@ -1721,9 +1887,8 @@ class CausalityScorer(DimensionScorer):
                 raw_correct += 1
             elif len(failures) < 10:
                 if not time_ok:
-                    delta = (earliest - event.time).total_seconds()
                     failures.append(
-                        f"Event {event.index}: trace at {delta:+.0f}s from expected "
+                        f"Event {event.index}: trace at {anchor_delta:+.0f}s from expected "
                         f"(tolerance ±{TIME_TOLERANCE.total_seconds():.0f}s)"
                     )
                 if not order_ok:

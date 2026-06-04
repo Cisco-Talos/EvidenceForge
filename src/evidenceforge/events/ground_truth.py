@@ -203,6 +203,41 @@ class SpillageAttributes(GroundTruthAttributesBase):
     expected_sources: list[str] = Field(default_factory=list)
 
 
+class IdsAlertAttributes(BaseModel):
+    """The on-wire Snort/Suricata signature an adversarial payload should trip.
+
+    Correlation evidence (distinct from ``expected_sources``): the Snort/IDS alert
+    line references this SID, not the payload text, so it documents the detection a
+    network sensor should fire when the payload rides a cleartext http request.
+    """
+
+    sid: int
+    rev: int = 1
+    message: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AdversarialPayloadAttributes(GroundTruthAttributesBase):
+    """Adversarial-payload event attributes (the counterpart to spillage)."""
+
+    surface: str
+    expected_sources: list[str] = Field(default_factory=list)
+    # The operator-registered live-callback (OOB) host the payload points at, when a
+    # generation run opted into live callbacks (`eforge generate --oob-host`). None for
+    # the default inert-canary runs.
+    callback_host: str | None = None
+    # The family's weakness class and the pass criterion a hardened pipeline must meet
+    # (CWE/CVE class + what to verify) — propagated so an analyst can SCORE the payload
+    # from ground truth alone. None for a literal `value:` payload (no family).
+    weakness_class: str | None = None
+    expected_defender_signal: str | None = None
+    # The on-wire IDS signature a network sensor should fire on for this payload, when
+    # it rides a cleartext http request and the family maps to a signature. None for
+    # https (opaque), syslog/process surfaces, or families with no network signature.
+    ids_alert: IdsAlertAttributes | None = None
+
+
 class RawAttributes(GroundTruthAttributesBase):
     """Raw event attributes."""
 
@@ -394,6 +429,29 @@ class SpillageGroundTruthEvent(GroundTruthEventBase):
         return self
 
 
+class AdversarialPayloadGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["adversarial_payload"]
+    attributes: AdversarialPayloadAttributes
+
+    @model_validator(mode="after")
+    def validate_adversarial_payload(self) -> AdversarialPayloadGroundTruthEvent:
+        """Keep adversarial-payload emitted/skipped semantics explicit and consistent."""
+        attrs = self.attributes
+        value_fields = (attrs.value, attrs.value_sha256, attrs.rendered_value)
+        if self.emitted:
+            if not all(value_fields) or attrs.expected_sources is None:
+                raise ValueError(
+                    "emitted adversarial_payload events require "
+                    "value/value_sha256/rendered_value and expected_sources"
+                )
+        else:
+            if any(value_fields):
+                raise ValueError(
+                    "skipped adversarial_payload events must not carry emitted value fields"
+                )
+        return self
+
+
 class RawGroundTruthEvent(GroundTruthEventBase):
     kind: Literal["raw"]
     attributes: RawAttributes
@@ -427,6 +485,7 @@ GroundTruthEvent = Annotated[
     | WorkstationLockGroundTruthEvent
     | WorkstationUnlockGroundTruthEvent
     | SpillageGroundTruthEvent
+    | AdversarialPayloadGroundTruthEvent
     | RawGroundTruthEvent,
     Field(discriminator="kind"),
 ]

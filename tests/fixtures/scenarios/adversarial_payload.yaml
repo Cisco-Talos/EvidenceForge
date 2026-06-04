@@ -1,0 +1,108 @@
+version: "1.0"
+name: adversarial-payload-test
+description: "Synthetic log-pipeline weakness payloads across surfaces/families for parser/SIEM hardening tests"
+
+environment:
+  description: "Single Linux server plus a web server for payload testing"
+
+  users:
+    - username: nina.kapoor
+      full_name: "Nina Kapoor"
+      email: "nina.kapoor@example.com"
+      primary_system: APP-SRV-01
+      enabled: true
+
+  systems:
+    - hostname: APP-SRV-01
+      ip: 192.168.20.30
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      assigned_user: nina.kapoor
+      services: ["SSH"]
+
+    - hostname: WEB-APP-01
+      ip: 192.168.20.40
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      roles: ["web_server"]
+      services: ["HTTP"]
+
+time_window:
+  start: "2024-03-18T14:00:00Z"
+  duration: "2h"
+
+baseline_activity:
+  description: "Light baseline activity"
+  intensity: low
+  variation: low
+
+output:
+  logs:
+    - format: bash_history
+    - format: syslog
+    - format: ecar
+    - format: web_access
+  destination: "./output"
+  compression: false
+
+storyline:
+  - id: ap-ansi-syslog
+    time: "+20m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "ANSI escape injected into syslog (terminal-spoofing)"
+    events:
+      - type: adversarial_payload
+        technique: "T1565.001 - Stored Data Manipulation"
+        surface: syslog_message
+        family: ansi_escape
+
+  - id: ap-crlf-syslog
+    time: "+30m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "CRLF log forging in syslog (forges a second log line)"
+    events:
+      - type: adversarial_payload
+        surface: syslog_message
+        family: crlf_log_forging
+
+  - id: ap-ansi-proc
+    time: "+40m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "ANSI escape on a process command line (captured by EDR; escaped to a literal)"
+    events:
+      - type: adversarial_payload
+        surface: process_command_line
+        family: ansi_escape
+
+  - id: ap-log4shell-ua
+    time: "+50m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "Log4Shell JNDI lookup in the User-Agent header"
+    events:
+      - type: adversarial_payload
+        surface: http_user_agent
+        family: log4shell
+
+  - id: ap-crlf-url
+    time: "+60m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "CRLF log forging in a request URL (percent-encoded on the wire)"
+    events:
+      - type: adversarial_payload
+        surface: http_request_url
+        family: crlf_log_forging
+
+  - id: ap-log4shell-referrer
+    time: "+70m"
+    actor: nina.kapoor
+    system: APP-SRV-01
+    activity: "Log4Shell JNDI lookup in the Referer header"
+    events:
+      - type: adversarial_payload
+        surface: http_referrer
+        family: log4shell

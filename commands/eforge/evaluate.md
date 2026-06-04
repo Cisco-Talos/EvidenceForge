@@ -50,13 +50,15 @@ If the user provides the scenario directory (e.g., `scenarios/branch-office-exam
 - Data directory: `scenarios/<name>/data/`
 - Scenario file: `scenarios/<name>/scenario.yaml`
 
-**Spillage scoring depends on the spillage records in `GROUND_TRUTH.json`.** The
-causality pillar reads the canonical document to confirm each labeled credential
-landed in the logs. If the document is missing (e.g., it was deleted, or `data/`
-was copied without it), spillage events cannot be matched and score as
-untraced — the Event Presence detail says as much. Keep `GROUND_TRUTH.json`
-next to (or one level above) the data directory when evaluating a spillage
-dataset.
+**Spillage and adversarial_payload scoring depends on the records in
+`GROUND_TRUTH.json`.** The causality pillar reads the canonical document to confirm
+each labeled credential (spillage) or weakness payload (adversarial_payload) landed
+in the logs. If the document is missing (e.g., it was deleted, or `data/` was copied
+without it), those events cannot be matched and score as untraced — the Event
+Presence detail says as much. (For `adversarial_payload`, a `crlf_log_forging`
+payload spans two physical lines and is matched against the source's raw text, so
+the whole forged-line span must be present.) Keep `GROUND_TRUTH.json` next to (or one
+level above) the data directory.
 
 Ignore optional `artifacts/` contents for evaluation; they are exercise collateral, not generated log output.
 

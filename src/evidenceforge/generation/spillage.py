@@ -338,10 +338,13 @@ def _extract_hosts(value: str) -> list[str]:
     # if they are IPs or carry a TLD that also looks like a file extension. The
     # netloc ends at the first '/', '?', '#', '\' (WHATWG treats '\' as '/'), or
     # whitespace; the scheme is optional so scheme-relative URLs ("//evil.com/x",
-    # which resolve to the surrounding scheme) are host-checked too.
-    for match in re.finditer(r"(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?//([^/?#\\\s]+)", value):
-        for segment in match.group(1).split("@"):
-            _add(segment, host_position=True)
+    # which resolve to the surrounding scheme) are host-checked too. The pattern
+    # requires "//", so skip it when absent — the optional scheme run otherwise
+    # backtracks O(n^2) on a long token (e.g. an oversized_field payload).
+    if "//" in value:
+        for match in re.finditer(r"(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?//([^/?#\\\s]+)", value):
+            for segment in match.group(1).split("@"):
+                _add(segment, host_position=True)
     # Host after any "@" — IPv4, bracketed IPv6 (incl. zone id), or domain — so an
     # IP cannot slip past the allowlist by hiding behind userinfo (e.g.
     # "user@8.8.8.8"); _add classifies and validates each. Non-overlapping matching
@@ -355,13 +358,16 @@ def _extract_hosts(value: str) -> list[str]:
     # missed by the ASCII-only extractors above (and the unicode-dot map only
     # normalizes separators, not labels). Scan any dotted token carrying a non-ASCII
     # codepoint and host-check it, so it is rejected unless it is a non-ASCII
-    # subdomain of an allowlisted domain. Pure-ASCII values produce no match here.
-    for match in re.finditer(r"[^\s/]*[^\x00-\x7f][^\s/]*", value):
-        if "." not in match.group(0):
-            continue  # a non-ASCII word with no dot is not a host
-        for segment in match.group(0).split("@"):
-            if "." in segment and any(ord(c) > 127 for c in segment):
-                _add(segment, host_position=True)
+    # subdomain of an allowlisted domain. The pattern requires a non-ASCII byte, so a
+    # pure-ASCII value never matches — skip the scan entirely (its overlapping `[^\s/]*`
+    # halves backtrack O(n^2) on a long token, e.g. an oversized_field payload).
+    if not value.isascii():
+        for match in re.finditer(r"[^\s/]*[^\x00-\x7f][^\s/]*", value):
+            if "." not in match.group(0):
+                continue  # a non-ASCII word with no dot is not a host
+            for segment in match.group(0).split("@"):
+                if "." in segment and any(ord(c) > 127 for c in segment):
+                    _add(segment, host_position=True)
 
     return sorted(hosts)
 
