@@ -872,6 +872,26 @@ or follow-up batch is needed.
   Queued behind that are Zeek capture imperfections, TLS/proxy variance, and
   host-specific Windows endpoint source-mix variation.
 
+- Loop 276 fixed shell pipeline/eCAR process completeness by adding
+  `pt-query-digest` mapping/foreground classification and preserving pipeline
+  stage order during Linux shell foreground eCAR timing normalization. Focused
+  shell/activity/source-timing tests, Ruff checks, generation, eval, and the
+  full `uv run pytest --no-cov` suite passed (`4201 passed, 18 skipped`).
+  Automated eval passed at 96.97978666252297 over 84978 records, with
+  Parseability 100.0, Plausibility 97.12748752661176, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe found 31
+  bash-history pipeline commands with 56 expected mapped process stages, 56
+  matched eCAR PROCESS CREATE rows, 0 missing stages, and 0 stage-order
+  inversions, including the previously cited `pt-query-digest ... | head -50`
+  and `find ... | head` cases. Blind initial scores were 44/28/31/34, average
+  34.25; deliberation settled at 42/30/32/35, final average 34.25. Three
+  reviewers called the data Real and one called it Inconclusive leaning Real.
+  The pipeline finding did not recur. The next target is Linux eCAR auth-log
+  file ownership: avoid rendering `/var/log/auth.log` writes as direct `sshd`
+  listener writes; prefer syslog/journald/rsyslog ownership or source-profile
+  suppression, and add a rendered-output probe for auth-log FILE WRITE actor
+  ownership.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
