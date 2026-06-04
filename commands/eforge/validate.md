@@ -76,6 +76,26 @@ validation. Common errors and fixes:
 - **shell_history/syslog_message on a Windows host** — these surfaces are Linux-modeled;
   put the actor on a Linux host (process_command_line and http_* are cross-OS).
 
+### Adversarial payload event errors
+
+`adversarial_payload` events (a log-pipeline weakness payload injected into a
+semantic `surface`) have the same shape of extra validation. Common errors:
+
+- **"exactly one of family or value"** — needs `family:` (synthesize from a known
+  family) XOR `value:` (a literal). Remove one.
+- **unknown `family`** — must be a family in `payload_families.yaml` (e.g.
+  `ansi_escape`, `crlf_log_forging`, `csv_formula`, `log4shell`, `xss_reflection`).
+- **family "does not model surface"** — a `family` only declares certain surfaces
+  (e.g. `csv_formula` does not model `http_user_agent`). Pick a surface the family
+  declares, or use a different family.
+- **unsafe value** (`AdversarialPayloadSafetyError`) — control bytes are allowed, but
+  a literal `value:` must carry a poison marker (e.g. `EFORGE_TEST`) on **every
+  physical line** (so a CRLF-forged line stays synthetic), and any embedded host must
+  be the canary (`canary.eforge.invalid`) or an RFC-reserved domain/address.
+- **http_* with no web_server** — add a system with `roles: [web_server]`.
+- **syslog_message on a Windows host** — syslog_message is Linux-modeled; put the
+  actor on a Linux host (process_command_line and http_* are cross-OS).
+
 These are typically simple, directly-fixable errors. Only escalate to `/eforge scenario`
 if the environment lacks a host of the required OS/role and one cannot be trivially added.
 

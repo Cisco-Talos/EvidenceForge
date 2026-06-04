@@ -173,6 +173,21 @@ def generate(
         "--target",
         help="Output rendering target: default or sof-elk",
     ),
+    oob_host: list[str] = typer.Option(
+        [],
+        "--oob-host",
+        help="LIVE CALLBACK (out-of-band) testing: register an operator-controlled host "
+        "(e.g. a Burp Collaborator / interactsh / sinkhole domain) for adversarial_payload "
+        "events. The payload's canary is replaced with this host so a vulnerable target "
+        "actually calls back to YOU. Repeatable. Requires --i-am-authorized. Off by default "
+        "(payloads use the inert, non-resolving canary).",
+    ),
+    i_am_authorized: bool = typer.Option(
+        False,
+        "--i-am-authorized",
+        help="Acknowledge you are authorized to test the target systems; required to use "
+        "--oob-host (live callbacks).",
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -194,9 +209,69 @@ def generate(
         console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR) from exc
 
+    # Live-callback (OOB) opt-in for adversarial_payload events. Off by default; only
+    # the explicitly-registered host(s) become allowlisted, and only with the
+    # authorization acknowledgment, so a payload can never silently point anywhere else.
+    # Normalize + validate at the boundary (fail fast): each value is substituted for the
+    # canary inside a payload and matched against the safety allowlist (which lowercases),
+    # so an --oob-host must be a BARE, lowercased hostname or IP — never a scheme/path/
+    # userinfo/port form. (A bare uppercase host like CANARY-SINK.LOCAL would otherwise
+    # crash mid-generation when the lowercased extracted host fails the allowlist match.)
+    import ipaddress as _ipaddress
+    import re as _re
+
+    oob_hosts_list: list[str] = []
+    for _raw in oob_host:
+        _h = _raw.strip().lower()
+        if not _h:
+            continue
+        _malformed = "://" in _h or any(c in _h for c in "/\\ \t\r\n@?#%")
+        _candidate = _h.strip("[]")
+        _valid_ip = False
+        if not _malformed:
+            try:
+                _ipaddress.ip_address(_candidate)
+                _valid_ip = True
+            except ValueError:
+                _valid_ip = False
+        _valid_host = (not _malformed) and (
+            _valid_ip or bool(_re.fullmatch(r"[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?", _h))
+        )
+        if not _valid_host:
+            console.print(
+                f"[bold red]Error:[/bold red] --oob-host {_raw!r} is not a bare host; pass just "
+                "a hostname or IP (e.g. 127.0.0.1, oob-sink.local) with no scheme, path, port, "
+                "userinfo, or whitespace.",
+                style="red",
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        oob_hosts_list.append(_candidate if _valid_ip else _h)
+    oob_hosts: tuple[str, ...] = tuple(dict.fromkeys(oob_hosts_list))
+    if oob_hosts and not i_am_authorized:
+        console.print(
+            "[bold red]Error:[/bold red] --oob-host enables LIVE callbacks to the given "
+            "host(s) if a target is vulnerable; pass --i-am-authorized to confirm you are "
+            "authorized to test the target systems.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if not oob_hosts and i_am_authorized:
+        console.print(
+            "[yellow]Note:[/yellow] --i-am-authorized has no effect without --oob-host.",
+            style="yellow",
+        )
+
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
     console.print(f"Scenario: {scenario_file}")
     console.print(f"Output target: {output_target.value}")
+    if oob_hosts:
+        console.print(
+            "[bold red]⚠ LIVE CALLBACK MODE[/bold red] — adversarial_payload events will "
+            f"point at {', '.join(oob_hosts)} instead of the inert canary. A VULNERABLE "
+            "TARGET WILL CALL BACK to these host(s). Only use against systems you are "
+            "authorized to test.",
+            style="red",
+        )
 
     # Load and validate scenario
     try:
@@ -217,7 +292,7 @@ def generate(
         from evidenceforge.validation import ScenarioValidator
 
         console.print("\n[bold]Validating cross-references...[/bold]")
-        validator = ScenarioValidator(scenario)
+        validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
         issues = validator.validate()
 
         if issues:
@@ -433,6 +508,7 @@ def generate(
                 progress_callback=progress_callback,
                 ground_truth_dir=gen_gt_dir,
                 output_target=output_target,
+                oob_hosts=oob_hosts,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)

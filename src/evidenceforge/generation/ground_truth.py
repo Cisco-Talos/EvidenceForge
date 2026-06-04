@@ -264,7 +264,7 @@ class GroundTruthGenerator:
             for key, value in event.items()
             if key not in _EVENT_BASE_KEYS
         }
-        if event.get("type") == "spillage":
+        if event.get("type") in ("spillage", "adversarial_payload"):
             if event.get("skipped_reason"):
                 for field in ("value", "value_sha256", "rendered_value", "rendered_sha256"):
                     attributes.pop(field, None)
@@ -482,6 +482,31 @@ class GroundTruthGenerator:
             return (
                 f"Spillage ({event.get('family') or 'literal'}) to {event.get('surface', 'N/A')}: "
                 f"{_redact_secret(value)} (sha256:{digest[:12]})"
+            )
+        if event_type == "adversarial_payload":
+            surface = event.get("surface", "N/A")
+            family = event.get("family") or "literal"
+            encoding = event.get("encoding", "raw")
+            value = event.get("value", "")
+            digest = hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
+            # An adversarial payload is an inert, marker-bearing test artifact (NOT a
+            # secret), so show the FULL value — an analyst must recognize it to score a
+            # detection. Escape control bytes and the table delimiter so the payload
+            # cannot corrupt/inject the table; truncate only a very long (oversized) one.
+            shown = value.encode("unicode_escape").decode("ascii", "replace").replace("|", "\\|")
+            if len(shown) > 200:
+                shown = shown[:200] + f"…(+{len(shown) - 200} more chars)"
+            # Surface the on-wire IDS alert a network sensor should fire on (compact
+            # correlation metadata; the full weakness_class / pass-criterion live in the
+            # canonical JSON). Present only for cleartext-http, signature-mapped families.
+            ids_alert = event.get("ids_alert") or {}
+            ids_suffix = ""
+            if ids_alert:
+                msg = str(ids_alert.get("message", "")).replace("|", "\\|")
+                ids_suffix = f" [IDS {ids_alert.get('sid')}: {msg}]"
+            return (
+                f"Adversarial payload ({family}) to {surface} [{encoding}]: "
+                f"{shown} (sha256:{digest[:12]}){ids_suffix}"
             )
         return event.get("activity", "N/A")
 

@@ -2001,6 +2001,161 @@ class SecretFamiliesConfig(BaseModel, extra="forbid"):
         return self
 
 
+class PayloadFamilyEntry(BaseModel, extra="forbid"):
+    """One adversarial-payload family used by the adversarial_payload event type.
+
+    The counterpart to SecretFamilyEntry: a payload deliberately carries a log-
+    pipeline injection primitive, so there is no credential `regex`; instead a
+    family declares which `surfaces` it is valid in and, in `raw_surfaces`, the
+    subset where its control bytes are emitted raw (the realistic weakness).
+    """
+
+    name: str
+    description: str = ""
+    weakness_class: str = ""
+    value_template: str | None = None
+    # An ordered list of variant templates (the engine picks one per event by seed):
+    # ship the canonical form PLUS evasion/bypass variants so a dataset tests detection
+    # QUALITY, not just presence. Mutually exclusive with value_template/examples.
+    value_templates: list[str] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
+    surfaces: list[str] = Field(default_factory=list, min_length=1)
+    raw_surfaces: list[str] = Field(default_factory=list)
+    carriers: dict[str, list[str]] = Field(default_factory=dict)
+    expected_defender_signal: str = ""
+    # The on-wire Snort/Suricata signature ID (from ids_signatures.yaml) a network
+    # sensor should fire on when this family's payload rides a CLEARTEXT http request.
+    # None = no network signature (e.g. a syslog-only / viewer-only weakness). The
+    # SID's existence in the signature pool is verified by validate-config (cross-file
+    # coupling), not here.
+    ids_sid: int | None = None
+    # The literal content token the flat ET signature keys on. The alert fires ONLY when
+    # the (normalized) rendered payload still contains this token, so an evasion variant
+    # that splits it produces NO alert — modeling the real rule's blind spot. Required
+    # whenever ids_sid is set (else the signature would fire on every variant, including
+    # the ones it is designed to miss).
+    ids_fires_on: str | None = None
+    proposed: bool = False
+
+    @model_validator(mode="after")
+    def _check_family(self) -> Self:
+        sources = sum(bool(s) for s in (self.value_template, self.value_templates, self.examples))
+        if sources == 0:
+            raise ValueError(
+                f"payload family {self.name!r} needs a value_template, value_templates, or examples"
+            )
+        if sources > 1:
+            raise ValueError(
+                f"payload family {self.name!r} must use exactly one of value_template / "
+                "value_templates / examples"
+            )
+        extra = sorted(set(self.raw_surfaces) - set(self.surfaces))
+        if extra:
+            raise ValueError(
+                f"payload family {self.name!r} raw_surfaces {extra} are not in its surfaces"
+            )
+        for surface, lines in self.carriers.items():
+            for line in lines:
+                if "{value}" not in line:
+                    raise ValueError(
+                        f"payload family {self.name!r} carrier for {surface!r} must contain "
+                        f"{{value}}: {line!r}"
+                    )
+        # An on-wire IDS signature only fires on a cleartext http request, so a family
+        # declaring ids_sid must have at least one http_* surface to carry it, and must
+        # declare the content token (ids_fires_on) the flat rule keys on so the alert
+        # fires only on matching (non-evasion) renderings.
+        if self.ids_sid is not None:
+            http_surfaces = {"http_user_agent", "http_request_url", "http_referrer"}
+            if not (set(self.surfaces) & http_surfaces):
+                raise ValueError(
+                    f"payload family {self.name!r} declares ids_sid {self.ids_sid} but has no "
+                    f"http_* surface for the signature to fire on (surfaces={self.surfaces})"
+                )
+            if not self.ids_fires_on:
+                raise ValueError(
+                    f"payload family {self.name!r} declares ids_sid {self.ids_sid} but no "
+                    "ids_fires_on content token; without it the signature would fire on every "
+                    "variant (including the evasion variants it is designed to miss)"
+                )
+        if self.ids_fires_on and self.ids_sid is None:
+            raise ValueError(
+                f"payload family {self.name!r} declares ids_fires_on but no ids_sid to fire"
+            )
+        return self
+
+
+class PayloadFamiliesConfig(BaseModel, extra="forbid"):
+    """Top-level schema for payload_families.yaml (merged bundle + overlay)."""
+
+    families: list[PayloadFamilyEntry] = Field(default_factory=list, min_length=1)
+    default_marker: str = "EFORGE_TEST"
+    markers: list[str] = Field(default_factory=list, min_length=1)
+    canary_host: str = "canary.eforge.invalid"
+    network_allowlist: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _unique_family_names(self) -> Self:
+        names = [f.name for f in self.families]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"duplicate payload family names: {dupes}")
+        return self
+
+    @model_validator(mode="after")
+    def _safe_marker_canary_domain_values(self) -> Self:
+        # Reject a degenerate marker/canary/domain that would silently weaken the
+        # safety contract (an empty marker marks every payload synthetic; a real
+        # callback host or a bare TLD would let a live payload reach the network).
+        if len(self.default_marker.strip()) < 3:
+            raise ValueError(
+                f"default_marker {self.default_marker!r} is empty/too short (need >=3 chars)"
+            )
+        if self.default_marker not in self.markers:
+            raise ValueError(
+                f"default_marker {self.default_marker!r} must be in markers {self.markers}"
+            )
+        for marker in self.markers:
+            stripped = marker.strip()
+            if len(stripped) < 3:
+                raise ValueError(
+                    f"marker {marker!r} is empty/too short (need >=3 chars); a short marker "
+                    "would mark real content as synthetic"
+                )
+            # Distinctiveness: marker matching is substring-based and the per-line
+            # marker is the SOLE synthetic guarantee for adversarial payloads (no
+            # credential-shape/vendor-fake backstop). A generic lowercase word (e.g.
+            # "admin", "status") would mark ordinary forged log text as synthetic and
+            # let an unmarked forged line through — require a "shouty" marker.
+            uppers = sum(1 for c in stripped if c.isupper())
+            has_sep = any(c.isdigit() or c == "_" for c in stripped)
+            if not (uppers >= 1 and (has_sep or uppers >= 4)):
+                raise ValueError(
+                    f"marker {marker!r} is not distinctive enough; an adversarial-payload "
+                    "marker must be shouty (an uppercase letter plus a digit/underscore, or "
+                    ">=4 uppercase letters) so it cannot match ordinary log text"
+                )
+        reserved_suffixes = (".example", ".test", ".invalid", ".localhost")
+        reserved_exact = {
+            "example.com",
+            "example.net",
+            "example.org",
+            "example",
+            "test",
+            "invalid",
+            "localhost",
+        }
+        domains = list(self.network_allowlist.get("domains", []) or [])
+        for domain in [self.canary_host, *domains]:
+            normalized = str(domain).lower().strip(".")
+            if normalized not in reserved_exact and not normalized.endswith(reserved_suffixes):
+                raise ValueError(
+                    f"host {domain!r} is not an RFC 2606/6761 reserved name; the canary and "
+                    "allowlist must use example.com/.net/.org or a .test/.invalid/.localhost name"
+                )
+        return self
+
+
 # --- Validation helper ---
 
 

@@ -45,6 +45,19 @@ def reset_ids_signatures_cache() -> None:
     _CACHED_DATA = None
 
 
+def signature_by_sid(sid: int) -> dict[str, Any] | None:
+    """Return the curated signature dict for ``sid`` (merged with overlay), or None.
+
+    Used to attach a known on-wire IDS signature to canonical network evidence — e.g.
+    an adversarial_payload family maps to the ET rule a sensor should fire on when the
+    payload rides a cleartext HTTP request.
+    """
+    for signature in load_ids_signatures().get("signatures", []):
+        if signature.get("sid") == sid:
+            return dict(signature)
+    return None
+
+
 def validate_dns_query_template(template: str) -> str | None:
     """Validate IDS DNS template safety; return error message or None."""
     if not template:

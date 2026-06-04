@@ -1001,6 +1001,54 @@ class SpillageEventSpec(_EventSpecBase):
         return self
 
 
+class AdversarialPayloadEventSpec(_EventSpecBase):
+    """Inject a known log-pipeline weakness payload into a log surface for testing.
+
+    The counterpart to ``SpillageEventSpec``: instead of a fake credential, this
+    carries a deliberate injection primitive (ANSI escape, CRLF log-forging, CSV
+    formula, JNDI/Log4Shell lookup, reflected-XSS markup) so defenders can verify
+    their parsers / SIEMs / shippers / terminals / CSV exports handle untrusted log
+    content safely. Provide exactly one of:
+      - ``family``: synthesize a canonical payload from a data-driven family
+        (see config/activity/payload_families.yaml), or
+      - ``value``: a literal payload that must pass the payload safety guardrails
+        (poison marker on every line, host allowlist).
+
+    ``surface`` is the *semantic* exposure surface, never an emitter name. Every
+    payload is rendered with surface-appropriate encoding and always carries the
+    ``EFORGE_TEST`` marker so it is clearly synthetic test content.
+    """
+
+    type: Literal["adversarial_payload"] = "adversarial_payload"
+    surface: Literal[
+        "http_user_agent",
+        "http_request_url",
+        "http_referrer",
+        "syslog_message",
+        "process_command_line",
+    ]
+    family: str | None = None
+    # Bound a literal payload's length: the oversized_field family tops out ~4 KB, and
+    # an unbounded author-supplied value would be a length-driven DoS footgun on the
+    # safety host-extraction pass. 64 KB is generous for any realistic log-field test.
+    value: str | None = Field(default=None, max_length=65536)
+    scheme: Literal["http", "https"] | None = None
+
+    @model_validator(mode="after")
+    def adversarial_payload_requires_one_source(self) -> "AdversarialPayloadEventSpec":
+        """Require exactly one of family or value (mutually exclusive)."""
+        if (self.family is None) == (self.value is None):
+            raise ValueError("adversarial_payload requires exactly one of 'family' or 'value'")
+        # http_user_agent is HTTP too, so scheme is valid on all three http_* surfaces.
+        if self.scheme is not None and self.surface not in {
+            "http_user_agent",
+            "http_request_url",
+            "http_referrer",
+        }:
+            raise ValueError("adversarial_payload scheme is only valid for the http_* surfaces")
+        return self
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -1043,6 +1091,7 @@ EventSpec = Annotated[
     | WorkstationLockEventSpec
     | WorkstationUnlockEventSpec
     | SpillageEventSpec
+    | AdversarialPayloadEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]
