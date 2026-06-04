@@ -115,9 +115,9 @@ file_side_effect_profiles:
 
   - name: linux_sshd_listener_state
     executables: ["sshd"]
-    actions: ["modify"]
+    actions: ["read"]
     paths_linux:
-      - "/var/log/auth.log"
+      - "/etc/ssh/sshd_config"
 
   - name: linux_proxy_service_state
     executables: ["squid"]
