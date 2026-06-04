@@ -778,6 +778,29 @@ or follow-up batch is needed.
   plus related eCAR FLOW principal attribution gaps and hard-edged collection
   boundaries.
 
+- Loop 271 fixed Linux package-manager activity alignment across bash command
+  selection, proxy User-Agent selection, and endpoint process ownership by
+  adding data-driven distro-family package-manager metadata, filtering
+  incompatible bash/package commands by host OS, normalizing explicit-proxy
+  package-manager User-Agents to the source distro family, and rendering apt
+  proxy traffic through `/usr/lib/apt/methods/http(s)` helpers instead of
+  repeated direct `apt-get update` process creates. Config validation,
+  scenario validation, focused package/proxy/bash tests, Ruff checks, and the
+  full `uv run pytest --no-cov` suite passed (`4190 passed, 18 skipped`).
+  Automated eval passed at 96.97008227799 over 85916 records. The hard probe
+  moved exact `apt-get update` eCAR process creates from 74 in loop 270 to 0,
+  direct package-manager process creates to 0, known-source package User-Agent
+  rows to 168, and distro/package-family mismatches to 0. Blind initial scores
+  were 32/34/27/46, average 34.75 (mostly realistic); deliberation settled at
+  36/36/29/43, final average 36.0. The old apt/yum/package-manager finding did
+  not recur. The strongest next target is the broader Linux shell/session
+  execution contract: timestamped bash-history commands such as `git status`,
+  `docker logs`, `google-chrome`, `vmstat`, and `nginx -t` can still lack
+  nearby eCAR PROCESS CREATE evidence, while comparable commands sometimes
+  have it. Lower-impact follow-ups include Linux DBus/polkit management-service
+  repetition, Zeek core/DMZ collection-profile texture, DB SCP file-size/byte
+  consistency, and SMB filename vocabulary.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
