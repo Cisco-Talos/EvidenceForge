@@ -7944,6 +7944,63 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == bash_pid
 
+    def test_workstation_bash_command_bootstraps_local_session_process_telemetry(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Assigned Linux workstation shell commands should not render as history-only rows."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._scenario_start_time = command_time - timedelta(minutes=30)
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid}}
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "git status")
+
+        sessions = [
+            session
+            for session in state_manager.get_sessions_for_user(test_user.username)
+            if session.system == linux.hostname and session.logon_type == 2
+        ]
+        assert sessions
+        assert sessions[-1].session_kind == "interactive"
+        assert sessions[-1].start_time < command_time
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        shell_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/bin/bash"
+        ]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "git status"
+        ]
+        assert shell_events
+        assert process_events
+        assert process_events[-1].process.image == "/usr/bin/git"
+        assert process_events[-1].process.parent_pid == shell_events[-1].process.pid
+
     def test_generate_bash_command_serializes_foreground_children(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

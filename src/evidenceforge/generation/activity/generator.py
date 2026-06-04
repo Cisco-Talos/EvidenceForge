@@ -13055,6 +13055,63 @@ class ActivityGenerator:
                 seed_text=process_command_line,
             )
 
+    def _prepare_bash_process_session(
+        self,
+        user: User,
+        system: System,
+        requested_time: datetime,
+        command: str,
+    ) -> None:
+        """Ensure assigned Linux workstation shell commands have session ownership."""
+        if _get_os_category(system.os) != "linux":
+            return
+        if (system.type or "workstation").lower() != "workstation":
+            return
+        if system.assigned_user != user.username:
+            return
+        if not _linux_command_processes_from_shell(
+            command,
+            max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES,
+            username=user.username,
+        ):
+            return
+
+        requested_time = ensure_utc(requested_time)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type not in {3, 5}
+            and _session_active_for_activity(session, requested_time, margin_seconds=1.5)
+        ]
+        if sessions:
+            return
+
+        seed = _stable_seed(
+            "linux_workstation_bash_session:"
+            f"{system.hostname}:{user.username}:{requested_time.isoformat()}:{command}"
+        )
+        logon_time = requested_time - timedelta(minutes=5 + (seed % 11), seconds=seed % 47)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+            if requested_time >= scenario_start and logon_time < scenario_start:
+                logon_time = scenario_start + timedelta(milliseconds=350 + (seed % 3200))
+        if logon_time >= requested_time:
+            logon_time = requested_time - timedelta(seconds=2, milliseconds=seed % 500)
+        if not self._is_within_scenario_window(logon_time):
+            return
+
+        self.generate_logon(
+            user=user,
+            system=system,
+            time=logon_time,
+            logon_type=2,
+            source_ip="-",
+            emit_network_evidence=False,
+        )
+
     def _schedule_bash_history_time(
         self,
         user: User,
