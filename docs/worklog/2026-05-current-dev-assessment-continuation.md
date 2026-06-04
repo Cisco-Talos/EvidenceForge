@@ -892,6 +892,26 @@ or follow-up batch is needed.
   suppression, and add a rendered-output probe for auth-log FILE WRITE actor
   ownership.
 
+- Loop 277 fixed Linux eCAR auth-log file ownership by moving routine sshd
+  listener side effects from `/var/log/auth.log` WRITE rows to
+  `/etc/ssh/sshd_config` READ rows, while allowing `read` as a validated EDR
+  side-effect action. Focused EDR/spillage tests, config validation, scenario
+  validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4201 passed, 18 skipped`). Automated
+  eval passed at 96.9797858555115 over 84978 records, with Parseability 100.0,
+  Plausibility 97.12748429856588, Causality 95.09527754763877, and Timing
+  94.62047696980169. The hard probe found 4 `/var/log/auth.log` eCAR FILE rows,
+  0 sshd-owned auth-log rows, 4 syslog-family auth-log rows, and 13 sshd config
+  READ rows; the generated Linux syslog corpus also contained 7 `syslog.log`
+  files and 373 sshd rows. Blind initial scores were 36/42/36/61, average
+  43.75; deliberation settled at 38/43/37/52, final average 42.5 after
+  fact-checking one reviewer's mistaken claim that Linux syslog/auth logs were
+  absent. The 10-loop batch requested by the user is complete. If another loop
+  is run, prioritize collection imperfection and Linux bash texture: selective
+  endpoint drops, delayed ingestion, missing proxy enrichment, sparse Zeek
+  child-log gaps, fewer one-command SSH history stubs, denser primary-user bash
+  histories, and the isolated Zeek files/protocol timestamp edge case.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
