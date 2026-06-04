@@ -801,6 +801,26 @@ or follow-up batch is needed.
   repetition, Zeek core/DMZ collection-profile texture, DB SCP file-size/byte
   consistency, and SMB filename vocabulary.
 
+- Loop 272 fixed the broader Linux shell/session execution contract by mapping
+  common bash-pool commands such as `vmstat`, `nginx`, `google-chrome`,
+  `sha256sum | cut`, and `code` to source-native Linux executables, removing
+  the random history-only drop for resolvable external shell commands, and
+  bootstrapping assigned-user Linux workstation sessions before emitting
+  workstation bash process telemetry. Focused shell/activity/eCAR tests, Ruff
+  checks, and the full `uv run pytest --no-cov` suite passed (`4193 passed,
+  18 skipped`). Automated eval passed at 96.97973723618829 over 84975 records,
+  with Parseability 100.0, Plausibility 97.127289821273, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe moved
+  bash-history-to-eCAR PROCESS CREATE matching from 99/126 in the loop-271
+  reference to 181/185 in loop 272, leaving 4 missing expected process
+  instances. Blind initial scores were 67/63/39/38, average 52.0; deliberation
+  settled at 67/64/39/40, final average 52.5 (split, modest synthetic lean).
+  The old shell/process gap improved substantially. The strongest next target
+  is SSH/proxy source-native texture: stop repeated `/run/sshd.pid` writes for
+  ordinary SSH sessions, preserve realistic MIME/cache semantics for proxy
+  304 static-asset rows, and tighten eCAR SSH FLOW-before-accepted/session
+  ordering or explicitly model source-local collection delay.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
