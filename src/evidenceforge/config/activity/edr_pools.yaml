@@ -117,7 +117,6 @@ file_side_effect_profiles:
     executables: ["sshd"]
     actions: ["modify"]
     paths_linux:
-      - "/run/sshd.pid"
       - "/var/log/auth.log"
 
   - name: linux_proxy_service_state

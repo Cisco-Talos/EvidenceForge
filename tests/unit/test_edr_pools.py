@@ -315,6 +315,25 @@ class TestFilePaths:
             if effect
         )
 
+    def test_linux_sshd_churn_does_not_rewrite_listener_pid_file(self):
+        """Routine SSH activity should not look like repeated daemon startup."""
+        generic_paths = get_file_paths("linux")
+        effects = {
+            select_ambient_file_churn_effect(
+                "/usr/sbin/sshd",
+                "/usr/sbin/sshd -D [listener]",
+                "linux",
+                random.Random(seed),
+                "root",
+                generic_paths,
+                ["read", "modify", "create"],
+                [60, 30, 10],
+            )
+            for seed in range(20)
+        }
+
+        assert effects == {("modify", "/var/log/auth.log")}
+
 
 class TestRegistryKeys:
     """Test registry key pool content."""
