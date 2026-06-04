@@ -83,7 +83,7 @@ fields:
   - name: cache_result
     type: string
     required: false
-    description: "Cache result (HIT, MISS, NONE, DENIED)"
+    description: "Cache result (HIT, MISS, REVALIDATED, NONE, DENIED)"
 
   - name: proxy_action
     type: string

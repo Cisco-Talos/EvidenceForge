@@ -5157,10 +5157,18 @@ class ActivityGenerator:
         domain_tags = get_domain_tags(proxy_hostname)
         proxy_ua_override = None
         if http is not None:
+            from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
+
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             proxy_method = http.method
             url = f"{scheme}://{proxy_hostname}{http.uri}"
-            proxy_content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
+            if http.resp_mime_types or http.status_code == 304:
+                proxy_content_type = normalize_mime_type_for_path(
+                    http.uri,
+                    http.resp_mime_types[0] if http.resp_mime_types else "text/html",
+                )
+            else:
+                proxy_content_type = "text/html"
             user_agent = http.user_agent
             proxy_referrer = http.referrer
         elif explicit_mode and dst_port == 443:
@@ -5262,7 +5270,9 @@ class ActivityGenerator:
         if http is not None:
             # When the request already carries canonical HTTP outcome data,
             # proxy rendering should not independently invent a policy denial.
-            if proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
+            if proxy_cacheable and http.status_code == 304:
+                cache_result = "REVALIDATED"
+            elif proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
                 cache_result = "HIT"
             else:
                 cache_result = "MISS"
@@ -11663,12 +11673,24 @@ class ActivityGenerator:
                 # generator), derive proxy fields from it.  The proxy emitter
                 # handles CONNECT tunnel deduplication automatically.
                 if event.http is not None:
+                    from evidenceforge.generation.activity.http_content import (
+                        normalize_mime_type_for_path,
+                    )
+
                     scheme = "https" if dst_port == 443 else "http"
                     proxy_method = event.http.method
                     url = f"{scheme}://{proxy_hostname}{event.http.uri}"
-                    proxy_content_type = (
-                        event.http.resp_mime_types[0] if event.http.resp_mime_types else "text/html"
-                    )
+                    if event.http.resp_mime_types or event.http.status_code == 304:
+                        proxy_content_type = normalize_mime_type_for_path(
+                            event.http.uri,
+                            (
+                                event.http.resp_mime_types[0]
+                                if event.http.resp_mime_types
+                                else "text/html"
+                            ),
+                        )
+                    else:
+                        proxy_content_type = "text/html"
                     proxy_ua_override = None  # session UA is already on HttpContext
                     user_agent = event.http.user_agent
                     proxy_referrer = event.http.referrer
@@ -11768,7 +11790,9 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
                 if event.http is not None:
-                    if proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
+                    if proxy_cacheable and event.http.status_code == 304:
+                        cache_result = "REVALIDATED"
+                    elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
                         cache_result = "HIT"
                     else:
                         cache_result = "MISS"

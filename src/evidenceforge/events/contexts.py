@@ -518,7 +518,7 @@ class ProxyContext:
     time_taken: int = 0  # Request duration in ms
     user_agent: str = ""
     content_type: str = ""
-    cache_result: str = "MISS"  # HIT, MISS, NONE, DENIED
+    cache_result: str = "MISS"  # HIT, MISS, REVALIDATED, NONE, DENIED
     referrer: str = ""  # HTTP Referer header
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
     proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required

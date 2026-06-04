@@ -528,6 +528,10 @@ class ProxyTransactionActionBundle:
             )
 
         if request.http is not None:
+            from evidenceforge.generation.activity.http_content import (
+                response_mime_types_for_status,
+            )
+
             status_messages = {
                 200: "OK",
                 301: "Moved Permanently",
@@ -540,6 +544,11 @@ class ProxyTransactionActionBundle:
                 503: "Service Unavailable",
                 504: "Gateway Timeout",
             }
+            response_body_len = generator_utils._proxy_http_response_body_len(
+                proxy_context,
+                resp_bytes=request.resp_bytes,
+                http=request.http,
+            )
             return HttpContext(
                 method=request.http.method,
                 host=proxy_context.host,
@@ -547,11 +556,7 @@ class ProxyTransactionActionBundle:
                 version=request.http.version,
                 user_agent=request.http.user_agent,
                 request_body_len=request.http.request_body_len,
-                response_body_len=generator_utils._proxy_http_response_body_len(
-                    proxy_context,
-                    resp_bytes=request.resp_bytes,
-                    http=request.http,
-                ),
+                response_body_len=response_body_len,
                 flow_request_body_len=request.http.flow_request_body_len,
                 flow_response_body_len=request.http.flow_response_body_len,
                 flow_transaction_count=request.http.flow_transaction_count,
@@ -560,9 +565,13 @@ class ProxyTransactionActionBundle:
                 referrer=request.http.referrer,
                 trans_depth=request.http.trans_depth,
                 tags=list(request.http.tags),
-                resp_mime_types=[proxy_context.content_type]
-                if proxy_context.content_type
-                else list(request.http.resp_mime_types),
+                resp_mime_types=response_mime_types_for_status(
+                    proxy_context.status_code,
+                    proxy_context.content_type
+                    or (request.http.resp_mime_types[0] if request.http.resp_mime_types else ""),
+                    response_body_len,
+                    method=request.http.method,
+                ),
             )
 
         request_body_len = 0
@@ -1004,7 +1013,7 @@ class ProxyTransactionActionBundle:
         request = self.request
         egress_http = (
             request.http
-            if request.http is not None and proxy_context.cache_result == "MISS"
+            if request.http is not None and proxy_context.cache_result in {"MISS", "REVALIDATED"}
             else None
         )
         if egress_http is not None:
@@ -1016,7 +1025,7 @@ class ProxyTransactionActionBundle:
         if (
             egress_http is not None
             or request.dst_port != 80
-            or proxy_context.cache_result != "MISS"
+            or proxy_context.cache_result not in {"MISS", "REVALIDATED"}
         ):
             return egress_http
 
