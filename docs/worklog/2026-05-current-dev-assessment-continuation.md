@@ -853,6 +853,25 @@ or follow-up batch is needed.
   syslog and eCAR session IDs, source tuples, sshd/shell process chains,
   login/logout boundaries, and flow principal behavior for modeled SSH sessions.
 
+- Loop 275 fixed Linux SSH/eCAR session identity by preserving already-monotonic
+  canonical systemd-logind IDs during syslog finalization and by making the
+  `StateManager` Linux logind allocator timestamp-ordered down to coarse
+  same-minute seconds. Focused StateManager/syslog/SSH/eCAR tests, Ruff checks,
+  generation, eval, and the full `uv run pytest --no-cov` suite passed (`4200
+  passed, 18 skipped`). Automated eval held at 96.97973723618829 over 84975
+  records, with Parseability 100.0, Plausibility 97.127289821273, Causality
+  95.09527754763877, and Timing 94.62047696980169. The hard probe found 91
+  visible syslog SSH sessions, 87 eCAR SSH login sessions, 87 matched tuple
+  sessions, 0 session-ID mismatches, 4 syslog-only sessions, and 0 eCAR-only
+  sessions. Blind initial scores were 31/28/38/44, average 35.25; deliberation
+  settled at 32/30/38/42, final average 35.0. No reviewer called the data
+  Synthetic, and the loop-274 SSH identity finding did not recur. The next
+  target is shell pipeline/eCAR process completeness: emit complete eCAR child
+  process evidence for both sides of bash-history pipelines, or make missing
+  sides explainable through source-native failure or collection behavior.
+  Queued behind that are Zeek capture imperfections, TLS/proxy variance, and
+  host-specific Windows endpoint source-mix variation.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
