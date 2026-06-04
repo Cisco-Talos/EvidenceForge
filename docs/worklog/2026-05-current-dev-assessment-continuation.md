@@ -746,6 +746,22 @@ or follow-up batch is needed.
   endpoint eCAR FLOW rows, plus neighboring Sysmon-before-4688 and Linux
   server-role desktop/journald texture.
 
+- Loop 269 partially improved paired endpoint eCAR FLOW timing texture by adding
+  host-local timing offsets for unbounded paired FLOWs and separate handling for
+  very short bounded intervals. Focused eCAR/source-timing tests, Ruff checks,
+  and the full `uv run pytest --no-cov` suite passed (`4179 passed, 18
+  skipped`). Automated eval stayed high at 96.88559994042029 over 90394 records.
+  The hard probe moved exact same-ms cross-host FLOW tuple groups from 95 to 84
+  and <=5ms groups from 1011 to 851, leaving residual Kerberos/short-service
+  timing pairs. Blind initial scores were 46/38/68/58, average 52.5;
+  deliberation triggered and settled at 50/44/63/60, final average 54.25
+  (mixed/inconclusive). Reviewers no longer anchored on exact same-ms eCAR
+  mirroring, but now cluster around flattened/too-clean eCAR FLOW semantics,
+  missing eCAR logout/session correlation properties, pristine Zeek/network
+  collection texture, incomplete normalized eCAR parent graph, placeholder
+  Sysmon metadata, repeated `apt-get update` commands, and missing network
+  evidence for a metadata-service curl.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
