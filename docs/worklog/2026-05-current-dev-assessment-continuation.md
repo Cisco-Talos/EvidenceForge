@@ -733,6 +733,19 @@ or follow-up batch is needed.
   collection texture for small ASA-to-Zeek visibility misses, and tighter Linux
   eCAR SSH/SCP receiver process lifecycle pairing.
 
+- Loop 268 fixed stable static web asset body-size texture by making full-200
+  static resource sizes independent of client/User-Agent, virtual host, and
+  cache-busting query strings. Focused tests, Ruff checks, and the full
+  `uv run pytest --no-cov` suite passed (`4178 passed, 18 skipped`), generation
+  and eval succeeded at 96.83561790479325 over 90396 records, and the hard probe
+  found 91 stable asset paths with zero variable-size full-200 paths. The
+  standalone blind panel scored 49/68/66/74, average 64.25; deliberation
+  triggered on verdict disagreement and converged to Synthetic with final
+  average 69.0. The fixed static-asset family stayed clean, but reviewers
+  surfaced a stronger next target: source timing/observation texture for paired
+  endpoint eCAR FLOW rows, plus neighboring Sysmon-before-4688 and Linux
+  server-role desktop/journald texture.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
