@@ -1231,7 +1231,53 @@ class TestChronologicalOutput:
         rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
         assert len(rendered_ms) == 2
         assert len(set(rendered_ms)) == 2
-        assert all(ts - timedelta(milliseconds=37) <= row["timestamp"] <= ts for row in emitted)
+        assert all(ts - timedelta(milliseconds=540) <= row["timestamp"] <= ts for row in emitted)
+
+    def test_paired_endpoint_success_flows_without_close_bound_get_texture(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Unbounded successful paired FLOW rows should not cluster on one millisecond."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="dc01",
+                ip="10.0.0.20",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+                fqdn="dc01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=57124,
+                dst_ip="10.0.0.20",
+                dst_port=53,
+                protocol="udp",
+                conn_state="SF",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
+        assert len(rendered_ms) == 2
+        assert abs(rendered_ms[0] - rendered_ms[1]) > 5
+        assert all(ts <= row["timestamp"] <= ts + timedelta(milliseconds=1800) for row in emitted)
 
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""

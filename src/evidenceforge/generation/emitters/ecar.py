@@ -881,22 +881,109 @@ class EcarEmitter(HostMultiplexEmitter):
         if not enabled:
             return timestamp
         if not_after is None:
-            return timestamp
+            return EcarEmitter._unbounded_paired_flow_observation_time(
+                event,
+                seed_parts=seed_parts,
+                not_before=not_before,
+            )
 
+        short_interval = not_after <= event.timestamp + timedelta(milliseconds=5)
         lower_bound = not_before
+        if not short_interval and not_after > event.timestamp:
+            lower_bound = (
+                event.timestamp if lower_bound is None else max(lower_bound, event.timestamp)
+            )
+
         seed = _stable_seed(
             "ecar_paired_flow_observation:"
             + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
         )
-        jitter_ms = 1 + (seed % 37)
+        direction = str(seed_parts[0]) if seed_parts else ""
+        if short_interval and direction == "inbound":
+            min_jitter_ms = 22
+            max_jitter_ms = 55
+        elif short_interval and direction == "outbound":
+            min_jitter_ms = 1
+            max_jitter_ms = 16
+        elif direction == "inbound":
+            min_jitter_ms = 75
+            max_jitter_ms = 540
+        elif direction == "outbound":
+            min_jitter_ms = 12
+            max_jitter_ms = 220
+        else:
+            min_jitter_ms = 12
+            max_jitter_ms = 360
+
+        jitter_ms = min_jitter_ms + (seed % (max_jitter_ms - min_jitter_ms + 1))
         candidate = timestamp - timedelta(milliseconds=jitter_ms)
         if lower_bound is not None and candidate < lower_bound:
             available_ms = int((timestamp - lower_bound).total_seconds() * 1000)
             if available_ms <= 0:
                 return timestamp
-            candidate = timestamp - timedelta(milliseconds=min(jitter_ms, available_ms))
-        if candidate > not_after:
+            if available_ms < min_jitter_ms:
+                if direction == "inbound" and available_ms >= 4:
+                    slice_min_ms = max(1, (available_ms * 2) // 3)
+                    slice_max_ms = available_ms
+                elif direction == "outbound" and available_ms >= 4:
+                    slice_min_ms = 1
+                    slice_max_ms = max(1, available_ms // 3)
+                else:
+                    slice_min_ms = 1
+                    slice_max_ms = available_ms
+                bounded_jitter_ms = slice_min_ms + (seed % (slice_max_ms - slice_min_ms + 1))
+            else:
+                bounded_jitter_ms = min_jitter_ms + (seed % (available_ms - min_jitter_ms + 1))
+            candidate = timestamp - timedelta(milliseconds=bounded_jitter_ms)
+        if not_after is not None and candidate > not_after:
             return not_after
+        return candidate
+
+    @staticmethod
+    def _unbounded_paired_flow_observation_time(
+        event: SecurityEvent,
+        *,
+        seed_parts: tuple[Any, ...],
+        not_before: datetime | None,
+    ) -> datetime:
+        """Return coordinated host-local timing for paired FLOWs with no close bound."""
+        net = event.network
+        if net is None:
+            return event.timestamp
+
+        tuple_seed = _stable_seed(
+            "ecar_paired_flow_base:"
+            + ":".join(
+                str(part)
+                for part in (
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    net.protocol,
+                    event.timestamp.isoformat(),
+                )
+            )
+        )
+        base_delay_ms = 220 + (tuple_seed % 900)
+
+        direction = str(seed_parts[0]) if seed_parts else ""
+        host = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+        offset_seed = _stable_seed(
+            "ecar_paired_flow_host_offset:"
+            + ":".join(str(part) for part in (direction, host, *seed_parts))
+        )
+        if direction == "inbound":
+            offset_ms = 300 + (offset_seed % 360)
+        elif direction == "outbound":
+            offset_ms = 20 + (offset_seed % 180)
+        else:
+            offset_ms = 80 + (offset_seed % 420)
+
+        candidate = event.timestamp + timedelta(milliseconds=base_delay_ms + offset_ms)
+        if not_before is not None and candidate < not_before:
+            gap_ms = 6 + (offset_seed % 180)
+            candidate = not_before + timedelta(milliseconds=gap_ms)
         return candidate
 
     @staticmethod
