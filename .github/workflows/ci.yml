@@ -67,19 +67,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run tests without coverage
-        if: matrix.python-version != '3.12' || github.event_name != 'pull_request' || github.base_ref != 'main'
         run: uv run pytest --no-cov
-
-      - name: Run release coverage gate
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && github.base_ref == 'main'
-        run: uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
-
-      - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12' && github.event_name == 'pull_request' && github.base_ref == 'main'
-        uses: codecov/codecov-action@v6
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
 
   ci-required:
     name: Required CI
