@@ -358,6 +358,7 @@ _LINUX_COMMAND_IMAGE_OVERRIDES = {
     "npm": "/usr/bin/npm",
     "ps": "/usr/bin/ps",
     "psql": "/usr/bin/psql",
+    "pt-query-digest": "/usr/bin/pt-query-digest",
     "python": "/usr/bin/python",
     "python3": "/usr/bin/python3",
     "redis-cli": "/usr/bin/redis-cli",

@@ -1764,6 +1764,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "printenv",
         "ps",
         "psql",
+        "pt-query-digest",
         "pwd",
         "python",
         "python3",
@@ -1906,18 +1907,29 @@ class EcarEmitter(HostMultiplexEmitter):
                     shift_ms = shifted_ms - group_start_ms
 
                 group_latest_ms = next_available_ms
-                for record in group_records:
+                next_stage_ms = 0
+                for index in sorted(group):
+                    record = records[index]
+                    if record is None:
+                        continue
                     timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
                     object_id = str(record.get("objectID") or "")
+                    total_shift_ms = shift_ms
                     if shift_ms:
                         timestamp_ms += shift_ms
                         record["timestamp_ms"] = timestamp_ms
-                        if object_id:
-                            shift_by_object_id[object_id] = shift_ms
+                    if next_stage_ms and timestamp_ms < next_stage_ms:
+                        stage_shift_ms = next_stage_ms - timestamp_ms
+                        timestamp_ms = next_stage_ms
+                        total_shift_ms += stage_shift_ms
+                        record["timestamp_ms"] = timestamp_ms
+                    next_stage_ms = timestamp_ms + 15
+                    if object_id and total_shift_ms:
+                        shift_by_object_id[object_id] = total_shift_ms
                     if object_id and object_id in terminate_ms_by_object_id:
                         group_latest_ms = max(
                             group_latest_ms,
-                            terminate_ms_by_object_id[object_id] + shift_ms,
+                            terminate_ms_by_object_id[object_id] + total_shift_ms,
                         )
                     else:
                         group_latest_ms = max(group_latest_ms, timestamp_ms)

@@ -768,6 +768,68 @@ def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() 
     )
 
 
+def test_ecar_linux_shell_foreground_order_preserves_pipeline_stage_order() -> None:
+    """Tiny source-timing inversions should not put the pipe reader before the writer."""
+    find_create = {
+        "timestamp_ms": 1_710_780_034_167,
+        "id": "find-create",
+        "hostname": "WS-OHADDAD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "find-process",
+        "actorID": "bash-process",
+        "pid": 470150,
+        "ppid": 467288,
+        "principal": "omar.haddad",
+        "properties": {
+            "image_path": "/usr/bin/find",
+            "command_line": "find . -name *.csv -o -name *.xlsx",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    head_create = {
+        "timestamp_ms": 1_710_780_034_152,
+        "id": "head-create",
+        "hostname": "WS-OHADDAD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "head-process",
+        "actorID": "bash-process",
+        "pid": 470137,
+        "ppid": 467288,
+        "principal": "omar.haddad",
+        "properties": {
+            "image_path": "/usr/bin/head",
+            "command_line": "head",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    head_terminate = {
+        "timestamp_ms": 1_710_780_038_468,
+        "id": "head-terminate",
+        "hostname": "WS-OHADDAD-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "head-process",
+        "pid": 470137,
+        "principal": "omar.haddad",
+        "properties": {"image_path": "/usr/bin/head"},
+    }
+
+    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
+        [
+            json.dumps(find_create, separators=(",", ":")),
+            json.dumps(head_create, separators=(",", ":")),
+            json.dumps(head_terminate, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[0]["timestamp_ms"] < rows[1]["timestamp_ms"]
+    assert rows[1]["timestamp_ms"] == rows[0]["timestamp_ms"] + 15
+    assert rows[2]["timestamp_ms"] > rows[1]["timestamp_ms"]
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

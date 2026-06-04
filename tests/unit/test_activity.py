@@ -8520,6 +8520,13 @@ class TestActivityGenerator:
                 ("/usr/bin/sha256sum", "sha256sum /tmp/rpt.sql.gz"),
                 ("/usr/bin/cut", "cut -c1-16"),
             ],
+            "pt-query-digest /var/log/mysql/slow.log | head -50": [
+                (
+                    "/usr/bin/pt-query-digest",
+                    "pt-query-digest /var/log/mysql/slow.log",
+                ),
+                ("/usr/bin/head", "head -50"),
+            ],
             "code --no-sandbox /home/lina.nguyen/projects/data-pipeline": [
                 (
                     "/usr/bin/code",
