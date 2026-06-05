@@ -107,6 +107,23 @@ The curated set is **data** in `config/activity/payload_families.yaml`:
 | `structured_log_injection` | structured-log (JSON/logfmt) injection | a shipper that concatenates untrusted text into a JSON/key-value record, forging sibling fields | — |
 | `oversized_field` | oversized/unbounded field (CWE-400) | a pipeline's field-length caps, truncation behavior, and regex/ingest cost on a multi-KB value | — |
 
+A second family group targets a different downstream consumer — an **LLM SOC copilot**
+that reads log content as instructions (OWASP LLM01:2025 indirect prompt injection):
+
+| Family | Weakness class | What it tests | On-wire IDS |
+|---|---|---|---|
+| `prompt_injection_persona` *(proposed)* | persona/authority hijack | a copilot that lets an in-field claim of authority downgrade/whitelist a finding | — |
+| `prompt_injection_context` *(proposed)* | context/output-structure manipulation | a copilot summarizer fooled by a forged log/markup boundary into a "BENIGN" verdict | — |
+| `prompt_injection_exfil` *(proposed)* | data-exfiltration / tool-call abuse | a copilot induced to surface secrets, list other events, or call a tool | — |
+| `prompt_injection_control` *(proposed)* | direct override + obfuscation | **labeled negative control** — a hardened copilot resists; emission ⇒ trivially broken | — |
+
+These reuse the chassis but their proof is callback-free: every variant embeds the
+**echo-canary** `{marker}-CANARY-{alnum:12}` (= `EFORGE_TEST-CANARY-<nonce>`), which is both
+the per-line marker and the unique flag the injection tells the copilot to emit in its
+*verdict* — a defender greps their copilot's output for it. See
+[`scenarios/llm-injection-demo/`](../../scenarios/llm-injection-demo/README.md) for the
+full threat framing and the tiered self-score recipe.
+
 Each family declares its payload as `value_templates` (variant list), a single
 `value_template`, or literal `examples` — with marker/canary/control-byte tokens —
 plus the `surfaces` it models, its `raw_surfaces` subset, an
