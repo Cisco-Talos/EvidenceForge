@@ -84,6 +84,15 @@ def generated_output(medium_scenario):
         }
 
 
+def _generated_file(generated_output: dict, *names: str) -> dict | None:
+    """Return the first aggregated generated file matching one of the names."""
+    for name in names:
+        file_info = generated_output["files"].get(name)
+        if file_info is not None:
+            return file_info
+    return None
+
+
 @pytest.mark.slow
 class TestMediumDatasetGeneration:
     """Tests for 100-user 8-hour dataset generation."""
@@ -102,7 +111,7 @@ class TestMediumDatasetGeneration:
         """Should produce at least Windows Event, Zeek, eCAR, and syslog files."""
         filenames = set(generated_output["files"].keys())
         assert "windows_event_security.xml" in filenames
-        assert "zeek_conn.json" in filenames
+        assert "conn.json" in filenames
         assert "ecar.json" in filenames
         assert "syslog.log" in filenames
 
@@ -114,13 +123,13 @@ class TestMediumDatasetGeneration:
 
     def test_zeek_events_substantial(self, generated_output):
         """Should produce substantial Zeek output (>100KB)."""
-        zeek_file = generated_output["files"].get("zeek_conn.json")
+        zeek_file = _generated_file(generated_output, "conn.json", "zeek_conn.json")
         assert zeek_file is not None
         assert zeek_file["size"] > 100_000, f"Zeek output too small: {zeek_file['size']} bytes"
 
     def test_zeek_events_valid_json(self, generated_output):
         """All Zeek events should be valid JSON (NDJSON)."""
-        zeek_file = generated_output["files"].get("zeek_conn.json")
+        zeek_file = _generated_file(generated_output, "conn.json", "zeek_conn.json")
         if zeek_file is None or zeek_file["content"] is None:
             pytest.skip("Zeek file too large or missing")
 
