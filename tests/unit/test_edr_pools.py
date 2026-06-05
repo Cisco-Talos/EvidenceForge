@@ -834,3 +834,27 @@ class TestOverlayValidation:
         sanitized = _sanitize_edr_pools(defaults, merged)
 
         assert sanitized["registry_keys_hkcu"] == defaults["registry_keys_hkcu"]
+
+
+def test_file_side_effect_actions_all_have_an_event_type_mapping():
+    # Regression: a process-driven file side-effect whose action is not in the generator's
+    # action->event_type map crashes generation mid-run with KeyError (the sshd profile's
+    # `read` of /etc/ssh/sshd_config did exactly this). Every action the EDR config can emit
+    # must map to a real, eCAR-renderable event type.
+    from evidenceforge.generation.activity.generator import _FILE_EFFECT_EVENT_TYPE
+    from evidenceforge.generation.emitters.ecar import EcarEmitter
+
+    config_actions = {
+        str(action).lower()
+        for profile in load_edr_pools().get("file_side_effect_profiles", [])
+        for action in profile.get("actions", [])
+    }
+    missing = config_actions - set(_FILE_EFFECT_EVENT_TYPE)
+    assert not missing, f"file side-effect actions with no event-type mapping: {sorted(missing)}"
+    # the specific regressed case
+    assert _FILE_EFFECT_EVENT_TYPE.get("read") == "file_read"
+    # every mapped event type must be one the eCAR emitter actually renders
+    unrenderable = set(_FILE_EFFECT_EVENT_TYPE.values()) - EcarEmitter._supported_types
+    assert not unrenderable, (
+        f"file-effect event types the eCAR emitter cannot render: {unrenderable}"
+    )

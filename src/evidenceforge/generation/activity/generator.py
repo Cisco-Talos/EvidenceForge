@@ -236,6 +236,18 @@ class _HttpPersistentConnection:
 
 _HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
 
+# Map a process-driven file side-effect `action` (from edr_pools.yaml's
+# file_side_effect_profiles + the command-semantic effects) to its canonical event
+# type. Must cover EVERY action those data sources can emit — a missing key is a
+# generation crash (e.g. the sshd `read` of /etc/ssh/sshd_config). `file_read` is a
+# fully-modeled event (FileContext action "read", eCAR FILE/READ).
+_FILE_EFFECT_EVENT_TYPE: dict[str, str] = {
+    "create": "file_create",
+    "modify": "file_modify",
+    "delete": "file_delete",
+    "read": "file_read",
+}
+
 
 _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
     {
@@ -9099,11 +9111,7 @@ class ActivityGenerator:
             semantic_file_effect = select_command_file_side_effect(process_name, command_line)
             if semantic_file_effect is not None:
                 action, path = semantic_file_effect
-                event_type = {
-                    "create": "file_create",
-                    "modify": "file_modify",
-                    "delete": "file_delete",
-                }[action]
+                event_type = _FILE_EFFECT_EVENT_TYPE[action]
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=time + timedelta(milliseconds=180),
@@ -9152,11 +9160,7 @@ class ActivityGenerator:
             )
             if side_effect is not None:
                 action, path = side_effect
-                event_type = {
-                    "create": "file_create",
-                    "modify": "file_modify",
-                    "delete": "file_delete",
-                }[action]
+                event_type = _FILE_EFFECT_EVENT_TYPE[action]
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
