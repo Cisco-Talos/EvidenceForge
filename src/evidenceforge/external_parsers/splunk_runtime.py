@@ -74,10 +74,13 @@ class SplunkGeneratedConfig:
     inputs_conf: Path
     props_conf: Path
     transforms_conf: Path
+    eventtypes_conf: Path
+    tags_conf: Path
     indexes_conf: Path
     server_conf: Path
     supplied_apps_dir: Path
     supplied_app_count: int
+    supplied_app_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -193,9 +196,10 @@ def export_search(
     search: str,
     *,
     output_name: str,
+    namespace_app: str | None = None,
 ) -> list[JsonObject]:
     """Run a Splunk REST search/export request and save the JSONL response."""
-    rows = _rest_search_export(compose_run, search)
+    rows = _rest_search_export(compose_run, search, namespace_app=namespace_app)
     output_path = compose_run.search_results_dir / f"{output_name}.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
@@ -267,7 +271,12 @@ def observed_sourcetype_counts(compose_run: SplunkComposeRun) -> dict[str, int]:
     return counts
 
 
-def _rest_search_export(compose_run: SplunkComposeRun, search: str) -> list[JsonObject]:
+def _rest_search_export(
+    compose_run: SplunkComposeRun,
+    search: str,
+    *,
+    namespace_app: str | None = None,
+) -> list[JsonObject]:
     body = urllib.parse.urlencode(
         {
             "search": search,
@@ -277,7 +286,12 @@ def _rest_search_export(compose_run: SplunkComposeRun, search: str) -> list[Json
             "latest_time": "+10y",
         }
     ).encode("utf-8")
-    payload = _rest_bytes(compose_run, "/services/search/jobs/export", body)
+    if namespace_app:
+        app = urllib.parse.quote(namespace_app, safe="")
+        path = f"/servicesNS/admin/{app}/search/jobs/export"
+    else:
+        path = "/services/search/jobs/export"
+    payload = _rest_bytes(compose_run, path, body)
     rows: list[JsonObject] = []
     for line in payload.decode("utf-8", errors="replace").splitlines():
         if not line.strip():

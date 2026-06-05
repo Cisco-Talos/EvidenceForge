@@ -61,6 +61,9 @@ without turning `TODO.md` back into a high-conflict work journal.
   lands.
 - [ ] **P2** Review shared Windows Event XML helper opportunities across
   Security and Sysmon emitters without hiding provider-specific field semantics.
+- [ ] **P2** Add output-target ingest guides covering which generated sources
+  are parsed and normalized, parsed-only, unsupported, and how to ingest each
+  target-specific dataset.
 
 Recently completed: Codex fix-family PR review/rework, full slow-suite
 regression cleanup, architecture reset validation, output-target extraction,

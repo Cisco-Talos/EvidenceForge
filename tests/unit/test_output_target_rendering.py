@@ -209,7 +209,7 @@ def test_splunk_windows_security_target_writes_line_delimited_xml_events(
     emitter = WindowsEventEmitter(load_format("windows_event_security"), tmp_path, buffer_size=10)
     emitter.configure_output_target("splunk")
 
-    emitter.emit_event(_security_log_clear_event())
+    emitter.emit_event(_security_logon_event())
     emitter.close()
 
     output_path = tmp_path / "win01.example.test" / "windows_event_security.xml"
@@ -218,7 +218,9 @@ def test_splunk_windows_security_target_writes_line_delimited_xml_events(
     assert lines[0].startswith("<Event ")
     assert "<Events>" not in lines[0]
     assert "</Events>" not in lines[0]
-    assert "<EventID>1102</EventID>" in lines[0]
+    assert "<EventID>4624</EventID>" in lines[0]
+    assert "<Data Name='TargetUserName'>alice</Data>" in lines[0]
+    assert '<Data Name="TargetUserName">' not in lines[0]
 
 
 def test_splunk_sysmon_target_writes_line_delimited_xml_events(tmp_path: Path) -> None:
@@ -235,6 +237,8 @@ def test_splunk_sysmon_target_writes_line_delimited_xml_events(tmp_path: Path) -
     assert "<Events>" not in lines[0]
     assert "</Events>" not in lines[0]
     assert "<EventID>5</EventID>" in lines[0]
+    assert "<Data Name='Image'>C:\\Windows\\System32\\cmd.exe</Data>" in lines[0]
+    assert '<Data Name="Image">' not in lines[0]
 
 
 def _syslog_event() -> dict[str, object]:
@@ -263,6 +267,26 @@ def _security_log_clear_event() -> dict[str, object]:
         "SubjectUserName": "alice",
         "SubjectDomainName": "EXAMPLE",
         "SubjectLogonId": "0x1234",
+    }
+
+
+def _security_logon_event() -> dict[str, object]:
+    return {
+        "EventID": 4624,
+        "TimeCreated": datetime(2026, 6, 15, 14, 23, 5, tzinfo=UTC),
+        "Computer": "win01.example.test",
+        "Channel": "Security",
+        "Level": 0,
+        "ExecutionProcessID": 4,
+        "ExecutionThreadID": 100,
+        "TargetUserName": "alice",
+        "TargetDomainName": "EXAMPLE",
+        "TargetLogonId": "0x3e7abc",
+        "LogonType": 2,
+        "WorkstationName": "WIN01",
+        "IpAddress": "192.0.2.10",
+        "LogonProcessName": "User32",
+        "AuthenticationPackageName": "Negotiate",
     }
 
 

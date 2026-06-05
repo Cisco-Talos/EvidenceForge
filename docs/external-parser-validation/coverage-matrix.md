@@ -62,8 +62,8 @@ app config and optional caller-supplied apps for CIM checks.
 | Sysmon XML stream (`splunk` target) | `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational` | One XML `<Event>` per line; no binary EVTX in v1. |
 | Linux RFC5424 syslog (`splunk` target) | `syslog` | Keeps full timestamp year and generated RFC5424 shape. |
 | Cisco ASA syslog (`splunk` target) | `cisco:asa` | Keeps native ASA `%ASA-...` syslog payload in a flat sensor file. |
-| Web access | `access_combined` | Generated Apache/Nginx combined access log. |
-| Proxy access | `evidenceforge:proxy:w3c` | Generated W3C Extended proxy log with EvidenceForge search-time extractions. |
+| Web access (`splunk` target) | `apache:access:json` | Target-specific Apache TA JSON access records so the supplied Apache TA can parse and tag the events for CIM Web validation. |
+| Proxy access (`splunk` target) | `apache:access:json` | Target-specific Apache TA JSON proxy records; generated EvidenceForge eventtype/tag config marks `proxy_access.log` as CIM `Web.Proxy` and maps proxy category/action fields. |
 | eCAR JSON | `evidenceforge:ecar:json` | JSON line breaking and count validation. |
 
 ## Splunk Unsupported

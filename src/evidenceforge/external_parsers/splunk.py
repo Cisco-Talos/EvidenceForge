@@ -106,6 +106,10 @@ class SplunkCimExpectation:
     object_name: str
     required_fields: tuple[str, ...]
     source_filter: str | None = None
+    search_app: str | None = None
+    field_prefix: str | None = None
+    post_search_commands: tuple[str, ...] = ()
+    conditional_required_fields: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,7 @@ class SplunkStageManifest:
     unsupported_logs: tuple[StagedSplunkLog, ...]
     cim_mode: CimMode
     supplied_app_count: int
+    supplied_app_names: tuple[str, ...] = ()
 
     @property
     def expected_counts(self) -> dict[str, int]:
@@ -226,8 +231,8 @@ SPLUNK_SOURCE_SPECS: tuple[SplunkSourceSpec, ...] = (
         "web",
         "access",
         ("web_access.log",),
-        "access_combined",
-        required_fields=("src_ip", "http_method", "status"),
+        "apache:access:json",
+        required_fields=("client", "server", "dest_port", "http_method", "status"),
         root_host="web-source",
     ),
     SplunkSourceSpec(
@@ -235,9 +240,8 @@ SPLUNK_SOURCE_SPECS: tuple[SplunkSourceSpec, ...] = (
         "proxy",
         "access",
         ("proxy_access.log",),
-        "evidenceforge:proxy:w3c",
-        required_fields=("src_ip", "http_method", "status"),
-        skip_comment_records=True,
+        "apache:access:json",
+        required_fields=("client", "server", "dest_port", "http_method", "status"),
         root_host="proxy-source",
     ),
     SplunkSourceSpec(
@@ -246,7 +250,6 @@ SPLUNK_SOURCE_SPECS: tuple[SplunkSourceSpec, ...] = (
         "ecar",
         ("ecar.json",),
         "evidenceforge:ecar:json",
-        required_fields=("event_type",),
         root_host="ecar-source",
     ),
 )
@@ -263,8 +266,16 @@ CIM_EXPECTATIONS: tuple[SplunkCimExpectation, ...] = (
         format_name="windows_event_security",
         data_model="Authentication",
         object_name="Authentication",
-        required_fields=("user", "src", "dest", "action", "app"),
+        required_fields=("user", "dest", "action", "app"),
         source_filter="XmlWinEventLog:Security",
+        post_search_commands=('rex field=_raw "<EventID>(?<cim_event_id>\\d+)</EventID>"',),
+        conditional_required_fields=(
+            (
+                "src",
+                'cim_event_id="4624" OR cim_event_id="4625" OR cim_event_id="4768" '
+                'OR cim_event_id="4769" OR cim_event_id="4771" OR cim_event_id="4776"',
+            ),
+        ),
     ),
     SplunkCimExpectation(
         format_name="windows_event_sysmon",
@@ -272,30 +283,57 @@ CIM_EXPECTATIONS: tuple[SplunkCimExpectation, ...] = (
         object_name="Processes",
         required_fields=("process", "process_name", "dest", "user"),
         source_filter="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
+        post_search_commands=(
+            'rex field=_raw "<EventID>(?<cim_event_id>\\d+)</EventID>"',
+            'search cim_event_id IN ("1","5")',
+        ),
     ),
     SplunkCimExpectation(
         format_name="zeek_conn",
         data_model="Network_Traffic",
         object_name="All_Traffic",
-        required_fields=("src", "dest", "dest_port", "transport", "action"),
+        required_fields=("src", "dest", "transport", "action"),
+        search_app="Splunk_TA_zeek",
+        conditional_required_fields=(
+            (
+                "dest_port",
+                "lower(tostring(coalesce('All_Traffic.transport','transport')))!=\"icmp\"",
+            ),
+        ),
     ),
     SplunkCimExpectation(
         format_name="zeek_http",
         data_model="Web",
         object_name="Web",
         required_fields=("src", "dest", "url", "http_method", "status"),
+        search_app="Splunk_TA_zeek",
     ),
     SplunkCimExpectation(
         format_name="cisco_asa",
         data_model="Network_Traffic",
         object_name="All_Traffic",
-        required_fields=("src", "dest", "dest_port", "transport", "action"),
+        required_fields=("src", "dest", "transport", "action"),
+        conditional_required_fields=(
+            (
+                "dest_port",
+                "lower(tostring(coalesce('All_Traffic.transport','transport')))!=\"icmp\"",
+            ),
+        ),
     ),
     SplunkCimExpectation(
         format_name="web_access",
         data_model="Web",
         object_name="Web",
         required_fields=("src", "url", "http_method", "status"),
+        source_filter="*web_access.log",
+    ),
+    SplunkCimExpectation(
+        format_name="proxy_access",
+        data_model="Web",
+        object_name="Proxy",
+        required_fields=("src", "url", "http_method", "status", "category", "action"),
+        source_filter="*proxy_access.log",
+        field_prefix="Web",
     ),
 )
 CIM_EXPECTATIONS_BY_FORMAT = {
@@ -344,6 +382,7 @@ def run_splunk_parser(
         unsupported_logs=unsupported,
         cim_mode=cim_mode,
         supplied_app_count=generated_config.supplied_app_count,
+        supplied_app_names=generated_config.supplied_app_names,
     )
     compose_run = create_splunk_compose_run(
         work_dir=work_dir,
@@ -477,11 +516,13 @@ def build_splunk_configs(
     local_dir.mkdir(parents=True, exist_ok=True)
     supplied_apps_dir = config_root / "supplied-apps"
     supplied_apps_dir.mkdir(parents=True, exist_ok=True)
-    supplied_app_count = stage_splunk_apps(splunk_apps, supplied_apps_dir)
+    supplied_app_names = stage_splunk_apps(splunk_apps, supplied_apps_dir)
 
     inputs_conf = local_dir / "inputs.conf"
     props_conf = local_dir / "props.conf"
     transforms_conf = local_dir / "transforms.conf"
+    eventtypes_conf = local_dir / "eventtypes.conf"
+    tags_conf = local_dir / "tags.conf"
     indexes_conf = local_dir / "indexes.conf"
     server_conf = local_dir / "server.conf"
     inputs_conf.write_text(
@@ -490,11 +531,13 @@ def build_splunk_configs(
     )
     props_conf.write_text(_props_conf(), encoding="utf-8")
     transforms_conf.write_text(_transforms_conf(), encoding="utf-8")
+    eventtypes_conf.write_text(_eventtypes_conf(), encoding="utf-8")
+    tags_conf.write_text(_tags_conf(), encoding="utf-8")
     indexes_conf.write_text(_indexes_conf(), encoding="utf-8")
     server_conf.write_text(_server_conf(), encoding="utf-8")
     (app_dir / "metadata").mkdir(exist_ok=True)
     (app_dir / "metadata" / "default.meta").write_text(
-        "[]\naccess = read : [ * ], write : [ admin ]\n",
+        "[]\naccess = read : [ * ], write : [ admin ]\nexport = system\n",
         encoding="utf-8",
     )
     return SplunkGeneratedConfig(
@@ -504,16 +547,19 @@ def build_splunk_configs(
         inputs_conf=inputs_conf,
         props_conf=props_conf,
         transforms_conf=transforms_conf,
+        eventtypes_conf=eventtypes_conf,
+        tags_conf=tags_conf,
         indexes_conf=indexes_conf,
         server_conf=server_conf,
         supplied_apps_dir=supplied_apps_dir,
-        supplied_app_count=supplied_app_count,
+        supplied_app_count=len(supplied_app_names),
+        supplied_app_names=supplied_app_names,
     )
 
 
-def stage_splunk_apps(app_paths: tuple[Path, ...], destination_root: Path) -> int:
+def stage_splunk_apps(app_paths: tuple[Path, ...], destination_root: Path) -> tuple[str, ...]:
     """Copy or unpack user-supplied Splunk apps into ephemeral runtime state."""
-    count = 0
+    app_names: list[str] = []
     for app_path in app_paths:
         source = app_path.expanduser().resolve()
         if not source.exists():
@@ -521,11 +567,11 @@ def stage_splunk_apps(app_paths: tuple[Path, ...], destination_root: Path) -> in
         if source.is_dir():
             destination = _unique_app_destination(destination_root, source.name)
             shutil.copytree(source, destination, symlinks=False)
-            count += 1
+            app_names.append(destination.name)
             continue
         extracted = _extract_app_archive(source, destination_root)
-        count += len(extracted)
-    return count
+        app_names.extend(path.name for path in extracted)
+    return tuple(sorted(app_names))
 
 
 def validate_splunk_output(
@@ -599,7 +645,7 @@ def _inputs_conf(staged_logs: tuple[StagedSplunkLog, ...], data_root: Path) -> s
                 f"index = {SPLUNK_INDEX}",
                 f"sourcetype = {log.sourcetype}",
                 f"host = {log.host}",
-                f"crcSalt = <SOURCE>{log.sourcetype}",
+                "crcSalt = <SOURCE>",
                 "",
             )
         )
@@ -616,6 +662,10 @@ KV_MODE = json
 TIME_PREFIX = "ts"\\s*:\\s*
 TIME_FORMAT = %s.%Q
 MAX_TIMESTAMP_LOOKAHEAD = 24
+FIELDALIAS-evidenceforge-zeek-src = id.orig_h AS src id.orig_h AS src_ip
+FIELDALIAS-evidenceforge-zeek-src-port = id.orig_p AS src_port
+FIELDALIAS-evidenceforge-zeek-dest = id.resp_h AS dest id.resp_h AS dest_ip
+FIELDALIAS-evidenceforge-zeek-dest-port = id.resp_p AS dest_port
 """
         for sourcetype in sorted(set(ZEEK_SPLUNK_SOURCETYPES.values()))
     )
@@ -668,13 +718,18 @@ TIME_PREFIX = ^<\\d+>
 TIME_FORMAT = %b %d %H:%M:%S
 MAX_TIMESTAMP_LOOKAHEAD = 15
 
-[access_combined]
+[apache:access:json]
 SHOULD_LINEMERGE = false
 LINE_BREAKER = ([\\r\\n]+)
-EXTRACT-evidenceforge-web = ^(?<src_ip>\\S+)\\s+\\S+\\s+(?<user>\\S+)\\s+\\[[^\\]]+\\]\\s+"(?<http_method>\\S+)\\s+(?<uri>\\S+)\\s+(?<http_version>[^"]+)"\\s+(?<status>\\d{{3}})\\s+(?<bytes>\\S+)\\s+"(?<referrer>[^"]*)"\\s+"(?<user_agent>[^"]*)"
-TIME_PREFIX = \\[
-TIME_FORMAT = %d/%b/%Y:%H:%M:%S %z
-MAX_TIMESTAMP_LOOKAHEAD = 32
+KV_MODE = json
+TIME_PREFIX = "timestamp"\\s*:\\s*"
+TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%6N%Z
+MAX_TIMESTAMP_LOOKAHEAD = 34
+
+[source::.../proxy_access.log]
+EVAL-action = case(proxy_action="deny" OR proxy_action="auth-required" OR status>=400, "blocked", true(), "allowed")
+EVAL-category = if(isnull(url_category) OR url_category="", null(), url_category)
+EVAL-vendor_product = "Apache mod_proxy"
 
 [evidenceforge:proxy:w3c]
 SHOULD_LINEMERGE = false
@@ -692,6 +747,19 @@ def _transforms_conf() -> str:
 REGEX = ^#
 DEST_KEY = queue
 FORMAT = nullQueue
+"""
+
+
+def _eventtypes_conf() -> str:
+    return """[evidenceforge_proxy_access]
+search = sourcetype=apache:access:json source="*proxy_access.log"
+"""
+
+
+def _tags_conf() -> str:
+    return """[eventtype=evidenceforge_proxy_access]
+web = enabled
+proxy = enabled
 """
 
 
@@ -738,10 +806,10 @@ def _required_field_validation_search(
     )
     quoted = ",".join(json.dumps(sourcetype) for sourcetype in sourcetypes)
     extractions = [
+        "spath",
         'rex field=_raw "<EventID>(?<EventID>\\d+)</EventID>.*<Computer>(?<Computer>[^<]*)</Computer>"',
         'rex field=_raw "^<(?<pri>\\d+)>1\\s+\\S+\\s+\\S+\\s+(?<app>\\S+)\\s+(?<pid>\\S+)\\s+\\S+\\s+\\S+\\s+(?<message>.*)$"',
         'rex field=_raw "^<(?<pri>\\d+)>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+\\s+\\S+\\s+%ASA-\\d+-(?<asa_msg_id>\\d+):\\s+(?<message>.*)$"',
-        'rex field=_raw "^(?<src_ip>\\S+)\\s+\\S+\\s+(?<user>\\S+)\\s+\\[[^\\]]+\\]\\s+\\"(?<http_method>\\S+)\\s+(?<uri>\\S+)\\s+(?<http_version>[^\\"]+)\\"\\s+(?<status>\\d{3})\\s+(?<bytes>\\S+)\\s+\\"(?<referrer>[^\\"]*)\\"\\s+\\"(?<user_agent>[^\\"]*)\\""',
         'rex field=_raw "^(?<date>\\d{4}-\\d{2}-\\d{2})\\s+(?<time>\\d{2}:\\d{2}:\\d{2})\\s+(?<src_ip>\\S+)\\s+(?<user>\\S+)\\s+(?<http_method>\\S+)\\s+(?<uri>\\S+)\\s+(?<http_version>\\S+)\\s+(?<status>\\d{3})\\s+(?<bytes_out>\\d+)\\s+(?<bytes_in>\\d+)\\s+(?<duration_ms>\\d+)\\s+(?<dest_host>\\S+)\\s+(?<user_agent>\\S+)\\s+(?<referrer>\\S+)\\s+(?<content_type>\\S+)\\s+(?<cache_result>\\S+)\\s+(?<proxy_action>\\S+)"',
     ]
     evals = [
@@ -793,19 +861,27 @@ def _cim_dataset_validation_search(
     *,
     sourcetype: str,
 ) -> str:
+    field_prefix = expectation.field_prefix or expectation.object_name
     field_missing_counts = [
-        f"count(eval({_missing_cim_field_expr(expectation.object_name, field)})) "
+        f"count(eval({_missing_cim_field_expr(field_prefix, field)})) "
         f"as missing_{_field_token(field)}"
         for field in expectation.required_fields
     ]
+    field_missing_counts.extend(
+        f"count(eval(({condition}) AND ({_missing_cim_field_expr(field_prefix, field)}))) "
+        f"as missing_{_field_token(field)}"
+        for field, condition in expectation.conditional_required_fields
+    )
     source_clause = ""
     if expectation.source_filter:
         source_clause = f" source={json.dumps(expectation.source_filter)}"
-    return (
-        f"| datamodel {expectation.data_model} {expectation.object_name} search "
-        f"| search index={SPLUNK_INDEX} sourcetype={json.dumps(sourcetype)}{source_clause} "
-        f"| stats count as cim_count {' '.join(field_missing_counts)}"
-    )
+    commands = [
+        f"| datamodel {expectation.data_model} {expectation.object_name} search",
+        f"search sourcetype={json.dumps(sourcetype)}{source_clause}",
+        *expectation.post_search_commands,
+        f"stats count as cim_count {' '.join(field_missing_counts)}",
+    ]
+    return " | ".join(commands)
 
 
 def _cim_model_search() -> str:
@@ -854,14 +930,27 @@ def _validate_cim_datasets(
     expected_counts = manifest.expected_counts
     use_supplied_app_sourcetypes = manifest.supplied_app_count > 0
     for expectation in CIM_EXPECTATIONS:
-        expected_count = expected_counts.get(expectation.format_name, 0)
-        if expected_count == 0:
+        format_count = expected_counts.get(expectation.format_name, 0)
+        if format_count == 0:
             continue
         spec = SPLUNK_SOURCE_SPECS_BY_FORMAT[expectation.format_name]
         sourcetype = _validation_sourcetype(
             spec,
             use_supplied_app_sourcetypes=use_supplied_app_sourcetypes,
         )
+        expected_count = _expected_cim_count(
+            expectation,
+            compose_run,
+            default_count=format_count,
+            sourcetype=sourcetype,
+            manifest=manifest,
+        )
+        if expected_count == 0:
+            failures.append(
+                f"{expectation.format_name}: no indexed events matched the "
+                f"CIM eligibility search for {expectation.data_model}.{expectation.object_name}"
+            )
+            continue
         rows = _search_result_rows(
             export_search(
                 compose_run,
@@ -870,6 +959,7 @@ def _validate_cim_datasets(
                     sourcetype=sourcetype,
                 ),
                 output_name=f"cim-{_field_token(expectation.format_name)}",
+                namespace_app=_cim_search_namespace(expectation, manifest),
             )
         )
         checked.append(f"{expectation.data_model}.{expectation.object_name}")
@@ -886,6 +976,8 @@ def _validate_cim_datasets(
 def _metadata_failures(rows: list[JsonObject]) -> list[str]:
     failures: list[str] = []
     for row in rows:
+        if row.get("preview") is True:
+            continue
         result = row.get("result", row)
         if not isinstance(result, dict):
             continue
@@ -899,6 +991,8 @@ def _metadata_failures(rows: list[JsonObject]) -> list[str]:
 def _field_failures(rows: list[JsonObject]) -> list[str]:
     failures: list[str] = []
     for row in rows:
+        if row.get("preview") is True:
+            continue
         result = row.get("result", row)
         if not isinstance(result, dict):
             continue
@@ -931,13 +1025,21 @@ def _cim_dataset_failures(
             f"{expectation.format_name}: expected {expected_count} event(s) in CIM "
             f"{dataset}, got {cim_count}"
         )
-    for field in expectation.required_fields:
+    for field in _cim_required_field_names(expectation):
         missing = _int_value(result.get(f"missing_{_field_token(field)}"))
         if missing > 0:
             failures.append(
-                f"{expectation.format_name}: {missing} CIM {dataset} event(s) missing {field}"
+                f"{expectation.format_name}: {missing} CIM {dataset} event(s) "
+                f"missing/invalid {field}"
             )
     return failures
+
+
+def _cim_required_field_names(expectation: SplunkCimExpectation) -> tuple[str, ...]:
+    return (
+        *expectation.required_fields,
+        *(field for field, _condition in expectation.conditional_required_fields),
+    )
 
 
 def _search_result_rows(rows: list[JsonObject]) -> list[JsonObject]:
@@ -952,6 +1054,65 @@ def _validation_sourcetype(
     if use_supplied_app_sourcetypes and spec.supplied_app_sourcetype:
         return spec.supplied_app_sourcetype
     return spec.sourcetype
+
+
+def _expected_cim_count(
+    expectation: SplunkCimExpectation,
+    compose_run: SplunkComposeRun,
+    *,
+    default_count: int,
+    sourcetype: str,
+    manifest: SplunkStageManifest,
+) -> int:
+    search = _cim_expected_count_search(expectation, sourcetype=sourcetype)
+    if not search:
+        return default_count
+    rows = _search_result_rows(
+        export_search(
+            compose_run,
+            search,
+            output_name=f"cim-expected-{_field_token(expectation.format_name)}",
+            namespace_app=_cim_search_namespace(expectation, manifest),
+        )
+    )
+    if not rows:
+        return 0
+    result = rows[0].get("result", rows[0])
+    if not isinstance(result, dict):
+        return 0
+    return _int_value(result.get("expected_count"))
+
+
+def _cim_expected_count_search(
+    expectation: SplunkCimExpectation,
+    *,
+    sourcetype: str,
+) -> str | None:
+    if expectation.format_name == "windows_event_security":
+        return (
+            f"search index={SPLUNK_INDEX} sourcetype={json.dumps(sourcetype)} "
+            f"source={json.dumps(expectation.source_filter)} "
+            'tag=authentication NOT (action=success user="*$") '
+            "| stats count as expected_count"
+        )
+    if expectation.format_name == "windows_event_sysmon":
+        return (
+            f"search index={SPLUNK_INDEX} sourcetype={json.dumps(sourcetype)} "
+            f"source={json.dumps(expectation.source_filter)} "
+            '| rex field=_raw "<EventID>(?<cim_event_id>\\d+)</EventID>" '
+            '| search cim_event_id IN ("1","5") '
+            "| stats count as expected_count"
+        )
+    return None
+
+
+def _cim_search_namespace(
+    expectation: SplunkCimExpectation,
+    manifest: SplunkStageManifest,
+) -> str | None:
+    if expectation.search_app and expectation.search_app in manifest.supplied_app_names:
+        return expectation.search_app
+    return None
 
 
 def _write_failure_report(
@@ -1007,6 +1168,7 @@ def _base_report(
         "cim_mode": manifest.cim_mode.value,
         "cim_status": cim_status,
         "supplied_app_count": manifest.supplied_app_count,
+        "supplied_app_names": list(manifest.supplied_app_names),
         "staged_logs": [
             {
                 "source": str(log.source),
@@ -1167,7 +1329,8 @@ def _cim_field_expr(object_name: str, field: str) -> str:
 
 def _missing_cim_field_expr(object_name: str, field: str) -> str:
     value = _cim_field_expr(object_name, field)
-    return f'isnull({value}) OR {value}=""'
+    normalized = f"lower(tostring({value}))"
+    return f'isnull({value}) OR {value}="" OR {normalized}="unknown" OR tostring({value})="0"'
 
 
 def _int_value(value: object) -> int:

@@ -125,8 +125,26 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         sof_elk_variant="year_partitioned_syslog",
         splunk_variant="flat_syslog",
     ),
-    "web_access": TargetFormatPolicy("web_access", "w3c_extended", "w3c_extended"),
-    "proxy_access": TargetFormatPolicy("proxy_access", "w3c_extended", "w3c_extended"),
+    "web_access": TargetFormatPolicy(
+        "web_access",
+        "apache_combined",
+        "apache_combined",
+        splunk_variant="apache_json",
+        notes=(
+            "Default and SOF-ELK consume Apache/Nginx combined logs; Splunk consumes "
+            "Apache TA-compatible JSON access records."
+        ),
+    ),
+    "proxy_access": TargetFormatPolicy(
+        "proxy_access",
+        "w3c_extended",
+        "w3c_extended",
+        splunk_variant="apache_proxy_json",
+        notes=(
+            "Default and SOF-ELK consume W3C Extended proxy logs; Splunk consumes "
+            "Apache TA-compatible JSON proxy access records with CIM proxy tagging."
+        ),
+    ),
 }
 
 

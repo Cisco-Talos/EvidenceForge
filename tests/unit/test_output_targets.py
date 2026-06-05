@@ -108,4 +108,6 @@ def test_target_policy_identifies_v1_target_dependent_formats() -> None:
         "windows_event_sysmon",
         "syslog",
         "cisco_asa",
+        "web_access",
+        "proxy_access",
     }

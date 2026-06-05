@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -326,22 +327,67 @@ def _write_host_text_samples(data_dir: Path) -> None:
     (data_dir / "fw01").mkdir(parents=True, exist_ok=True)
     (data_dir / "fw01" / "cisco_asa.log").write_text(
         "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 7 "
-        "for inside:10.0.10.5/54321 to outside:198.51.100.10/443\n",
+        "for inside:10.0.10.5/54321 (10.0.10.5/54321) to "
+        "outside:198.51.100.10/443 (198.51.100.10/443)\n",
         encoding="utf-8",
     )
     (data_dir / "web01.example.test").mkdir(parents=True, exist_ok=True)
     (data_dir / "web01.example.test" / "web_access.log").write_text(
-        '198.51.100.25 - alice [15/Jun/2026:14:23:05 +0000] "GET /index.html HTTP/1.1" '
-        '200 512 "https://example.test/" "Mozilla/5.0"\n',
+        json.dumps(
+            {
+                "timestamp": "2026-06-15T14:23:05.000000Z",
+                "client": "198.51.100.25",
+                "server": "www.example.test",
+                "dest_port": 80,
+                "ident": "-",
+                "user": "alice",
+                "http_method": "GET",
+                "uri_path": "/index.html",
+                "uri_query": "",
+                "http_version": "HTTP/1.1",
+                "status": 200,
+                "http_referrer": "https://example.test/",
+                "http_user_agent": "Mozilla/5.0",
+                "bytes_in": 0,
+                "bytes_out": 512,
+                "response_time_microseconds": 23000,
+                "http_content_type": "text/html",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
         encoding="utf-8",
     )
     (data_dir / "proxy01.example.test").mkdir(parents=True, exist_ok=True)
     (data_dir / "proxy01.example.test" / "proxy_access.log").write_text(
-        "#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status "
-        "sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) "
-        "rs(Content-Type) s-cache-result x-proxy-action\n"
-        "2026-06-15 14:23:05 10.0.0.5 alice GET http://example.test/ HTTP/1.1 "
-        "200 512 128 10 example.test Mozilla/5.0 - text/html MISS forward\n",
+        json.dumps(
+            {
+                "timestamp": "2026-06-15T14:23:05.000000Z",
+                "client": "10.0.0.5",
+                "server": "example.test",
+                "dest_port": 80,
+                "ident": "-",
+                "user": "alice",
+                "http_method": "GET",
+                "uri_path": "/",
+                "uri_query": "",
+                "http_version": "HTTP/1.1",
+                "status": 200,
+                "http_referrer": "",
+                "http_user_agent": "Mozilla/5.0",
+                "bytes_in": 128,
+                "bytes_out": 512,
+                "response_time_microseconds": 10000,
+                "http_content_type": "text/html",
+                "cache_result": "MISS",
+                "proxy_action": "forward",
+                "url_category": "Business/Economy",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
         encoding="utf-8",
     )
     (data_dir / "endpoint01.example.test").mkdir(parents=True, exist_ok=True)
