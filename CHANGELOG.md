@@ -6,6 +6,43 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.3.0 (2026-06-05)
+
+This minor release adds the Splunk output target, Splunk parser validation
+pipeline, optional caller-supplied CIM app validation, and output-target ingest
+guides. The branch contains non-breaking `feat:` commits since v1.2.1, so the
+project moves from `1.2.1` to `1.3.0`.
+
+**Splunk output target and parser validation**
+
+- Added `--target splunk`, target marker handling, Splunk-specific Windows XML
+  event streams, RFC5424 Linux syslog retention, native Cisco ASA syslog
+  staging, and Splunk parser harness orchestration with generated
+  EvidenceForge-owned configs and reports (`7b8aabca`, `aa53c84f`).
+- Stabilized Splunk live ingest and normalized source metadata handling so the
+  base parser harness can validate counts, source/sourcetype metadata, fields,
+  and ingest/parser warnings without vendoring Splunk assets (`aa53c84f`,
+  `5795b6dc`).
+
+**CIM validation**
+
+- Added optional CIM validation for caller-supplied Splunk apps/TAs, including
+  dataset searches for Windows authentication, Sysmon process lifecycle, Zeek
+  network/web records, Cisco ASA firewall records, web access, and proxy access
+  logs (`6e886ff2`, `047da1a0`).
+- Refined CIM query builders and app namespace handling so validation can
+  distinguish indexed-but-unnormalized data from missing parser coverage
+  (`047da1a0`).
+
+**Output-target guidance and regression coverage**
+
+- Added user-facing ingest guides for the default, SOF-ELK, and Splunk output
+  targets, documenting format differences, validation tiers, ingest steps, and
+  current compatibility expectations (`feede499`).
+- Updated slow and renderer-level Zeek tests to use explicit sensor topology or
+  direct-file mode, matching the no-root-Zeek-output policy when no sensors are
+  configured (`2094f3f5`).
+
 ## v1.2.1 (2026-06-04)
 
 This patch release promotes the current-dev realism assessment fixes from loops
