@@ -22,12 +22,15 @@
 
 """HTTP/HTTPS forward proxy access log emitter (W3C Extended format)."""
 
+import json
 import random
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.rng import _stable_seed
 
 # CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
@@ -89,6 +92,80 @@ def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | da
     }
 
 
+def _splunk_json_timestamp(value: datetime | str | None) -> str:
+    """Return a timestamp accepted by the Apache TA JSON stanza."""
+    if isinstance(value, datetime):
+        timestamp = value
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(UTC)
+        return timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    if value:
+        return str(value)
+    return ""
+
+
+def _int_value(value: object, default: int = 0) -> int:
+    """Return *value* as an int, falling back for blank proxy fields."""
+    if value in (None, "", "-"):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _proxy_url_parts(
+    *,
+    method: str,
+    url: str,
+    host: str,
+    fallback_port: int,
+) -> tuple[str, int, str, str]:
+    """Return Apache TA JSON server, port, path, and query values for a proxy URL."""
+    method_upper = method.upper()
+    if method_upper == "CONNECT":
+        authority = url or host
+        server, separator, port_text = authority.partition(":")
+        return (
+            server or host,
+            _int_value(port_text, fallback_port or 443) if separator else fallback_port or 443,
+            "/",
+            "",
+        )
+
+    parsed = urlsplit(url or "/")
+    server = parsed.hostname or host
+    if parsed.port is not None:
+        dest_port = parsed.port
+    elif parsed.scheme.lower() == "https":
+        dest_port = 443
+    elif parsed.scheme.lower() == "http":
+        dest_port = 80
+    else:
+        dest_port = fallback_port
+    if parsed.scheme or parsed.netloc:
+        path = parsed.path or "/"
+    else:
+        path = parsed.path or url or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return server, dest_port, path, query
+
+
+def _proxy_url_category(event_data: dict[str, Any]) -> str:
+    """Return a coarse URL category for CIM proxy validation."""
+    action = str(event_data.get("proxy_action") or "").lower()
+    cache_result = str(event_data.get("cache_result") or "").upper()
+    host = str(event_data.get("host") or "")
+    content_type = str(event_data.get("content_type") or "")
+    if action in {"deny", "auth-required"} or cache_result in {"DENIED", "AUTH_REQUIRED"}:
+        return "Blocked"
+    if any(token in host.lower() for token in ("update", "cdn", "download", "packages")):
+        return "Software/Updates"
+    if content_type.startswith(("application/", "text/javascript", "text/css")):
+        return "Technology"
+    return "Business/Economy"
+
+
 class ProxyEmitter(HostMultiplexEmitter):
     """Emitter for forward proxy access logs (W3C Extended Log Format).
 
@@ -108,6 +185,14 @@ class ProxyEmitter(HostMultiplexEmitter):
     @staticmethod
     def _sort_key(line: str) -> tuple[datetime, str]:
         """Extract W3C date/time prefix for chronological flush sorting."""
+        if line.startswith("{"):
+            try:
+                timestamp = json.loads(line).get("timestamp", "")
+                parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                return (datetime.max, line)
+            return (parsed, line)
+
         parts = line.split(maxsplit=2)
         if len(parts) < 2 or parts[0].startswith("#"):
             return (datetime.max, line)
@@ -122,6 +207,17 @@ class ProxyEmitter(HostMultiplexEmitter):
         # Track active CONNECT tunnels:
         # (proxy_fqdn, client_ip, host, dst_port) -> last_activity_time
         self._active_tunnels: dict[tuple[str, str, str, int], datetime] = {}
+
+    def _get_writer(self, host_fqdn: str) -> Any:
+        """Return a host writer, suppressing W3C headers for Splunk JSON output."""
+        if self.output_target != OutputTarget.SPLUNK:
+            return super()._get_writer(host_fqdn)
+        header_template = self.format_def.output.header_template
+        self.format_def.output.header_template = None
+        try:
+            return super()._get_writer(host_fqdn)
+        finally:
+            self.format_def.output.header_template = header_template
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry a ProxyContext."""
@@ -205,6 +301,9 @@ class ProxyEmitter(HostMultiplexEmitter):
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render proxy access log entry in W3C Extended format."""
+        if self.output_target == OutputTarget.SPLUNK:
+            return self._render_splunk_json_event(event_data)
+
         context = {
             "timestamp": event_data.get("timestamp"),
             "client_ip": _w3c_extended_field(event_data.get("client_ip")),
@@ -225,3 +324,42 @@ class ProxyEmitter(HostMultiplexEmitter):
         }
         rendered = self._template.render(**context)
         return rendered.strip()
+
+    def _render_splunk_json_event(self, event_data: dict[str, Any]) -> str:
+        """Render proxy access as Apache TA JSON plus proxy classification fields."""
+        method = str(event_data.get("method") or "")
+        fallback_port = (
+            443 if str(event_data.get("url") or "").lower().startswith("https://") else 80
+        )
+        server, dest_port, uri_path, uri_query = _proxy_url_parts(
+            method=method,
+            url=str(event_data.get("url") or ""),
+            host=str(event_data.get("host") or ""),
+            fallback_port=fallback_port,
+        )
+        proxy_action = str(event_data.get("proxy_action") or "")
+        record = {
+            "timestamp": _splunk_json_timestamp(event_data.get("timestamp")),
+            "client": str(event_data.get("client_ip") or ""),
+            "server": server,
+            "dest_port": dest_port,
+            "ident": "-",
+            "user": str(event_data.get("username") or "-"),
+            "http_method": method,
+            "uri_path": uri_path,
+            "uri_query": uri_query,
+            "http_version": str(event_data.get("protocol") or "HTTP/1.1"),
+            "status": _int_value(event_data.get("status_code"), 0),
+            "http_referrer": str(event_data.get("referrer") or ""),
+            "http_user_agent": str(event_data.get("user_agent") or ""),
+            "bytes_in": _int_value(event_data.get("cs_bytes"), 0),
+            "bytes_out": _int_value(event_data.get("sc_bytes"), 0),
+            "response_time_microseconds": _int_value(event_data.get("time_taken"), 0) * 1000,
+            "cache_result": str(event_data.get("cache_result") or ""),
+            "proxy_action": proxy_action,
+            "url_category": _proxy_url_category(event_data),
+        }
+        content_type = event_data.get("content_type")
+        if content_type:
+            record["http_content_type"] = str(content_type)
+        return json.dumps(record, sort_keys=True, separators=(",", ":"))

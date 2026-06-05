@@ -84,10 +84,11 @@ For scripted or non-interactive use:
 
 Useful command flags: `generate` accepts `--verbose` / `--debug` for logging,
 `--output` / `-o` for output directory overrides, `--force` / `-f` to overwrite
-existing output without prompting, and `--target default|sof-elk` to choose the
+existing output without prompting, and `--target default|sof-elk|splunk` to choose the
 generated file layout. The `default` target is SIEM-neutral; `sof-elk` emits
 target-specific variants such as Snare Windows events and year-partitioned
-RFC3164 syslog for parser validation. `eval` uses `--scenario` / `-s` and
+RFC3164 syslog for parser validation, and `splunk` emits Splunk-friendly
+Windows XML event streams. `eval` uses `--scenario` / `-s` and
 `--format text|json`; `info` and `validate-config` support `--json` for machine
 output.
 
@@ -233,14 +234,14 @@ ActivityGenerator (builds SecurityEvents with composable contexts)
     v
 EventDispatcher (routes to StateManager + matching emitters)
     |
-    +---> WindowsEventEmitter ---> default XML / sof-elk Snare syslog
-    +---> SysmonEmitter ---------> default XML / sof-elk Snare syslog
-    +---> ZeekEmitter(s) --------> conn/dns/http/ssl/... (NDJSON)
+    +---> WindowsEventEmitter ---> default XML / sof-elk Snare / splunk XML stream
+    +---> SysmonEmitter ---------> default XML / sof-elk Snare / splunk XML stream
+    +---> ZeekEmitter(s) --------> sensor/conn,dns,http,ssl,... (NDJSON)
     +---> EcarEmitter -----------> ecar.json (NDJSON)
-    +---> SyslogEmitter ---------> default RFC5424 / sof-elk RFC3164 year layout
+    +---> SyslogEmitter ---------> default+splunk RFC5424 / sof-elk RFC3164 year layout
     +---> BashHistoryEmitter ----> per-user bash history
     +---> SnortEmitter ----------> snort_alert.log
-    +---> CiscoAsaEmitter -------> default flat / sof-elk year layout
+    +---> CiscoAsaEmitter -------> default+splunk flat / sof-elk year layout
     +---> WebEmitter ------------> web_access.log
     +---> ProxyEmitter ----------> proxy_access.log
 ```

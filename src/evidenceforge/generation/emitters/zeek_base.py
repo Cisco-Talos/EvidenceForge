@@ -32,8 +32,9 @@ Output structure:
     base_dir/<sensor_hostname>/ssl.json
     ...
 
-When no sensors are configured (backward compat), writes directly to:
-    base_dir/<log_filename>
+When no sensors are configured, directory-mode generation does not write
+sensor logs. Direct file paths remain supported for focused tests and callers
+that explicitly request one file.
 """
 
 import json
@@ -638,7 +639,7 @@ class SensorMultiplexEmitter(LogEmitter):
     """
 
     _log_filename: str = "output.json"  # Override in subclasses (e.g., "conn.json")
-    _flat_filename: str = ""  # Override for backward-compat flat output (e.g., "zeek_conn.json")
+    _flat_filename: str = ""  # Used only for explicit direct-file mode.
     _supported_types: set[str] = set()
     _sort_before_flush: bool = True
 
@@ -672,7 +673,9 @@ class SensorMultiplexEmitter(LogEmitter):
         if self._direct_file_path:
             # Direct file mode (test/simple usage): output_path was a file
             return self._direct_file_path
-        # No sensors configured -> flat output using format name
+        # Directory-mode sensor emitters require a sensor. This fallback is
+        # retained only as a defensive path and should not be reached by normal
+        # generation.
         flat_name = self._flat_filename or self._log_filename
         return self._base_dir / flat_name
 
@@ -697,7 +700,7 @@ class SensorMultiplexEmitter(LogEmitter):
             return writer
 
     def _get_default_writer(self) -> _SingleZeekWriter:
-        """Get the backward-compat flat writer (no sensor subdirectory)."""
+        """Get the explicit direct-file writer."""
         return self._get_writer("")
 
     def emit_to_sensors(self, rendered: str, sensor_hostnames: list[str] | None = None) -> None:
@@ -706,11 +709,13 @@ class SensorMultiplexEmitter(LogEmitter):
         Args:
             rendered: Pre-rendered NDJSON line
             sensor_hostnames: List of sensor hostnames to write to.
-                If None/empty, writes to all configured sensors (or flat output).
+                If None/empty, writes to all configured sensors. Directory-mode
+                generation drops sensor records when no sensor exists.
         """
         targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
         if not targets:
-            # No sensors configured → backward compat flat output
+            if not self._direct_file_path:
+                return
             self._get_default_writer().write(rendered)
             return
         for hostname in targets:
@@ -783,7 +788,8 @@ class SensorMultiplexEmitter(LogEmitter):
         targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
 
         if not targets:
-            # No sensor targets: render once to the flat output.
+            if not self._direct_file_path:
+                return
             _enforce_http_body_invariants(event_data)
             _enforce_ip_byte_invariants(event_data)
             rendered = self._render_event(event_data)

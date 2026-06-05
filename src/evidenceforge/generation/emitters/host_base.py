@@ -190,6 +190,8 @@ class HostMultiplexEmitter(LogEmitter):
 
     def emit_to_host(self, rendered: str, host_fqdn: str = "") -> None:
         """Route a rendered line to the appropriate host writer."""
+        if not host_fqdn and not self._direct_file_path:
+            return
         self._get_writer(host_fqdn).write(rendered)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
@@ -218,7 +220,9 @@ class HostMultiplexEmitter(LogEmitter):
         logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
     def _buffer_event(self, rendered: str) -> None:
-        """Override base class to route through default writer."""
+        """Override base class to route through explicit direct-file mode only."""
+        if not self._direct_file_path:
+            return
         self._get_writer("").write(rendered)
 
     def flush(self, force: bool = False) -> None:

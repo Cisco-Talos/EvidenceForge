@@ -31,3 +31,11 @@ class SofElkHarnessError(RuntimeError):
 
 class SofElkParserError(AssertionError):
     """Raised when SOF-ELK parses fewer events or produces invalid events."""
+
+
+class SplunkHarnessError(RuntimeError):
+    """Raised when the external Splunk harness cannot run."""
+
+
+class SplunkParserError(AssertionError):
+    """Raised when Splunk ingest, parse, or CIM validation fails."""
