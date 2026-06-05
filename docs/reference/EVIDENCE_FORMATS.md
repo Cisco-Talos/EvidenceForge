@@ -53,6 +53,8 @@ formats. Scenario YAML and `--formats` remain canonical: request
 on, then choose the target at generation time.
 When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
 legacy/default output.
+For practical ingestion and validation guidance by target, see
+[Output Target Ingest Guides](../output-targets/README.md).
 
 Target-specific behavior in V1:
 
