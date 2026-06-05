@@ -38,6 +38,9 @@ from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
+    NetworkConfig,
+    NetworkSegment,
+    NetworkSensor,
     OutputSpec,
     Scenario,
     StorylineEvent,
@@ -83,7 +86,28 @@ def create_test_scenario(users: int = 2, hours: int = 3) -> Scenario:
         )
 
     environment = Environment(
-        description="Test environment for parallel generation", users=user_list, systems=system_list
+        description="Test environment for parallel generation",
+        users=user_list,
+        systems=system_list,
+        network=NetworkConfig(
+            segments=[
+                NetworkSegment(
+                    name="workstations",
+                    cidr="10.0.10.0/24",
+                    exposure="internal",
+                )
+            ],
+            sensors=[
+                NetworkSensor(
+                    name="zeek-workstations",
+                    type="network",
+                    placement="span",
+                    monitoring_segments=["workstations"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ],
+        ),
     )
 
     time_window = TimeWindow(start=start_time, end=end_time)
@@ -181,6 +205,17 @@ def parse_zeek_log(file_path: Path) -> list[dict]:
     return events
 
 
+def first_zeek_conn_file(output_dir: Path) -> Path:
+    """Return the first generated Zeek conn log in sensor or direct-file mode."""
+    conn_files = list(output_dir.rglob("conn.json"))
+    if conn_files:
+        return conn_files[0]
+    legacy_conn_files = list(output_dir.rglob("zeek_conn.json"))
+    if legacy_conn_files:
+        return legacy_conn_files[0]
+    raise AssertionError("No Zeek conn log found")
+
+
 class TestParallelGeneration:
     """Test parallel generation with threaded emitters."""
 
@@ -195,7 +230,7 @@ class TestParallelGeneration:
             # Verify both log files exist
             # Files may be in per-host/per-sensor subdirectories
             win_files = list(Path(tmpdir).rglob("windows_event_security.xml"))
-            zeek_files = list(Path(tmpdir).rglob("*.json"))
+            zeek_files = list(Path(tmpdir).rglob("conn.json"))
             assert len(win_files) > 0, "No Windows event files found"
             assert len(zeek_files) > 0, "No Zeek files found"
 
@@ -203,11 +238,7 @@ class TestParallelGeneration:
             windows_events = parse_windows_log(
                 list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
             )
-            zeek_events = parse_zeek_log(
-                list(Path(tmpdir).rglob("conn.json"))[0]
-                if list(Path(tmpdir).rglob("conn.json"))
-                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
-            )
+            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
 
             # Check Windows events exist
             windows_timestamps = [e["TimeCreated"] for e in windows_events if "TimeCreated" in e]
@@ -261,11 +292,7 @@ class TestParallelGeneration:
                 assert len(pids) == len(set(pids)), f"Duplicate PIDs found on {system}!"
 
             # Verify Zeek UID uniqueness
-            zeek_events = parse_zeek_log(
-                list(Path(tmpdir).rglob("conn.json"))[0]
-                if list(Path(tmpdir).rglob("conn.json"))
-                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
-            )
+            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
             uids = [e["uid"] for e in zeek_events]
             assert len(uids) > 0
             assert len(uids) == len(set(uids)), "Duplicate Zeek UIDs found!"
@@ -282,11 +309,7 @@ class TestParallelGeneration:
             windows_events = parse_windows_log(
                 list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
             )
-            zeek_events = parse_zeek_log(
-                list(Path(tmpdir).rglob("conn.json"))[0]
-                if list(Path(tmpdir).rglob("conn.json"))
-                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
-            )
+            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
 
             # Verify events parsed successfully
             assert len(windows_events) > 0, "No Windows events generated"
@@ -370,7 +393,7 @@ class TestParallelGeneration:
             # Verify generation completed
             # Files may be in per-host/per-sensor subdirectories
             win_files = list(Path(tmpdir).rglob("windows_event_security.xml"))
-            zeek_files = list(Path(tmpdir).rglob("*.json"))
+            zeek_files = list(Path(tmpdir).rglob("conn.json"))
             assert len(win_files) > 0, "No Windows event files found"
             assert len(zeek_files) > 0, "No Zeek files found"
 
@@ -381,11 +404,7 @@ class TestParallelGeneration:
             windows_events = parse_windows_log(
                 list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
             )
-            zeek_events = parse_zeek_log(
-                list(Path(tmpdir).rglob("conn.json"))[0]
-                if list(Path(tmpdir).rglob("conn.json"))
-                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
-            )
+            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
 
             # With 10 users, 2 hours, low intensity: events distributed across 7 formats
             assert len(windows_events) > 10, "Too few Windows events generated"

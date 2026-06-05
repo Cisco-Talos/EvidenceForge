@@ -810,8 +810,8 @@ class TestPerSensorDirectoryRouting:
             emitter.close()
             assert (base / "sensor-1" / "conn.json").exists()
 
-    def test_no_sensors_flat_output(self):
-        """No sensors configured → flat output using _flat_filename."""
+    def test_no_sensors_no_directory_mode_output(self):
+        """No sensors configured means no directory-mode sensor output."""
         fmt = load_format("zeek_conn")
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
@@ -829,10 +829,12 @@ class TestPerSensorDirectoryRouting:
                 }
             )
             emitter.close()
-            assert (base / "zeek_conn.json").exists()
+            assert not (base / "conn.json").exists()
+            assert not (base / "zeek_conn.json").exists()
+            assert not list(base.rglob("*.json"))
 
     def test_ssl_emitter_sensor_filenames(self):
-        """SSL emitter uses ssl.json in sensor dirs, zeek_ssl.json for flat."""
+        """SSL emitter uses ssl.json in sensor dirs."""
         fmt = load_format("zeek_ssl")
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)

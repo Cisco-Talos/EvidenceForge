@@ -3,6 +3,7 @@
 
 """Tests for proxy emitter referrer field and CONNECT tunnel behavior."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -354,6 +355,63 @@ class TestProxyActionSemantics:
         assert inspected_fields[4] == "GET"
         assert inspected_fields[5] == "https://example.com/page"
         assert inspected_fields[-1] == "ssl-inspect"
+
+    def test_splunk_target_renders_apache_ta_json_without_w3c_header(self, tmp_path):
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, tmp_path)
+        emitter.configure_output_target("splunk")
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                username="alice",
+                method="GET",
+                url="https://updates.example.com/page?q=1",
+                host="updates.example.com",
+                status_code=200,
+                sc_bytes=4096,
+                cs_bytes=700,
+                time_taken=23,
+                user_agent="curl/8.0",
+                content_type="text/html",
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        lines = (
+            (tmp_path / "PROXY-01" / "proxy_access.log").read_text(encoding="utf-8").splitlines()
+        )
+        assert len(lines) == 2
+        assert not lines[0].startswith("#")
+        connect = json.loads(lines[0])
+        inspected = json.loads(lines[1])
+        assert connect["http_method"] == "CONNECT"
+        assert connect["server"] == "updates.example.com"
+        assert connect["dest_port"] == 443
+        assert connect["uri_path"] == "/"
+        assert connect["proxy_action"] == "tunnel-setup"
+        assert inspected["http_method"] == "GET"
+        assert inspected["uri_path"] == "/page"
+        assert inspected["uri_query"] == "?q=1"
+        assert inspected["bytes_in"] == 700
+        assert inspected["bytes_out"] == 4096
+        assert inspected["response_time_microseconds"] == 23000
+        assert inspected["url_category"] == "Software/Updates"
 
     def test_connect_setup_row_differs_from_inspected_request_accounting(self):
         from pathlib import Path

@@ -54,7 +54,10 @@ from evidenceforge.generation.emitters.syslog_family import (
     sanitize_syslog_family_route_key,
     syslog_family_writer_path,
 )
-from evidenceforge.generation.emitters.windows_event import format_windows_system_time
+from evidenceforge.generation.emitters.windows_event import (
+    compact_windows_event_xml,
+    format_windows_system_time,
+)
 from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
@@ -1535,9 +1538,9 @@ class WindowsEventEmitter(LogEmitter):
             else:
                 path = self._base_dir / "windows_event_security.xml"
             writer = _SingleHostWriter(path, self.buffer_size)
-            # Write XML header immediately for new host files
+            # The Splunk target is an event stream, not a rooted XML document.
             header = self.format_def.output.header_template
-            if header:
+            if header and self.output_target != OutputTarget.SPLUNK:
                 writer.write_header(header)
             self._host_writers[safe_host_fqdn] = writer
             return writer
@@ -1571,7 +1574,9 @@ class WindowsEventEmitter(LogEmitter):
             return writer
 
     def _buffer_event(self, rendered: str) -> None:
-        """Override base class to route through default host writer (backward compat for tests)."""
+        """Route rendered fallback output only in explicit direct-file mode."""
+        if not self._direct_file_path:
+            return
         self._get_host_writer("").write(rendered)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
@@ -2175,13 +2180,17 @@ class WindowsEventEmitter(LogEmitter):
                     event["TimeCreated"] = current_time
                 self._last_record_time_created_by_computer[counter_key] = current_time
 
-            host_fqdn = event.get("Computer", "")
+            host_fqdn = str(event.get("Computer") or "")
+            if not host_fqdn and not self._direct_file_path:
+                continue
             snare_timestamp = event.get("TimeCreated")
             if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
                 snare_rendered = render_windows_security_snare_syslog(event)
                 self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
-            elif self.output_target == OutputTarget.DEFAULT:
+            elif self.output_target in {OutputTarget.DEFAULT, OutputTarget.SPLUNK}:
                 rendered = self._render_event(event)
+                if self.output_target == OutputTarget.SPLUNK:
+                    rendered = compact_windows_event_xml(rendered)
                 self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
@@ -2523,11 +2532,11 @@ class WindowsEventEmitter(LogEmitter):
             self.flush(force=True)
         if self.threaded:
             self.flush(force=True)
-        # Write XML footer for each host file that has events
+        # Write XML footer only for rooted XML document targets.
         footer = self.format_def.output.footer_template or ""
         for writer in self._host_writers.values():
             writer.flush()
-            if footer and writer.event_count > 0:
+            if footer and writer.event_count > 0 and self.output_target != OutputTarget.SPLUNK:
                 writer.write_footer(footer)
         for writer in self._snare_writers.values():
             writer.flush()

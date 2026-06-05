@@ -417,7 +417,8 @@ class TestZeekDnsFormatAccuracy:
         from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
         format_def = load_format("zeek_dns")
-        emitter = ZeekDnsEmitter(format_def, tmp_path)
+        output_file = tmp_path / "zeek_dns.json"
+        emitter = ZeekDnsEmitter(format_def, output_file)
         ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         event = SecurityEvent(
             timestamp=ts,
@@ -453,7 +454,7 @@ class TestZeekDnsFormatAccuracy:
         emitter.emit(event)
         emitter.close()
 
-        record = json.loads((tmp_path / "zeek_dns.json").read_text().splitlines()[0])
+        record = json.loads(output_file.read_text().splitlines()[0])
         assert record["ts"] > ts.timestamp()
         assert record["ts"] - ts.timestamp() <= 0.095
 
@@ -467,7 +468,8 @@ class TestZeekDnsFormatAccuracy:
         from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
         format_def = load_format("zeek_dns")
-        emitter = ZeekDnsEmitter(format_def, tmp_path)
+        output_file = tmp_path / "zeek_dns.json"
+        emitter = ZeekDnsEmitter(format_def, output_file)
         ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         duration = 0.0005607147741810154
         event = SecurityEvent(
@@ -505,7 +507,7 @@ class TestZeekDnsFormatAccuracy:
         emitter.emit(event)
         emitter.close()
 
-        record = json.loads((tmp_path / "zeek_dns.json").read_text().splitlines()[0])
+        record = json.loads(output_file.read_text().splitlines()[0])
         delta = record["ts"] - ts.timestamp()
         assert 0 <= delta <= duration
         assert delta + record["rtt"] <= duration + 0.000001

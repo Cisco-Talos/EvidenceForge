@@ -50,7 +50,10 @@ from evidenceforge.generation.emitters.windows import (
     _normalize_windows_time_created,
     _subject_domain,
 )
-from evidenceforge.generation.emitters.windows_event import format_windows_system_time
+from evidenceforge.generation.emitters.windows_event import (
+    compact_windows_event_xml,
+    format_windows_system_time,
+)
 from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
@@ -1767,7 +1770,7 @@ class SysmonEventEmitter(LogEmitter):
                 path = self._base_dir / "windows_event_sysmon.xml"
             writer = _SingleHostWriter(path, self.buffer_size)
             header = self.format_def.output.header_template
-            if header:
+            if header and self.output_target != OutputTarget.SPLUNK:
                 writer.write_header(header)
             self._host_writers[safe_host] = writer
             return writer
@@ -1801,6 +1804,8 @@ class SysmonEventEmitter(LogEmitter):
             return writer
 
     def _buffer_event(self, rendered: str) -> None:
+        if not self._direct_file_path:
+            return
         self._get_host_writer("").write(rendered)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
@@ -1885,13 +1890,17 @@ class SysmonEventEmitter(LogEmitter):
         self._sync_process_guids_to_event1_times()
 
         for event in self._event_dicts:
-            host_fqdn = event.get("Computer", "")
+            host_fqdn = str(event.get("Computer") or "")
+            if not host_fqdn and not self._direct_file_path:
+                continue
             snare_timestamp = event.get("TimeCreated")
             if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
                 snare_rendered = render_windows_sysmon_snare_syslog(event)
                 self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
-            elif self.output_target == OutputTarget.DEFAULT:
+            elif self.output_target in {OutputTarget.DEFAULT, OutputTarget.SPLUNK}:
                 rendered = self._render_event(event)
+                if self.output_target == OutputTarget.SPLUNK:
+                    rendered = compact_windows_event_xml(rendered)
                 self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
@@ -2083,7 +2092,7 @@ class SysmonEventEmitter(LogEmitter):
         footer = self.format_def.output.footer_template or ""
         for writer in self._host_writers.values():
             writer.flush()
-            if footer and writer.event_count > 0:
+            if footer and writer.event_count > 0 and self.output_target != OutputTarget.SPLUNK:
                 writer.write_footer(footer)
         for writer in self._snare_writers.values():
             writer.flush()

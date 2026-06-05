@@ -139,6 +139,19 @@ environment:
     - {hostname: DC-01, ip: "10.0.3.10", os: "Windows Server 2019", type: domain_controller}
     - {hostname: DC-02, ip: "10.0.3.11", os: "Windows Server 2019", type: domain_controller}
 
+  network:
+    segments:
+      - name: corp
+        cidr: "10.0.0.0/16"
+        exposure: internal
+    sensors:
+      - name: zeek-corp
+        type: network
+        placement: span
+        monitoring_segments: [corp]
+        direction: bidirectional
+        log_formats: [zeek]
+
 personas:
   - name: executive
     description: "C-level and senior management"

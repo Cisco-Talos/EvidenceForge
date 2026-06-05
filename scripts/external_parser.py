@@ -42,6 +42,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from evidenceforge.external_parsers.errors import SplunkHarnessError, SplunkParserError
 from evidenceforge.external_parsers.runner import (
     VALIDATOR_ORDER,
     ExternalParserPlan,
@@ -59,6 +60,12 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
     SOF_ELK_ZEEK_VALIDATOR,
     SofElkHarnessError,
     SofElkParserError,
+)
+from evidenceforge.external_parsers.splunk import (
+    SPLUNK_FAILURE_REPORT_FILENAME,
+    CimMode,
+    SplunkValidationResult,
+    run_splunk_parser,
 )
 from evidenceforge.output_targets import (
     OUTPUT_TARGET_FILENAME,
@@ -91,6 +98,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("data_dir", type=Path, help="Generated EvidenceForge data/ directory")
     parser.add_argument(
+        "--backend",
+        choices=("auto", "sof-elk", "splunk"),
+        default="auto",
+        help="External parser backend to run; default follows OUTPUT_TARGET.txt",
+    )
+    parser.add_argument(
         "--work-dir",
         type=Path,
         help="Directory for staged files, parsed JSONL, logs, and reports",
@@ -112,6 +125,24 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         choices=VALIDATOR_ORDER,
         help="Limit execution to a specific validator; may be repeated",
     )
+    parser.add_argument(
+        "--cim",
+        choices=tuple(mode.value for mode in CimMode),
+        default=CimMode.AUTO.value,
+        help="Splunk CIM validation mode: auto, require, or off",
+    )
+    parser.add_argument(
+        "--splunk-app",
+        action="append",
+        type=Path,
+        default=[],
+        help="Local Splunk app directory or archive to install ephemerally; may be repeated",
+    )
+    parser.add_argument(
+        "--accept-splunk-license",
+        action="store_true",
+        help="Accept Splunk license and General Terms for this ephemeral parser run",
+    )
 
     args = parser.parse_args(argv)
     if legacy_validator:
@@ -124,7 +155,8 @@ def _run(args: argparse.Namespace) -> int:
     if not data_dir.is_dir():
         console.print(f"[bold red]error:[/bold red] data directory does not exist: {data_dir}")
         return 1
-    if not _require_sof_elk_output_target(data_dir):
+    backend = _select_backend(data_dir, args.backend)
+    if backend is None:
         return 1
 
     work_dir = (
@@ -132,6 +164,27 @@ def _run(args: argparse.Namespace) -> int:
         if args.work_dir
         else Path(tempfile.mkdtemp(prefix="eforge-external-parsers-"))
     )
+    if backend == "splunk":
+        if args.validator:
+            error_console.print(
+                "[bold red]error:[/bold red] --validator is only supported with --backend sof-elk."
+            )
+            return 1
+        console.print(f"[bold]Data directory:[/bold] {data_dir}")
+        console.print(f"[bold]Output target:[/bold] {OutputTarget.SPLUNK.value}")
+        console.print(f"[bold]Work directory:[/bold] {work_dir}")
+        console.print("[bold]Backend:[/bold] Splunk")
+        console.print(f"[bold]CIM mode:[/bold] {args.cim}")
+        return _run_splunk_validators(
+            data_dir=data_dir,
+            work_dir=work_dir / "splunk",
+            timeout=args.timeout,
+            runtime=args.runtime,
+            cim_mode=CimMode(args.cim),
+            splunk_apps=tuple(args.splunk_app or ()),
+            accept_splunk_license=bool(args.accept_splunk_license),
+        )
+
     plan = detect_external_parser_plan(data_dir)
     validators = _selected_validators(plan, args.validator)
 
@@ -154,6 +207,57 @@ def _run(args: argparse.Namespace) -> int:
         timeout=args.timeout,
         runtime=args.runtime,
     )
+
+
+def _select_backend(data_dir: Path, requested_backend: str) -> str | None:
+    marker = _find_output_target_marker(data_dir)
+    if marker is None:
+        searched = "\n".join(
+            f"  - {candidate}" for candidate in _output_target_marker_candidates(data_dir)
+        )
+        error_console.print(
+            "[bold red]error:[/bold red] external parser validation requires an explicit "
+            f"`{OUTPUT_TARGET_FILENAME}` marker."
+        )
+        error_console.print(
+            "Regenerate the dataset with `uv run eforge generate <scenario.yaml> "
+            "--target sof-elk` or `--target splunk`."
+        )
+        error_console.print(f"Searched for `{OUTPUT_TARGET_FILENAME}` in:\n{searched}")
+        return None
+    try:
+        output_target = read_output_target_marker(data_dir)
+    except ValueError as error:
+        error_console.print(
+            f"[bold red]error:[/bold red] {marker} is not a valid output target marker: {error}."
+        )
+        return None
+
+    if requested_backend == "auto":
+        if output_target == OutputTarget.SOF_ELK:
+            return "sof-elk"
+        if output_target == OutputTarget.SPLUNK:
+            return "splunk"
+        error_console.print(
+            f"[bold red]error:[/bold red] {marker} says `{output_target.value}`; "
+            "external parser validation requires `sof-elk` or `splunk`."
+        )
+        return None
+
+    expected_target = (
+        OutputTarget.SOF_ELK if requested_backend == "sof-elk" else OutputTarget.SPLUNK
+    )
+    if output_target != expected_target:
+        error_console.print(
+            f"[bold red]error:[/bold red] {marker} says `{output_target.value}`; "
+            f"{requested_backend} validation requires `{expected_target.value}`."
+        )
+        error_console.print(
+            "Regenerate the dataset with `uv run eforge generate <scenario.yaml> "
+            f"--target {expected_target.value}`."
+        )
+        return None
+    return requested_backend
 
 
 def _require_sof_elk_output_target(data_dir: Path) -> bool:
@@ -407,6 +511,70 @@ def _run_validators(
     return 0
 
 
+def _run_splunk_validators(
+    *,
+    data_dir: Path,
+    work_dir: Path,
+    timeout: int,
+    runtime: str | None,
+    cim_mode: CimMode,
+    splunk_apps: tuple[Path, ...],
+    accept_splunk_license: bool,
+) -> int:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("Ingesting logs with Splunk", total=5)
+
+        def progress_callback(event_type: str, data: dict[str, Any]) -> None:
+            if event_type == "validator_step":
+                progress.update(
+                    task,
+                    advance=1,
+                    description=f"Ingesting logs with Splunk: {data['description']}",
+                )
+            elif event_type == "validator_done":
+                failed = "failed" in str(data["description"]).lower()
+                progress.update(
+                    task,
+                    completed=5,
+                    description="Validating Splunk output: failed" if failed else "Splunk complete",
+                )
+
+        try:
+            result = run_splunk_parser(
+                data_dir,
+                work_dir,
+                cim_mode=cim_mode,
+                splunk_apps=splunk_apps,
+                accept_splunk_license=accept_splunk_license,
+                timeout_seconds=timeout,
+                runtime=runtime,
+                progress_callback=progress_callback,
+            )
+        except SplunkParserError as exc:
+            progress.stop()
+            error_console.print(f"\n[bold red]FAIL:[/bold red] {exc}")
+            _print_failure_report(work_dir / "parsed" / SPLUNK_FAILURE_REPORT_FILENAME)
+            _print_splunk_artifact_paths(work_dir)
+            return 2
+        except SplunkHarnessError as exc:
+            progress.stop()
+            error_console.print(f"\n[bold red]ERROR:[/bold red] {exc}")
+            _print_splunk_artifact_paths(work_dir)
+            return 1
+
+    _print_splunk_success(result)
+    _print_splunk_artifact_paths(work_dir)
+    return 0
+
+
 def _print_success(result: SofElkCombinedResult) -> None:
     console.print(
         f"\n[bold green]PASS:[/bold green] {COMBINED_VALIDATOR_NAME} parsed staged records"
@@ -417,6 +585,13 @@ def _print_success(result: SofElkCombinedResult) -> None:
         "Observed counts: "
         f"{ {log_type: len(events) for log_type, events in result.events_by_type.items() if events} }"
     )
+
+
+def _print_splunk_success(result: SplunkValidationResult) -> None:
+    console.print("\n[bold green]PASS:[/bold green] Splunk indexed and validated staged records")
+    console.print(f"Expected counts: {result.manifest.expected_sourcetype_counts}")
+    console.print(f"Observed counts: {result.observed_counts}")
+    console.print(f"CIM status: {result.cim_status}")
 
 
 def _print_failure_report(report_path: Path) -> None:
@@ -430,7 +605,8 @@ def _print_failure_report(report_path: Path) -> None:
     console.print("\n[bold]Failure summary:[/bold]")
     console.print(f"  Report: {report_path}")
     console.print(f"  Expected counts: {report.get('expected_counts', {})}")
-    console.print(f"  Observed counts: {report.get('observed_counts', {})}")
+    observed_counts = report.get("observed_counts", report.get("observed_sourcetype_counts", {}))
+    console.print(f"  Observed counts: {observed_counts}")
     console.print(f"  Failure count: {report.get('failure_count', 0)}")
     console.print(f"  Failure tag counts: {report.get('failure_tag_counts', {})}")
     dns_qtypes = report.get("dns_failure_qtype_counts")
@@ -442,6 +618,16 @@ def _print_artifact_paths(work_dir: Path) -> None:
     console.print("\n[bold]Artifacts:[/bold]")
     console.print(f"  Staged input: {work_dir / 'stage' / 'logstash'}")
     console.print(f"  Parsed JSONL: {work_dir / 'parsed'}")
+    console.print(f"  Pipeline logs: {work_dir / 'pipeline-logs'}")
+    console.print(f"  Compose file: {work_dir / 'compose.yaml'}")
+    console.print(f"  EvidenceForge runtime config: {work_dir / 'runtime-config-src'}")
+
+
+def _print_splunk_artifact_paths(work_dir: Path) -> None:
+    console.print("\n[bold]Artifacts:[/bold]")
+    console.print(f"  Staged input: {work_dir / 'stage' / 'data'}")
+    console.print(f"  Reports: {work_dir / 'parsed'}")
+    console.print(f"  Search exports: {work_dir / 'search-results'}")
     console.print(f"  Pipeline logs: {work_dir / 'pipeline-logs'}")
     console.print(f"  Compose file: {work_dir / 'compose.yaml'}")
     console.print(f"  EvidenceForge runtime config: {work_dir / 'runtime-config-src'}")

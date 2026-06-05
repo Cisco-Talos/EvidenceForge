@@ -4,12 +4,11 @@ External Parser Validation checks generated EvidenceForge logs with third-party
 parsers. The goal is format and parseability validation, not blind realism
 review and not the deterministic `eforge eval` scoring model.
 
-The current implementation uses SOF-ELK®'s Filebeat and Logstash parsing path
-through Docker Compose or Podman Compose, using pinned Elastic OSS Filebeat and
-Logstash container images. Generated files are staged in the directory layout
-SOF-ELK expects, a short-lived prep service downloads the pinned SOF-ELK
-checkout into Compose-managed volumes, and parsed events are written to
-temporary JSONL artifacts instead of Elasticsearch.
+The current implementation supports two developer-facing parser backends:
+
+- SOF-ELK® through Filebeat and Logstash, without Elasticsearch.
+- Splunk Enterprise in Docker, using generated file-monitoring app config and
+  REST search/export validation.
 
 ## Quickstart
 
@@ -21,11 +20,22 @@ uv run eforge generate scenarios/apt-healthcare-breach/scenario.yaml --target so
 uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data
 ```
 
+For Splunk validation, generate with the Splunk output target and explicitly
+accept Splunk's license and General Terms for the ephemeral container run:
+
+```bash
+uv run eforge generate scenarios/apt-healthcare-breach/scenario.yaml --target splunk
+uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data \
+  --backend splunk \
+  --accept-splunk-license
+```
+
 The script requires `OUTPUT_TARGET.txt` to exist beside the scenario artifacts
-or inside `data/`, and the marker must contain `sof-elk`. Missing, invalid, or
-`default` markers exit gracefully before discovery/staging with a message that
-explains how to regenerate the dataset. This keeps the SOF-ELK lane from
-quietly validating only the target-invariant subset of a default-target dataset.
+or inside `data/`, and the marker must contain `sof-elk` or `splunk`. Missing,
+invalid, or `default` markers exit gracefully before discovery/staging with a
+message that explains how to regenerate the dataset. This keeps target-specific
+parser lanes from quietly validating only the target-invariant subset of a
+default-target dataset.
 
 For a durable report location, pass a work directory:
 
@@ -36,24 +46,45 @@ uv run python scripts/external_parser.py \
   --timeout 180
 ```
 
-Each run clears the parser-owned `sof-elk/stage`, `sof-elk/parsed`,
-`sof-elk/pipeline-logs`, `sof-elk/filebeat-data`, `sof-elk/logstash-data`, and
-`sof-elk/runtime-config-src` directories before staging new input. Use a unique
-work directory when you need to keep artifacts from multiple runs side by side.
+Each SOF-ELK run clears parser-owned `sof-elk/*` runtime directories. Each
+Splunk run clears parser-owned `splunk/stage`, `splunk/parsed`,
+`splunk/search-results`, `splunk/pipeline-logs`, and
+`splunk/runtime-config-src` directories. Use a unique work directory when you
+need to keep artifacts from multiple runs side by side.
 
 The runner auto-detects supported logs. Do not pass validator names for normal
 use. Unsupported logs are reported as warnings so new formats are visible
 without blocking supported parser checks.
 
-Docker Compose v2 or Podman Compose is required. The default runtime is Docker
-Compose when available, then Podman Compose. Use `--runtime podman` to force
-Podman Compose.
+Docker Compose v2 or Podman Compose is required for SOF-ELK. Splunk validation
+currently requires Docker Compose because it uses the official `splunk/splunk`
+container.
+
+Splunk CIM validation is controlled with `--cim auto|require|off`. The default
+`auto` mode runs base ingest/parse validation and skips CIM checks unless one or
+more local apps are supplied with repeatable `--splunk-app <path>`. `require`
+fails early without supplied apps. EvidenceForge never vendors or downloads
+Splunkbase apps; supplied app directories or archives are copied/unpacked only
+into the ephemeral run work directory.
 
 Run the contributor smoke lane when changing emitted formats covered by this
 pipeline:
 
 ```bash
 uv run pytest --include-external-parsers -m external_parser --no-cov
+```
+
+The Splunk external-parser test uses a purpose-built multi-family parser sample,
+not `tests/fixtures/scenarios/minimal.yaml`. It writes explicit host/sensor
+directories and includes one compact record for every Splunk-supported
+EvidenceForge family. To run only that live Splunk smoke after reviewing the
+Splunk terms:
+
+```bash
+EFORGE_ACCEPT_SPLUNK_LICENSE=1 uv run pytest \
+  --include-external-parsers \
+  --no-cov \
+  tests/external_parser/test_splunk_harness.py
 ```
 
 ## Current Coverage
@@ -66,13 +97,21 @@ Supported through SOF-ELK today:
 - Linux syslog generated with `--target sof-elk`
 - Windows Security and Sysmon Snare/RFC3164 logs generated with `--target sof-elk`
 
+Supported through Splunk today:
+
+- Windows Security and Sysmon XML event streams generated with `--target splunk`
+- Linux RFC5424 syslog and native Cisco ASA syslog generated with `--target splunk`
+- Zeek per-sensor NDJSON, web access, proxy access, and eCAR JSON
+- Optional CIM/data-model visibility checks when caller-supplied Splunk apps are present
+
 Not yet supported:
 
 - Native Windows/Sysmon XML files from the `default` target
 - Default-target Linux syslog and Cisco ASA layouts
 - Any dataset missing `OUTPUT_TARGET.txt` or marked with `default`
-- IDS and proxy logs
-- eCAR and bash history, which have no stable third-party standard parser target
+- Proxy logs in the SOF-ELK backend
+- Snort fast alert and bash history in the Splunk backend v1
+- eCAR in the SOF-ELK backend, which has no stable third-party standard parser target
 - Elasticsearch output behavior
 
 See [coverage-matrix.md](coverage-matrix.md) for the current parser/filter
@@ -91,6 +130,13 @@ On failure, the most useful files are under the run work directory:
 | `sof-elk/pipeline-logs/logstash.log` | Logstash container log |
 | `sof-elk/compose.yaml` | Generated Compose topology |
 | `sof-elk/runtime-config-src/` | EvidenceForge-owned wrapper configs consumed by the prep service |
+| `splunk/parsed/splunk_parser_failures.json` | Structured Splunk failure report with counts, parser issues, CIM status, and samples |
+| `splunk/search-results/*.jsonl` | Raw Splunk REST search/export rows used for validation |
+| `splunk/stage/data/...` | The exact files as staged for Splunk file monitoring |
+| `splunk/pipeline-logs/splunkd.log` | Recent Splunk daemon log |
+| `splunk/pipeline-logs/btool-*.txt` | Effective Splunk config snapshots |
+| `splunk/compose.yaml` | Generated Splunk Compose topology |
+| `splunk/runtime-config-src/` | EvidenceForge-owned Splunk app config and ephemeral supplied app copies |
 
 Fatal failures are things that mean a record did not parse or required
 normalized fields are missing. Optional enrichment misses are ignored only when
@@ -101,6 +147,8 @@ they are explicitly registered in code and documented in
 
 - [sof-elk-harness.md](sof-elk-harness.md): container lifecycle, downloads,
   mounts, staging, and artifacts
+- [splunk-harness.md](splunk-harness.md): Splunk container lifecycle, generated
+  app config, CIM mode, and artifacts
 - [ignored-parser-tags.md](ignored-parser-tags.md): ignored parser tags and
   rationale
 - [coverage-matrix.md](coverage-matrix.md): supported and unsupported log
@@ -112,3 +160,6 @@ they are explicitly registered in code and documented in
 SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used with permission.
 
 Elastic, Filebeat, and Logstash are trademarks or registered trademarks of Elasticsearch B.V.
+
+Splunk is a trademark or registered trademark of Splunk LLC. Splunk container
+license and Splunkbase app terms are the caller's responsibility.
