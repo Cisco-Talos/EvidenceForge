@@ -427,6 +427,61 @@ class TestStorylineEvent:
         assert event.events[0].type == "process_access"
         assert event.events[0].target_process == "lsass.exe"
 
+    def test_storyline_process_event_accepts_explicit_lineage_refs(self):
+        """Process events should accept opt-in lineage references."""
+        event = StorylineEvent(
+            id="evt-test-4",
+            time="+45m",
+            actor="jdoe",
+            system="WS-01",
+            activity="Launch child through rundll32",
+            events=[
+                {
+                    "type": "process",
+                    "process_name": "rundll32.exe",
+                    "process_ref": "loader",
+                },
+                {
+                    "type": "process",
+                    "process_name": "powershell.exe",
+                    "parent_ref": "loader",
+                },
+            ],
+        )
+
+        assert event.events[0].process_ref == "loader"
+        assert event.events[1].parent_ref == "loader"
+
+    def test_beacon_event_dns_resolution_defaults_cached(self):
+        """Beacon DNS cadence remains cached unless explicitly opted in."""
+        event = StorylineEvent(
+            id="evt-test-5",
+            time="+45m",
+            actor="jdoe",
+            system="WS-01",
+            activity="Beacon with repeated DNS exercise signal",
+            events=[
+                {
+                    "type": "beacon",
+                    "dst_ip": "198.51.100.10",
+                    "hostname": "rare-c2.example",
+                    "interval": "3m",
+                    "count": 3,
+                },
+                {
+                    "type": "beacon",
+                    "dst_ip": "198.51.100.11",
+                    "hostname": "rare-c2-2.example",
+                    "interval": "3m",
+                    "count": 3,
+                    "dns_resolution": "each_tick",
+                },
+            ],
+        )
+
+        assert event.events[0].dns_resolution == "cached"
+        assert event.events[1].dns_resolution == "each_tick"
+
 
 class TestOutputSpec:
     """Tests for OutputSpec model."""

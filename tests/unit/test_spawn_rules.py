@@ -124,6 +124,69 @@ class TestSpawnRulesYaml:
 class TestWindowsProcessTreeRealism:
     """Windows process trees should use spawn rules for parent selection."""
 
+    def test_singleton_service_reuse_does_not_reap_seeded_windows_parent(
+        self, state_manager, mock_emitters
+    ):
+        """Reused boot-seeded Windows services should not be terminated as transient noise."""
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.10.10",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, dc_system)
+        dns_pid = pids["dns"]
+        services_pid = pids["services"]
+        timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+        reused_pid = ag.generate_system_process(
+            system=dc_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\dns.exe",
+            command_line="dns.exe",
+            parent_pid=services_pid,
+            username="SYSTEM",
+        )
+
+        assert reused_pid == dns_pid
+        assert state_manager.get_process(dc_system.hostname, dns_pid) is not None
+        system_create_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "system_process_create"
+        ]
+        assert system_create_events == []
+
+        ag.generate_system_process_termination(
+            system=dc_system,
+            time=timestamp + timedelta(seconds=30),
+            pid=reused_pid,
+            process_name=r"C:\Windows\System32\dns.exe",
+            parent_pid=services_pid,
+            username="SYSTEM",
+        )
+
+        assert state_manager.get_process(dc_system.hostname, dns_pid) is not None
+        terminate_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate"
+        ]
+        assert terminate_events == []
+
+        child_pid = ag.generate_system_process(
+            system=dc_system,
+            time=timestamp + timedelta(minutes=1),
+            process_name=r"C:\Windows\System32\conhost.exe",
+            command_line="conhost.exe 0x4",
+            parent_pid=dns_pid,
+            username="SYSTEM",
+        )
+        child_proc = state_manager.get_process(dc_system.hostname, child_pid)
+
+        assert child_proc is not None
+        assert child_proc.parent_pid == dns_pid
+
     def test_cli_process_gets_shell_parent(self, state_manager, mock_emitters, win_system, user):
         """CLI process (dotnet.exe) should get cmd.exe or powershell.exe as parent."""
         ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)

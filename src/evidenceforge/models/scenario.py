@@ -423,6 +423,8 @@ class ProcessEventSpec(_EventSpecBase):
     type: Literal["process"] = "process"
     process_name: str
     command_line: str | None = None  # defaults to process_name at generation time
+    process_ref: str | None = None  # Optional durable ref for explicit parent/child lineage
+    parent_ref: str | None = None  # Optional process_ref to use as this process parent
     supplementary: Literal["auto", "none"] = "auto"
 
 
@@ -689,6 +691,13 @@ class BeaconEventSpec(_PeriodicEventBase):
     orig_bytes: int | None = None
     resp_bytes: int | None = None
     conn_state: str | None = None
+    dns_resolution: Literal["cached", "each_tick"] = Field(
+        default="cached",
+        description=(
+            "DNS cadence for hostname beacons. 'cached' emits resolver evidence only "
+            "on the first tick; 'each_tick' emits resolver evidence for every tick."
+        ),
+    )
 
     @field_validator("hostname")
     @classmethod

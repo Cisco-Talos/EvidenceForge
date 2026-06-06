@@ -6,6 +6,28 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.3.1 (2026-06-06)
+
+This patch release fixes several generation edge cases reported from class
+exercise authoring and preserves a durable service-process state regression.
+The branch contains only `fix:` commits since v1.3.0, so the project moves from
+`1.3.0` to `1.3.1`.
+
+**Generation edge cases and backward-compatible controls**
+
+- Moved Windows Security event spool SQLite state out of final output
+  directories, optimized SOF-ELK syslog close-time normalization, allowed
+  concrete Zeek formats in output and sensor configuration, added opt-in
+  per-tick beacon DNS resolution, optimized high-volume DGA state handling,
+  preserved compatible explicit TCP payload byte overrides, and added explicit
+  storyline process lineage refs (`949faa26`).
+
+**Durable service process state**
+
+- Preserved durable service process state across activity generation paths and
+  added regression coverage for service process and spawn-rule behavior
+  (`7e3a3a52`).
+
 ## v1.3.0 (2026-06-05)
 
 This minor release adds the Splunk output target, Splunk parser validation

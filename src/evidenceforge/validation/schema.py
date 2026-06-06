@@ -457,6 +457,9 @@ class ScenarioValidator:
             "proxy_access",
         }
 
+        process_refs: set[tuple[str, str, str]] = set()
+        incompatible_payload_states = {"S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR"}
+
         for idx, event in enumerate(self.scenario.storyline):
             for spec_idx, spec in enumerate(event.events):
                 # Validate connection dst_ip is a valid IP
@@ -474,6 +477,67 @@ class ScenarioValidator:
                                 suggestion="Use a valid IPv4 or IPv6 address",
                             )
                         )
+
+                if getattr(spec, "type", "") in {"connection", "beacon"}:
+                    conn_state = getattr(spec, "conn_state", None)
+                    has_payload_override = (
+                        getattr(spec, "orig_bytes", None) is not None
+                        or getattr(spec, "resp_bytes", None) is not None
+                    )
+                    if has_payload_override and conn_state in incompatible_payload_states:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.conn_state",
+                                message=(
+                                    f"{spec.type} specifies byte overrides with conn_state "
+                                    f"'{conn_state}', but that state cannot reliably carry "
+                                    "application payload bytes"
+                                ),
+                                suggestion=(
+                                    "Use conn_state: SF for explicit payload sizing, or omit "
+                                    "orig_bytes/resp_bytes for failed/handshake-only flows."
+                                ),
+                            )
+                        )
+
+                if getattr(spec, "type", "") == "process":
+                    ref_key_base = (event.system, event.actor)
+                    parent_ref = getattr(spec, "parent_ref", None)
+                    if parent_ref is not None and (*ref_key_base, parent_ref) not in process_refs:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.parent_ref",
+                                message=(
+                                    f"Process parent_ref '{parent_ref}' has no earlier matching "
+                                    "process_ref for the same storyline actor and system"
+                                ),
+                                suggestion=(
+                                    "Define the parent process earlier with process_ref, or omit "
+                                    "parent_ref to use the default shell/service parent inference."
+                                ),
+                            )
+                        )
+                    process_ref = getattr(spec, "process_ref", None)
+                    if process_ref is not None:
+                        ref_key = (*ref_key_base, process_ref)
+                        if ref_key in process_refs:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    field_path=f"storyline.{idx}.events.{spec_idx}.process_ref",
+                                    message=(
+                                        f"Duplicate process_ref '{process_ref}' for the same "
+                                        "storyline actor and system"
+                                    ),
+                                    suggestion=(
+                                        "Use unique process_ref values when later events need "
+                                        "unambiguous parentage."
+                                    ),
+                                )
+                            )
+                        process_refs.add(ref_key)
 
                 # Validate raw event target_format
                 if hasattr(spec, "target_format") and spec.target_format:
@@ -552,13 +616,12 @@ class ScenarioValidator:
 
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
 
-        # Valid sensor log_formats: group names + standalone non-group formats
+        # Valid sensor log_formats: group aliases plus concrete emitter names.
+        # This preserves "zeek" as the full-group alias while allowing narrow
+        # sensor scopes such as "zeek_conn" and "zeek_dns".
         known_sensor_formats = set(FORMAT_GROUPS.keys()) | {"snort_alert", "cisco_asa"}
-        # Individual emitter names that must use their group instead
-        _group_members = {}
-        for group, members in FORMAT_GROUPS.items():
-            for member in members:
-                _group_members[member] = group
+        for members in FORMAT_GROUPS.values():
+            known_sensor_formats.update(members)
 
         for idx, sensor in enumerate(self.scenario.environment.network.sensors):
             for seg_idx, seg_name in enumerate(sensor.monitoring_segments):
@@ -573,16 +636,7 @@ class ScenarioValidator:
                     )
 
             for fmt_idx, fmt in enumerate(sensor.log_formats):
-                if fmt in _group_members:
-                    self.issues.append(
-                        ValidationIssue(
-                            severity="error",
-                            field_path=f"environment.network.sensors.{idx}.log_formats.{fmt_idx}",
-                            message=f"Sensor '{sensor.name}' uses individual format '{fmt}'",
-                            suggestion=f"Use the group name '{_group_members[fmt]}' instead",
-                        )
-                    )
-                elif fmt not in known_sensor_formats:
+                if fmt not in known_sensor_formats:
                     self.issues.append(
                         ValidationIssue(
                             severity="warning",
@@ -760,12 +814,15 @@ class ScenarioValidator:
         monitored_segments: set[str] = set()
         link_local_span_segments: set[str] = set()
         for sensor in self.scenario.environment.network.sensors:
+            from evidenceforge.events.dispatcher import expand_formats
+
+            expanded_sensor_formats = expand_formats(sensor.log_formats)
             monitored_segments.update(sensor.monitoring_segments)
             if (
                 sensor.type != "firewall"
                 and sensor.placement == "span"
                 and sensor.direction in {"bidirectional", "outbound"}
-                and "zeek" in sensor.log_formats
+                and "zeek_conn" in expanded_sensor_formats
             ):
                 link_local_span_segments.update(sensor.monitoring_segments)
 

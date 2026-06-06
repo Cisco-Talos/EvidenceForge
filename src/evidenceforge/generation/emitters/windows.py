@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import sqlite3
 import tempfile
 from bisect import bisect_left
@@ -1517,6 +1518,8 @@ class WindowsEventEmitter(LogEmitter):
         self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._current_storyline_origin: bool = False
+        self._spool_dir: Path | None = None
+        self._owns_spool_dir: bool = False
         self._spool_path: Path | None = None
         self._spool_conn: sqlite3.Connection | None = None
         self._spooled_count: int = 0
@@ -1639,9 +1642,9 @@ class WindowsEventEmitter(LogEmitter):
     def _get_spool_conn_unlocked(self) -> sqlite3.Connection:
         """Open the on-disk Windows event spool database while holding _file_lock."""
         if self._spool_conn is None:
-            self._base_dir.mkdir(parents=True, exist_ok=True)
+            spool_dir = self._get_spool_dir_unlocked()
             fd, path = tempfile.mkstemp(
-                prefix=".windows_event_spool_", suffix=".sqlite3", dir=self._base_dir
+                prefix=".windows_event_spool_", suffix=".sqlite3", dir=spool_dir
             )
             os.close(fd)
             Path(path).unlink(missing_ok=True)
@@ -1654,6 +1657,23 @@ class WindowsEventEmitter(LogEmitter):
                 "payload TEXT NOT NULL)"
             )
         return self._spool_conn
+
+    def _get_spool_dir_unlocked(self) -> Path:
+        """Return the local runtime directory used for SQLite spool state."""
+        if self._spool_dir is not None:
+            return self._spool_dir
+
+        configured = os.environ.get("EFORGE_SPOOL_DIR")
+        if configured:
+            spool_dir = Path(configured).expanduser().resolve()
+            spool_dir.mkdir(parents=True, exist_ok=True)
+            self._spool_dir = spool_dir
+            self._owns_spool_dir = False
+            return spool_dir
+
+        self._spool_dir = Path(tempfile.mkdtemp(prefix="evidenceforge-windows-spool-"))
+        self._owns_spool_dir = True
+        return self._spool_dir
 
     def _spool_event_dicts_unlocked(self) -> None:
         """Move buffered event dictionaries to disk to bound emitter memory usage."""
@@ -2116,6 +2136,10 @@ class WindowsEventEmitter(LogEmitter):
         if self._spool_path is not None:
             self._spool_path.unlink(missing_ok=True)
             self._spool_path = None
+        if self._owns_spool_dir and self._spool_dir is not None:
+            shutil.rmtree(self._spool_dir, ignore_errors=True)
+            self._spool_dir = None
+            self._owns_spool_dir = False
         self._spooled_count = 0
 
     def _flush_unlocked(self) -> None:

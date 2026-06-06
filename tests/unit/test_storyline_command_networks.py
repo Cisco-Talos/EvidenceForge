@@ -27,10 +27,130 @@ from evidenceforge.generation.engine.storyline import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.scenario import ConnectionEventSpec, System, User
+from evidenceforge.models.scenario import BeaconEventSpec, ConnectionEventSpec, System, User
 
 
 class TestStorylineCommandNetworks:
+    def test_explicit_storyline_process_ref_sets_child_parent_pid(self):
+        """Explicit process_ref/parent_ref lineage should reach canonical process context."""
+        captured: list[Any] = []
+
+        class _CapturingDispatcher:
+            visibility_engine = None
+
+            @staticmethod
+            def dispatch(event: Any) -> None:
+                captured.append(event)
+
+        state = StateManager()
+        generator = ActivityGenerator(state, {})
+        generator.dispatcher = _CapturingDispatcher()
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        system = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        state.set_current_time(event_time)
+        engine = object.__new__(StorylineMixin)
+
+        parent_pid = generator.generate_process(
+            actor,
+            system,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\rundll32.exe",
+            r"rundll32.exe C:\Users\alice\AppData\Local\stage.dll,Run",
+            parent_pid=4,
+        )
+        engine._record_storyline_process_ref(
+            actor=actor,
+            system=system,
+            process_ref="loader",
+            pid=parent_pid,
+            image=r"C:\Windows\System32\rundll32.exe",
+        )
+
+        resolved_parent = engine._storyline_process_ref_for_parent(
+            actor=actor,
+            system=system,
+            parent_ref="loader",
+        )
+        assert resolved_parent is not None
+
+        child_pid = generator.generate_process(
+            actor,
+            system,
+            event_time + timedelta(seconds=2),
+            "0x3e7",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile -EncodedCommand SQBFAFgA",
+            parent_pid=resolved_parent[0],
+        )
+
+        child_event = next(
+            event
+            for event in captured
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.pid == child_pid
+        )
+        assert child_event.process.parent_pid == parent_pid
+
+    def test_beacon_dns_resolution_each_tick_controls_emit_dns_cadence(self):
+        """Beacon DNS remains cached by default and can opt into per-tick queries."""
+        calls: list[dict[str, Any]] = []
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        system = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        start = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+
+        def run_beacon(spec: BeaconEventSpec) -> list[bool]:
+            calls.clear()
+            engine = object.__new__(StorylineMixin)
+            engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+            engine.activity_generator = SimpleNamespace(
+                _ip_to_system={system.ip: system},
+                _proxy_routes={},
+                generate_connection=lambda **kwargs: calls.append(kwargs),
+            )
+            engine._ensure_storyline_service_process_for_beacon = lambda *_args, **_kwargs: (
+                -1,
+                None,
+            )
+            engine._execute_typed_event(
+                spec=spec,
+                actor=actor,
+                system=system,
+                time=start,
+                activity="Beacon cadence",
+                explicit_types={"beacon"},
+            )
+            return [bool(call["emit_dns"]) for call in calls]
+
+        cached_spec = BeaconEventSpec(
+            dst_ip="198.51.100.20",
+            hostname="rare-c2.example",
+            interval="3m",
+            count=3,
+        )
+        each_tick_spec = BeaconEventSpec(
+            dst_ip="198.51.100.20",
+            hostname="rare-c2.example",
+            interval="3m",
+            count=3,
+            dns_resolution="each_tick",
+        )
+
+        assert run_beacon(cached_spec) == [True, False, False]
+        assert run_beacon(each_tick_spec) == [True, True, True]
+
     def test_recorded_storyline_logon_expires_at_transport_close(self):
         """Recorded storyline SSH sessions should not be reused after TCP close."""
         state = StateManager()

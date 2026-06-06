@@ -695,6 +695,61 @@ class TestActivityGenerator:
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
 
+    def test_linux_read_file_side_effect_maps_to_file_read(self, monkeypatch):
+        """Linux read side effects from EDR pools should emit file_read events."""
+        state_manager = StateManager()
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        ecar_emitter = Mock()
+        emitters = {"ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        system = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
+        user = User(username="root", full_name="Root", email="root@example.com")
+        systemd_pid = state_manager.create_process(
+            system=system.hostname,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd",
+            username="root",
+            integrity_level="System",
+        )
+
+        class AlwaysSideEffectRng(random.Random):
+            def random(self) -> float:
+                return 0.0
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.generator._get_rng",
+            lambda: AlwaysSideEffectRng(1),
+        )
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.edr_pools.select_file_side_effect",
+            lambda **_kwargs: ("read", "/etc/ssh/sshd_config"),
+        )
+
+        activity_gen.generate_process(
+            user=user,
+            system=system,
+            time=timestamp + timedelta(seconds=1),
+            logon_id="",
+            process_name="/usr/sbin/sshd",
+            command_line="/usr/sbin/sshd -D [listener]",
+            parent_pid=systemd_pid,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+
+        file_events = [
+            call.args[0]
+            for call in ecar_emitter.emit.call_args_list
+            if call.args[0].event_type == "file_read"
+        ]
+        assert len(file_events) == 1
+        assert file_events[0].file is not None
+        assert file_events[0].file.action == "read"
+        assert file_events[0].file.path == "/etc/ssh/sshd_config"
+
     def test_auth_session_bundle_anchors_are_stable(self, test_user, test_system):
         """Auth/session requests should expose durable deterministic anchors."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

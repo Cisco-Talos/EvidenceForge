@@ -1061,6 +1061,33 @@ class StorylineMixin:
         self._last_storyline_image = image
         self._last_storyline_system = system.hostname
 
+    def _record_storyline_process_ref(
+        self,
+        *,
+        actor: User,
+        system: System,
+        process_ref: str,
+        pid: int,
+        image: str,
+    ) -> None:
+        """Record an explicit storyline process reference for later parentage."""
+        if not hasattr(self, "_storyline_process_refs"):
+            self._storyline_process_refs: dict[tuple[str, str, str], tuple[int, str]] = {}
+        self._storyline_process_refs[(system.hostname, actor.username, process_ref)] = (pid, image)
+
+    def _storyline_process_ref_for_parent(
+        self,
+        *,
+        actor: User,
+        system: System,
+        parent_ref: str | None,
+    ) -> tuple[int, str] | None:
+        """Resolve an explicit parent_ref to a known storyline process."""
+        if parent_ref is None:
+            return None
+        refs = getattr(self, "_storyline_process_refs", {})
+        return refs.get((system.hostname, actor.username, parent_ref))
+
     def _record_storyline_service_install(
         self,
         system: System,
@@ -2522,23 +2549,31 @@ class StorylineMixin:
 
             output_file = self._extract_output_file(command_line, os_category)
             process_logon_id = logon_id
-            service_context = self._storyline_service_context_for_process(
+            explicit_parent = self._storyline_process_ref_for_parent(
                 actor=process_actor,
                 system=system,
-                time=time,
-                process_name=process_name,
+                parent_ref=getattr(spec, "parent_ref", None),
             )
-            if service_context is not None:
-                process_actor, process_logon_id, parent_pid = service_context
+            if explicit_parent is not None:
+                parent_pid, _parent_image = explicit_parent
             else:
-                parent_pid = self.activity_generator._resolve_parent(
-                    system,
-                    process_actor,
-                    time,
-                    process_logon_id,
-                    process_name,
-                    process_command_line,
+                service_context = self._storyline_service_context_for_process(
+                    actor=process_actor,
+                    system=system,
+                    time=time,
+                    process_name=process_name,
                 )
+                if service_context is not None:
+                    process_actor, process_logon_id, parent_pid = service_context
+                else:
+                    parent_pid = self.activity_generator._resolve_parent(
+                        system,
+                        process_actor,
+                        time,
+                        process_logon_id,
+                        process_name,
+                        process_command_line,
+                    )
             if os_category == "linux":
                 self._emit_linux_storyline_shell_friction(
                     actor=process_actor,
@@ -2590,6 +2625,15 @@ class StorylineMixin:
             )
             self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name)
+            process_ref = getattr(spec, "process_ref", None)
+            if process_ref is not None:
+                self._record_storyline_process_ref(
+                    actor=process_actor,
+                    system=system,
+                    process_ref=process_ref,
+                    pid=pid,
+                    image=process_name,
+                )
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
@@ -3179,6 +3223,9 @@ class StorylineMixin:
                 process_image=story_image,
                 hostname=conn_hostname,
                 preserve_dst_ip=bool(spec.hostname),
+                preserve_explicit_payload=(
+                    spec.orig_bytes is not None or spec.resp_bytes is not None
+                ),
             )
             logged_dst_ip = getattr(
                 self.activity_generator,
@@ -3815,6 +3862,9 @@ class StorylineMixin:
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
+                tick_emit_dns = emit_dns and (
+                    spec.dns_resolution == "each_tick" or attempt_count == 0
+                )
                 tick_http_ctx = http_ctx
                 tick_resp_bytes = s_rb
                 if http_ctx is not None and http_is_c2 and spec.response_body_len is None:
@@ -3896,7 +3946,7 @@ class StorylineMixin:
                             orig_bytes=s_ob,
                             resp_bytes=tick_resp_bytes,
                             conn_state="SF",
-                            emit_dns=emit_dns and attempt_count == 0,
+                            emit_dns=tick_emit_dns,
                             source_system=src_sys,
                             http=tick_http_ctx,
                             proxy=proxy_ctx,
@@ -3904,6 +3954,9 @@ class StorylineMixin:
                             pid=story_pid,
                             process_image=story_image,
                             preserve_dst_ip=bool(spec.hostname),
+                            preserve_explicit_payload=(
+                                spec.orig_bytes is not None or spec.resp_bytes is not None
+                            ),
                         )
                     else:
                         self.activity_generator.generate_connection(
@@ -3929,13 +3982,16 @@ class StorylineMixin:
                         orig_bytes=s_ob,
                         resp_bytes=tick_resp_bytes,
                         conn_state=s_conn_state,
-                        emit_dns=emit_dns and attempt_count == 0,
+                        emit_dns=tick_emit_dns,
                         source_system=src_sys,
                         http=tick_http_ctx,
                         hostname=conn_hostname,
                         pid=story_pid,
                         process_image=story_image,
                         preserve_dst_ip=bool(spec.hostname),
+                        preserve_explicit_payload=(
+                            spec.orig_bytes is not None or spec.resp_bytes is not None
+                        ),
                     )
                 attempt_count += 1
 
@@ -4220,6 +4276,8 @@ class StorylineMixin:
                     duration=rng.uniform(0.001, 0.05),
                 )
                 query_count += 1
+                if query_count % 500 == 0:
+                    self.state_manager.sweep_closed_connections()
                 if len(domain_sample) < 5:
                     domain_sample.append(domain)
 

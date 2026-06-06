@@ -111,6 +111,78 @@ def _make_activity_gen() -> tuple[ActivityGenerator, list[SecurityEvent]]:
     return gen, captured_events
 
 
+def test_closed_connections_do_not_force_tuple_recent_scan_matches():
+    """Closed state should not make high-volume DNS source-port scans grow quadratically."""
+    gen, _events = _make_activity_gen()
+    now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    gen.state_manager.set_current_time(now)
+    conn_id = gen.state_manager.open_connection(
+        "10.0.0.10",
+        53124,
+        "10.0.0.1",
+        53,
+        "udp",
+    )
+    gen.state_manager.state.open_connections[conn_id].state = "closed"
+
+    assert not gen._connection_tuple_recently_used(
+        "10.0.0.10",
+        53124,
+        "10.0.0.1",
+        53,
+        "udp",
+        now,
+    )
+
+
+def test_explicit_http_upload_bytes_survive_protocol_shaping():
+    """Explicit server-egress orig_bytes should not be shrunk by HTTP shaping."""
+    gen, events = _make_activity_gen()
+    server = System(
+        hostname="APP-01",
+        ip="10.0.20.10",
+        os="Windows Server 2022",
+        type="server",
+    )
+    gen._ip_to_system = {server.ip: server}
+    now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+    gen.generate_connection(
+        src_ip=server.ip,
+        dst_ip="198.51.100.25",
+        time=now,
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        source_system=server,
+        hostname="collector.example",
+        preserve_dst_ip=True,
+        http=HttpContext(
+            method="POST",
+            host="collector.example",
+            uri="/upload",
+            request_body_len=1024,
+            response_body_len=512,
+            status_code=200,
+        ),
+        orig_bytes=50_000_000,
+        resp_bytes=2_048,
+        conn_state="SF",
+        duration=12.0,
+        preserve_explicit_payload=True,
+    )
+
+    connection = next(
+        event
+        for event in events
+        if event.event_type == "connection"
+        and event.network is not None
+        and event.network.dst_ip == "198.51.100.25"
+    )
+    assert connection.network.orig_bytes >= 50_000_000
+    assert connection.network.resp_bytes >= 2_048
+
+
 def _event_signature(event: SecurityEvent) -> tuple:
     """Return a deterministic signature for SSH bundle evidence events."""
 
