@@ -246,6 +246,12 @@ _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
         "msdtc.exe",
     }
 )
+_FILE_ACTION_EVENT_TYPES = {
+    "read": "file_read",
+    "create": "file_create",
+    "modify": "file_modify",
+    "delete": "file_delete",
+}
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
 _USER_MODEL_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
 _LINUX_LOCAL_ACCOUNTS = {
@@ -9099,11 +9105,7 @@ class ActivityGenerator:
             semantic_file_effect = select_command_file_side_effect(process_name, command_line)
             if semantic_file_effect is not None:
                 action, path = semantic_file_effect
-                event_type = {
-                    "create": "file_create",
-                    "modify": "file_modify",
-                    "delete": "file_delete",
-                }[action]
+                event_type = _FILE_ACTION_EVENT_TYPES[action]
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=time + timedelta(milliseconds=180),
@@ -9152,11 +9154,7 @@ class ActivityGenerator:
             )
             if side_effect is not None:
                 action, path = side_effect
-                event_type = {
-                    "create": "file_create",
-                    "modify": "file_modify",
-                    "delete": "file_delete",
-                }[action]
+                event_type = _FILE_ACTION_EVENT_TYPES[action]
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
@@ -13580,6 +13578,10 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        if self._is_protected_windows_system_pid(system, pid):
+            self.state_manager.update_process_activity_time(system.hostname, pid, time)
+            return
+
         running_proc = self.state_manager.get_process(system.hostname, pid)
         if running_proc is not None:
             process_name = running_proc.image
@@ -13650,6 +13652,13 @@ class ActivityGenerator:
             )
 
         self.dispatcher.dispatch(event)
+
+    def _is_protected_windows_system_pid(self, system: System, pid: int) -> bool:
+        """Return whether a PID belongs to the durable seeded Windows process tree."""
+        if _get_os_category(system.os) != "windows":
+            return False
+        system_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        return pid in set(system_pids.values())
 
     def _dns_observed_ttls(
         self,
