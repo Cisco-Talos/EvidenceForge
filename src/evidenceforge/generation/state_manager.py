@@ -1164,9 +1164,26 @@ class StateManager:
             key = (system, pid)
             if key in self.state.running_processes:
                 del self.state.running_processes[key]
+                self._clear_session_process_references(system, pid)
                 logger.debug(f"Ended process {pid} on {system}")
                 return True
             return False
+
+    def _clear_session_process_references(self, system: str, pid: int) -> None:
+        """Clear active-session pointers to a process that has ended."""
+        for session in self.state.active_sessions.values():
+            if session.system != system:
+                continue
+            if session.explorer_pid == pid:
+                session.explorer_pid = None
+            if session.session_winlogon_pid == pid:
+                session.session_winlogon_pid = None
+            if session.session_shell_pid == pid:
+                session.session_shell_pid = None
+            if session.process_tree_root == pid:
+                session.process_tree_root = None
+            if session.transport_pid == pid:
+                session.transport_pid = None
 
     def list_running_processes(self) -> list[RunningProcess]:
         """Get all running processes.

@@ -260,6 +260,149 @@ class TestWindowsProcessTreeRealism:
         assert parent_proc.image.lower().endswith(r"\explorer.exe")
         assert session.explorer_pid == parent_proc.pid
 
+    def test_user_process_repairs_stale_explicit_parent_pid(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """A stale explicit parent PID should be replaced before process allocation."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+
+        stale_parent = state_manager.create_process(
+            win_system.hostname,
+            session.explorer_pid,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe",
+            user.username,
+            "Medium",
+            logon_id,
+        )
+        ag._record_user_process(win_system, user, stale_parent, r"C:\Windows\System32\cmd.exe")
+        assert state_manager.end_process(win_system.hostname, stale_parent)
+
+        child_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_id,
+            r"C:\Windows\System32\ipconfig.exe",
+            "ipconfig.exe /all",
+            parent_pid=stale_parent,
+        )
+        child_proc = state_manager.get_process(win_system.hostname, child_pid)
+
+        assert child_proc is not None
+        assert child_proc.parent_pid != stale_parent
+        assert state_manager.get_process(win_system.hostname, child_proc.parent_pid) is not None
+
+    def test_gui_process_repairs_stale_session_explorer_pid(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Stale Explorer session pointers should be rematerialized for GUI children."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+        stale_explorer = session.explorer_pid
+        assert state_manager.end_process(win_system.hostname, stale_explorer)
+        session.explorer_pid = stale_explorer
+
+        child_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+            parent_pid=stale_explorer,
+        )
+        child_proc = state_manager.get_process(win_system.hostname, child_pid)
+        assert child_proc is not None
+        parent_proc = state_manager.get_process(win_system.hostname, child_proc.parent_pid)
+
+        assert child_proc.parent_pid != stale_explorer
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\explorer.exe")
+        assert session.explorer_pid == parent_proc.pid
+
+    def test_system_process_repairs_stale_service_parent_pid(self, state_manager, mock_emitters):
+        """System process creation should fall back from stale service parents."""
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.10.10",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, dc_system)
+        timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        stale_parent = ag.generate_system_process(
+            system=dc_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c hostname",
+            parent_pid=pids["services"],
+            username="SYSTEM",
+        )
+        assert state_manager.end_process(dc_system.hostname, stale_parent)
+
+        child_pid = ag.generate_system_process(
+            system=dc_system,
+            time=timestamp + timedelta(minutes=1),
+            process_name=r"C:\Windows\System32\conhost.exe",
+            command_line="conhost.exe 0x4",
+            parent_pid=stale_parent,
+            username="SYSTEM",
+        )
+        child_proc = state_manager.get_process(dc_system.hostname, child_pid)
+
+        assert child_proc is not None
+        assert child_proc.parent_pid != stale_parent
+        assert child_proc.parent_pid == pids["services"]
+
+    def test_long_window_stale_parent_churn_does_not_crash(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Multi-week stale parent churn should repair parents instead of raising StateError."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        logon_id = ag.generate_logon(user, win_system, start, logon_type=2)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+        stale_parent = session.explorer_pid
+
+        for day in range(1, 17):
+            event_time = start + timedelta(days=day)
+            state_manager.end_process(win_system.hostname, stale_parent)
+            session.explorer_pid = stale_parent
+            child_pid = ag.generate_process(
+                user,
+                win_system,
+                event_time,
+                logon_id,
+                r"C:\Windows\System32\ipconfig.exe",
+                "ipconfig.exe /all",
+                parent_pid=stale_parent,
+            )
+            child_proc = state_manager.get_process(win_system.hostname, child_pid)
+            assert child_proc is not None
+            assert child_proc.parent_pid != stale_parent
+            assert state_manager.get_process(win_system.hostname, child_proc.parent_pid) is not None
+            stale_parent = child_pid
+
     def test_top_level_browser_reuses_existing_session_browser(
         self, state_manager, mock_emitters, win_system, user
     ):
