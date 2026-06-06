@@ -8958,6 +8958,19 @@ class ActivityGenerator:
             parent_pid=parent_pid,
             process_username=process_username,
         )
+        parent_pid = self._repair_process_parent_pid(
+            system=system,
+            time=time,
+            logon_id=process_logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
+        repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        if repaired_parent is not None and time <= repaired_parent.start_time:
+            time = repaired_parent.start_time + timedelta(milliseconds=50)
+        self.state_manager.set_current_time(time)
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
         # Phase 1: Allocate IDs from StateManager
@@ -13521,6 +13534,23 @@ class ActivityGenerator:
         if singleton_service_pid is not None:
             return singleton_service_pid
 
+        parent_pid = self._repair_process_parent_pid(
+            system=system,
+            time=time,
+            logon_id={
+                "SYSTEM": "0x3e7",
+                "LOCAL SERVICE": "0x3e5",
+                "NETWORK SERVICE": "0x3e4",
+            }.get(username, "0x3e7"),
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            process_username=username,
+        )
+        repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        if repaired_parent is not None and time <= repaired_parent.start_time:
+            time = repaired_parent.start_time + timedelta(milliseconds=50)
+        self.state_manager.set_current_time(time)
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
         pid = self.state_manager.create_process(
             system=system.hostname,
@@ -18822,6 +18852,181 @@ class ActivityGenerator:
         proc = self.state_manager.get_process(system.hostname, pid)
         return proc is not None and proc.start_time <= time
 
+    def _is_valid_process_parent_at(
+        self,
+        *,
+        system: System,
+        parent_pid: int,
+        time: datetime,
+    ) -> bool:
+        """Return whether a PID can be passed to StateManager.create_process()."""
+        if parent_pid == 0:
+            return True
+        if parent_pid == 4 and _get_os_category(system.os) == "windows":
+            return True
+        return self._is_pid_active_at(system, parent_pid, time)
+
+    def _prune_user_process_history(
+        self,
+        *,
+        system: System,
+        username: str,
+        time: datetime,
+        logon_id: str = "",
+    ) -> list[tuple[int, str]]:
+        """Drop ended process PIDs from recent parent-selection history."""
+        key = (system.hostname, username)
+        history = self._user_process_history.get(key, [])
+        if not history:
+            return []
+
+        os_category = _get_os_category(system.os)
+        pruned = [
+            (pid, image)
+            for pid, image in history
+            if self._is_pid_active_at(system, pid, time)
+            and self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=pid,
+                logon_id=logon_id,
+                os_category=os_category,
+            )
+        ]
+        self._user_process_history[key] = pruned[-10:]
+        return self._user_process_history[key]
+
+    def _windows_system_parent_fallback(self, system: System, time: datetime) -> int:
+        """Return a live Windows service ancestry fallback for system processes."""
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("services", "svchost_netsvcs", "svchost_dcom", "wininit"):
+            pid = sys_pids.get(role)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        return 4
+
+    def _linux_system_parent_fallback(self, system: System, time: datetime) -> int:
+        """Return a live Linux service ancestry fallback for system processes."""
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("systemd", "init", "sshd", "bash"):
+            pid = sys_pids.get(role)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        return self._linux_anchor_pid(system, time)
+
+    def _repair_process_parent_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int:
+        """Resolve a live parent PID before process state allocation."""
+        os_category = _get_os_category(system.os)
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        user_context = process_username not in _SYSTEM_ACCOUNTS and not process_username.endswith(
+            "$"
+        )
+
+        if os_category == "windows":
+            if user_context:
+                repair_user = self._user_model_for_username(process_username)
+                if self._is_windows_same_exe_gui_child(process_name, command_line):
+                    same_exe_parent = self._windows_same_exe_gui_parent_pid(
+                        system=system,
+                        user=repair_user,
+                        time=time,
+                        logon_id=logon_id,
+                        process_name=process_name,
+                        parent_pid=parent_pid,
+                        process_username=process_username,
+                    )
+                    if (
+                        same_exe_parent is not None
+                        and self.state_manager.get_process(system.hostname, same_exe_parent)
+                        is not None
+                    ):
+                        return same_exe_parent
+                if self._is_valid_process_parent_at(
+                    system=system,
+                    parent_pid=parent_pid,
+                    time=time,
+                ):
+                    return parent_pid
+                if process_exe in self._WINDOWS_GUI_APPS or process_exe == "explorer.exe":
+                    explorer_pid = self._ensure_session_explorer_pid(
+                        system,
+                        repair_user,
+                        time,
+                        logon_id,
+                    )
+                    if explorer_pid is not None and self._is_valid_process_parent_at(
+                        system=system,
+                        parent_pid=explorer_pid,
+                        time=time,
+                    ):
+                        return explorer_pid
+                resolved = self._resolve_parent(
+                    system,
+                    repair_user,
+                    time,
+                    logon_id,
+                    process_name,
+                    command_line,
+                )
+                if self._is_valid_process_parent_at(
+                    system=system,
+                    parent_pid=resolved,
+                    time=time,
+                ):
+                    return resolved
+            if self._is_valid_process_parent_at(system=system, parent_pid=parent_pid, time=time):
+                return parent_pid
+            return self._windows_system_parent_fallback(system, time)
+
+        if user_context:
+            repair_user = self._user_model_for_username(process_username)
+            materialized_parent = self._materialize_visible_linux_shell_parent_for_child(
+                system=system,
+                time=time,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                process_username=process_username,
+            )
+            if materialized_parent != parent_pid and self._is_valid_process_parent_at(
+                system=system, parent_pid=materialized_parent, time=time
+            ):
+                return materialized_parent
+            if (
+                materialized_parent != parent_pid
+                and self.state_manager.get_process(system.hostname, materialized_parent) is not None
+            ):
+                return materialized_parent
+            parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+            if parent_proc is not None and ensure_utc(parent_proc.start_time) > ensure_utc(time):
+                return parent_pid
+            if self._is_valid_process_parent_at(system=system, parent_pid=parent_pid, time=time):
+                return parent_pid
+            session_shell = self._active_session_shell_pid(system, repair_user, time, logon_id)
+            if session_shell is not None:
+                return session_shell
+            resolved = self._resolve_parent(
+                system,
+                repair_user,
+                time,
+                logon_id,
+                process_name,
+                command_line,
+            )
+            if self._is_valid_process_parent_at(system=system, parent_pid=resolved, time=time):
+                return resolved
+        if self._is_valid_process_parent_at(system=system, parent_pid=parent_pid, time=time):
+            return parent_pid
+        return self._linux_system_parent_fallback(system, time)
+
     def _lookup_parent_image(self, hostname: str, parent_pid: int) -> str:
         """Look up parent process image from StateManager, with fallback."""
         proc = self.state_manager.get_process(hostname, parent_pid)
@@ -19031,8 +19236,12 @@ class ActivityGenerator:
         rng = _get_rng()
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         os_cat = _get_os_category(system.os)
-        key = (system.hostname, user.username)
-        history = self._user_process_history.get(key, [])
+        history = self._prune_user_process_history(
+            system=system,
+            username=user.username,
+            time=time or self.state_manager.state.current_time or datetime.now(UTC),
+            logon_id=logon_id,
+        )
         # Filter history to only include still-running processes
         alive_history = []
         for pid, name in history:
@@ -19254,8 +19463,12 @@ class ActivityGenerator:
         if is_network_logon:
             if remote_wrapper_pid is not None:
                 return remote_wrapper_pid
-            key = (system.hostname, user.username)
-            history = self._user_process_history.get(key, [])
+            history = self._prune_user_process_history(
+                system=system,
+                username=user.username,
+                time=time,
+                logon_id=logon_id,
+            )
             remote_wrappers = []
             shells = []
             for pid, name in history:
@@ -19370,8 +19583,12 @@ class ActivityGenerator:
             return self._select_parent_pid(system, user, process_name, time=time, logon_id=logon_id)
 
         # Check alive_history for a matching parent
-        key = (system.hostname, user.username)
-        history = self._user_process_history.get(key, [])
+        history = self._prune_user_process_history(
+            system=system,
+            username=user.username,
+            time=time,
+            logon_id=logon_id,
+        )
         alive_parents = []
         for pid, name in history:
             if not self._is_pid_active_at(system, pid, time):

@@ -924,6 +924,73 @@ class TestProcessManagement:
         result = sm.end_process("WS-01", 999)
         assert result is False
 
+    def test_end_process_clears_active_session_process_references(self):
+        """Ended processes should not remain as live session parent pointers."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        logon_id = sm.create_session("jdoe", "WS-01", 2, "192.168.1.1")
+        session = sm.get_session(logon_id)
+        assert session is not None
+
+        winlogon_pid = sm.create_process(
+            "WS-01",
+            4,
+            r"C:\Windows\System32\winlogon.exe",
+            "winlogon.exe",
+            "SYSTEM",
+            "System",
+            logon_id,
+        )
+        explorer_pid = sm.create_process(
+            "WS-01",
+            winlogon_pid,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            "jdoe",
+            "Medium",
+            logon_id,
+        )
+        shell_pid = sm.create_process(
+            "WS-01",
+            explorer_pid,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe",
+            "jdoe",
+            "Medium",
+            logon_id,
+        )
+        transport_pid = sm.create_process(
+            "WS-01",
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "SYSTEM",
+            "System",
+            logon_id,
+        )
+        explorer_object_id = sm.get_process_object_id("WS-01", explorer_pid)
+
+        session.session_winlogon_pid = winlogon_pid
+        session.process_tree_root = winlogon_pid
+        session.explorer_pid = explorer_pid
+        session.session_shell_pid = shell_pid
+        session.transport_pid = transport_pid
+
+        assert sm.end_process("WS-01", explorer_pid) is True
+        assert session.explorer_pid is None
+        assert sm.get_process_object_id("WS-01", explorer_pid) == explorer_object_id
+
+        assert sm.end_process("WS-01", winlogon_pid) is True
+        assert session.session_winlogon_pid is None
+        assert session.process_tree_root is None
+
+        assert sm.end_process("WS-01", shell_pid) is True
+        assert session.session_shell_pid is None
+
+        assert sm.end_process("WS-01", transport_pid) is True
+        assert session.transport_pid is None
+
     def test_update_process_activity_time_keeps_latest(self):
         """Process activity marker should track the latest dependent event."""
         sm = StateManager()
