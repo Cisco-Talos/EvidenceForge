@@ -6,6 +6,19 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.3.2 (2026-06-06)
+
+This patch release fixes a long-window Windows process lifecycle regression
+found after v1.3.1. The branch contains only a `fix:` commit since v1.3.1, so
+the project moves from `1.3.1` to `1.3.2`.
+
+**Windows process lifecycle stability**
+
+- Cleared stale active-session process pointers when referenced processes end,
+  repaired stale user and system parent PIDs before strict process allocation,
+  and added regression coverage for multi-week Windows parent churn
+  (`60594ee4`).
+
 ## v1.3.1 (2026-06-06)
 
 This patch release fixes several generation edge cases reported from class
