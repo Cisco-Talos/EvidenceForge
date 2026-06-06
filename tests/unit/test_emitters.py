@@ -103,6 +103,42 @@ class TestWindowsEventEmitter:
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
+    def test_spool_database_uses_local_runtime_directory(self, format_def, tmp_path, monkeypatch):
+        """Windows Security spool state should stay out of the final output directory."""
+        output_dir = tmp_path / "onedrive-like-output"
+        spool_dir = tmp_path / "local-spool"
+        monkeypatch.setenv("EFORGE_SPOOL_DIR", str(spool_dir))
+        emitter = WindowsEventEmitter(format_def, output_dir, buffer_size=1)
+
+        emitter.emit_event(
+            {
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+                "Computer": "WIN-TEST-01.corp.local",
+                "Channel": "Security",
+                "Level": 0,
+                "EventRecordID": 12345,
+                "ExecutionProcessID": 4,
+                "ExecutionThreadID": 100,
+                "TargetUserName": "jsmith",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": "0x3e7abc",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "192.168.1.100",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+        )
+
+        assert emitter._spool_path is not None
+        assert emitter._spool_path.parent == spool_dir.resolve()
+        assert not list(output_dir.glob(".windows_event_spool_*.sqlite3"))
+
+        emitter.close()
+
+        assert not list(spool_dir.glob(".windows_event_spool_*.sqlite3"))
+
     def test_windows_pid_hex_rejects_oversized_decimal_pid(self) -> None:
         """Oversized decimal PID text should not raise and should remain unchanged."""
         oversized_pid = "9" * 5000

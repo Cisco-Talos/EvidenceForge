@@ -2362,6 +2362,38 @@ def _align_tcp_network_payload_with_history(
     return True
 
 
+def _preserve_explicit_tcp_payload_overrides(
+    net: NetworkContext,
+    *,
+    explicit_orig_bytes: int | None,
+    explicit_resp_bytes: int | None,
+    rng: random.Random,
+) -> bool:
+    """Re-apply explicit author payload intent after protocol shaping."""
+    if net.protocol != "tcp" or net.conn_state != "SF":
+        return False
+
+    changed = False
+    if explicit_orig_bytes is not None and explicit_orig_bytes > (net.orig_bytes or 0):
+        net.orig_bytes = explicit_orig_bytes
+        changed = True
+    if explicit_resp_bytes is not None and explicit_resp_bytes > (net.resp_bytes or 0):
+        net.resp_bytes = explicit_resp_bytes
+        changed = True
+    if not changed:
+        return False
+
+    net.orig_pkts, net.resp_pkts = _tcp_packet_counts_from_payload_and_history(
+        net.orig_bytes,
+        net.resp_bytes,
+        net.history,
+        rng,
+    )
+    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
+    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
+    return True
+
+
 def _tcp_ip_byte_count(
     payload_bytes: int | None,
     packet_count: int,
@@ -4637,7 +4669,10 @@ class ActivityGenerator:
 
         wanted_src = src_ip.removeprefix("::ffff:")
         wanted_dst = dst_ip.removeprefix("::ffff:")
+        terminal_states = getattr(self.state_manager, "_TERMINAL_CONN_STATES", frozenset())
         for connection in self.state_manager.state.open_connections.values():
+            if connection.state in terminal_states:
+                continue
             if (
                 connection.src_ip.removeprefix("::ffff:") != wanted_src
                 or connection.src_port != src_port
@@ -10280,6 +10315,7 @@ class ActivityGenerator:
         preserve_dst_ip: bool = False,
         preserve_http_outcome: bool = False,
         suppress_application_side_effects: bool = False,
+        preserve_explicit_payload: bool = False,
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
     ) -> str:
@@ -10345,6 +10381,7 @@ class ActivityGenerator:
             preserve_dst_ip=preserve_dst_ip,
             preserve_http_outcome=preserve_http_outcome,
             suppress_application_side_effects=suppress_application_side_effects,
+            preserve_explicit_payload=preserve_explicit_payload,
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
         )
@@ -10364,6 +10401,8 @@ class ActivityGenerator:
         duration = request.duration
         orig_bytes = request.orig_bytes
         resp_bytes = request.resp_bytes
+        explicit_orig_bytes = request.orig_bytes
+        explicit_resp_bytes = request.resp_bytes
         src_port = request.src_port
         emit_dns = request.emit_dns
         pid = request.pid
@@ -10384,6 +10423,7 @@ class ActivityGenerator:
         preserve_dst_ip = request.preserve_dst_ip
         preserve_http_outcome = request.preserve_http_outcome
         suppress_application_side_effects = request.suppress_application_side_effects
+        preserve_explicit_payload = request.preserve_explicit_payload
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
 
@@ -12230,6 +12270,17 @@ class ActivityGenerator:
             )
 
         if _align_tcp_network_payload_with_history(event.network, rng):
+            self.state_manager.update_connection_bytes(
+                event.network.conn_id,
+                event.network.orig_bytes or 0,
+                event.network.resp_bytes or 0,
+            )
+        if preserve_explicit_payload and _preserve_explicit_tcp_payload_overrides(
+            event.network,
+            explicit_orig_bytes=explicit_orig_bytes,
+            explicit_resp_bytes=explicit_resp_bytes,
+            rng=rng,
+        ):
             self.state_manager.update_connection_bytes(
                 event.network.conn_id,
                 event.network.orig_bytes or 0,

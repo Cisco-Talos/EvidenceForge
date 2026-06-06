@@ -77,6 +77,188 @@ class TestScenarioValidator:
             for issue in issues
         )
 
+    def test_network_sensor_accepts_individual_zeek_formats(self):
+        """Sensor log_formats may narrow Zeek to concrete emitters."""
+        scenario = Scenario(
+            version="1.0",
+            name="test-zeek-sensor",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        primary_system="TEST-01",
+                    )
+                ],
+                systems=[
+                    System(
+                        hostname="TEST-01",
+                        ip="10.0.0.10",
+                        os="Windows 10",
+                        type="workstation",
+                    )
+                ],
+                network=NetworkConfig(
+                    segments=[
+                        NetworkSegment(
+                            name="workstations",
+                            cidr="10.0.0.0/24",
+                            systems=["TEST-01"],
+                            exposure="internal",
+                        )
+                    ],
+                    sensors=[
+                        NetworkSensor(
+                            type="network",
+                            name="sensor-1",
+                            monitoring_segments=["workstations"],
+                            log_formats=["zeek_conn"],
+                        )
+                    ],
+                ),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows_event_security"}, {"format": "zeek_conn"}],
+                destination="./output",
+                compression=False,
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert not any(issue.severity == "error" for issue in issues)
+        assert not any("uses individual format" in issue.message for issue in issues)
+
+    def test_incompatible_explicit_connection_bytes_warn(self):
+        """Failed/handshake-only states should warn when authors set payload bytes."""
+        scenario = Scenario(
+            version="1.0",
+            name="test-byte-warning",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        primary_system="TEST-01",
+                    )
+                ],
+                systems=[
+                    System(
+                        hostname="TEST-01",
+                        ip="10.0.0.10",
+                        os="Windows 10",
+                        type="workstation",
+                    )
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-byte-warning",
+                    time="+5m",
+                    actor="testuser",
+                    system="TEST-01",
+                    activity="Failed exfil flow",
+                    events=[
+                        {
+                            "type": "connection",
+                            "dst_ip": "198.51.100.10",
+                            "conn_state": "S0",
+                            "orig_bytes": 50_000_000,
+                        }
+                    ],
+                )
+            ],
+            output=OutputSpec(
+                logs=[{"format": "windows_event_security"}, {"format": "zeek_conn"}],
+                destination="./output",
+                compression=False,
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "warning"
+            and issue.field_path == "storyline.0.events.0.conn_state"
+            and "byte overrides" in issue.message
+            for issue in issues
+        )
+
+    def test_missing_process_parent_ref_warns(self):
+        """Explicit parent refs should warn when they cannot be resolved."""
+        scenario = Scenario(
+            version="1.0",
+            name="test-parent-ref-warning",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        primary_system="TEST-01",
+                    )
+                ],
+                systems=[
+                    System(
+                        hostname="TEST-01",
+                        ip="10.0.0.10",
+                        os="Windows 10",
+                        type="workstation",
+                    )
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-parent-ref-warning",
+                    time="+5m",
+                    actor="testuser",
+                    system="TEST-01",
+                    activity="Launch child without parent ref",
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "powershell.exe",
+                            "parent_ref": "missing-loader",
+                        }
+                    ],
+                )
+            ],
+            output=OutputSpec(
+                logs=[{"format": "windows_event_security"}],
+                destination="./output",
+                compression=False,
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "warning"
+            and issue.field_path == "storyline.0.events.0.parent_ref"
+            and "missing-loader" in issue.message
+            for issue in issues
+        )
+
     def test_invalid_persona_reference(self):
         """User referencing non-existent persona should error."""
         scenario = Scenario(

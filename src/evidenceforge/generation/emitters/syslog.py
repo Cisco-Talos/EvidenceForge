@@ -403,6 +403,10 @@ class SyslogEmitter(HostMultiplexEmitter):
         """Close emitter after normalizing source-native syslog presentation state."""
         if self.threaded:
             self.stop_thread()
+        if self.output_target == OutputTarget.SOF_ELK:
+            self._normalize_sof_elk_buffers()
+            self.flush(force=True)
+            return
         self._normalize_logind_session_ids()
         self._backfill_missing_logind_pam_openers()
         self._normalize_pam_uid_collisions()
@@ -410,6 +414,19 @@ class SyslogEmitter(HostMultiplexEmitter):
         self._normalize_kernel_uptime_stamps()
         self._normalize_sshd_child_pids()
         self.flush(force=True)
+
+    def _normalize_sof_elk_buffers(self) -> None:
+        """Normalize SOF-ELK RFC3164 syslog rows with one final sort pass."""
+        with self._writers_lock:
+            for host_key, rows in self._sorted_lines_by_host().items():
+                if not rows:
+                    continue
+                normalized = [line for _year, _sort_key, _route_key, line in rows]
+                normalized = self._normalize_logind_session_ids_for_lines(normalized, host_key)
+                normalized = self._normalize_sudo_session_lifecycles_for_lines(normalized)
+                normalized = self._normalize_kernel_uptime_stamps_for_lines(normalized)
+                normalized = self._normalize_sshd_child_pids_for_lines(normalized, host_key)
+                self._replace_buffers_by_sorted_rows(rows, normalized)
 
     def _sorted_lines_by_host(self) -> dict[str, list[tuple[int, tuple[Any, ...], str, str]]]:
         """Return buffered rows grouped by host and sorted in final render order."""
