@@ -19,3 +19,8 @@ class EvaluationContext:
     # from GROUND_TRUTH.json. Lets the causality pillar match spillage events
     # without re-running synthesis, anchored to the actual emitted time.
     spillage_ground_truth: dict[str, dict] | None = None
+    # storyline_id -> {"records": [{"value": rendered_payload, "expected_sources": [...]}]},
+    # from GROUND_TRUTH.json (kind:"adversarial_payload"). Lets the causality pillar
+    # verify each labeled payload landed in the expected source without re-running
+    # synthesis (matched against the source's raw text so a CRLF split still matches).
+    adversarial_payload_ground_truth: dict[str, dict] | None = None

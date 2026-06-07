@@ -142,13 +142,18 @@ class ValidationIssue:
 class ScenarioValidator:
     """Validates cross-references and logical consistency in scenarios."""
 
-    def __init__(self, scenario: Scenario):
+    def __init__(self, scenario: Scenario, oob_hosts: tuple[str, ...] = ()):
         """Initialize validator with a scenario.
 
         Args:
             scenario: The scenario to validate
+            oob_hosts: Operator-registered live-callback host(s) (from
+                ``eforge generate --oob-host``) accepted by adversarial_payload literal
+                value safety checks, so a fuzzer payload pointing at the operator's
+                out-of-band server validates instead of being rejected as a real host.
         """
         self.scenario = scenario
+        self.oob_hosts = tuple(oob_hosts)
         self.issues: list[ValidationIssue] = []
 
         # Build lookup sets for fast reference checking
@@ -201,6 +206,7 @@ class ScenarioValidator:
         self._validate_storyline_format_coverage()
         self._validate_storyline_os_plausibility()
         self._validate_spillage_events()
+        self._validate_adversarial_payload_events()
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
@@ -1352,6 +1358,192 @@ class ScenarioValidator:
                                 suggestion=(
                                     "Mark the value with a poison marker (e.g. "
                                     "EvidenceForgeFake) or use a vendor-published fake"
+                                ),
+                            )
+                        )
+
+    def _validate_adversarial_payload_events(self) -> None:
+        """Validate adversarial_payload events: surface/OS fit, family↔surface, safety.
+
+        Mirrors :meth:`_validate_spillage_events`, with one extra gate: a named
+        family only models on the surfaces it declares, so a family/surface mismatch
+        is rejected here rather than raising mid-generation.
+        """
+        if not self.scenario.storyline:
+            return
+        if not any(
+            spec.type == "adversarial_payload"
+            for ev in self.scenario.storyline
+            for spec in ev.events
+        ):
+            return  # nothing to do — avoid importing the generator below
+
+        from evidenceforge.config.payload_families import family_names, get_family
+        from evidenceforge.generation.adversarial_payload import (
+            HTTP_SURFACES,
+            LINUX_ONLY_SURFACES,
+            SURFACE_FORMATS,
+            AdversarialPayloadSafetyError,
+            check_payload_safety,
+        )
+        from evidenceforge.generation.spillage import (
+            choose_web_spillage_scheme,
+            web_server_supported_schemes,
+        )
+
+        known_families = family_names()
+        expanded_formats = self._get_expanded_formats()
+        # http_* surfaces leak into a web server's access log; one supporting a
+        # compatible scheme must exist.
+        web_servers = [
+            s for s in self.scenario.environment.systems if web_server_supported_schemes(s)
+        ]
+        has_web_server = bool(web_servers)
+
+        for idx, event in enumerate(self.scenario.storyline):
+            system = self._get_system(event.system)
+            os_cat = _get_os_category(system.os) if system else "unknown"
+            for spec_idx, spec in enumerate(event.events):
+                if spec.type != "adversarial_payload":
+                    continue
+                field_path = f"storyline.{idx}.events.{spec_idx}"
+
+                # syslog_message is Linux-modeled; on Windows the payload would be
+                # ground-truthed but never emitted — a phantom positive.
+                if os_cat == "windows" and spec.surface in LINUX_ONLY_SURFACES:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Adversarial payload surface '{spec.surface}' is "
+                                f"Linux-modeled but system '{event.system}' is windows; the "
+                                "payload would not be emitted"
+                            ),
+                            suggestion="Target a Linux host for this payload surface",
+                        )
+                    )
+
+                # The payload is lost (but still ground-truthed) if the surface's
+                # output format is not collected — phantom positive.
+                required_fmt = SURFACE_FORMATS.get(spec.surface)
+                if required_fmt and required_fmt not in expanded_formats:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Adversarial payload surface '{spec.surface}' needs "
+                                f"output format '{required_fmt}' but it is not in output.logs; the "
+                                "payload would not be emitted"
+                            ),
+                            suggestion=f"Add '{required_fmt}' to output.logs",
+                        )
+                    )
+
+                # An http_* surface needs a web_server-role host to record the request.
+                if spec.surface in HTTP_SURFACES and not has_web_server:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Adversarial payload surface '{spec.surface}' needs "
+                                "a host with role 'web_server' to record the request, but none "
+                                "exists; the payload would not be emitted"
+                            ),
+                            suggestion="Add a system with roles: [web_server] to the environment",
+                        )
+                    )
+                elif spec.surface in HTTP_SURFACES:
+                    # A web server exists, but it must serve the requested (or any
+                    # auto-selectable) scheme, else the payload is labeled but never
+                    # emitted — a phantom positive.
+                    compatible_targets = [
+                        s for s in web_servers if choose_web_spillage_scheme(s, spec.scheme)
+                    ]
+                    if not compatible_targets:
+                        scheme_text = spec.scheme or "auto-selected http/https"
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] Adversarial payload surface '{spec.surface}' "
+                                    f"needs a web_server host compatible with scheme "
+                                    f"'{scheme_text}', but none exists; the payload would not be "
+                                    "emitted"
+                                ),
+                                suggestion=(
+                                    "Add a compatible service marker such as 'http', 'https', "
+                                    "or both to a roles: [web_server] host"
+                                ),
+                            )
+                        )
+
+                if spec.family is not None and spec.family not in known_families:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Unknown adversarial payload family '{spec.family}' "
+                                f"(known: {sorted(known_families)})"
+                            ),
+                            suggestion=(
+                                "Use a known family or add one to the payload_families overlay"
+                            ),
+                        )
+                    )
+                elif spec.family is not None:
+                    # A family only models on the surfaces it declares; a mismatch
+                    # would raise AdversarialPayloadSafetyError mid-generation.
+                    fam = get_family(spec.family) or {}
+                    fam_surfaces = set(fam.get("surfaces") or ())
+                    if spec.surface not in fam_surfaces:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] Adversarial payload family '{spec.family}' does "
+                                    f"not model surface '{spec.surface}' "
+                                    f"(declared: {sorted(fam_surfaces)})"
+                                ),
+                                suggestion=(
+                                    "Choose a surface the family declares, or add it to the "
+                                    "family's 'surfaces' in the payload_families overlay"
+                                ),
+                            )
+                        )
+                    if fam.get("proposed"):
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] Adversarial payload family '{spec.family}' is "
+                                    "marked 'proposed' (pending maintainer sign-off); it may "
+                                    "change or be removed"
+                                ),
+                                suggestion=(
+                                    "Use a locked family, or accept the proposed family knowingly"
+                                ),
+                            )
+                        )
+
+                if spec.value is not None:
+                    try:
+                        check_payload_safety(spec.value, family=None, oob_hosts=self.oob_hosts)
+                    except AdversarialPayloadSafetyError as exc:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=f"[{event.id}] Unsafe adversarial payload value: {exc}",
+                                suggestion=(
+                                    "Mark every line with a poison marker (e.g. EFORGE_TEST) and "
+                                    "point any host at an RFC-reserved domain (e.g. .invalid)"
                                 ),
                             )
                         )

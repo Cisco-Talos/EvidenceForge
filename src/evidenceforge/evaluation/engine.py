@@ -191,6 +191,41 @@ class EvaluationEngine:
                 entry["time"] = rec.time.astimezone(UTC)
         return result
 
+    def _load_adversarial_payload_ground_truth(self) -> dict[str, dict]:
+        """Load emitted adversarial-payload labels from GROUND_TRUTH.json, keyed by storyline id.
+
+        Returns ``{storyline_id: {"records": [{"value": rendered, "expected_sources":
+        [...]}], "time": datetime, "target_system": fqdn}}``. The causality pillar
+        verifies each labeled payload landed in an expected source's text (matched
+        against the source's raw lines so a CRLF split still counts), without
+        re-running synthesis.
+        """
+        from evidenceforge.events.ground_truth import load_ground_truth_document
+
+        result: dict[str, dict] = {}
+        document = load_ground_truth_document(self.output_dir, self.scenario)
+        if document is None:
+            return result
+        for rec in document.events:
+            if rec.kind != "adversarial_payload" or not rec.emitted:
+                continue
+            sid = rec.storyline_id
+            value = rec.attributes.rendered_value or rec.attributes.value
+            if not (sid and value):
+                continue
+            entry = result.setdefault(sid, {"records": [], "time": None})
+            entry["records"].append(
+                {
+                    "value": value,
+                    "expected_sources": list(rec.attributes.expected_sources or ()),
+                }
+            )
+            if rec.attributes.target_system and not entry.get("target_system"):
+                entry["target_system"] = rec.attributes.target_system
+            if entry["time"] is None:
+                entry["time"] = rec.time.astimezone(UTC)
+        return result
+
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
         # 1. Discover and parse all log files
@@ -211,6 +246,7 @@ class EvaluationEngine:
         context = EvaluationContext(
             observation_manifest=observation_manifest,
             spillage_ground_truth=self._load_spillage_ground_truth(),
+            adversarial_payload_ground_truth=self._load_adversarial_payload_ground_truth(),
         )
 
         # 2. Run each available pillar scorer
