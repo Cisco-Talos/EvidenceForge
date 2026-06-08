@@ -1100,6 +1100,50 @@ class TestWindowsEventEmitter:
         assert child["TimeCreated"] == parent_time + timedelta(milliseconds=1)
         emitter._cleanup_spool_unlocked()
 
+    def test_spooled_process_create_parent_chain_shifts_in_one_pass(
+        self,
+        format_def,
+        temp_output,
+    ):
+        """Spooled multi-level Security 4688 chains should propagate parent ordering once."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        root_time = datetime(2024, 1, 15, 10, 0, 2, tzinfo=UTC)
+        parent_time = root_time - timedelta(seconds=1)
+        child_time = root_time - timedelta(seconds=2)
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x2000",
+                "NewProcessId": "0x3000",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": parent_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1000",
+                "NewProcessId": "0x2000",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": root_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x4",
+                "NewProcessId": "0x1000",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_creates_after_visible_parent_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        parent = next(event for event in events if event["NewProcessId"] == "0x2000")
+        child = next(event for event in events if event["NewProcessId"] == "0x3000")
+        assert parent["TimeCreated"] == root_time + timedelta(milliseconds=1)
+        assert child["TimeCreated"] == root_time + timedelta(milliseconds=2)
+        emitter._cleanup_spool_unlocked()
+
     def test_spooled_process_create_parent_cycle_is_not_shifted_forever(
         self, format_def, temp_output
     ):
@@ -1417,21 +1461,27 @@ class TestWindowsEventEmitter:
         assert "__dt__:not-a-date" in content
         assert content.count("<EventID>4624</EventID>") == 1
 
-    def test_windows_spooled_flush_uses_streaming_fixups(self, format_def, temp_output):
-        """Final spooled rendering should not fall back to list-based event fixups."""
+    def test_windows_spooled_flush_uses_single_decoded_repair_pass(self, format_def, temp_output):
+        """Final spooled rendering should avoid repeated per-fixup spool scans."""
 
         class GuardedWindowsEventEmitter(WindowsEventEmitter):
-            def _shift_process_creates_after_visible_parent(self) -> None:
-                raise AssertionError("spooled flush must not materialize list-based create fixups")
+            decoded_spool_loads = 0
 
-            def _shift_process_terminations_after_dependents(self) -> None:
-                raise AssertionError("spooled flush must not materialize list-based process fixups")
+            def _load_spooled_rows_unlocked(self, *, event_ids=None):
+                self.decoded_spool_loads += 1
+                return super()._load_spooled_rows_unlocked(event_ids=event_ids)
 
-            def _shift_logoffs_after_dependents(self) -> None:
-                raise AssertionError("spooled flush must not materialize list-based logoff fixups")
+            def _shift_spooled_process_creates_after_visible_parent_unlocked(self) -> None:
+                raise AssertionError("final flush must use consolidated spooled repair")
 
-            def _suppress_duplicate_lock_unlock_transitions(self) -> None:
-                raise AssertionError("spooled flush must not materialize list-based lock fixups")
+            def _shift_spooled_process_terminations_after_dependents_unlocked(self) -> None:
+                raise AssertionError("final flush must use consolidated spooled repair")
+
+            def _shift_spooled_logoffs_after_dependents_unlocked(self) -> None:
+                raise AssertionError("final flush must use consolidated spooled repair")
+
+            def _suppress_spooled_duplicate_lock_unlock_transitions_unlocked(self) -> None:
+                raise AssertionError("final flush must use consolidated spooled repair")
 
         emitter = GuardedWindowsEventEmitter(format_def, temp_output, buffer_size=1)
         for idx in range(3):
@@ -1459,6 +1509,54 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert content.count("<EventID>4624</EventID>") == 3
+        assert emitter.decoded_spool_loads == 1
+
+    def test_windows_spooled_flush_decodes_rows_linearly(self, format_def, tmp_path):
+        """Decoded spool work should grow with row count, not repair-pass count."""
+
+        class CountingWindowsEventEmitter(WindowsEventEmitter):
+            decoded_spool_rows = 0
+
+            def _load_spooled_rows_unlocked(self, *, event_ids=None):
+                rows, original_payloads = super()._load_spooled_rows_unlocked(event_ids=event_ids)
+                self.decoded_spool_rows += len(rows)
+                return rows, original_payloads
+
+            def _iter_spooled_rows_unlocked(self, *, ordered=False):
+                raise AssertionError("final flush must not run iterative decoded row scans")
+
+        def _run_spooled_flush(row_count: int) -> int:
+            emitter = CountingWindowsEventEmitter(
+                format_def,
+                tmp_path / f"windows_events_{row_count}.xml",
+                buffer_size=1,
+            )
+            base_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+            for idx in range(row_count):
+                emitter.emit_event(
+                    {
+                        "EventID": 4624,
+                        "TimeCreated": base_time + timedelta(milliseconds=idx),
+                        "Computer": "WIN-TEST-01",
+                        "Channel": "Security",
+                        "Level": 0,
+                        "ExecutionProcessID": 4,
+                        "ExecutionThreadID": 100,
+                        "TargetUserName": f"user{idx}",
+                        "TargetDomainName": "CORP",
+                        "TargetLogonId": f"0x{idx:06x}",
+                        "LogonType": 2,
+                        "WorkstationName": "WIN-TEST-01",
+                        "IpAddress": "192.168.1.100",
+                        "LogonProcessName": "User32",
+                        "AuthenticationPackageName": "Negotiate",
+                    }
+                )
+            emitter.close()
+            return emitter.decoded_spool_rows
+
+        assert _run_spooled_flush(64) == 64
+        assert _run_spooled_flush(128) == 128
 
     def test_threaded_windows_barrier_spools_buffer_to_bound_memory(self, format_def, temp_output):
         """Threaded Windows barrier flush should release in-memory event dicts."""

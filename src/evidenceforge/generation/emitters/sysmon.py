@@ -1943,28 +1943,33 @@ class SysmonEventEmitter(LogEmitter):
                 parent_key = parent_keys.get(current)
                 current = parent_key if parent_key in process_create_events else None
 
-        max_passes = len(process_create_events)
-        for _ in range(max_passes):
-            changed = False
-            process_create_times: dict[tuple[str, str], datetime] = {}
-            for key, event in process_create_events.items():
-                ts = event.get("TimeCreated")
-                if isinstance(ts, datetime):
-                    process_create_times[key] = ts
+        resolved_keys: set[tuple[str, str]] = set()
+        visiting_keys: set[tuple[str, str]] = set()
 
-            for key, event in process_create_events.items():
-                if key in cyclic_keys:
-                    continue
-                ts = event.get("TimeCreated")
-                parent_key = parent_keys.get(key)
-                if not isinstance(ts, datetime) or parent_key is None or parent_key in cyclic_keys:
-                    continue
-                parent_time = process_create_times.get(parent_key)
-                if parent_time is not None and ts <= parent_time:
+        def _resolve_parent_order(key: tuple[str, str]) -> None:
+            if key in resolved_keys or key in cyclic_keys or key in visiting_keys:
+                return
+            visiting_keys.add(key)
+            parent_key = parent_keys.get(key)
+            if parent_key is not None and parent_key in process_create_events:
+                _resolve_parent_order(parent_key)
+            visiting_keys.remove(key)
+
+            event = process_create_events[key]
+            ts = event.get("TimeCreated")
+            if (
+                isinstance(ts, datetime)
+                and parent_key is not None
+                and parent_key not in cyclic_keys
+            ):
+                parent_event = process_create_events.get(parent_key)
+                parent_time = parent_event.get("TimeCreated") if parent_event is not None else None
+                if isinstance(parent_time, datetime) and ts <= parent_time:
                     event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
-                    changed = True
-            if not changed:
-                break
+            resolved_keys.add(key)
+
+        for key in process_create_events:
+            _resolve_parent_order(key)
 
     def _sync_process_guids_to_event1_times(self) -> None:
         """Rewrite ProcessGuid references after final Event 1 timestamp shifts."""
