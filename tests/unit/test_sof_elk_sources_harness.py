@@ -39,12 +39,14 @@ from evidenceforge.external_parsers.sof_elk_sources import (
     SofElkSourceManifest,
     SofElkSourceSpec,
     StagedSourceLog,
+    _safe_stage_source,
     build_sof_elk_source_configs,
     stage_source_logs,
     validate_source_parsed_output,
 )
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
+    SofElkHarnessError,
     SofElkParserError,
 )
 
@@ -122,6 +124,41 @@ def test_stage_source_logs_preserves_windows_snare_year_subdirectories(tmp_path:
     assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
         Path("syslog/2026/win-01.example.test/windows_event_security_snare.log")
     }
+
+
+def test_stage_source_logs_rejects_symlinked_web_access_log(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_dir = source_root / "web-01.example.test"
+    source_dir.mkdir(parents=True)
+    outside_secret = tmp_path / "outside_secret.txt"
+    outside_secret.write_text("do not stage me\n", encoding="utf-8")
+    (source_dir / "web_access.log").symlink_to(outside_secret)
+
+    with pytest.raises(SofElkHarnessError, match="refusing to stage symlinked"):
+        stage_source_logs(source_root, tmp_path / "stage", WEB_ACCESS_SPEC)
+
+    staged_log = (
+        tmp_path / "stage" / "logstash" / "httpd" / "web-01.example.test" / "web_access.log"
+    )
+    assert not staged_log.exists()
+
+
+def test_safe_stage_source_rejects_source_resolving_outside_root(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "web_access.log").write_text(
+        '198.51.100.25 - - [15/Jun/2026:14:23:05 +0000] "GET /index.html HTTP/1.1" '
+        '200 512 "-" "Mozilla/5.0"\n',
+        encoding="utf-8",
+    )
+    source_root.mkdir()
+    (source_root / "web-01.example.test").symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(SofElkHarnessError, match="outside generated output root"):
+        _safe_stage_source(
+            source_root.resolve(), source_root / "web-01.example.test" / "web_access.log"
+        )
 
 
 def test_build_sof_elk_source_configs_requests_sof_elk_syslog_input(tmp_path: Path) -> None:

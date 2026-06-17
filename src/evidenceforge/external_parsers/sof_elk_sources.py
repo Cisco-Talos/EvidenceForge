@@ -282,14 +282,15 @@ def stage_source_logs(
     logs: list[StagedSourceLog] = []
     for source_name in spec.source_names:
         for source in sorted(source_root.rglob(source_name)):
+            safe_source = _safe_stage_source(source_root, source)
             sensor = _source_name(source_root, source)
-            source_year = _source_year(source) if spec.staged_directory == "syslog" else None
+            source_year = _source_year(safe_source) if spec.staged_directory == "syslog" else None
             if spec.staged_directory == "syslog" and source_year is not None:
                 destination = source_stage_root / str(source_year) / sensor / spec.staged_name
             else:
                 destination = source_stage_root / sensor / spec.staged_name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
+            shutil.copyfile(safe_source, destination)
             logs.append(
                 StagedSourceLog(
                     source=source,
@@ -693,6 +694,22 @@ def _update_scope_progress(
             "subtype_total": expected_by_subtype[scope],
         },
     )
+
+
+def _safe_stage_source(source_root: Path, source: Path) -> Path:
+    """Return a resolved source path that is safe to copy into parser staging."""
+    if source.is_symlink():
+        raise SofElkHarnessError(f"refusing to stage symlinked generated log file: {source}")
+
+    resolved = source.resolve(strict=True)
+    try:
+        resolved.relative_to(source_root)
+    except ValueError as exc:
+        raise SofElkHarnessError(
+            f"refusing to stage generated log file outside generated output root {source_root}: "
+            f"{source} -> {resolved}"
+        ) from exc
+    return resolved
 
 
 def _source_name(source_root: Path, source: Path) -> str:
