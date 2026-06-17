@@ -2935,6 +2935,30 @@ def _split_linux_pipeline(
     return list(_iter_linux_pipeline_stages(command, max_stages=max_stages))
 
 
+def _contains_unquoted_shell_pipe(command: str) -> bool:
+    """Return whether a shell command contains an unquoted pipe operator."""
+    quote: str | None = None
+    escaped = False
+    scan_limit = min(len(command), _LINUX_SHELL_MAX_SCAN_CHARS)
+    for char in command[:scan_limit]:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "|":
+            return True
+    return False
+
+
 def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[str]:
     """Yield bounded unquoted pipeline/control stages from a Linux shell command."""
     if max_stages <= 0:
@@ -8697,6 +8721,7 @@ class ActivityGenerator:
         suppress_command_file_effect: bool = False,
         allow_existing_browser_reuse: bool = True,
         allow_browser_launch_spacing: bool = True,
+        concurrency_group_id: str = "",
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -8723,6 +8748,7 @@ class ActivityGenerator:
             allow_browser_launch_spacing: Apply anti-burst spacing to top-level browser
                 launches. Causal connection-owner processes disable this so process
                 creation stays before the socket evidence they own.
+            concurrency_group_id: Explicit same-shell concurrency group for true pipelines.
 
         Returns:
             PID of the new process
@@ -8740,6 +8766,7 @@ class ActivityGenerator:
             suppress_command_file_effect=suppress_command_file_effect,
             allow_existing_browser_reuse=allow_existing_browser_reuse,
             allow_browser_launch_spacing=allow_browser_launch_spacing,
+            concurrency_group_id=concurrency_group_id,
         )
         return ProcessExecutionActionBundle(self, request).execute()
 
@@ -8759,6 +8786,7 @@ class ActivityGenerator:
         suppress_command_file_effect = request.suppress_command_file_effect
         allow_existing_browser_reuse = request.allow_existing_browser_reuse
         allow_browser_launch_spacing = request.allow_browser_launch_spacing
+        concurrency_group_id = request.concurrency_group_id
 
         self.state_manager.set_current_time(time)
         if _get_os_category(system.os) == "windows":
@@ -9031,6 +9059,7 @@ class ActivityGenerator:
                     parent_pid=parent_pid,
                     logon_type=process_logon_type,
                 ),
+                concurrency_group_id=concurrency_group_id,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
             storyline_origin=from_storyline,
@@ -13083,6 +13112,14 @@ class ActivityGenerator:
 
         shell_release_times: list[tuple[int, datetime, str]] = []
         base_process_time: datetime | None = None
+        concurrency_group_id = ""
+        if len(processes) > 1 and _contains_unquoted_shell_pipe(command):
+            pipeline_seed = _stable_seed(
+                "linux_shell_pipeline:"
+                f"{system.hostname}:{user.username}:{session.logon_id}:"
+                f"{time.isoformat()}:{command}"
+            )
+            concurrency_group_id = f"linux-shell-pipeline-{pipeline_seed:016x}"
         for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             if base_process_time is None:
@@ -13114,6 +13151,7 @@ class ActivityGenerator:
                 command_line=process_command_line,
                 parent_pid=parent_pid,
                 suppress_command_file_effect=True,
+                concurrency_group_id=concurrency_group_id,
             )
             running_proc = self.state_manager.get_process(system.hostname, pid)
             actual_process_start = (

@@ -693,6 +693,66 @@ def test_ecar_flow_connect_keeps_network_time_for_close_process_conflict() -> No
     assert "parent_image_path" not in rows[0]["properties"]
 
 
+def test_ecar_linux_shell_foreground_order_serializes_close_unrelated_commands() -> None:
+    """Same-shell commands without an explicit pipeline group should not overlap."""
+    sleep_create = {
+        "timestamp_ms": 1_000_000,
+        "id": "sleep-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "sleep-process",
+        "actorID": "bash-process",
+        "pid": 706031,
+        "ppid": 705932,
+        "principal": "root",
+        "properties": {
+            "image_path": "/usr/bin/sleep",
+            "command_line": "sleep 5",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    whoami_create = {
+        "timestamp_ms": 1_000_500,
+        "id": "whoami-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "whoami-process",
+        "actorID": "bash-process",
+        "pid": 706032,
+        "ppid": 705932,
+        "principal": "root",
+        "properties": {
+            "image_path": "/usr/bin/whoami",
+            "command_line": "whoami",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    sleep_terminate = {
+        "timestamp_ms": 1_005_000,
+        "id": "sleep-terminate",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "sleep-process",
+        "pid": 706031,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/sleep"},
+    }
+
+    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
+        [
+            json.dumps(sleep_create, separators=(",", ":")),
+            json.dumps(whoami_create, separators=(",", ":")),
+            json.dumps(sleep_terminate, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
+
+
 def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() -> None:
     """Pipeline children are concurrent shell work, not sequential foreground prompts."""
     cat_create = {
@@ -702,6 +762,7 @@ def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() 
         "object": "PROCESS",
         "action": "CREATE",
         "objectID": "cat-process",
+        "_concurrency_group_id": "pipeline-1",
         "actorID": "bash-process",
         "pid": 706031,
         "ppid": 705932,
@@ -719,6 +780,7 @@ def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() 
         "object": "PROCESS",
         "action": "CREATE",
         "objectID": "head-process",
+        "_concurrency_group_id": "pipeline-1",
         "actorID": "bash-process",
         "pid": 706032,
         "ppid": 705932,
@@ -763,6 +825,8 @@ def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() 
     rows = [json.loads(line) for line in normalized]
 
     assert rows[1]["timestamp_ms"] == head_create["timestamp_ms"]
+    assert "_concurrency_group_id" not in rows[0]
+    assert "_concurrency_group_id" not in rows[1]
     assert max(rows[0]["timestamp_ms"], rows[1]["timestamp_ms"]) < min(
         rows[2]["timestamp_ms"], rows[3]["timestamp_ms"]
     )
