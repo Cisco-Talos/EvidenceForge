@@ -24,9 +24,50 @@
 
 import random
 from datetime import datetime
+from typing import Any
 
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+
+
+def coerce_windows_event_id(value: Any) -> int | None:
+    """Return a numeric Windows Event ID when raw emitter input is safely parseable.
+
+    Raw scenario events intentionally carry arbitrary emitter fields. Event IDs
+    that are malformed should still render as authored, but should not abort
+    source-native EventRecordID sequencing.
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped, 10)
+        except ValueError:
+            return None
+    return None
+
+
+def normalize_windows_event_id_value(value: Any) -> Any:
+    """Return an EventID value that is safe for Windows XML template helpers.
+
+    Jinja template lookups compare EventID against numeric IDs and use it as a
+    dictionary key for source-native metadata. Container values from raw events
+    should render as authored text instead of raising unhashable-type errors.
+    """
+    try:
+        hash(value)
+    except TypeError:
+        return str(value)
+    return value
 
 
 class WindowsRecordIdSequence:
