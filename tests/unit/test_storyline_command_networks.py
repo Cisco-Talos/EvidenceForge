@@ -24,6 +24,8 @@ from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
     _estimate_process_lifetime,
     _linux_shell_process_command_line,
+    _linux_storyline_shell_friction_commands,
+    _render_storyline_shell_friction_template,
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
@@ -31,6 +33,58 @@ from evidenceforge.models.scenario import BeaconEventSpec, ConnectionEventSpec, 
 
 
 class TestStorylineCommandNetworks:
+    def test_storyline_shell_friction_renderer_rejects_unsafe_formatting(self):
+        """Overlay-controlled shell-friction templates should not use Python format specs."""
+        values = {
+            "database": "appdb",
+            "directory": "/tmp",
+            "path": "/tmp/appdb.sql",
+            "output_path": "/tmp/appdb.sql",
+        }
+
+        assert (
+            _render_storyline_shell_friction_template("test -w {directory}", values)
+            == "test -w /tmp"
+        )
+        for template in (
+            "{path!x}",
+            "{path:1000000000}",
+            "{path.__class__}",
+            "{missing}",
+            "{path",
+        ):
+            assert _render_storyline_shell_friction_template(template, values) is None
+
+    def test_linux_storyline_shell_friction_skips_unsafe_overlay_templates(self, monkeypatch):
+        """Unsafe project-overlay shell-friction templates should be ignored, not raised."""
+        from evidenceforge.generation.activity import bash_commands
+
+        monkeypatch.setattr(
+            bash_commands,
+            "load_bash_commands",
+            lambda: {
+                "storyline_friction": {
+                    "common_probe": ["echo {path}"],
+                    "before_database_dump": [
+                        "{path!x}",
+                        "{path:1000000000}",
+                        "{path.__class__}",
+                        "test -s {output_path}",
+                    ],
+                }
+            },
+        )
+
+        commands = _linux_storyline_shell_friction_commands(
+            username="root",
+            process_name="mysqldump",
+            command_line="mysqldump appdb > /tmp/appdb.sql",
+            output_file="/tmp/appdb.sql",
+            rng=random.Random(1),
+        )
+
+        assert commands == ["echo /tmp/appdb.sql", "test -s /tmp/appdb.sql"]
+
     def test_explicit_storyline_process_ref_sets_child_parent_pid(self):
         """Explicit process_ref/parent_ref lineage should reach canonical process context."""
         captured: list[Any] = []
