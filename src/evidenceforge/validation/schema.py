@@ -1408,17 +1408,19 @@ class ScenarioValidator:
                     continue
                 field_path = f"storyline.{idx}.events.{spec_idx}"
 
-                # syslog_message is Linux-modeled; on Windows the payload would be
-                # ground-truthed but never emitted — a phantom positive.
-                if os_cat == "windows" and spec.surface in LINUX_ONLY_SURFACES:
+                # syslog_message is Linux-modeled; on any non-Linux host (Windows OR an
+                # unknown OS such as macOS/BSD/Solaris) the payload would be ground-truthed
+                # but never emitted — a phantom positive. The emitter only handles linux, so
+                # gate on != "linux", not == "windows".
+                if os_cat != "linux" and spec.surface in LINUX_ONLY_SURFACES:
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
                             field_path=field_path,
                             message=(
                                 f"[{event.id}] Adversarial payload surface '{spec.surface}' is "
-                                f"Linux-modeled but system '{event.system}' is windows; the "
-                                "payload would not be emitted"
+                                f"Linux-modeled but system '{event.system}' is not Linux "
+                                f"(detected: {os_cat}); the payload would not be emitted"
                             ),
                             suggestion="Target a Linux host for this payload surface",
                         )
