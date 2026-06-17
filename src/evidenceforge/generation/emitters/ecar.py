@@ -1856,6 +1856,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
         shift_by_object_id: dict[str, int] = {}
         for indexes in create_indexes_by_shell.values():
+            original_indexes = list(indexes)
             indexes.sort(
                 key=lambda index: (
                     cls._ecar_int(records[index].get("timestamp_ms"), 0)
@@ -1868,6 +1869,16 @@ class EcarEmitter(HostMultiplexEmitter):
             )
             next_available_ms = 0
             groups: list[list[int]] = []
+            original_group_by_concurrency_id: dict[str, list[int]] = {}
+            for index in original_indexes:
+                record = records[index]
+                if record is None:
+                    continue
+                concurrency_group_id = str(record.get("_concurrency_group_id") or "")
+                if concurrency_group_id:
+                    original_group_by_concurrency_id.setdefault(concurrency_group_id, []).append(
+                        index
+                    )
             group_by_concurrency_id: dict[str, list[int]] = {}
             for index in indexes:
                 record = records[index]
@@ -1877,10 +1888,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 if concurrency_group_id:
                     group = group_by_concurrency_id.get(concurrency_group_id)
                     if group is None:
-                        group = []
+                        group = original_group_by_concurrency_id[concurrency_group_id]
                         group_by_concurrency_id[concurrency_group_id] = group
                         groups.append(group)
-                    group.append(index)
                     continue
                 groups.append([index])
 
