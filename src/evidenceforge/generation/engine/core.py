@@ -80,6 +80,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         progress_callback: Callable[[str, dict], None] | None = None,
         ground_truth_dir: Path | None = None,
         output_target: str | OutputTarget | None = None,
+        oob_hosts: tuple[str, ...] = (),
     ):
         """Initialize generation engine.
 
@@ -90,12 +91,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 Called with (event_type: str, data: dict) at key milestones.
             ground_truth_dir: Directory for GROUND_TRUTH.md. Defaults to output_dir.
             output_target: Render/layout target for generated output.
+            oob_hosts: Operator-registered live-callback host(s) for adversarial_payload
+                out-of-band testing (off by default). When set, an adversarial payload's
+                {canary} resolves to the first and all are host-allowlisted.
         """
         reset_thread_rng()
         self.scenario = scenario
         self.output_dir = output_dir
         self.ground_truth_dir = ground_truth_dir or output_dir
         self.output_target = normalize_output_target(output_target)
+        self.oob_hosts = tuple(oob_hosts)
         self.progress_callback = progress_callback
         self.state_manager = StateManager()
         self.emitters: dict = {}
@@ -300,6 +305,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             sid_registry=sid_registry,
             dispatcher=self.dispatcher,
         )
+        # Live-callback OOB host(s) for adversarial_payload (off by default).
+        self.activity_generator._oob_hosts = self.oob_hosts
         # Build IP->System lookup for HostContext resolution on connection events
         self.activity_generator._ip_to_system = {s.ip: s for s in self.scenario.environment.systems}
         # Set scenario start time for pre-existing process chain logic

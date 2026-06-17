@@ -4715,6 +4715,75 @@ class StorylineMixin:
                 if info.get("scheme"):
                     malicious_event["scheme"] = info["scheme"]
 
+        elif spec.type == "adversarial_payload":
+            from evidenceforge.generation.adversarial_payload import HTTP_SURFACES
+
+            cluster_id = malicious_event["storyline_cluster_id"]
+            # Monotonic per-generation sequence makes every synthesized payload
+            # unique (deterministic order); eval reads the emitted value from
+            # ground truth.
+            seq = getattr(self, "_adversarial_payload_seq", 0)
+            self._adversarial_payload_seq = seq + 1
+            payload_logon_id = None
+            payload_target = None
+            payload_scheme = None
+            # A process_command_line payload runs as a standalone process-execution
+            # record; resolve canonical session ownership (same as a spillage process
+            # spill) so it gets a non-shell parent and a stable, unique identity.
+            if spec.surface == "process_command_line":
+                payload_logon_id = self._resolve_storyline_process_spill_logon_id(
+                    actor,
+                    system,
+                    time,
+                    rng,
+                )
+            if spec.surface in HTTP_SURFACES:
+                # The payload rides to a web server's access log; pick the destination.
+                # An authored `scheme:` (http/https) forces the transport; otherwise the
+                # server's supported scheme decides (https preferred, else http).
+                payload_target, payload_scheme = self._select_web_server_for_spillage(
+                    system, spec.scheme
+                )
+            info = self.activity_generator.generate_adversarial_payload(
+                user=actor,
+                system=system,
+                time=time,
+                surface=spec.surface,
+                family=spec.family,
+                value=spec.value,
+                scheme=payload_scheme,
+                seed_key=f"adversarial_payload:{cluster_id}:{seq}:{spec.surface}:{spec.family or 'literal'}",
+                logon_id=payload_logon_id,
+                target_system=payload_target,
+            )
+            malicious_event["surface"] = info["surface"]
+            malicious_event["family"] = info["family"]
+            if info.get("skipped_reason"):
+                malicious_event["skipped_reason"] = info["skipped_reason"]
+            else:
+                malicious_event["value"] = info["value"]
+                malicious_event["rendered_value"] = info["rendered_value"]
+                malicious_event["expected_sources"] = info["expected_sources"]
+                malicious_event["encoding"] = info["encoding"]
+                malicious_event["time"] = info["time"]
+                if info.get("target_system"):
+                    malicious_event["target_system"] = info["target_system"]
+                if info.get("scheme"):
+                    malicious_event["scheme"] = info["scheme"]
+                if info.get("callback_host"):
+                    malicious_event["callback_host"] = info["callback_host"]
+                if info.get("weakness_class"):
+                    malicious_event["weakness_class"] = info["weakness_class"]
+                if info.get("expected_defender_signal"):
+                    malicious_event["expected_defender_signal"] = info["expected_defender_signal"]
+                if info.get("ids_alert"):
+                    malicious_event["ids_alert"] = info["ids_alert"]
+                # Pivot anchors to the exact evidence row (dst tuple for http, pid for
+                # process) so an analyst can jump from the payload record to the source.
+                for pivot_key in ("dst_ip", "dst_port", "pid"):
+                    if info.get(pivot_key) is not None:
+                        malicious_event[pivot_key] = info[pivot_key]
+
         elif spec.type == "raw":
             self.activity_generator.generate_raw(
                 time=time,

@@ -72,6 +72,15 @@ class NetworkVisibilityEngine:
         if self._enabled:
             self._build_topology(network_config, systems)
 
+    @property
+    def enabled(self) -> bool:
+        """True when a network topology (segments/sensors) is configured.
+
+        When False, there is no sensor to capture sensor-only formats (e.g. Zeek), so callers
+        deciding whether such a source will actually land must treat it as not observed.
+        """
+        return self._enabled
+
     def _build_topology(self, config: NetworkConfig, systems: list[System]) -> None:
         """Build internal lookup structures from config.
 

