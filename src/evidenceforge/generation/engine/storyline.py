@@ -38,6 +38,7 @@ import math
 import random
 import re
 import shlex
+import string
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -74,6 +75,7 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 logger = logging.getLogger(__name__)
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
+_STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
     r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
@@ -162,23 +164,36 @@ def _storyline_shell_friction_pool(name: str) -> list[str]:
     return [item for item in raw if isinstance(item, str) and item.strip()]
 
 
-class _StorylineShellTemplateValues(dict[str, str]):
-    """Leave unknown placeholders visible so invalid templates can be skipped."""
-
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
 def _render_storyline_shell_friction_template(
     template: str,
     values: dict[str, str],
 ) -> str | None:
-    """Render one shell-friction template if all placeholders are known."""
-    rendered = template.format_map(_StorylineShellTemplateValues(values))
-    if re.search(r"{[^{}]+}", rendered):
+    """Render one shell-friction template if all placeholders are known and safe.
+
+    Shell-friction templates can come from project-local configuration overlays, so
+    keep this renderer to a small literal-plus-placeholder language. Rejecting
+    Python format conversions/specifiers prevents malformed or hostile overlay
+    entries from crashing generation or requesting excessive output widths.
+    """
+    try:
+        parsed = list(_STORYLINE_SHELL_TEMPLATE_FORMATTER.parse(template))
+    except ValueError:
         return None
-    rendered = re.sub(r"\s+", " ", rendered).strip()
-    return rendered or None
+
+    rendered: list[str] = []
+    for literal_text, field_name, format_spec, conversion in parsed:
+        rendered.append(literal_text)
+        if field_name is None:
+            continue
+        if field_name not in values or conversion is not None or format_spec:
+            return None
+        rendered.append(values[field_name])
+
+    rendered_text = "".join(rendered)
+    if re.search(r"{[^{}]+}", rendered_text):
+        return None
+    rendered_text = re.sub(r"\s+", " ", rendered_text).strip()
+    return rendered_text or None
 
 
 def _linux_storyline_shell_friction_commands(
