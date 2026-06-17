@@ -187,7 +187,10 @@ def _http_content_identity_uri(host: str, uri: str) -> str:
 
     if not uri:
         return "/"
-    parsed = urlsplit(uri)
+    try:
+        parsed = urlsplit(uri)
+    except ValueError:
+        return uri
     if parsed.scheme and parsed.netloc:
         parsed_host = (parsed.hostname or "").rstrip(".").lower()
         expected_host = host.rstrip(".").lower()
