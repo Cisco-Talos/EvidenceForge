@@ -45,6 +45,7 @@ from evidenceforge.external_parsers.sof_elk_sources import (
 )
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
+    SofElkHarnessError,
     SofElkParserError,
 )
 
@@ -101,6 +102,20 @@ def test_stage_source_logs_preserves_syslog_subdirectories(tmp_path: Path) -> No
     assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
         Path("syslog/2026/linux-01.example.test/syslog.log")
     }
+
+
+def test_stage_source_logs_rejects_symlink_sources(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_dir = source_root / "linux-01.example.test" / "2026"
+    source_dir.mkdir(parents=True)
+    secret = tmp_path / "secret-readable-by-operator.txt"
+    secret.write_text("SECRET_CANARY_SYMLINK_COPY\n", encoding="utf-8")
+    (source_dir / "syslog.log").symlink_to(secret)
+
+    with pytest.raises(SofElkHarnessError, match="refusing to stage symlinked"):
+        stage_source_logs(source_root, tmp_path / "stage", SYSLOG_SPEC)
+
+    assert not (tmp_path / "stage" / "logstash" / "syslog" / "2026").exists()
 
 
 def test_stage_source_logs_preserves_windows_snare_year_subdirectories(tmp_path: Path) -> None:

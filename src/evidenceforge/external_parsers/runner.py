@@ -260,7 +260,11 @@ def _add_detected_log(
     validator: str | None,
     unsupported_reason: str | None = None,
 ) -> None:
+    if path.is_symlink():
+        return
     path = path.resolve()
+    if not path.is_relative_to(data_dir):
+        return
     logs_by_path[path] = DetectedLog(
         path=path,
         host=_host_for_path(data_dir, path),
@@ -273,13 +277,14 @@ def _add_detected_log(
 
 
 def _candidate_log_files(data_dir: Path) -> tuple[Path, ...]:
-    return tuple(
-        sorted(
-            path.resolve()
-            for path in data_dir.rglob("*")
-            if path.is_file() and path.suffix in _LOG_FILE_SUFFIXES
-        )
-    )
+    candidates: list[Path] = []
+    for path in data_dir.rglob("*"):
+        if path.is_symlink() or not path.is_file() or path.suffix not in _LOG_FILE_SUFFIXES:
+            continue
+        resolved_path = path.resolve()
+        if resolved_path.is_relative_to(data_dir):
+            candidates.append(resolved_path)
+    return tuple(sorted(candidates))
 
 
 def _host_for_path(data_dir: Path, path: Path) -> str:

@@ -146,6 +146,21 @@ def test_default_target_syslog_family_logs_are_reported_as_wrong_target(
     }
 
 
+def test_detect_external_parser_plan_ignores_symlinked_supported_logs(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    write_output_target_marker(tmp_path, "sof-elk")
+    source_dir = data_dir / "linux-01.example.test" / "2026"
+    source_dir.mkdir(parents=True)
+    secret = tmp_path / "secret-readable-by-operator.txt"
+    secret.write_text("SECRET_CANARY_SYMLINK_COPY\n", encoding="utf-8")
+    (source_dir / "syslog.log").symlink_to(secret)
+
+    plan = detect_external_parser_plan(data_dir)
+
+    assert plan.validators == ()
+    assert plan.logs == ()
+
+
 def test_group_logs_for_progress_uses_host_logtype_subtype_levels(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     (data_dir / "sensor-a").mkdir(parents=True)

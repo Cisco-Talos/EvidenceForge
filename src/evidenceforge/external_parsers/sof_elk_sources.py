@@ -282,6 +282,7 @@ def stage_source_logs(
     logs: list[StagedSourceLog] = []
     for source_name in spec.source_names:
         for source in sorted(source_root.rglob(source_name)):
+            _validate_stage_source(source_root, source)
             sensor = _source_name(source_root, source)
             source_year = _source_year(source) if spec.staged_directory == "syslog" else None
             if spec.staged_directory == "syslog" and source_year is not None:
@@ -307,6 +308,21 @@ def stage_source_logs(
         )
 
     return SofElkSourceManifest(spec=spec, logstash_root=logstash_root, logs=tuple(logs))
+
+
+def _validate_stage_source(source_root: Path, source: Path) -> None:
+    """Reject staged source paths that could escape the generated output tree."""
+    if source.is_symlink():
+        raise SofElkHarnessError(
+            f"refusing to stage symlinked external parser source file {source}; "
+            "copy generated log files into the data directory instead"
+        )
+    resolved_source = source.resolve()
+    if not resolved_source.is_relative_to(source_root):
+        raise SofElkHarnessError(
+            f"refusing to stage external parser source file {source}; "
+            f"resolved path {resolved_source} is outside generated output {source_root}"
+        )
 
 
 def build_sof_elk_source_configs(
