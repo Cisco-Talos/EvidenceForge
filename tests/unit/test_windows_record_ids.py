@@ -3,7 +3,11 @@
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
-from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
+from evidenceforge.generation.emitters.windows_record_ids import (
+    WindowsRecordIdSequence,
+    coerce_windows_event_id,
+    normalize_windows_event_id_value,
+)
 
 
 def _sample_gaps(channel: str, host_key: str, count: int = 640) -> list[int]:
@@ -41,3 +45,20 @@ def test_record_id_sequence_is_deterministic_per_host_channel() -> None:
     second = _sample_gaps("security", "FILE-SRV-01", count=128)
 
     assert first == second
+
+
+def test_coerce_windows_event_id_ignores_malformed_raw_values() -> None:
+    """Malformed raw EventID values should not abort record-ID sequencing."""
+    assert coerce_windows_event_id("4624") == 4624
+    assert coerce_windows_event_id(1.0) == 1
+    assert coerce_windows_event_id("not-an-int") is None
+    assert coerce_windows_event_id([]) is None
+    assert coerce_windows_event_id({"EventID": 4624}) is None
+
+
+def test_normalize_windows_event_id_value_stringifies_unhashable_raw_values() -> None:
+    """Raw EventID containers should be safe for template metadata lookups."""
+    assert normalize_windows_event_id_value([1]) == "[1]"
+    assert normalize_windows_event_id_value({"EventID": 4624}) == "{'EventID': 4624}"
+    assert normalize_windows_event_id_value("not-an-int") == "not-an-int"
+    assert normalize_windows_event_id_value(4624) == 4624

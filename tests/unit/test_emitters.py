@@ -200,6 +200,26 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert '<Execution ProcessID="544" ThreadID="116"/>' in content
 
+    def test_emit_event_preserves_malformed_raw_event_id(self, format_def, temp_output):
+        """Malformed raw EventID should not abort Security XML rendering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": "not-an-int",
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 100,
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>not-an-int</EventID>" in content
+
     def test_emit_event_preserves_oversized_decimal_execution_id(self, format_def, temp_output):
         """Oversized raw decimal PID/TID strings should not abort Security XML rendering."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
