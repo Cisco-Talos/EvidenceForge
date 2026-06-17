@@ -672,6 +672,15 @@ def validate(
         dir_okay=False,
         readable=True,
     ),
+    oob_host: list[str] = typer.Option(
+        [],
+        "--oob-host",
+        help="Allowlist an operator-controlled out-of-band host (concrete registrable "
+        "domain or IP literal) when validating a scenario whose adversarial_payload uses a "
+        "literal `value:` pointing at that host — parity with `generate --oob-host`, so "
+        "'validate before generate' stays reliable for live-callback scenarios. Validation "
+        "only: no callback is ever made. Repeatable.",
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -680,11 +689,15 @@ def validate(
 
     Exit codes:
     - 0: Validation passed
-    - 1: YAML parse error or file I/O error
+    - 1: YAML parse error, file I/O error, or invalid --oob-host
     - 2: Schema validation or cross-reference error
     """
     console.print("[bold blue]EvidenceForge Scenario Validator[/bold blue]")
     console.print(f"Scenario: {scenario_file}\n")
+
+    # Normalize/validate --oob-host the same way `generate` does, so a literal OOB payload
+    # validates identically here (fail fast on a bad value before loading the scenario).
+    oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
 
     # Step 1: Load and parse YAML
     try:
@@ -724,7 +737,7 @@ def validate(
     from evidenceforge.validation import ScenarioValidator
 
     console.print("\n[bold]Validating cross-references...[/bold]")
-    validator = ScenarioValidator(scenario)
+    validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
     issues = validator.validate()
 
     if issues:
