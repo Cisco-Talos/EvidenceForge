@@ -413,6 +413,21 @@ class TestProxyActionSemantics:
         assert inspected["response_time_microseconds"] == 23000
         assert inspected["url_category"] == "Software/Updates"
 
+    def test_splunk_url_parts_falls_back_for_malformed_url(self):
+        from evidenceforge.generation.emitters.proxy import _proxy_url_parts
+
+        server, dest_port, uri_path, uri_query = _proxy_url_parts(
+            method="GET",
+            url="https://example.test:notaport/download?q=1",
+            host="example.test",
+            fallback_port=443,
+        )
+
+        assert server == "example.test"
+        assert dest_port == 443
+        assert uri_path == "https://example.test:notaport/download?q=1"
+        assert uri_query == ""
+
     def test_connect_setup_row_differs_from_inspected_request_accounting(self):
         from pathlib import Path
 

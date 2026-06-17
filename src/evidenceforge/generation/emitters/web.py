@@ -62,7 +62,10 @@ def _splunk_json_timestamp(value: datetime | str | None) -> str:
 def _split_uri_for_apache_json(uri: str | None) -> tuple[str, str]:
     """Split a request target into Apache TA JSON path and query fields."""
     request_uri = uri or "/"
-    parsed = urlsplit(request_uri)
+    try:
+        parsed = urlsplit(request_uri)
+    except ValueError:
+        return request_uri or "/", ""
     if parsed.scheme or parsed.netloc:
         path = parsed.path or "/"
     else:

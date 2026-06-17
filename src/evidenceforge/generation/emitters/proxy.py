@@ -133,10 +133,16 @@ def _proxy_url_parts(
             "",
         )
 
-    parsed = urlsplit(url or "/")
-    server = parsed.hostname or host
-    if parsed.port is not None:
-        dest_port = parsed.port
+    request_url = url or "/"
+    try:
+        parsed = urlsplit(request_url)
+        server = parsed.hostname or host
+        parsed_port = parsed.port
+    except ValueError:
+        return host, fallback_port, request_url or "/", ""
+
+    if parsed_port is not None:
+        dest_port = parsed_port
     elif parsed.scheme.lower() == "https":
         dest_port = 443
     elif parsed.scheme.lower() == "http":
