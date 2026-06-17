@@ -4693,6 +4693,7 @@ class BaselineMixin:
         if "ecar" not in self.emitters:
             return
 
+        from evidenceforge.config.schemas import MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR
         from evidenceforge.events.base import SecurityEvent
         from evidenceforge.events.contexts import (
             AuthContext,
@@ -4716,6 +4717,8 @@ class BaselineMixin:
         count_max = int(os_cfg.get("count_max", count_min))
         if count_max <= 0 or count_min > count_max:
             return
+        count_min = min(count_min, MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR)
+        count_max = min(count_max, MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR)
 
         processes = []
         for pid in sorted(set(sys_pids.values())):
@@ -4732,12 +4735,15 @@ class BaselineMixin:
         if not actions or not path_templates:
             return
 
-        count = self._scaled_randint(
-            rng,
-            system,
-            "ecar_file_churn",
-            count_min,
-            count_max,
+        count = min(
+            self._scaled_randint(
+                rng,
+                system,
+                "ecar_file_churn",
+                count_min,
+                count_max,
+            ),
+            MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR,
         )
         host_ctx = self.activity_generator._build_host_context(system)
         assigned_user = getattr(system, "assigned_user", None) or ""

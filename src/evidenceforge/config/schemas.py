@@ -1453,11 +1453,14 @@ class EcarFlowIdentityConfig(BaseModel, extra="forbid"):
     inbound_listener_probability: float = Field(ge=0.0, le=1.0)
 
 
+MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR = 100
+
+
 class EcarFileChurnOsConfig(BaseModel, extra="forbid"):
     """Per-OS ambient eCAR FILE event count and action policy."""
 
-    count_min: int = Field(ge=0)
-    count_max: int = Field(ge=0)
+    count_min: int = Field(ge=0, le=MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR)
+    count_max: int = Field(ge=0, le=MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR)
     action_weights: dict[Literal["read", "modify", "create"], int]
 
     @model_validator(mode="after")
