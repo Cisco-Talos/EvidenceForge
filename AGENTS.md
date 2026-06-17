@@ -159,9 +159,49 @@ correct SemVer version before merging to `main`.
 unavailable and a maintainer must validate a `main` PR by hand, run:
 
 ```
-VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+VERSION=$(python - <<'PY'
+import ast
+import re
+import tomllib
+from pathlib import Path
+
+pyproject_version = tomllib.loads(
+    Path("pyproject.toml").read_text(encoding="utf-8")
+)["project"]["version"]
+
+init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
+init_version = None
+for node in init_tree.body:
+    if not isinstance(node, ast.Assign):
+        continue
+    for target in node.targets:
+        if isinstance(target, ast.Name) and target.id == "__version__":
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                init_version = node.value.value
+
+lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+lock_version = None
+for package in lock.get("package", []):
+    if package.get("name") == "evidence-forge":
+        lock_version = package.get("version")
+        break
+
+if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
+    raise SystemExit(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+if init_version != pyproject_version:
+    raise SystemExit(
+        "src/evidenceforge/__init__.py __version__ "
+        f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
+    )
+if lock_version != pyproject_version:
+    raise SystemExit(
+        f"uv.lock evidence-forge version ({lock_version!r}) "
+        f"does not match pyproject.toml ({pyproject_version!r})"
+    )
+print(pyproject_version)
+PY
+)
 TAG="v${VERSION}"
-test "$(uv run python -c "import evidenceforge; print(evidenceforge.__version__)")" = "$VERSION"
 git ls-remote --exit-code --tags origin "$TAG" && {
   echo "Remote release tag $TAG already exists; bump the version before opening the main PR."
   exit 1
@@ -175,7 +215,48 @@ so it appears under Releases.
 
 ```
 git fetch origin main:refs/remotes/origin/main --tags
-VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+VERSION=$(python - <<'PY'
+import ast
+import re
+import tomllib
+from pathlib import Path
+
+pyproject_version = tomllib.loads(
+    Path("pyproject.toml").read_text(encoding="utf-8")
+)["project"]["version"]
+
+init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
+init_version = None
+for node in init_tree.body:
+    if not isinstance(node, ast.Assign):
+        continue
+    for target in node.targets:
+        if isinstance(target, ast.Name) and target.id == "__version__":
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                init_version = node.value.value
+
+lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+lock_version = None
+for package in lock.get("package", []):
+    if package.get("name") == "evidence-forge":
+        lock_version = package.get("version")
+        break
+
+if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
+    raise SystemExit(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+if init_version != pyproject_version:
+    raise SystemExit(
+        "src/evidenceforge/__init__.py __version__ "
+        f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
+    )
+if lock_version != pyproject_version:
+    raise SystemExit(
+        f"uv.lock evidence-forge version ({lock_version!r}) "
+        f"does not match pyproject.toml ({pyproject_version!r})"
+    )
+print(pyproject_version)
+PY
+)
 TAG="v${VERSION}"
 MERGE_SHA=$(git rev-parse origin/main)
 test -z "$(git tag --list "$TAG")" || {
