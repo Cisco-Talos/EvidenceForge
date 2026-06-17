@@ -6,13 +6,38 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
-## v1.3.3 (2026-06-17)
+## v1.4.0 (2026-06-17)
 
-This patch release integrates the accepted Codex hardening fixes queued on
-`dev`, plus a local SOF-ELK harness fixture cleanup found during slow-suite
-validation, a spillage validation fix, and dependency maintenance. The branch
-contains only `fix:`, `docs:`, `test:`, and `chore:` work since v1.3.2, so the
-project moves from `1.3.2` to `1.3.3`.
+This release integrates the accepted Codex hardening fixes queued on `dev`, the
+accepted `adversarial_payload` feature, a local SOF-ELK harness fixture cleanup
+found during slow-suite validation, a spillage validation fix, and dependency
+maintenance. Because this release now includes the non-breaking
+`adversarial_payload` feature before landing on `main`, the project moves from
+`1.3.2` to `1.4.0`.
+
+**Adversarial payload testing**
+
+- Added the typed `adversarial_payload` storyline event for deterministic
+  log-pipeline weakness testing across syslog, process command line, HTTP
+  user-agent, URL, and referrer surfaces, with data-driven payload families,
+  surface-aware encoding, canonical ground-truth records, evaluation support,
+  and on-wire IDS alert modeling when cleartext HTTP traffic is sensor-visible
+  (`fe4bc439`, `fd40a2b4`, `ca46a3e4`).
+- Added supported payload families for ANSI escape, CRLF log forging, CSV
+  formula injection, Log4Shell/JNDI, reflected XSS, SQL injection,
+  structured-log injection, and oversized-field testing, then removed the
+  temporary proposed-family mechanism so shipped families are first-class
+  supported behavior (`2ea19b4e`, `86ba2e86`).
+- Added explicit live-callback OOB support via `--oob-host`, removed the
+  separate acknowledgement flag, added `eforge validate --oob-host` parity, and
+  enforced concrete registrable-domain/IP validation at the payload safety
+  boundary and carrier-rendering boundary so broad values cannot widen the host
+  allowlist (`cca749e3`, `0daa726d`, `47a1fa58`).
+- Tightened adversarial-payload docs, skill guidance, IDS sensor-model
+  documentation, public-suffix handling, Linux-only surface validation, and
+  `expected_sources` so ground truth names only sources that actually land in the
+  generated dataset (`68d77afe`, `55bb3d62`, `3eede9b8`, `03e92fea`,
+  `9aee3b19`, `4cd64cac`, `ef59cd9a`).
 
 **External parser and output-target hardening**
 
