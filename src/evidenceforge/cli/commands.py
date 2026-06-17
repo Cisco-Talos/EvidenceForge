@@ -138,74 +138,30 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
 
 
 def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
-    """Normalize and validate operator-supplied --oob-host values (live-callback opt-in).
+    """Normalize/validate operator-supplied --oob-host values for fail-fast CLI UX.
 
-    Each value replaces the inert canary inside an adversarial_payload and is matched
-    against the safety allowlist (which lowercases), so a value must be a BARE, lowercased
-    hostname or IP — never a scheme/path/userinfo/port form. To keep the allowlist narrow,
-    a hostname must be a concrete registrable domain (e.g. example.com, oast.fun) or a
-    subdomain of one: bare TLDs / single labels (com, fun, local) and multi-label public
-    suffixes (co.uk, co.in, github.io, herokuapp.com, ...) are rejected, because an
-    over-broad entry would allowlist an entire namespace (e.g. an entry of `com` would let a
-    payload host of `evil.com` pass the suffix match). The public-suffix set is the curated,
-    overlay-extensible list shared with TLS/DNS realism (tls_realism.yaml) — a common subset,
-    not the full PSL (no external dependency, per issue #284). IP literals are accepted
-    as-is. Shared by `generate` and `validate` so the contract is identical. Prints an error
-    and raises typer.Exit(EXIT_INPUT_ERROR) on a bad value.
+    Delegates the actual contract to ``adversarial_payload.normalize_oob_host`` — the single
+    source of truth, which is ALSO enforced at the safety boundary (``check_payload_safety``)
+    so a broad value (a bare TLD/public suffix that would allowlist a whole namespace via the
+    suffix match) can never reach the allowlist regardless of caller. A value must be a concrete
+    registrable domain (e.g. example.com, oast.fun, or a subdomain of one) or an IP literal.
+    Shared by `generate` and `validate`. Prints a friendly error and raises
+    typer.Exit(EXIT_INPUT_ERROR) on a bad value.
     """
-    import ipaddress
-    import re
-
-    _label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
-
-    def _well_formed_hostname(host: str) -> bool:
-        # Every dot-separated label must be a valid DNS label (non-empty, <=63 chars, no
-        # leading/trailing hyphen) and the TLD must not be all-numeric — an all-numeric
-        # dotted value is a malformed IP, not a hostname. Rejects a..b, good-.com, 1.2.3.4.5.
-        labels = host.split(".")
-        return all(_label.fullmatch(label) for label in labels) and not labels[-1].isdigit()
-
-    def _is_registrable_domain(host: str) -> bool:
-        from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
-
-        labels = [label for label in host.split(".") if label]
-        if len(labels) < 2:
-            return False  # single label: a bare TLD / hostname (com, fun, local)
-        # reject a bare multi-label public suffix (co.uk, co.in, github.io, ...); a name
-        # UNDER one (abc.github.io) has more labels than the suffix, so it stays registrable.
-        return host not in multi_label_public_suffixes()
+    from evidenceforge.generation.adversarial_payload import (
+        AdversarialPayloadSafetyError,
+        normalize_oob_host,
+    )
 
     normalized: list[str] = []
     for raw in oob_host:
-        host = raw.strip().lower()
-        if not host:
+        if not raw.strip():
             continue
-        malformed = "://" in host or any(c in host for c in "/\\ \t\r\n@?#%")
-        candidate = host.strip("[]")
-        valid_ip = False
-        if not malformed:
-            try:
-                ipaddress.ip_address(candidate)
-                valid_ip = True
-            except ValueError:
-                valid_ip = False
-        if malformed or not (valid_ip or _well_formed_hostname(host)):
-            console.print(
-                f"[bold red]Error:[/bold red] --oob-host {raw!r} is not a bare host; pass just "
-                "a hostname or IP (e.g. 127.0.0.1, oast.fun) with no scheme, path, port, "
-                "userinfo, or whitespace.",
-                style="red",
-            )
-            raise typer.Exit(EXIT_INPUT_ERROR)
-        if not valid_ip and not _is_registrable_domain(host):
-            console.print(
-                f"[bold red]Error:[/bold red] --oob-host {raw!r} must be a concrete registrable "
-                "domain (e.g. example.com, oast.fun) or an IP literal; bare TLDs (com, fun, "
-                "local) and public suffixes (co.uk) are not specific enough.",
-                style="red",
-            )
-            raise typer.Exit(EXIT_INPUT_ERROR)
-        normalized.append(candidate if valid_ip else host)
+        try:
+            normalized.append(normalize_oob_host(raw))
+        except AdversarialPayloadSafetyError as exc:
+            console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+            raise typer.Exit(EXIT_INPUT_ERROR) from exc
     return tuple(dict.fromkeys(normalized))
 
 

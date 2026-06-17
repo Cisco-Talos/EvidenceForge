@@ -26,6 +26,7 @@ it preserves the detection SIGNAL without corrupting an unrelated record.
 
 from __future__ import annotations
 
+import ipaddress
 import random
 import re
 import shlex
@@ -153,6 +154,61 @@ def expected_sources_for_surface(surface: str) -> tuple[str, ...]:
 
 # --- Safety guardrails ---------------------------------------------------------
 
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def _is_well_formed_hostname(host: str) -> bool:
+    """Every dot-separated label is a valid DNS label and the TLD is not all-numeric."""
+    labels = host.split(".")
+    return all(_DNS_LABEL.fullmatch(label) for label in labels) and not labels[-1].isdigit()
+
+
+def _is_registrable_domain(host: str) -> bool:
+    """A concrete registrable domain: >=2 labels and not itself a multi-label public suffix."""
+    from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
+
+    labels = [label for label in host.split(".") if label]
+    if len(labels) < 2:
+        return False  # single label: a bare TLD / hostname (com, fun, local)
+    return host not in multi_label_public_suffixes()  # reject co.uk, github.io, ...
+
+
+def normalize_oob_host(raw: str) -> str:
+    """Validate one operator-supplied live-callback (``--oob-host``) value; return its normal form.
+
+    This is the SAFETY contract for the OOB allowlist, enforced HERE so a broad value can never be
+    allowlisted regardless of caller (``check_payload_safety`` calls it; the CLI calls it too, only
+    for fail-fast UX). An OOB host must be a concrete registrable domain (e.g. ``example.com`` /
+    ``oast.fun``) or an IP literal — never a bare TLD / public suffix (which would allowlist a whole
+    namespace via the suffix match), nor a scheme/path/userinfo/port form, nor a malformed hostname.
+    Raises :class:`AdversarialPayloadSafetyError` otherwise.
+    """
+    host = raw.strip().lower()
+    if not host:
+        raise AdversarialPayloadSafetyError("an --oob-host value must not be empty")
+    if "://" in host or any(c in host for c in "/\\ \t\r\n@?#%"):
+        raise AdversarialPayloadSafetyError(
+            f"--oob-host {raw!r} is not a bare host (no scheme, path, port, userinfo, or whitespace)"
+        )
+    candidate = host.strip("[]")
+    try:
+        ipaddress.ip_address(candidate)
+        return candidate  # IP literal — accepted as-is
+    except ValueError:
+        pass
+    if not _is_well_formed_hostname(host):
+        raise AdversarialPayloadSafetyError(
+            f"--oob-host {raw!r} is not a bare host; pass a hostname or IP with valid DNS labels "
+            "(no port, empty/hyphen-edge label, trailing dot, or all-numeric TLD)"
+        )
+    if not _is_registrable_domain(host):
+        raise AdversarialPayloadSafetyError(
+            f"--oob-host {raw!r} must be a concrete registrable domain (e.g. example.com, "
+            "oast.fun) or an IP literal; bare TLDs and public suffixes (com, fun, local, co.uk, "
+            "github.io, …) are not specific enough"
+        )
+    return host
+
 
 def check_payload_safety(
     value: str, family: str | None = None, *, oob_hosts: tuple[str, ...] = ()
@@ -168,6 +224,9 @@ def check_payload_safety(
     interactsh / sinkhole domain the operator registered at generation time). When
     set, those host(s) are additionally accepted so a real out-of-band test can fire;
     every OTHER non-reserved host is still rejected, and the marker is still required.
+    Each ``oob_hosts`` entry is itself validated via :func:`normalize_oob_host`, so a broad
+    value (a bare TLD/public suffix that would allowlist a whole namespace) can never enter
+    the allowlist here — regardless of which caller supplied it.
     """
     if not value:
         raise AdversarialPayloadSafetyError("adversarial payload must be non-empty")
@@ -185,10 +244,11 @@ def check_payload_safety(
                 "stay clearly synthetic"
             )
 
-    # Hosts compare case-insensitively (_extract_hosts lowercases), so lowercase the
-    # registered OOB hosts too — a caller (or an uppercase --oob-host) must not fail the
-    # allowlist match on case alone.
-    domains = [*allowlisted_domains(), *(h.lower() for h in oob_hosts)]
+    # Validate each OOB host HERE, at the safety boundary — not only at the CLI — so a broad
+    # value (a bare TLD/public suffix that would allowlist a whole namespace via the suffix
+    # match) can never enter the allowlist regardless of caller. normalize_oob_host lowercases
+    # and raises on anything that is not a concrete registrable domain or IP literal.
+    domains = [*allowlisted_domains(), *(normalize_oob_host(h) for h in oob_hosts)]
     for host in _extract_hosts(value):
         if not _host_allowed(host, domains):
             raise AdversarialPayloadSafetyError(
