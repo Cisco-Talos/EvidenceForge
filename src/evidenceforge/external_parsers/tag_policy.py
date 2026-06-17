@@ -149,7 +149,7 @@ def _is_zeek_x509_post_2038_date_limitation(event: JsonMapping) -> bool:
         return False
     try:
         raw = json.loads(original)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return False
     if not isinstance(raw, Mapping):
         return False

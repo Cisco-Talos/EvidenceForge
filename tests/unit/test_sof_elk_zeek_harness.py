@@ -373,6 +373,37 @@ def test_validate_parsed_output_ignores_x509_post_2038_date_parser_limitation(
     assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
 
 
+def test_validate_parsed_output_keeps_deep_x509_original_dateparsefailure_fatal(
+    tmp_path: Path,
+) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "x509.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "x509.log",
+                log_type="zeek_x509",
+                record_count=1,
+            ),
+        ),
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_x509(not_valid_after=2_289_254_400)
+    event["event"] = {"original": "[" * 10_000 + "0" + "]" * 10_000}
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_dateparsefailure")
+    _write_jsonl(parsed_dir / "zeek_x509.jsonl", [event])
+
+    with pytest.raises(SofElkParserError, match="_dateparsefailure"):
+        validate_parsed_output(manifest, parsed_dir)
+
+    report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert report["failure_tag_counts"]["zeek_x509"]["_dateparsefailure"] == 1
+    assert report["sample_failures"][0]["tags"] == ["_dateparsefailure"]
+
+
 def test_validate_parsed_output_keeps_x509_dateparsefailure_fatal_without_limitation(
     tmp_path: Path,
 ) -> None:
