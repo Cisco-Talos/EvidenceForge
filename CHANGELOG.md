@@ -6,6 +6,52 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.3.3 (2026-06-17)
+
+This patch release integrates the accepted Codex hardening fixes queued on
+`dev`, plus a local SOF-ELK harness fixture cleanup found during slow-suite
+validation. The branch contains only `fix:`, `docs:`, `test:`, and `chore:`
+work since v1.3.2, so the project moves from `1.3.2` to `1.3.3`.
+
+**External parser and output-target hardening**
+
+- Hardened Splunk app archive extraction, output-target marker reads, raw
+  Windows Event ID normalization, deep X.509 parser originals, SOF-ELK DNS tag
+  validation, and symlink handling for external parser source logs
+  (`fe267171`, `228fbaca`, `e79f2e6e`, `094afa79`, `ba34aae4`, `f64a7447`,
+  `5fcb7da5`, `a96e505d`, `7d8e49c1`, `ec6f88c3`, `8d6c3c58`, `4aaf2df2`).
+- Preserved accepted integration behavior by replacing unsafe tar extraction
+  with safe regular-file extraction and keeping explicit eCAR pipeline group
+  stage order stable after parser hardening (`c4405a8e`).
+- Updated the combined SOF-ELK harness DNS fixture to include normalized
+  `dns.answers.ip` for address answers, matching the stricter parser validation
+  contract (`f9b5e2f2`).
+
+**Malformed input tolerance and source-specific rendering**
+
+- Tolerated malformed explicit proxy URIs, HTTP file URIs, and Splunk request
+  URLs without crashing parser or emitter paths (`950fa2cd`, `655227de`,
+  `719770f6`, `f58a9d58`, `9e4ea592`, `2478c63f`).
+- Preserved IPv6 Cisco ASA ICMP `faddr` parsing and aligned web-emitter role
+  matching with normalized web-server roles (`bca1481b`, `2461e744`,
+  `a2d362a8`, `75a416c3`).
+
+**eCAR, shell, and logon realism guards**
+
+- Bounded eCAR file churn counts, required explicit eCAR shell concurrency
+  groups, hardened storyline shell friction templates, and avoided orphan Linux
+  logons when dropped bash commands no longer have visible session evidence
+  (`2fad4a9f`, `28c12917`, `19222895`, `d261c57e`, `241d756b`, `ada23d3e`,
+  `ec00e3d7`, `104c457f`).
+- Added a regression guard for file side-effect event mappings so read-style
+  side effects remain covered (`4cf50430`).
+
+**Release documentation**
+
+- Hardened the manual release fallback docs so maintainers have clearer release
+  guard and tagging instructions when automation is unavailable (`f292f0ec`,
+  `39c8d87a`).
+
 ## v1.3.2 (2026-06-06)
 
 This patch release fixes a long-window Windows process lifecycle regression
