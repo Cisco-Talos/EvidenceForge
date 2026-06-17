@@ -135,27 +135,39 @@ token** (`ids_fires_on`) the rule keys on:
 | `crlf_log_forging` | `2012887` | ET WEB_SERVER Possible CRLF Injection Attempt in HTTP Header | `\r\n` |
 | `sql_injection` | `2009714` | ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT | `UNION SELECT` |
 
-**The alert fires only when the rendered payload still contains that token** — so an
-*evasion* variant that splits it produces **no alert**, faithfully modeling a flat
-content rule's blind spot. This is the whole point: the canonical `${jndi:ldap://…}`,
-`UNION SELECT`, and full-`\r\n` forms fire, but `${lower:j}ndi` / `${::-j}` /
-`${env:X:-j}ndi`, `UNION/**/SELECT`, and the LF-only / CR-only forges **evade** the
-flat rule. A defender comparing their own detection against this baseline sees exactly
-which obfuscations slip past — the detection-quality signal, not a fabricated 100%
-catch rate. (Matching the normalized value models a sensor that URL/UA-decodes before
-content-matching; the obfuscation still evades after decoding.)
+**The alert fires when the payload still contains the signature's content token** — so an
+*evasion* variant that splits it (`${lower:j}ndi` / `${::-j}` / `${env:X:-j}ndi`,
+`UNION/**/SELECT`, a comment-split forge) produces **no alert**, faithfully modeling a
+flat-content rule's blind spot — the detection-quality signal a defender wants, not a
+fabricated 100% catch rate.
 
-When it fires AND an IDS sensor on the path actually observes the connection, the alert
-is recorded in ground truth as `ids_alert` (`sid`/`rev`/`message`) **and** rendered to
+> **Sensor model — read before scoring against `ids_alert`.** The modeled alert represents a
+> sensor that **normalizes the URI/header buffer (percent-decoding) before content matching**
+> — e.g. Suricata `http.uri` / `http.header` or Snort `http_inspect`. This matters because on
+> the `http_request_url` / `http_referrer` surfaces the payload is percent-encoded on the wire
+> (`UNION SELECT` → `UNION%20SELECT`, `${jndi:` → `%24%7Bjndi:`, `\r\n` → `%0d%0a`), so the
+> literal `ids_fires_on` token is **not** byte-present in `web_access.log` / Zeek `http.log`; a
+> normalizing rule recovers it, but a **raw-content rule without URI normalization may not
+> fire**. Two consequences to keep in mind: (1) the SID/message are the upstream ET rule's
+> own, so `2012887` reads "…in HTTP **Header**" even when a CRLF payload rode the URL query —
+> always read the ground-truth **`surface`** field alongside `ids_alert` to see where the
+> payload actually was; (2) `http_user_agent` keeps printable tokens literal on the wire, so
+> its alerts also hold for a raw-content sensor. (Whether to additionally gate firing by
+> surface — so a header-named rule doesn't fire on a URL payload — is a deliberate modeling
+> choice left to the maintainer; today the dataset fires on the normalized token and records
+> `surface` so either interpretation is recoverable.)
+
+When an alert fires AND an IDS sensor on the path actually observes the connection, it is
+recorded in ground truth as `ids_alert` (`sid`/`rev`/`message`) **and** rendered to
 `snort_alert.log` — the two always agree (`GROUND_TRUTH.ids_alert` ⟺ a `snort_alert.log`
 line), so the dataset is internally consistent for IDS scoring. The `ids_alert` field
-follows the **same network-visibility rules as every network format**: an IDS sensor
-must monitor the path (e.g. a perimeter IDS on the web server's segment), and east-west
-traffic a TAP sensor cannot see (intra-segment), or a scenario with no IDS sensor, fires
-**no** alert and records **no** `ids_alert`. An *evaded* variant (the token is absent)
-records no `ids_alert`; an **`https`** payload is encrypted on the wire, so none is
-attached; and a literal `value:` (no family) never auto-fires — we cannot know which
-signature it would trip.
+follows the **same network-visibility rules as every network format**: an IDS sensor must
+monitor the path (e.g. a perimeter IDS on the web server's segment), and east-west traffic
+a TAP sensor cannot see (intra-segment), or a scenario with no IDS sensor, fires **no**
+alert and records **no** `ids_alert`. An evaded variant records no `ids_alert`; an
+**`https`** payload is encrypted on the wire, so none is attached; and a literal `value:`
+(no family) never auto-fires. The surface a payload rode is recorded separately in the
+ground-truth `surface` field, so always read `surface` alongside `ids_alert`.
 
 ## Safety guardrails
 
@@ -205,10 +217,14 @@ your **own fuzzer payloads** (supplied as a literal `value:`) pointing at your
 Collaborator pass validation instead of being rejected as a real host. Safety stays
 tight: **only the host(s) you explicitly register are accepted** (every other
 non-reserved host is still rejected), each `--oob-host` must be a concrete registrable
-domain or IP literal — bare TLDs like `com` and common multi-label public suffixes like
-`co.uk` are refused (a curated common-suffix list, not the full Public Suffix List), so
-register a specific host you control (ideally a subdomain) rather than a broad
-shared-suffix domain — the marker is still
+domain or IP literal — bare TLDs like `com` and multi-label public suffixes (ICANN
+ccTLD second-levels like `co.uk`/`co.in` and vendor namespaces like `github.io`/
+`herokuapp.com`/`ngrok.io`) are refused, so a single entry can't allowlist a whole
+namespace. The public-suffix set is a **curated common subset**, not the full Public
+Suffix List (kept dependency-free per the project's design constraints) and is
+overlay-extensible in `tls_realism.yaml`; a name *under* a suffix (`abc.github.io`,
+`me.oast.fun`) is registrable and accepted. Register a specific host you control (ideally
+a subdomain) rather than a broad shared-suffix domain — the marker is still
 required on every line, generation prints a loud `LIVE CALLBACK MODE` banner, and each
 affected record carries a `callback_host` attribute so you know exactly which OOB
 interaction to watch for. Passing `--oob-host` is itself the explicit opt-in. `--oob-host`
@@ -248,12 +264,17 @@ its `events` list, with the per-kind facts nested under `attributes`:
 
 Field notes for scoring a parser/SIEM by hand:
 
-- `rendered_value` is the surface-encoded payload **value**. The `encoding` field
-  names the transform applied (`raw`, `percent`, `escaped`, `shell_quote`). For most
-  surfaces it is the on-disk record content; for `process_command_line` it is a
-  **substring** of the full command line (the payload arg, not the whole line), and
-  the eCAR JSON layer escapes embedded quotes/backslashes on disk, so match the
-  JSON-decoded `command_line` (or the JSON-escaped form of `rendered_value`).
+- `rendered_value` is the surface-encoded payload **value**, and `rendered_sha256` is
+  its SHA-256. The `encoding` field names the transform applied (`raw`, `percent`,
+  `escaped`, `shell_quote`). It equals the **whole on-disk field** only for
+  `syslog_message` (the full message) and `http_user_agent` (the UA header *is* the
+  payload). For `http_request_url` and `http_referrer` it is the value **substring**
+  wrapped in a benign carrier on disk (e.g. `/search?q=<value>`,
+  `/api/v1/items?filter=<value>`, `https://host/login?next=<value>`), and for
+  `process_command_line` it is the payload-arg **substring** of the full command line
+  (whose eCAR JSON layer also escapes embedded quotes/backslashes — match the
+  JSON-decoded `command_line`). So to reproduce `rendered_sha256` by hand, hash the
+  carrier-stripped value fragment, not the whole request-target / `Referer` / command line.
 - `weakness_class` and `expected_defender_signal` carry the family's CWE/CVE class
   and the **pass criterion** (what a hardened pipeline must do) so you can score a
   detection from ground truth alone.
