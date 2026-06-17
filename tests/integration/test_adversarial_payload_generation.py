@@ -74,6 +74,77 @@ class TestAdversarialPayloadGeneration:
                 on_disk = v.replace("\r\n", "\n").replace("\r", "\n")
             assert on_disk in norm, f"{r['storyline_id']} ({r['surface']}) missing on disk"
 
+    def test_every_family_surface_combo_lands_on_disk(self, tmp_path):
+        # Phantom-hunt across the FULL matrix: every family on every surface it declares
+        # must actually emit and land on disk. The ap_scenario fixture only exercises 3
+        # families; this guards all 8 (incl. the formerly-"proposed" xss_reflection /
+        # sql_injection / structured_log_injection / oversized_field).
+        from evidenceforge.config.payload_families import family_names, get_family
+
+        events = [
+            {"type": "adversarial_payload", "surface": surface, "family": fam}
+            for fam in sorted(family_names())
+            for surface in (get_family(fam).get("surfaces") or [])
+        ]
+        scenario = _linux_scenario(events, web_server=True)
+        # _linux_scenario spaces events at +10*(i+1)m; widen the window so all combos fall
+        # inside it (an event scheduled past the window is a separate engine edge case, not
+        # what this lands-on-disk matrix is testing).
+        scenario["time_window"]["duration"] = f"{len(events) // 6 + 2}h"
+        out = _generate(scenario, tmp_path / "matrix")
+        blob = "\n".join(
+            p.read_text(errors="replace")
+            for p in out.rglob("*")
+            if p.is_file()
+            and not p.name.startswith(("GROUND_TRUTH", "OBSERVATION", "OUTPUT", "generation.log"))
+        )
+        norm = blob.replace("\r\n", "\n").replace("\r", "\n")
+        recs = _ap_records(out)
+        assert len(recs) == len(events)  # every (family, surface) combo emitted
+        assert {r["family"] for r in recs} == set(family_names())  # all families present
+        for r in recs:
+            v = r["rendered_value"]
+            assert "EFORGE_TEST" in v, f"{r['family']}/{r['surface']} lost its poison marker"
+            on_disk = (
+                json.dumps(v)[1:-1]
+                if "ecar" in r["expected_sources"]
+                else v.replace("\r\n", "\n").replace("\r", "\n")
+            )
+            assert on_disk in norm, f"{r['family']}/{r['surface']} missing on disk"
+
+    def test_skipped_payload_is_labeled_and_not_on_disk(self, tmp_path):
+        # Inverse invariant: a payload that cannot be emitted (here an https request to an
+        # http-only web server) must be recorded emitted:false with a skipped_reason and its
+        # value fields stripped, and must NOT leak any bytes onto disk.
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "adversarial_payload",
+                    "surface": "http_request_url",
+                    "family": "log4shell",
+                    "scheme": "https",
+                }
+            ],
+            logs=[{"format": "web_access"}],
+            web_server=True,
+        )
+        scenario["environment"]["systems"][1]["services"] = ["http"]  # http-only -> https skip
+        out = _generate(scenario, tmp_path / "skip")
+        recs = [r for r in _records(out) if r.get("kind") == "adversarial_payload"]
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec["emitted"] is False
+        assert rec.get("skipped_reason")  # a reason is recorded
+        assert rec.get("rendered_value") in (None, "")  # value fields stripped on skip
+        assert rec.get("value") in (None, "")
+        blob = "".join(
+            p.read_text(errors="replace")
+            for p in out.rglob("*")
+            if p.is_file() and not p.name.startswith("GROUND_TRUTH")
+        )
+        assert "EFORGE_TEST" not in blob  # nothing leaked to disk
+        assert "jndi" not in blob
+
     def test_crlf_payload_is_a_genuine_two_line_split(self, ap_scenario, tmp_path):
         # The whole point of crlf_log_forging: a single record becomes multiple physical
         # lines, split on RAW CR/LF bytes (0d/0a) — never an escaped literal — with the
@@ -909,6 +980,28 @@ class TestAdversarialPayloadValidation:
         )
         scenario["environment"]["systems"][1]["services"] = ["http"]
         assert not _errors(scenario)
+
+    @pytest.mark.parametrize("actor_os", ["macOS 14", "FreeBSD 14", "Windows 10"])
+    def test_linux_only_surface_on_non_linux_host_rejected(self, actor_os):
+        # Regression: the Linux-only-surface gate must reject ANY non-Linux host (Windows
+        # OR an unknown OS such as macOS/BSD), not just Windows. Otherwise syslog_message on
+        # a macOS/BSD actor validates clean but is dropped at emit -> a phantom-positive
+        # ground-truth label. A Linux host is present so the 'syslog' format has a valid
+        # home, isolating the OS-gate error.
+        scenario = _linux_scenario(
+            [{"type": "adversarial_payload", "surface": "syslog_message", "family": "ansi_escape"}],
+            actor_os=actor_os,
+        )
+        scenario["environment"]["systems"].append(
+            {
+                "hostname": "LIN-AUX",
+                "ip": "192.168.20.99",
+                "os": "Ubuntu 22.04 LTS",
+                "type": "server",
+            }
+        )
+        msgs = _errors(scenario)
+        assert any("Linux-modeled" in m and "not Linux" in m for m in msgs), (actor_os, msgs)
 
 
 class TestAdversarialPayloadValidateCLI:
