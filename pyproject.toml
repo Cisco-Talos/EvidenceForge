@@ -54,7 +54,7 @@ Changelog = "https://github.com/Cisco-Talos/EvidenceForge/blob/main/CHANGELOG.md
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
+    "pytest>=9.1.0",
     "pytest-cov>=7.1.0",
     "pytest-asyncio>=1.4.0",
     "pytest-mock>=3.12.0",
