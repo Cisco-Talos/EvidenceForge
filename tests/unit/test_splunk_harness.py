@@ -24,7 +24,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,7 @@ from evidenceforge.external_parsers.splunk import (
     _required_field_validation_search,
     _search_result_rows,
     build_splunk_configs,
+    stage_splunk_apps,
     stage_splunk_logs,
 )
 from evidenceforge.external_parsers.splunk_runtime import create_splunk_compose_run
@@ -146,6 +149,54 @@ def test_build_splunk_configs_writes_generated_app_and_supplied_apps(
     assert config.supplied_app_count == 1
     assert config.supplied_app_names == ("Splunk_TA_windows",)
     assert (config.supplied_apps_dir / "Splunk_TA_windows" / "default" / "props.conf").exists()
+
+
+def test_stage_splunk_apps_rejects_tar_symlink_pivot(tmp_path: Path) -> None:
+    """Tar archives must not write through symlink members outside staging."""
+    archive_path = tmp_path / "evil.tar"
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    with tarfile.open(archive_path, "w") as archive:
+        root = tarfile.TarInfo("EvilApp")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+
+        link = tarfile.TarInfo("EvilApp/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = str(outside_dir)
+        archive.addfile(link)
+
+        payload = b"owned via tar symlink pivot"
+        member = tarfile.TarInfo("EvilApp/link/owned.txt")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+
+    with pytest.raises(SplunkHarnessError, match="unsupported file type"):
+        stage_splunk_apps((archive_path,), tmp_path / "apps")
+
+    assert not (outside_dir / "owned.txt").exists()
+
+
+def test_stage_splunk_apps_extracts_safe_tar_archive(tmp_path: Path) -> None:
+    archive_path = tmp_path / "safe.tar"
+    with tarfile.open(archive_path, "w") as archive:
+        root = tarfile.TarInfo("SafeApp")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+        default = tarfile.TarInfo("SafeApp/default")
+        default.type = tarfile.DIRTYPE
+        archive.addfile(default)
+        payload = b"[source::dummy]\n"
+        member = tarfile.TarInfo("SafeApp/default/props.conf")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+
+    app_names = stage_splunk_apps((archive_path,), tmp_path / "apps")
+
+    assert app_names == ("SafeApp",)
+    assert (tmp_path / "apps" / "SafeApp" / "default" / "props.conf").read_text(
+        encoding="utf-8"
+    ) == "[source::dummy]\n"
 
 
 def test_splunk_runtime_requires_explicit_license_acceptance(tmp_path: Path) -> None:
