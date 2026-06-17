@@ -30,7 +30,7 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, HttpContext, NetworkContext
 from evidenceforge.formats import load_format
-from evidenceforge.generation.emitters.web import WebEmitter
+from evidenceforge.generation.emitters.web import WebEmitter, _split_uri_for_apache_json
 
 
 def _make_host(system_type: str, roles: list[str]) -> HostContext:
@@ -194,6 +194,13 @@ class TestWebEmitterCanHandle:
         assert record["bytes_out"] == 512
         assert record["response_time_microseconds"] == 23000
         assert record["http_content_type"] == "text/html"
+
+    def test_splunk_uri_splitter_preserves_malformed_uri_as_fallback(self):
+        """Malformed absolute URIs should not abort Splunk web rendering."""
+        path, query = _split_uri_for_apache_json("http://[not-an-ipv6]/index.html?q=1")
+
+        assert path == "http://[not-an-ipv6]/index.html?q=1"
+        assert query == ""
 
     def test_combined_log_quoted_fields_are_escaped(self, emitter):
         """Referer and User-Agent quotes should not break combined-log fields."""
