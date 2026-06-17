@@ -765,6 +765,66 @@ class TestExplicitProxyVisibility:
 
         assert hint is not None
 
+    def test_proxy_origin_port_ignores_malformed_author_supplied_uri(self):
+        generator = ActivityGenerator(StateManager(), {})
+        oversized_port_uri = f"example.com:{'9' * 5000}"
+
+        cases = [
+            ("GET", "http://example.com:abc/", 80),
+            ("GET", "http://example.com:99999/", 80),
+            ("GET", "https://example.com:abc/", 443),
+            ("CONNECT", oversized_port_uri, 443),
+        ]
+
+        for method, uri, expected_port in cases:
+            http = HttpContext(method=method, host="example.com", uri=uri, version="1.1")
+
+            assert generator._proxy_origin_port_from_http(http) == expected_port
+
+    def test_direct_proxy_listener_connection_tolerates_malformed_http_uri(self):
+        malformed_cases = [
+            ("GET", "http://example.com:abc/"),
+            ("GET", "http://example.com:99999/"),
+            ("CONNECT", f"example.com:{'9' * 5000}"),
+        ]
+
+        for method, uri in malformed_cases:
+            generator, emitters = _generator(
+                [
+                    NetworkSensor(
+                        type="network",
+                        name="client-tap",
+                        monitoring_segments=["workstations"],
+                        direction="outbound",
+                        log_formats=["zeek"],
+                    )
+                ]
+            )
+            generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.3.10",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                dst_port=8080,
+                proto="tcp",
+                service="http",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                source_system=generator._ip_to_system["10.0.1.10"],
+                hostname="example.com",
+                conn_state="SF",
+                http=HttpContext(
+                    method=method,
+                    host="example.com",
+                    uri=uri,
+                    version="1.1",
+                    user_agent="curl/8.0",
+                    status_code=200,
+                ),
+            )
+
+            assert emitters["zeek_conn"].emit.called
+
     def test_connect_target_browser_hint_uses_origin_https_url(self):
         generator = ActivityGenerator(StateManager(), {})
 
