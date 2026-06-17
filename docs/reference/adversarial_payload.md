@@ -214,6 +214,13 @@ is repeatable; subdomains of a registered host are accepted (so a per-payload
 `<unique>.<your-collab>` works). Default runs record `callback_host: null` and remain
 fully inert.
 
+Even in live mode, EvidenceForge only ever writes the payload as **text** — it never
+executes the payload or initiates a callback itself; any callback comes solely from a
+genuinely vulnerable target that you pointed at your own host. Automated agents must
+**not** enable `--oob-host` unless the user explicitly requests live/OOB callback
+testing. `eforge validate --oob-host <host>` applies the same allowlisting so a
+live-callback scenario can be validated before it is generated.
+
 ## Ground truth
 
 Each event is recorded in two places: a **full machine-readable label** in the

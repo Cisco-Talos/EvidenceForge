@@ -95,6 +95,13 @@ semantic `surface`) have the same shape of extra validation. Common errors:
 - **http_* with no web_server** — add a system with `roles: [web_server]`.
 - **syslog_message on a Windows host** — syslog_message is Linux-modeled; put the
   actor on a Linux host (process_command_line and http_* are cross-OS).
+- **literal `value:` pointing at an operator out-of-band host** — by default `eforge
+  validate` uses the inert canary and rejects a non-reserved host as unsafe. To validate
+  a live-callback scenario whose literal payload targets your own OOB host, pass `eforge
+  validate scenario.yaml --oob-host <host>` to allowlist it exactly as `generate
+  --oob-host` does (a concrete registrable domain or IP literal; validation only, no
+  callback is ever made). Never pass `--oob-host` unless the user explicitly asks for
+  live/OOB callback testing.
 
 These are typically simple, directly-fixable errors. Only escalate to `/eforge scenario`
 if the environment lacks a host of the required OS/role and one cannot be trivially added.
