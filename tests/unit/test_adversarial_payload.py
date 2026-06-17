@@ -98,7 +98,18 @@ class TestAdversarialPayloadModel:
 class TestPayloadFamiliesData:
     def test_curated_family_set_present(self):
         names = family_names()
-        assert {"ansi_escape", "crlf_log_forging", "csv_formula", "log4shell"} <= names
+        # All eight families are first-class/supported (the "proposed" tier was removed),
+        # so guard every one against accidental removal.
+        assert {
+            "ansi_escape",
+            "crlf_log_forging",
+            "csv_formula",
+            "log4shell",
+            "xss_reflection",
+            "sql_injection",
+            "structured_log_injection",
+            "oversized_field",
+        } <= names
 
     def test_schema_validates_bundled_config(self):
         PayloadFamiliesConfig(**load_payload_families())
