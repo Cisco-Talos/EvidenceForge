@@ -114,16 +114,36 @@ overlay families are re-checked at generation; the raw/escaped control-byte matr
 per format; the host allowlist rejects every obfuscated public host (unicode/punycode/IP);
 byte-identical determinism across runs. Full non-slow suite green (4381 passed, 41 skipped).
 
-## Next steps
+## Status — SUBMITTED (2026-06-17)
 
-- Two branches are staged locally, both UNPUSHED (pushes gated):
-  - `feature/adversarial-payload-v1` — the PR #296 feature (force-push updates the PR;
-    history was rebased).
-  - `fix/spillage-linux-only-os-gate` — the spillage validator fix off `dev`, for its own
-    small PR (ships independently of the feature).
-- Decisions taken this round: D2 = docs-only (firing model unchanged); spillage = standalone
-  branch (out of this PR); `--oob-host` suffix list = kept shared with TLS/DNS (DRY; the
-  decouple-into-a-dedicated-list option remains documented above if the maintainer prefers).
+Both branches are pushed to the fork and have open PRs against `Cisco-Talos:dev`, awaiting
+maintainer review:
+
+- **PR #296** (`feature/adversarial-payload-v1`, head `496a7c61`, 14 commits) — updated via
+  force-push (history was rebased onto current `dev`), with a detailed comment mapping each of
+  the maintainer's 7 review items to its change plus the deep-review findings/decisions.
+- **PR #323** (`fix/spillage-linux-only-os-gate`, off `dev`) — the spillage phantom-positive
+  twin, split out so it can ship independently of the feature.
+
+Pre-submission gates: full non-slow suite green (4,378 passed, 41 skipped); `ruff` clean;
+`eforge validate-config` clean; an independent maintainer-style review returned APPROVE (its
+one nit — per-label `--oob-host` hostname validation — is fixed). Local branches now track the
+fork; the session backup branches were pruned.
+
+Decisions on record: **D2 = docs-only** (IDS firing model unchanged; sensor-model caveat
+documented; surface-gating offered to the maintainer); **spillage = standalone PR**;
+**`--oob-host` public-suffix list = kept shared** with TLS/DNS realism (expanded ~12→38,
+documented; decouple-into-a-dedicated-list remains an offered follow-up).
+
+## Open / next
+
+- Awaiting maintainer review on PR #296 and PR #323; CI runs on both.
+- One open question put to the maintainer: whether to surface-gate the IDS alert (a
+  header-named signature not firing for a URL-borne payload) — an easy follow-up either way.
 - No version bump on the feature branch — the bump happens once on `dev` before the
-  `dev → main` PR (AGENTS.md). Per SemVer this PR is a `feat:` (MINOR) when it lands.
-- Optionally delete the dead `fix/process-read-event-keyerror` branch.
+  `dev → main` PR (AGENTS.md). This PR is a `feat:` (MINOR) when it lands.
+- The 4 pre-existing `feature/adversarial-payload-v1-prerebase{,2,3,4}` fork branches remain
+  (not from this effort); optionally delete them and the dead `fix/process-read-event-keyerror`.
+- GitHub wiki note: the upstream wiki is enabled but uninitialized and we have pull-only
+  access, so this worklog + the two PRs are the status surface — a wiki Home page would need a
+  maintainer with push access.
