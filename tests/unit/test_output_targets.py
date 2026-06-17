@@ -22,6 +22,7 @@
 
 """Tests for target-aware output policy."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,25 @@ def test_output_target_marker_rejects_symlink(tmp_path: Path) -> None:
     marker.symlink_to(secret)
 
     with pytest.raises(ValueError, match="symlinks are not allowed"):
+        read_output_target_marker(tmp_path)
+
+
+def test_output_target_marker_rejects_non_regular_file(tmp_path: Path) -> None:
+    marker = tmp_path / "OUTPUT_TARGET.txt"
+    marker.mkdir()
+
+    with pytest.raises(ValueError, match="regular file"):
+        read_output_target_marker(tmp_path)
+
+
+def test_output_target_marker_rejects_fifo_without_reading(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO marker validation is POSIX-only")
+
+    marker = tmp_path / "OUTPUT_TARGET.txt"
+    os.mkfifo(marker)
+
+    with pytest.raises(ValueError, match="regular file"):
         read_output_target_marker(tmp_path)
 
 

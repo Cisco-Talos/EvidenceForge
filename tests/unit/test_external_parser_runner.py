@@ -118,6 +118,23 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
     }
 
 
+def test_detect_external_parser_plan_keeps_symlink_logs_within_reported_data_path(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    source_dir = data_dir / "fw-01.example.test"
+    source_dir.mkdir(parents=True)
+    secret = tmp_path / "operator_secret.txt"
+    secret.write_text("SECRET_CANARY_EFORGE_SYMLINK_LEAK\n", encoding="utf-8")
+    (source_dir / "cisco_asa.log").symlink_to(secret)
+
+    plan = detect_external_parser_plan(data_dir)
+
+    assert len(plan.logs) == 1
+    assert plan.logs[0].path == (source_dir / "cisco_asa.log").absolute()
+    assert plan.logs[0].host == "fw-01.example.test"
+
+
 def test_default_target_syslog_family_logs_are_reported_as_wrong_target(
     tmp_path: Path,
 ) -> None:

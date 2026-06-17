@@ -134,6 +134,26 @@ class TestSysmonEventEmitter:
         content = temp_output.read_text()
         assert '<Execution ProcessID="2756" ThreadID="1544"/>' in content
 
+    def test_emit_sysmon_preserves_malformed_raw_event_id(self, format_def, temp_output):
+        """Malformed raw EventID should not abort Sysmon XML rendering."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": [1],
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": 2756,
+            "ExecutionThreadID": 3632,
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>[1]</EventID>" in content
+
     def test_emit_sysmon_preserves_oversized_decimal_execution_id(self, format_def, temp_output):
         """Oversized raw decimal PID/TID strings should not abort Sysmon XML rendering."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)

@@ -54,7 +54,11 @@ from evidenceforge.generation.emitters.windows_event import (
     compact_windows_event_xml,
     format_windows_system_time,
 )
-from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
+from evidenceforge.generation.emitters.windows_record_ids import (
+    WindowsRecordIdSequence,
+    coerce_windows_event_id,
+    normalize_windows_event_id_value,
+)
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
@@ -1813,6 +1817,8 @@ class SysmonEventEmitter(LogEmitter):
         for field in ("ExecutionProcessID", "ExecutionThreadID"):
             value = event_data.get(field)
             event_data[field] = normalize_windows_id_value(value)
+        if "EventID" in event_data:
+            event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
         if self.threaded:
             self._emit_threaded(event_data)
         else:
@@ -1882,7 +1888,7 @@ class SysmonEventEmitter(LogEmitter):
             )
             event["EventRecordID"] = sequence_model.next(
                 event.get("TimeCreated"),
-                int(event.get("EventID") or 0),
+                coerce_windows_event_id(event.get("EventID")),
             )
             self._record_id_counters[counter_key] = sequence_model.current
 

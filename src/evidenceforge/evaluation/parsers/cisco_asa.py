@@ -22,6 +22,7 @@
 
 """Parser for Cisco ASA firewall syslog files."""
 
+import ipaddress
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -50,7 +51,7 @@ BUILT_TCP_UDP = re.compile(
 # Built ICMP: "Built {inbound/outbound} ICMP connection for faddr ip/type ..."
 BUILT_ICMP = re.compile(
     r"Built\s+(?:inbound|outbound)\s+ICMP\s+connection\s+for\s+faddr\s+"
-    r"(?:(\w+):)?([^/\s]+)/(\d+)"
+    r"([^/\s]+)/(\d+)"
 )
 
 # Teardown connection: "Teardown TCP connection 12345 for inside:10.0.10.50/54321 to ..."
@@ -64,7 +65,7 @@ TEARDOWN_TCP_UDP = re.compile(
 # Teardown ICMP: "Teardown ICMP connection for faddr ip/type ..."
 TEARDOWN_ICMP = re.compile(
     r"Teardown\s+ICMP\s+connection\s+for\s+faddr\s+"
-    r"(?:(\w+):)?([^/\s]+)/(\d+)"
+    r"([^/\s]+)/(\d+)"
 )
 
 # Deny: "Deny tcp src outside:104.248.71.33/44231 dst inside:10.0.10.50/445 ..."
@@ -99,6 +100,35 @@ THREAT_DETECTION = re.compile(
     r"max\s+configured\s+rate\s+is\s+(\d+);\s+"
     r"Cumulative\s+total\s+count\s+is\s+(\d+)"
 )
+
+
+def _parse_asa_address_token(token: str) -> tuple[str | None, str]:
+    """Split an ASA address token into optional interface and IP address.
+
+    ASA may render address tokens either as bare IPs or as ``interface:IP``.
+    Bare IPv6 addresses also contain colons, so validate the whole token before
+    treating the first colon-separated component as a legacy interface prefix.
+    """
+    try:
+        ipaddress.ip_address(token)
+    except ValueError:
+        pass
+    else:
+        return None, token
+
+    if ":" not in token:
+        return None, token
+
+    interface, address = token.split(":", 1)
+    if not re.fullmatch(r"\w+", interface):
+        return None, token
+
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        return None, token
+
+    return interface, address
 
 
 @register_parser
@@ -183,10 +213,11 @@ class CiscoAsaParser(LogParser):
         elif msg_id in (302020,):
             match = BUILT_ICMP.search(message)
             if match:
-                if match.group(1):
-                    fields["dst_interface"] = match.group(1)
-                fields["dst_ip"] = match.group(2)
-                fields["icmp_type"] = int(match.group(3))
+                interface, address = _parse_asa_address_token(match.group(1))
+                if interface:
+                    fields["dst_interface"] = interface
+                fields["dst_ip"] = address
+                fields["icmp_type"] = int(match.group(2))
         elif msg_id in (302014, 302016):
             match = TEARDOWN_TCP_UDP.search(message)
             if match:
@@ -202,10 +233,11 @@ class CiscoAsaParser(LogParser):
         elif msg_id in (302021,):
             match = TEARDOWN_ICMP.search(message)
             if match:
-                if match.group(1):
-                    fields["dst_interface"] = match.group(1)
-                fields["dst_ip"] = match.group(2)
-                fields["icmp_type"] = int(match.group(3))
+                interface, address = _parse_asa_address_token(match.group(1))
+                if interface:
+                    fields["dst_interface"] = interface
+                fields["dst_ip"] = address
+                fields["icmp_type"] = int(match.group(2))
         elif msg_id == 106023:
             match = DENY.search(message)
             if match:

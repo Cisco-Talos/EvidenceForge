@@ -21,6 +21,7 @@ from evidenceforge.generation.activity.edr_pools import (
     materialize_edr_template_group,
     normalize_defender_platform_path,
     select_ambient_file_churn_effect,
+    select_command_file_side_effect,
     select_file_side_effect,
 )
 
@@ -704,6 +705,37 @@ class TestFileSideEffectRealism:
         haystack = str(data)
         assert "eforge-" not in haystack
         assert "artifact-" not in haystack
+
+    def test_file_side_effect_actions_all_have_event_type_mapping(self):
+        from evidenceforge.generation.activity.generator import _FILE_ACTION_EVENT_TYPES
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+
+        config_actions = {
+            str(action).lower()
+            for profile in load_edr_pools().get("file_side_effect_profiles", [])
+            for action in profile.get("actions", [])
+        }
+        command_samples = (
+            ("gzip", "gzip -9 /tmp/patient_claims.sql"),
+            ("mysqldump", "mysqldump ehr patients > /tmp/patient_claims.sql"),
+            (
+                "powershell.exe",
+                r"powershell.exe -NoProfile -Command Compress-Archive "
+                r"-Path C:\ProgramData\Microsoft\*.log "
+                r"-DestinationPath C:\ProgramData\Microsoft\health-cache.zip",
+            ),
+        )
+        command_actions = {
+            effect[0]
+            for process_name, command_line in command_samples
+            if (effect := select_command_file_side_effect(process_name, command_line)) is not None
+        }
+        missing = (config_actions | command_actions) - set(_FILE_ACTION_EVENT_TYPES)
+
+        assert not missing, f"file side-effect actions with no event mapping: {sorted(missing)}"
+        assert _FILE_ACTION_EVENT_TYPES["read"] == "file_read"
+        unrenderable = set(_FILE_ACTION_EVENT_TYPES.values()) - EcarEmitter._supported_types
+        assert not unrenderable, f"file-effect event types eCAR cannot render: {unrenderable}"
 
     def test_gzip_side_effect_uses_compressed_operand_path(self):
         effect = select_file_side_effect(

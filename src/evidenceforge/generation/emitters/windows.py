@@ -59,7 +59,11 @@ from evidenceforge.generation.emitters.windows_event import (
     compact_windows_event_xml,
     format_windows_system_time,
 )
-from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
+from evidenceforge.generation.emitters.windows_record_ids import (
+    WindowsRecordIdSequence,
+    coerce_windows_event_id,
+    normalize_windows_event_id_value,
+)
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
@@ -1585,6 +1589,8 @@ class WindowsEventEmitter(LogEmitter):
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
         event_data = self._normalize_execution_ids(event_data)
+        if "EventID" in event_data:
+            event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         if self.threaded:
@@ -2191,7 +2197,7 @@ class WindowsEventEmitter(LogEmitter):
             )
             event["EventRecordID"] = sequence_model.next(
                 event.get("TimeCreated"),
-                int(event.get("EventID") or 0),
+                coerce_windows_event_id(event.get("EventID")),
             )
             self._record_id_counters[counter_key] = sequence_model.current
 

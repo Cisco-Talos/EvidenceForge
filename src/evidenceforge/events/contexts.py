@@ -101,6 +101,7 @@ class ProcessContext:
     mandatory_label: str = ""  # MandatoryLabel SID
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
     current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
+    concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
 
 
 @dataclass(slots=True)

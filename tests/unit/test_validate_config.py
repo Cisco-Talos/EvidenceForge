@@ -230,6 +230,64 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_excessive_ecar_file_churn_counts(self, monkeypatch):
+        from evidenceforge.generation.activity import endpoint_noise
+
+        def load_invalid_endpoint_noise():
+            return {
+                "windows_scheduled_processes": {
+                    "count_min": 2,
+                    "count_max": 5,
+                    "trigger_window_start_seconds": 90,
+                    "trigger_window_end_seconds": 3510,
+                    "slot_spacing_seconds": 300,
+                    "host_phase_window_seconds": 900,
+                    "jitter_seconds_min": 20,
+                    "jitter_seconds_max": 120,
+                    "skip_probability": 0.05,
+                },
+                "registry_noise": {
+                    "dhcp_interface_values": {
+                        "value_names": ["DhcpIPAddress"],
+                        "require_dhcp_state": True,
+                        "emit_on_lease_events": True,
+                        "suppress_system_types": ["server", "domain_controller"],
+                        "suppress_roles": ["domain_controller"],
+                    }
+                },
+                "ecar_flow_identity": {
+                    "user_process_probability": 0.88,
+                    "service_process_probability": 0.48,
+                    "root_process_probability": 0.42,
+                    "inbound_listener_probability": 0.36,
+                },
+                "ecar_file_churn": {
+                    "enabled": True,
+                    "windows": {
+                        "count_min": 101,
+                        "count_max": 101,
+                        "action_weights": {"read": 1, "modify": 0, "create": 0},
+                    },
+                    "linux": {
+                        "count_min": 2,
+                        "count_max": 6,
+                        "action_weights": {"read": 1, "modify": 0, "create": 0},
+                    },
+                },
+            }
+
+        monkeypatch.setattr(endpoint_noise, "load_endpoint_noise", load_invalid_endpoint_noise)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "endpoint_noise.yaml"
+            and "ecar_file_churn" in issue.message
+            and "less than or equal to 100" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_observation_profile_source(self, monkeypatch):
         from evidenceforge.config import observation_profiles
 

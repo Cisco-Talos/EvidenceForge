@@ -63,6 +63,17 @@ Options:
   --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
+  --oob-host <host>      LIVE-CALLBACK out-of-band testing for adversarial_payload events:
+                         register an operator-controlled host (Burp Collaborator /
+                         interactsh / sinkhole) so a vulnerable target calls back to YOU.
+                         Must be a concrete registrable domain (e.g. oast.fun) or an IP
+                         literal. Replaces the inert canary; allowlists your fuzzer
+                         payloads. Repeatable. Passing it is the explicit opt-in. NEVER
+                         pass --oob-host unless the user explicitly asks for live/OOB
+                         callback testing against systems they are authorized to test.
+                         Off by default — payloads use the inert, non-resolving canary
+                         `canary.eforge.invalid`; EvidenceForge writes payload text only
+                         and never executes it or calls out during generation.
 ```
 
 Exit codes:

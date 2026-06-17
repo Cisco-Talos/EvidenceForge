@@ -516,6 +516,8 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
+        if proc.concurrency_group_id:
+            event_data["_concurrency_group_id"] = proc.concurrency_group_id
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -1786,7 +1788,6 @@ class EcarEmitter(HostMultiplexEmitter):
         "whoami",
         "zip",
     }
-    _LINUX_SHELL_PIPELINE_CREATE_WINDOW_MS = 1000
 
     @classmethod
     def _is_linux_shell_foreground_create(cls, record: dict[str, Any]) -> bool:
@@ -1855,6 +1856,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
         shift_by_object_id: dict[str, int] = {}
         for indexes in create_indexes_by_shell.values():
+            original_indexes = list(indexes)
             indexes.sort(
                 key=lambda index: (
                     cls._ecar_int(records[index].get("timestamp_ms"), 0)
@@ -1867,21 +1869,29 @@ class EcarEmitter(HostMultiplexEmitter):
             )
             next_available_ms = 0
             groups: list[list[int]] = []
+            original_group_by_concurrency_id: dict[str, list[int]] = {}
+            for index in original_indexes:
+                record = records[index]
+                if record is None:
+                    continue
+                concurrency_group_id = str(record.get("_concurrency_group_id") or "")
+                if concurrency_group_id:
+                    original_group_by_concurrency_id.setdefault(concurrency_group_id, []).append(
+                        index
+                    )
+            group_by_concurrency_id: dict[str, list[int]] = {}
             for index in indexes:
                 record = records[index]
                 if record is None:
                     continue
-                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
-                if groups:
-                    first_record = records[groups[-1][0]]
-                    first_ms = (
-                        cls._ecar_int(first_record.get("timestamp_ms"), 0)
-                        if first_record is not None
-                        else 0
-                    )
-                    if timestamp_ms <= first_ms + cls._LINUX_SHELL_PIPELINE_CREATE_WINDOW_MS:
-                        groups[-1].append(index)
-                        continue
+                concurrency_group_id = str(record.get("_concurrency_group_id") or "")
+                if concurrency_group_id:
+                    group = group_by_concurrency_id.get(concurrency_group_id)
+                    if group is None:
+                        group = original_group_by_concurrency_id[concurrency_group_id]
+                        group_by_concurrency_id[concurrency_group_id] = group
+                        groups.append(group)
+                    continue
                 groups.append([index])
 
             for group in groups:
@@ -1948,6 +1958,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 and record.get("action") == "TERMINATE"
             ):
                 record["timestamp_ms"] = cls._ecar_int(record.get("timestamp_ms"), 0) + shift_ms
+            record.pop("_concurrency_group_id", None)
             normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
@@ -2312,6 +2323,8 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         if "_canonical_ms" in event_data:
             record["_canonical_ms"] = event_data["_canonical_ms"]
+        if event_data.get("_concurrency_group_id"):
+            record["_concurrency_group_id"] = event_data["_concurrency_group_id"]
 
         if event_data.get("actorID"):
             record["actorID"] = event_data["actorID"]

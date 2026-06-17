@@ -6,6 +6,88 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.4.0 (2026-06-17)
+
+This release integrates the accepted Codex hardening fixes queued on `dev`, the
+accepted `adversarial_payload` feature, a local SOF-ELK harness fixture cleanup
+found during slow-suite validation, a spillage validation fix, and dependency
+maintenance. Because this release now includes the non-breaking
+`adversarial_payload` feature before landing on `main`, the project moves from
+`1.3.2` to `1.4.0`.
+
+**Adversarial payload testing**
+
+- Added the typed `adversarial_payload` storyline event for deterministic
+  log-pipeline weakness testing across syslog, process command line, HTTP
+  user-agent, URL, and referrer surfaces, with data-driven payload families,
+  surface-aware encoding, canonical ground-truth records, evaluation support,
+  and on-wire IDS alert modeling when cleartext HTTP traffic is sensor-visible
+  (`fe4bc439`, `fd40a2b4`, `ca46a3e4`).
+- Added supported payload families for ANSI escape, CRLF log forging, CSV
+  formula injection, Log4Shell/JNDI, reflected XSS, SQL injection,
+  structured-log injection, and oversized-field testing, then removed the
+  temporary proposed-family mechanism so shipped families are first-class
+  supported behavior (`2ea19b4e`, `86ba2e86`).
+- Added explicit live-callback OOB support via `--oob-host`, removed the
+  separate acknowledgement flag, added `eforge validate --oob-host` parity, and
+  enforced concrete registrable-domain/IP validation at the payload safety
+  boundary and carrier-rendering boundary so broad values cannot widen the host
+  allowlist (`cca749e3`, `0daa726d`, `47a1fa58`).
+- Tightened adversarial-payload docs, skill guidance, IDS sensor-model
+  documentation, public-suffix handling, Linux-only surface validation, and
+  `expected_sources` so ground truth names only sources that actually land in the
+  generated dataset (`68d77afe`, `55bb3d62`, `3eede9b8`, `03e92fea`,
+  `9aee3b19`, `4cd64cac`, `ef59cd9a`).
+
+**External parser and output-target hardening**
+
+- Hardened Splunk app archive extraction, output-target marker reads, raw
+  Windows Event ID normalization, deep X.509 parser originals, SOF-ELK DNS tag
+  validation, and symlink handling for external parser source logs
+  (`fe267171`, `228fbaca`, `e79f2e6e`, `094afa79`, `ba34aae4`, `f64a7447`,
+  `5fcb7da5`, `a96e505d`, `7d8e49c1`, `ec6f88c3`, `8d6c3c58`, `4aaf2df2`).
+- Preserved accepted integration behavior by replacing unsafe tar extraction
+  with safe regular-file extraction and keeping explicit eCAR pipeline group
+  stage order stable after parser hardening (`c4405a8e`).
+- Updated the combined SOF-ELK harness DNS fixture to include normalized
+  `dns.answers.ip` for address answers, matching the stricter parser validation
+  contract (`f9b5e2f2`).
+
+**Malformed input tolerance and source-specific rendering**
+
+- Tolerated malformed explicit proxy URIs, HTTP file URIs, and Splunk request
+  URLs without crashing parser or emitter paths (`950fa2cd`, `655227de`,
+  `719770f6`, `f58a9d58`, `9e4ea592`, `2478c63f`).
+- Preserved IPv6 Cisco ASA ICMP `faddr` parsing and aligned web-emitter role
+  matching with normalized web-server roles (`bca1481b`, `2461e744`,
+  `a2d362a8`, `75a416c3`).
+
+**eCAR, shell, and logon realism guards**
+
+- Bounded eCAR file churn counts, required explicit eCAR shell concurrency
+  groups, hardened storyline shell friction templates, and avoided orphan Linux
+  logons when dropped bash commands no longer have visible session evidence
+  (`2fad4a9f`, `28c12917`, `19222895`, `d261c57e`, `241d756b`, `ada23d3e`,
+  `ec00e3d7`, `104c457f`).
+- Added a regression guard for file side-effect event mappings so read-style
+  side effects remain covered (`4cf50430`).
+- Rejected Linux-only spillage surfaces such as `shell_history` and
+  `syslog_message` on any non-Linux host, preventing ground-truthed credential
+  labels from being created for evidence that no Linux-modeled emitter can write
+  (`de6fc246`).
+
+**Release documentation**
+
+- Hardened the manual release fallback docs so maintainers have clearer release
+  guard and tagging instructions when automation is unavailable (`f292f0ec`,
+  `39c8d87a`).
+
+**Dependency maintenance**
+
+- Updated development dependencies to pytest 9.1.0 and Ruff 0.15.17, with
+  slow-inclusive no-coverage validation passing on the upgraded toolchain
+  (`f9db94b3`, `65387363`).
+
 ## v1.3.2 (2026-06-06)
 
 This patch release fixes a long-window Windows process lifecycle regression

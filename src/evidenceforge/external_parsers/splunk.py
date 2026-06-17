@@ -1241,7 +1241,18 @@ def _safe_tar_extract(archive: tarfile.TarFile, destination: Path) -> None:
         target = (destination / member.name).resolve()
         if not target.is_relative_to(destination):
             raise SplunkHarnessError(f"unsafe path in Splunk app archive: {member.name}")
-    archive.extractall(destination)
+        if not (member.isdir() or member.isfile()):
+            raise SplunkHarnessError(f"unsupported file type in Splunk app archive: {member.name}")
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = archive.extractfile(member)
+        if source is None:
+            raise SplunkHarnessError(f"failed to read Splunk app archive member: {member.name}")
+        with source, target.open("wb") as output:
+            shutil.copyfileobj(source, output)
 
 
 def _unique_app_destination(destination_root: Path, app_name: str) -> Path:

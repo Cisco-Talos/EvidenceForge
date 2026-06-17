@@ -29,6 +29,8 @@ file shape rendered on disk for those canonical formats.
 
 from __future__ import annotations
 
+import os
+import stat
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -186,22 +188,41 @@ def read_output_target_marker(path: Path) -> OutputTarget:
         candidates.append(path / "data" / OUTPUT_TARGET_FILENAME)
 
     for marker in candidates:
-        if not marker.exists():
+        try:
+            marker_stat = marker.lstat()
+        except FileNotFoundError:
             continue
-        if marker.is_symlink():
+
+        if stat.S_ISLNK(marker_stat.st_mode):
             raise ValueError("invalid output target marker: symlinks are not allowed")
-        resolved_marker = marker.resolve()
+        if not stat.S_ISREG(marker_stat.st_mode):
+            raise ValueError("invalid output target marker: marker must be a regular file")
+
+        resolved_marker = marker.resolve(strict=True)
         if not resolved_marker.is_relative_to(root_dir):
             raise ValueError(
                 "invalid output target marker: marker must stay under output directory"
             )
-        marker_size = marker.stat().st_size
+
+        marker_size = marker_stat.st_size
         if marker_size > MAX_OUTPUT_TARGET_MARKER_BYTES:
             raise ValueError(
                 "invalid output target marker: file is too large"
                 f" ({marker_size} bytes > {MAX_OUTPUT_TARGET_MARKER_BYTES} bytes)"
             )
-        value = marker.read_text(encoding="utf-8").strip()
+
+        open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        marker_fd = os.open(marker, open_flags)
+        with os.fdopen(marker_fd, "rb") as marker_file:
+            opened_stat = os.fstat(marker_file.fileno())
+            if not stat.S_ISREG(opened_stat.st_mode):
+                raise ValueError("invalid output target marker: marker must be a regular file")
+            if opened_stat.st_size > MAX_OUTPUT_TARGET_MARKER_BYTES:
+                raise ValueError(
+                    "invalid output target marker: file is too large"
+                    f" ({opened_stat.st_size} bytes > {MAX_OUTPUT_TARGET_MARKER_BYTES} bytes)"
+                )
+            value = marker_file.read(MAX_OUTPUT_TARGET_MARKER_BYTES + 1).decode("utf-8").strip()
         return normalize_output_target(value or None)
     return OutputTarget.DEFAULT
 

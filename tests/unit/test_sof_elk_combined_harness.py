@@ -330,7 +330,7 @@ def _parsed_dns(
         event["dns"] = {
             "question": {"name": question_name, "type": "A"},
             "response": {"code": "NOERROR"},
-            "answers": {"data": "93.184.216.34", "ttl": 3600},
+            "answers": {"data": "93.184.216.34", "ttl": 3600, "ip": "93.184.216.34"},
         }
     return event
 

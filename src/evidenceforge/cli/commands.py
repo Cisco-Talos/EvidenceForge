@@ -137,6 +137,34 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
     )
 
 
+def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
+    """Normalize/validate operator-supplied --oob-host values for fail-fast CLI UX.
+
+    Delegates the actual contract to ``adversarial_payload.normalize_oob_host`` — the single
+    source of truth, which is ALSO enforced at the safety boundary (``check_payload_safety``)
+    so a broad value (a bare TLD/public suffix that would allowlist a whole namespace via the
+    suffix match) can never reach the allowlist regardless of caller. A value must be a concrete
+    registrable domain (e.g. example.com, oast.fun, or a subdomain of one) or an IP literal.
+    Shared by `generate` and `validate`. Prints a friendly error and raises
+    typer.Exit(EXIT_INPUT_ERROR) on a bad value.
+    """
+    from evidenceforge.generation.adversarial_payload import (
+        AdversarialPayloadSafetyError,
+        normalize_oob_host,
+    )
+
+    normalized: list[str] = []
+    for raw in oob_host:
+        if not raw.strip():
+            continue
+        try:
+            normalized.append(normalize_oob_host(raw))
+        except AdversarialPayloadSafetyError as exc:
+            console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+            raise typer.Exit(EXIT_INPUT_ERROR) from exc
+    return tuple(dict.fromkeys(normalized))
+
+
 @app.command()
 def generate(
     scenario_file: Path = typer.Argument(
@@ -173,6 +201,17 @@ def generate(
         "--target",
         help="Output rendering target: default, sof-elk, or splunk",
     ),
+    oob_host: list[str] = typer.Option(
+        [],
+        "--oob-host",
+        help="LIVE CALLBACK (out-of-band) testing: register an operator-controlled host "
+        "(e.g. a Burp Collaborator / interactsh / sinkhole domain) for adversarial_payload "
+        "events. The payload's canary is replaced with this host so a vulnerable target "
+        "actually calls back to YOU. Must be a concrete registrable domain (e.g. oast.fun) "
+        "or an IP literal. Repeatable. Passing it is the explicit opt-in: only use against "
+        "systems you are authorized to test. Off by default (payloads use the inert, "
+        "non-resolving canary).",
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -194,9 +233,23 @@ def generate(
         console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR) from exc
 
+    # Live-callback (OOB) opt-in for adversarial_payload events. Off by default; passing
+    # --oob-host IS the explicit opt-in, and only the explicitly-registered host(s) become
+    # allowlisted, so a payload can never silently point anywhere else. Normalize + validate
+    # at the boundary (fail fast) via the shared helper that generate and validate share.
+    oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
+
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
     console.print(f"Scenario: {scenario_file}")
     console.print(f"Output target: {output_target.value}")
+    if oob_hosts:
+        console.print(
+            "[bold red]⚠ LIVE CALLBACK MODE[/bold red] — adversarial_payload events will "
+            f"point at {', '.join(oob_hosts)} instead of the inert canary. A VULNERABLE "
+            "TARGET WILL CALL BACK to these host(s). Only use against systems you are "
+            "authorized to test.",
+            style="red",
+        )
 
     # Load and validate scenario
     try:
@@ -217,7 +270,7 @@ def generate(
         from evidenceforge.validation import ScenarioValidator
 
         console.print("\n[bold]Validating cross-references...[/bold]")
-        validator = ScenarioValidator(scenario)
+        validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
         issues = validator.validate()
 
         if issues:
@@ -433,6 +486,7 @@ def generate(
                 progress_callback=progress_callback,
                 ground_truth_dir=gen_gt_dir,
                 output_target=output_target,
+                oob_hosts=oob_hosts,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -588,6 +642,15 @@ def validate(
         dir_okay=False,
         readable=True,
     ),
+    oob_host: list[str] = typer.Option(
+        [],
+        "--oob-host",
+        help="Allowlist an operator-controlled out-of-band host (concrete registrable "
+        "domain or IP literal) when validating a scenario whose adversarial_payload uses a "
+        "literal `value:` pointing at that host — parity with `generate --oob-host`, so "
+        "'validate before generate' stays reliable for live-callback scenarios. Validation "
+        "only: no callback is ever made. Repeatable.",
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -596,11 +659,15 @@ def validate(
 
     Exit codes:
     - 0: Validation passed
-    - 1: YAML parse error or file I/O error
+    - 1: YAML parse error, file I/O error, or invalid --oob-host
     - 2: Schema validation or cross-reference error
     """
     console.print("[bold blue]EvidenceForge Scenario Validator[/bold blue]")
     console.print(f"Scenario: {scenario_file}\n")
+
+    # Normalize/validate --oob-host the same way `generate` does, so a literal OOB payload
+    # validates identically here (fail fast on a bad value before loading the scenario).
+    oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
 
     # Step 1: Load and parse YAML
     try:
@@ -640,7 +707,7 @@ def validate(
     from evidenceforge.validation import ScenarioValidator
 
     console.print("\n[bold]Validating cross-references...[/bold]")
-    validator = ScenarioValidator(scenario)
+    validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
     issues = validator.validate()
 
     if issues:

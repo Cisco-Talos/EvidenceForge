@@ -45,6 +45,7 @@ from evidenceforge.external_parsers.sof_elk_sources import (
 )
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
+    SofElkHarnessError,
     SofElkParserError,
 )
 
@@ -65,6 +66,22 @@ def test_stage_source_logs_preserves_sensor_subdirectories(tmp_path: Path) -> No
     assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
         Path("syslog/2026/fw-01.example.test/cisco_asa.log")
     }
+
+
+def test_stage_source_logs_rejects_symlinked_source_files(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_dir = source_root / "fw-01.example.test" / "2026"
+    source_dir.mkdir(parents=True)
+    secret = tmp_path / "operator_secret.txt"
+    secret.write_text("SECRET_CANARY_EFORGE_SYMLINK_LEAK\n", encoding="utf-8")
+    symlink = source_dir / "cisco_asa.log"
+    symlink.symlink_to(secret)
+    stage_root = tmp_path / "stage"
+
+    with pytest.raises(SofElkHarnessError, match="refusing to stage symlinked"):
+        stage_source_logs(source_root, stage_root, CISCO_ASA_SPEC)
+
+    assert not list(stage_root.rglob("cisco_asa.log"))
 
 
 def test_stage_source_logs_preserves_web_access_subdirectories(tmp_path: Path) -> None:

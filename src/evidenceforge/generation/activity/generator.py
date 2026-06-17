@@ -2935,6 +2935,30 @@ def _split_linux_pipeline(
     return list(_iter_linux_pipeline_stages(command, max_stages=max_stages))
 
 
+def _contains_unquoted_shell_pipe(command: str) -> bool:
+    """Return whether a shell command contains an unquoted pipe operator."""
+    quote: str | None = None
+    escaped = False
+    scan_limit = min(len(command), _LINUX_SHELL_MAX_SCAN_CHARS)
+    for char in command[:scan_limit]:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "|":
+            return True
+    return False
+
+
 def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[str]:
     """Yield bounded unquoted pipeline/control stages from a Linux shell command."""
     if max_stages <= 0:
@@ -6117,7 +6141,7 @@ class ActivityGenerator:
         if (http.method or "").upper() == "CONNECT":
             target = http.uri or http.host or ""
             _host, separator, port_text = target.rpartition(":")
-            if separator and port_text.isdigit():
+            if separator and port_text.isdigit() and len(port_text) <= 5:
                 port = int(port_text)
                 if 1 <= port <= 65535:
                     return port
@@ -6126,10 +6150,11 @@ class ActivityGenerator:
         if url.startswith(("http://", "https://")):
             try:
                 parsed = urlsplit(url)
+                parsed_port = parsed.port
             except ValueError:
                 return 443 if url.startswith("https://") else 80
-            if parsed.port is not None:
-                return parsed.port
+            if parsed_port is not None:
+                return parsed_port
             return 443 if parsed.scheme == "https" else 80
         return 80
 
@@ -8696,6 +8721,7 @@ class ActivityGenerator:
         suppress_command_file_effect: bool = False,
         allow_existing_browser_reuse: bool = True,
         allow_browser_launch_spacing: bool = True,
+        concurrency_group_id: str = "",
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -8722,6 +8748,7 @@ class ActivityGenerator:
             allow_browser_launch_spacing: Apply anti-burst spacing to top-level browser
                 launches. Causal connection-owner processes disable this so process
                 creation stays before the socket evidence they own.
+            concurrency_group_id: Explicit same-shell concurrency group for true pipelines.
 
         Returns:
             PID of the new process
@@ -8739,6 +8766,7 @@ class ActivityGenerator:
             suppress_command_file_effect=suppress_command_file_effect,
             allow_existing_browser_reuse=allow_existing_browser_reuse,
             allow_browser_launch_spacing=allow_browser_launch_spacing,
+            concurrency_group_id=concurrency_group_id,
         )
         return ProcessExecutionActionBundle(self, request).execute()
 
@@ -8758,6 +8786,7 @@ class ActivityGenerator:
         suppress_command_file_effect = request.suppress_command_file_effect
         allow_existing_browser_reuse = request.allow_existing_browser_reuse
         allow_browser_launch_spacing = request.allow_browser_launch_spacing
+        concurrency_group_id = request.concurrency_group_id
 
         self.state_manager.set_current_time(time)
         if _get_os_category(system.os) == "windows":
@@ -9030,6 +9059,7 @@ class ActivityGenerator:
                     parent_pid=parent_pid,
                     logon_type=process_logon_type,
                 ),
+                concurrency_group_id=concurrency_group_id,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
             storyline_origin=from_storyline,
@@ -13082,6 +13112,14 @@ class ActivityGenerator:
 
         shell_release_times: list[tuple[int, datetime, str]] = []
         base_process_time: datetime | None = None
+        concurrency_group_id = ""
+        if len(processes) > 1 and _contains_unquoted_shell_pipe(command):
+            pipeline_seed = _stable_seed(
+                "linux_shell_pipeline:"
+                f"{system.hostname}:{user.username}:{session.logon_id}:"
+                f"{time.isoformat()}:{command}"
+            )
+            concurrency_group_id = f"linux-shell-pipeline-{pipeline_seed:016x}"
         for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             if base_process_time is None:
@@ -13113,6 +13151,7 @@ class ActivityGenerator:
                 command_line=process_command_line,
                 parent_pid=parent_pid,
                 suppress_command_file_effect=True,
+                concurrency_group_id=concurrency_group_id,
             )
             running_proc = self.state_manager.get_process(system.hostname, pid)
             actual_process_start = (
@@ -18199,6 +18238,316 @@ class ActivityGenerator:
             ):
                 return candidate
         return 4
+
+    def generate_adversarial_payload(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        time: datetime,
+        surface: str,
+        family: str | None,
+        value: str | None,
+        seed_key: str,
+        scheme: str | None = None,
+        logon_id: str | None = None,
+        target_system: "System | None" = None,
+    ) -> dict[str, Any]:
+        """Emit one adversarial payload into a semantic surface.
+
+        The counterpart to ``generate_spillage``: resolves a single safety-checked
+        canonical payload (synthesized from a family or supplied literally), renders
+        it with surface-appropriate encoding that PRESERVES the injection, and routes
+        it through the canonical modeled generation path for that surface. For http_*
+        surfaces ``scheme`` is the destination web server's resolved transport
+        (http/https), chosen by the caller from the server's supported schemes.
+        Returns a dict of ground-truth fields (including ``encoding`` and ``scheme``).
+        """
+        from evidenceforge.config.payload_families import get_family
+        from evidenceforge.generation.adversarial_payload import (
+            HTTP_SURFACES,
+            _raw_surfaces_for,
+            ids_signature_for_payload,
+            render_for_surface,
+            resolve_value,
+        )
+
+        # Live-callback opt-in (off by default): operator-registered OOB host(s) from
+        # `eforge generate --oob-host`. When set, a family's {canary} resolves to the
+        # first and all are accepted by the host allowlist, so the payload calls back to
+        # the operator's Collaborator/sinkhole and a fuzzer's own value: payload passes.
+        oob_hosts: tuple[str, ...] = tuple(getattr(self, "_oob_hosts", ()) or ())
+        canonical, resolved_family = resolve_value(
+            family, value, seed_key=seed_key, oob_hosts=oob_hosts
+        )
+        os_category = _get_os_category(system.os)
+        render = render_for_surface(
+            canonical,
+            surface,
+            resolved_family or None,
+            seed_key,
+            os_category=os_category,
+            oob_hosts=oob_hosts,
+        )
+
+        emitted_time = time
+        target_fqdn: str | None = None
+        effective_scheme: str | None = None
+        ids_alert_meta: dict[str, Any] | None = None
+        # Pivot anchors: faithful identifiers that let an analyst jump from the payload
+        # record to the exact evidence row — dst tuple for http (grep zeek/web by ip:port),
+        # pid for process (the eCAR PROCESS record). The connection UID is intentionally
+        # omitted: the rendered Zeek row carries a sensor-derived UID, so a raw UID here
+        # would mislead rather than pivot.
+        pivot: dict[str, Any] = {}
+        if surface == "syslog_message":
+            # Carry a realistic procid so the injected line isn't the only NILVALUE-pid
+            # line in the file (a statistical fingerprint a reviewer could grep for).
+            syslog_pid = random.Random(_stable_seed(f"{seed_key}:syslog_pid")).randint(300, 32000)
+            self.generate_syslog_event(
+                system=system,
+                time=time,
+                app_name=render.syslog_app,
+                message=render.syslog_message,
+                pid=syslog_pid,
+            )
+        elif surface == "process_command_line":
+            # The payload rides on a process command line, captured by EDR/process
+            # telemetry as a standalone process. Control bytes are escaped by the
+            # surface encoder before they reach command_line, so the eCAR record is
+            # not corrupted (the modeled raw-injection surface is syslog_message).
+            default_proc = (
+                r"C:\Windows\System32\cmd.exe" if os_category == "windows" else "/usr/bin/sh"
+            )
+            # Canonical session/parent ownership for a session-bound Linux spill: pick a
+            # non-shell parent so the live in-window process record is self-consistent.
+            parent_pid = 4
+            if os_category == "linux" and logon_id:
+                parent_pid = self._spillage_process_parent_pid(
+                    system=system,
+                    time=time,
+                    logon_id=logon_id,
+                )
+            pid = self.generate_process(
+                user=user,
+                system=system,
+                time=time,
+                logon_id=logon_id or "0x0",
+                process_name=render.process_name or default_proc,
+                command_line=render.command,
+                parent_pid=parent_pid,
+                from_storyline=True,
+            )
+            if not pid:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            pivot["pid"] = pid
+        elif surface in HTTP_SURFACES:
+            # The payload rides in an outbound HTTP/S request field (User-Agent, URL,
+            # or Referer) from the actor's host to a web server, captured by that
+            # server's access log. Route through the canonical connection path so the
+            # web emitter renders it natively.
+            if target_system is None:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            from evidenceforge.generation.spillage import choose_web_spillage_scheme
+
+            effective_scheme = choose_web_spillage_scheme(target_system, scheme)
+            if effective_scheme is None:
+                # The chosen web server does not serve a compatible scheme.
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            target_fqdn = self._build_host_context(target_system).fqdn or target_system.hostname
+            if surface == "http_user_agent":
+                # The payload IS the User-Agent header (the classic Log4Shell/UA
+                # vector); the request path is benign.
+                user_agent = render.user_agent or render.encoded_value
+            elif surface == "http_referrer":
+                from evidenceforge.generation.activity.web_session_profiles import (
+                    pick_web_user_agent,
+                )
+
+                ua_rng = random.Random(_stable_seed(f"{seed_key}:ua"))
+                user_agent = pick_web_user_agent(
+                    ua_rng,
+                    {
+                        "user_agent_pool": "browser_any",
+                        "user_agent_pool_by_os": {
+                            "windows": "browser_windows",
+                            "linux": "browser_linux",
+                        },
+                    },
+                    source_os=_get_os_category(system.os),
+                )
+            else:
+                ua_rng = random.Random(_stable_seed(f"{seed_key}:ua"))
+                user_agent = pick_proxy_user_agent(ua_rng, system, hostname=target_system.hostname)
+            resp_len = random.Random(_stable_seed(f"{seed_key}:bytes")).randint(256, 8192)
+            http_ctx = HttpContext(
+                method=render.http_method or "GET",
+                host=target_system.hostname,
+                uri=render.http_uri or "/",
+                version="1.1",
+                user_agent=user_agent,
+                request_body_len=0,
+                response_body_len=resp_len,
+                status_code=200,
+                status_msg="OK",
+                referrer=render.http_referrer or "",
+            )
+            conn_dst_port = 80 if effective_scheme == "http" else 443
+            # On-wire IDS detection: a cleartext http payload mapped to a Snort/Suricata
+            # signature fires the network alert — the "does my IDS catch this?" test. The
+            # alert fires ONLY when the rendered payload still contains the signature's flat
+            # content token, so an evasion variant (obfuscated JNDI lookup, UNION/**/SELECT,
+            # a CR-only forge) correctly produces NO alert — modeling the real rule's blind
+            # spot, which is the detection-gap the evasion variants exist to exercise.
+            # Encrypted (https) traffic is opaque to the sensor. Built through the IDS alert
+            # action bundle so (gid, sid, rev)/message/priority are owned canonically; the
+            # Snort emitter only renders the resulting IdsContext.
+            ids_ctx: IdsContext | None = None
+            fire_sid = (
+                ids_signature_for_payload(resolved_family, canonical)
+                if effective_scheme == "http"
+                else None
+            )
+            if fire_sid:
+                from evidenceforge.generation.actions import (
+                    IdsAlertActionBundle,
+                    IdsAlertRequest,
+                )
+                from evidenceforge.generation.activity.ids_signatures import signature_by_sid
+
+                signature = signature_by_sid(fire_sid)
+                if signature:
+                    ids_ctx = IdsAlertActionBundle(
+                        IdsAlertRequest(
+                            signature=signature,
+                            time=time,
+                            src_ip=system.ip,
+                            dst_ip=target_system.ip,
+                            dst_port=conn_dst_port,
+                            proto="tcp",
+                            rng=random.Random(_stable_seed(f"{seed_key}:ids")),
+                            source="adversarial_payload",
+                            direction="in",
+                        )
+                    ).execute()
+                    # Record the alert in ground truth ONLY when an IDS sensor on the path
+                    # actually observes this cleartext connection — mirroring the exact
+                    # decision the dispatcher uses to render snort_alert. East-west traffic a
+                    # TAP sensor cannot see (intra-segment), or a scenario with no IDS sensor,
+                    # renders NO snort line, so it must record no ids_alert (else ground truth
+                    # would claim an alert that is absent from snort_alert.log). The IdsContext
+                    # is still attached; the dispatcher is the single render authority.
+                    visibility = self._network_visibility or (
+                        self.dispatcher.visibility_engine
+                        if getattr(self, "dispatcher", None)
+                        else None
+                    )
+                    snort_observes = visibility is None or (
+                        "snort_alert"
+                        in visibility.get_log_formats_for_connection(system.ip, target_system.ip)
+                    )
+                    if snort_observes:
+                        ids_alert_meta = {
+                            "sid": int(signature["sid"]),
+                            "rev": int(signature.get("rev", 1)),
+                            "message": str(signature["message"]),
+                        }
+            uid = self.generate_connection(
+                src_ip=system.ip,
+                dst_ip=target_system.ip,
+                time=time,
+                dst_port=conn_dst_port,
+                proto="tcp",
+                service=effective_scheme,
+                source_system=system,
+                http=http_ctx,
+                hostname=target_system.hostname,
+                preserve_dst_ip=True,
+                proxy_bypass=True,
+                ids=ids_ctx,
+            )
+            if not uid:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            pivot["dst_ip"] = target_system.ip
+            pivot["dst_port"] = conn_dst_port
+        else:  # pragma: no cover - guarded by render_for_surface/model Literal
+            raise ValueError(f"unsupported adversarial payload surface: {surface!r}")
+
+        # Label the transform by what actually happened: when the encoder was a no-op
+        # for this value (e.g. csv_formula has no control bytes to escape; a printable
+        # log4shell UA needs no percent-encoding) the on-disk form equals the canonical
+        # value, so report "raw" rather than a transform that did nothing.
+        unchanged = render.encoded_value == canonical
+        if surface in ("http_request_url", "http_referrer", "http_user_agent"):
+            encoding = "raw" if unchanged else "percent"
+        elif surface == "process_command_line":
+            encoding = "raw" if unchanged else "shell_quote"
+        else:  # syslog_message — use the SAME family resolution the encoder used
+            raw_here = surface in _raw_surfaces_for(resolved_family or None)
+            encoding = "raw" if (raw_here or unchanged) else "escaped"
+
+        # A plaintext-http payload MAY also be visible on the wire in Zeek http.log — but only
+        # claim it as an expected source when it will ACTUALLY land in this dataset: the
+        # zeek_http emitter must be configured AND a network sensor on the path must observe Zeek
+        # for this connection (with no sensor there is no Zeek output, and an unconfigured format
+        # is never written). expected_sources must mean "exists in this dataset", not
+        # "theoretically visible there". https is encrypted, so web_access only.
+        expected_sources = list(render.expected_sources)
+        if surface in HTTP_SURFACES and effective_scheme == "http":
+            dispatcher = getattr(self, "dispatcher", None)
+            visibility = self._network_visibility or (
+                dispatcher.visibility_engine if dispatcher else None
+            )
+            zeek_configured = dispatcher is not None and "zeek_http" in dispatcher.emitters
+            zeek_observed = (
+                visibility is not None
+                and visibility.enabled
+                and "zeek_http"
+                in visibility.get_log_formats_for_connection(system.ip, target_system.ip)
+            )
+            if zeek_configured and zeek_observed:
+                expected_sources.append("zeek_http")
+
+        # Surface the live-callback host when this payload actually embeds it, so an
+        # operator knows exactly which OOB record to watch on their Collaborator.
+        callback_host = next((h for h in oob_hosts if h and h in canonical), None)
+        # Carry the family's weakness class + pass criterion into ground truth so an
+        # analyst can score the payload without re-reading the family config.
+        fam_meta = get_family(resolved_family) if resolved_family else None
+        weakness_class = (fam_meta or {}).get("weakness_class", "").strip() or None
+        expected_signal = (fam_meta or {}).get("expected_defender_signal", "").strip() or None
+        return {
+            "surface": surface,
+            "family": resolved_family,
+            "value": canonical,
+            "rendered_value": render.encoded_value,
+            "expected_sources": expected_sources,
+            "encoding": encoding,
+            "scheme": effective_scheme,
+            "time": emitted_time,
+            "target_system": target_fqdn,
+            **({"callback_host": callback_host} if callback_host else {}),
+            **({"weakness_class": weakness_class} if weakness_class else {}),
+            **({"expected_defender_signal": expected_signal} if expected_signal else {}),
+            **({"ids_alert": ids_alert_meta} if ids_alert_meta else {}),
+            **pivot,
+        }
 
     def _normalize_apache_raw_syslog(
         self,

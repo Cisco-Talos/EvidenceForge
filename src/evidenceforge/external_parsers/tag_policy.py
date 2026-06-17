@@ -143,13 +143,20 @@ def _is_parsed_snare_windows_event(event: JsonMapping) -> bool:
     )
 
 
+def _is_zeek_dns_non_address_answer_type(event: JsonMapping) -> bool:
+    question_type = _get_path(event, "dns.question.type")
+    if question_type in (None, ""):
+        return False
+    return str(question_type).strip().upper() not in {"A", "AAAA"}
+
+
 def _is_zeek_x509_post_2038_date_limitation(event: JsonMapping) -> bool:
     original = _get_path(event, "event.original")
     if not isinstance(original, str):
         return False
     try:
         raw = json.loads(original)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return False
     if not isinstance(raw, Mapping):
         return False
@@ -174,6 +181,7 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
             "Optional dns.answers.ip extraction from dns.answers.data. Non-address DNS "
             "answer types such as NS, PTR, MX, and SOA remain valid parsed records."
         ),
+        event_predicate=_is_zeek_dns_non_address_answer_type,
     ),
     ParserTagRule(
         validator=SOF_ELK_WEB_ACCESS_VALIDATOR,

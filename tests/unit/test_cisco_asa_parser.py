@@ -107,6 +107,35 @@ class TestParseBuiltRecords:
         assert records[0].fields["dst_ip"] == "203.0.113.50"
         assert records[0].fields["icmp_type"] == 8
 
+    def test_parse_302020_icmp_built_preserves_bare_ipv6(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302020: Built outbound ICMP connection "
+            "for faddr 2001:db8::50/8 gaddr fd00::10/0 laddr fd00::10/0\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        assert records[0].fields["msg_id"] == 302020
+        assert records[0].fields["dst_ip"] == "2001:db8::50"
+        assert records[0].fields["icmp_type"] == 8
+        assert "dst_interface" not in records[0].fields
+
+    def test_parse_302020_icmp_built_accepts_legacy_ipv6_interface_prefix(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302020: Built outbound ICMP connection "
+            "for faddr outside:2001:db8::50/8 gaddr inside:fd00::10/0 "
+            "laddr inside:fd00::10/0\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        assert records[0].fields["msg_id"] == 302020
+        assert records[0].fields["dst_interface"] == "outside"
+        assert records[0].fields["dst_ip"] == "2001:db8::50"
+        assert records[0].fields["icmp_type"] == 8
+
 
 class TestParseTeardownRecords:
     def test_parse_302014_tcp_teardown(self, tmp_path):
@@ -141,6 +170,37 @@ class TestParseTeardownRecords:
         assert rec.fields["dst_ip"] == "203.0.113.50"
         assert rec.fields["icmp_type"] == 8
         assert "dst_interface" not in rec.fields
+
+    def test_parse_302021_icmp_teardown_preserves_bare_ipv6(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:24:28 fw01 %ASA-6-302021: Teardown ICMP connection "
+            "for faddr 2001:db8::50/8 gaddr fd00::10/0 laddr fd00::10/0\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 302021
+        assert rec.fields["dst_ip"] == "2001:db8::50"
+        assert rec.fields["icmp_type"] == 8
+        assert "dst_interface" not in rec.fields
+
+    def test_parse_302021_icmp_teardown_accepts_legacy_ipv6_interface_prefix(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:24:28 fw01 %ASA-6-302021: Teardown ICMP connection "
+            "for faddr outside:2001:db8::50/8 gaddr inside:fd00::10/0 "
+            "laddr inside:fd00::10/0\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 302021
+        assert rec.fields["dst_interface"] == "outside"
+        assert rec.fields["dst_ip"] == "2001:db8::50"
+        assert rec.fields["icmp_type"] == 8
 
 
 class TestParseDenyRecords:

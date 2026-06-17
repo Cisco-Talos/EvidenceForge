@@ -6,19 +6,63 @@
 # Overlay behavior: nested dicts merge and lists extend.
 
 san:
+  # Multi-label public suffixes: registry/vendor zones under which one registers a name
+  # (the parent zone itself is NOT registrable). ONE curated list, TWO consumers:
+  #   1. TLS SAN + DNS realism — compute the registrable ("apex") domain for wildcard SAN
+  #      generation (tls_realism.py) and mail/TXT owner names (dns_txt.py).
+  #   2. `--oob-host` safety gate (cli/commands.py) — an operator-supplied live-callback
+  #      host must be a concrete registrable domain or IP, never a bare public suffix, so a
+  #      single entry can't allowlist a whole namespace (e.g. `co.uk` -> every `*.co.uk`).
+  # This is a CURATED COMMON SUBSET, NOT the full Public Suffix List — deliberately, to
+  # honor the "no external dependency / no vendored corpus" constraint (issue #284). It is
+  # overlay-EXTENSIBLE (lists extend), so a deployment needing a less-common suffix adds it
+  # in .eforge/config/activity/tls_realism.yaml. A suffix outside this list is treated as
+  # registrable; for `--oob-host` that means an operator could still over-broaden to such a
+  # suffix, but only behind the explicit opt-in + loud LIVE CALLBACK warning (a footgun,
+  # not an attacker bypass). The egregious bare-TLD case (`com` -> `*.com`) is always closed
+  # by the single-label rejection regardless of this list.
   multi_label_public_suffixes:
+    # ICANN ccTLD second-levels
     - ac.uk
+    - co.id
+    - co.il
+    - co.in
     - co.jp
+    - co.kr
     - co.nz
+    - co.th
     - co.uk
+    - co.za
     - com.au
     - com.br
+    - com.cn
+    - com.hk
     - com.mx
     - com.sg
+    - com.tr
+    - edu.au
+    - gov.au
     - gov.uk
+    - ne.jp
     - net.au
+    - net.nz
     - org.au
+    - org.nz
     - org.uk
+    # Vendor "private" public suffixes — hosting / OOB-receiver namespaces where each
+    # customer gets a subdomain and the bare zone is not operator-registrable.
+    - azurewebsites.net
+    - firebaseapp.com
+    - github.io
+    - gitlab.io
+    - herokuapp.com
+    - netlify.app
+    - ngrok.io
+    - pages.dev
+    - s3.amazonaws.com
+    - vercel.app
+    - web.app
+    - workers.dev
   profile_weights:
     apex_exact: 34
     apex_www: 26

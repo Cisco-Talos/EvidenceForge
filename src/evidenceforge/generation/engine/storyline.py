@@ -38,6 +38,7 @@ import math
 import random
 import re
 import shlex
+import string
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -74,6 +75,7 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 logger = logging.getLogger(__name__)
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
+_STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
     r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
@@ -162,23 +164,36 @@ def _storyline_shell_friction_pool(name: str) -> list[str]:
     return [item for item in raw if isinstance(item, str) and item.strip()]
 
 
-class _StorylineShellTemplateValues(dict[str, str]):
-    """Leave unknown placeholders visible so invalid templates can be skipped."""
-
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
 def _render_storyline_shell_friction_template(
     template: str,
     values: dict[str, str],
 ) -> str | None:
-    """Render one shell-friction template if all placeholders are known."""
-    rendered = template.format_map(_StorylineShellTemplateValues(values))
-    if re.search(r"{[^{}]+}", rendered):
+    """Render one shell-friction template if all placeholders are known and safe.
+
+    Shell-friction templates can come from project-local configuration overlays, so
+    keep this renderer to a small literal-plus-placeholder language. Rejecting
+    Python format conversions/specifiers prevents malformed or hostile overlay
+    entries from crashing generation or requesting excessive output widths.
+    """
+    try:
+        parsed = list(_STORYLINE_SHELL_TEMPLATE_FORMATTER.parse(template))
+    except ValueError:
         return None
-    rendered = re.sub(r"\s+", " ", rendered).strip()
-    return rendered or None
+
+    rendered: list[str] = []
+    for literal_text, field_name, format_spec, conversion in parsed:
+        rendered.append(literal_text)
+        if field_name is None:
+            continue
+        if field_name not in values or conversion is not None or format_spec:
+            return None
+        rendered.append(values[field_name])
+
+    rendered_text = "".join(rendered)
+    if re.search(r"{[^{}]+}", rendered_text):
+        return None
+    rendered_text = re.sub(r"\s+", " ", rendered_text).strip()
+    return rendered_text or None
 
 
 def _linux_storyline_shell_friction_commands(
@@ -4699,6 +4714,75 @@ class StorylineMixin:
                     malicious_event["target_system"] = info["target_system"]
                 if info.get("scheme"):
                     malicious_event["scheme"] = info["scheme"]
+
+        elif spec.type == "adversarial_payload":
+            from evidenceforge.generation.adversarial_payload import HTTP_SURFACES
+
+            cluster_id = malicious_event["storyline_cluster_id"]
+            # Monotonic per-generation sequence makes every synthesized payload
+            # unique (deterministic order); eval reads the emitted value from
+            # ground truth.
+            seq = getattr(self, "_adversarial_payload_seq", 0)
+            self._adversarial_payload_seq = seq + 1
+            payload_logon_id = None
+            payload_target = None
+            payload_scheme = None
+            # A process_command_line payload runs as a standalone process-execution
+            # record; resolve canonical session ownership (same as a spillage process
+            # spill) so it gets a non-shell parent and a stable, unique identity.
+            if spec.surface == "process_command_line":
+                payload_logon_id = self._resolve_storyline_process_spill_logon_id(
+                    actor,
+                    system,
+                    time,
+                    rng,
+                )
+            if spec.surface in HTTP_SURFACES:
+                # The payload rides to a web server's access log; pick the destination.
+                # An authored `scheme:` (http/https) forces the transport; otherwise the
+                # server's supported scheme decides (https preferred, else http).
+                payload_target, payload_scheme = self._select_web_server_for_spillage(
+                    system, spec.scheme
+                )
+            info = self.activity_generator.generate_adversarial_payload(
+                user=actor,
+                system=system,
+                time=time,
+                surface=spec.surface,
+                family=spec.family,
+                value=spec.value,
+                scheme=payload_scheme,
+                seed_key=f"adversarial_payload:{cluster_id}:{seq}:{spec.surface}:{spec.family or 'literal'}",
+                logon_id=payload_logon_id,
+                target_system=payload_target,
+            )
+            malicious_event["surface"] = info["surface"]
+            malicious_event["family"] = info["family"]
+            if info.get("skipped_reason"):
+                malicious_event["skipped_reason"] = info["skipped_reason"]
+            else:
+                malicious_event["value"] = info["value"]
+                malicious_event["rendered_value"] = info["rendered_value"]
+                malicious_event["expected_sources"] = info["expected_sources"]
+                malicious_event["encoding"] = info["encoding"]
+                malicious_event["time"] = info["time"]
+                if info.get("target_system"):
+                    malicious_event["target_system"] = info["target_system"]
+                if info.get("scheme"):
+                    malicious_event["scheme"] = info["scheme"]
+                if info.get("callback_host"):
+                    malicious_event["callback_host"] = info["callback_host"]
+                if info.get("weakness_class"):
+                    malicious_event["weakness_class"] = info["weakness_class"]
+                if info.get("expected_defender_signal"):
+                    malicious_event["expected_defender_signal"] = info["expected_defender_signal"]
+                if info.get("ids_alert"):
+                    malicious_event["ids_alert"] = info["ids_alert"]
+                # Pivot anchors to the exact evidence row (dst tuple for http, pid for
+                # process) so an analyst can jump from the payload record to the source.
+                for pivot_key in ("dst_ip", "dst_port", "pid"):
+                    if info.get(pivot_key) is not None:
+                        malicious_event[pivot_key] = info[pivot_key]
 
         elif spec.type == "raw":
             self.activity_generator.generate_raw(
