@@ -8056,6 +8056,48 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == shell_events[-1].process.pid
 
+    def test_dropped_workstation_bash_command_does_not_bootstrap_local_session(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Rejected Linux workstation shell commands should not leave orphan logon evidence."""
+        scenario_end = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._scenario_start_time = scenario_end - timedelta(minutes=30)
+        activity_gen._scenario_end_time = scenario_end
+        state_manager.set_current_time(scenario_end - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid}}
+
+        scheduled = activity_gen.generate_bash_command(test_user, linux, scenario_end, "git status")
+
+        assert scheduled is None
+        assert [
+            session
+            for session in state_manager.get_sessions_for_user(test_user.username)
+            if session.system == linux.hostname
+        ] == []
+        emitted_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert not [
+            event
+            for event in emitted_events
+            if event.event_type in {"logon", "process_create", "bash_command"}
+        ]
+
     def test_generate_bash_command_serializes_foreground_children(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

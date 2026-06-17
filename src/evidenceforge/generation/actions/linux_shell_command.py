@@ -162,13 +162,6 @@ class LinuxShellCommandActionBundle:
             return None
 
         command = self._executor._prepare_bash_history_command(self._request.system, command)
-        if self._request.emit_process_telemetry:
-            self._executor._prepare_bash_process_session(
-                self._request.user,
-                self._request.system,
-                self._request.time,
-                command,
-            )
         scheduled_time = self._executor._schedule_bash_history_time(
             self._request.user,
             self._request.system,
@@ -179,6 +172,13 @@ class LinuxShellCommandActionBundle:
             return None
         if not self._executor._is_within_scenario_window(scheduled_time):
             return None
+        if self._request.emit_process_telemetry:
+            self._executor._prepare_bash_process_session(
+                self._request.user,
+                self._request.system,
+                scheduled_time,
+                command,
+            )
         self._executor._emit_bash_command_event(
             self._request.user,
             self._request.system,
