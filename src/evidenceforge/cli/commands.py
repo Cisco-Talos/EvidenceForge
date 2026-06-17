@@ -156,6 +156,15 @@ def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
     import ipaddress
     import re
 
+    _label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+    def _well_formed_hostname(host: str) -> bool:
+        # Every dot-separated label must be a valid DNS label (non-empty, <=63 chars, no
+        # leading/trailing hyphen) and the TLD must not be all-numeric — an all-numeric
+        # dotted value is a malformed IP, not a hostname. Rejects a..b, good-.com, 1.2.3.4.5.
+        labels = host.split(".")
+        return all(_label.fullmatch(label) for label in labels) and not labels[-1].isdigit()
+
     def _is_registrable_domain(host: str) -> bool:
         from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
 
@@ -180,7 +189,7 @@ def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
                 valid_ip = True
             except ValueError:
                 valid_ip = False
-        if malformed or not (valid_ip or re.fullmatch(r"[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?", host)):
+        if malformed or not (valid_ip or _well_formed_hostname(host)):
             console.print(
                 f"[bold red]Error:[/bold red] --oob-host {raw!r} is not a bare host; pass just "
                 "a hostname or IP (e.g. 127.0.0.1, oast.fun) with no scheme, path, port, "

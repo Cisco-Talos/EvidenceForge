@@ -399,6 +399,16 @@ class TestNormalizeOobHosts:
 
         assert _normalize_oob_hosts(["OAST.fun", "oast.fun", ""]) == ("oast.fun",)
 
+    def test_rejects_malformed_hostname_labels(self):
+        # Per-label DNS validity: reject empty labels, leading/trailing-hyphen labels, and an
+        # all-numeric dotted value (a malformed IP, not a hostname). Harmless (they can't match
+        # a real host), but a clean boundary should not admit them.
+        from evidenceforge.cli.commands import _normalize_oob_hosts
+
+        for bad in ["a..b", "good-.com", "-foo.com", "foo-.bar.com", "1.2.3.4.5", "example.com."]:
+            with pytest.raises(typer.Exit):
+                _normalize_oob_hosts([bad])
+
 
 # --- Synthesis + per-surface rendering -----------------------------------------
 
