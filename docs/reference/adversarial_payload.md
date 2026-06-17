@@ -205,8 +205,10 @@ your **own fuzzer payloads** (supplied as a literal `value:`) pointing at your
 Collaborator pass validation instead of being rejected as a real host. Safety stays
 tight: **only the host(s) you explicitly register are accepted** (every other
 non-reserved host is still rejected), each `--oob-host` must be a concrete registrable
-domain or IP literal (bare TLDs like `com` and public suffixes like `co.uk` are
-refused, so a single entry can never allowlist a whole namespace), the marker is still
+domain or IP literal — bare TLDs like `com` and common multi-label public suffixes like
+`co.uk` are refused (a curated common-suffix list, not the full Public Suffix List), so
+register a specific host you control (ideally a subdomain) rather than a broad
+shared-suffix domain — the marker is still
 required on every line, generation prints a loud `LIVE CALLBACK MODE` banner, and each
 affected record carries a `callback_host` attribute so you know exactly which OOB
 interaction to watch for. Passing `--oob-host` is itself the explicit opt-in. `--oob-host`
