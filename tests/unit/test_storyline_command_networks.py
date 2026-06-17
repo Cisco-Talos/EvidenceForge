@@ -1145,6 +1145,24 @@ class TestFileTransferActionBundles:
         assert first.pe.has_cert_table == second.pe.has_cert_table
         assert later.pe.has_cert_table == first.pe.has_cert_table
 
+    def test_http_file_transfer_bundle_tolerates_malformed_absolute_uri(self):
+        """Malformed absolute-form URIs should fall back to raw URI identity."""
+        request = HttpResponseFileTransferRequest(
+            host="cdn.example.test",
+            uri="http://[::1/path.exe",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+
+        assert result.file_transfer.source == "HTTP"
+        assert result.file_transfer.sha1
+        assert result.pe is not None
+
     def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
         """SMB files.log metadata should preserve caller-owned transfer direction."""
         request = SmbFileTransferMetadataRequest(
