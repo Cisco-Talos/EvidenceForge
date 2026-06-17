@@ -210,6 +210,68 @@ class TestAdversarialPayloadGeneration:
             assert r["encoding"]  # the per-surface transform label is recorded
             assert r["expected_sources"]  # and where it should land
 
+    def test_expected_sources_excludes_zeek_http_when_not_observed(self, tmp_path):
+        # Review finding: expected_sources must mean "exists in this dataset", not "theoretically
+        # visible". A cleartext-http payload with no network sensor must NOT claim zeek_http
+        # (there is no Zeek output without a sensor), even though it rides plaintext on the wire.
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "adversarial_payload",
+                    "surface": "http_request_url",
+                    "family": "log4shell",
+                    "scheme": "http",
+                }
+            ],
+            logs=[
+                {"format": "web_access"},
+                {"format": "zeek_http"},
+            ],  # zeek requested, but no sensor
+            web_server=True,
+        )
+        scenario["environment"]["systems"][1]["services"] = ["http"]
+        out = _generate(scenario, tmp_path / "no_sensor")
+        rec = _ap_records(out)[0]
+        assert rec["expected_sources"] == ["web_access"]
+        assert not any("http" in p.name and p.suffix == ".json" for p in out.rglob("*"))
+
+    def test_expected_sources_includes_zeek_http_only_when_observed(self, tmp_path):
+        # With Zeek configured AND a sensor on the path, zeek_http actually lands — so it IS a
+        # legitimate expected source. (Guards against the gate becoming over-strict.)
+        scenario = _ids_scenario("log4shell", "http_request_url")  # office_lan -> dmz span sensor
+        scenario["output"]["logs"] = [{"format": "web_access"}, {"format": "zeek"}]
+        out = _generate(scenario, tmp_path / "observed")
+        rec = _ap_records(out)[0]
+        assert "zeek_http" in rec["expected_sources"]
+        assert any("http" in p.name and p.suffix == ".json" for p in out.rglob("*"))
+
+    def test_every_expected_source_produces_a_file(self, tmp_path):
+        # The inverse/completeness invariant the review taught us to assert: every source named in
+        # any record's expected_sources must ACTUALLY exist as output — no phantom sources. Run the
+        # full family x surface matrix and check each claimed source produced a file.
+        from evidenceforge.config.payload_families import family_names, get_family
+
+        events = [
+            {"type": "adversarial_payload", "surface": surface, "family": fam}
+            for fam in sorted(family_names())
+            for surface in (get_family(fam).get("surfaces") or [])
+        ]
+        scenario = _linux_scenario(events, web_server=True)
+        scenario["time_window"]["duration"] = f"{len(events) // 6 + 2}h"
+        out = _generate(scenario, tmp_path / "matrix")
+        files = [p for p in out.rglob("*") if p.is_file()]
+        present = {
+            "web_access": any("web_access.log" in p.name for p in files),
+            "syslog": any("syslog" in p.name and p.suffix == ".log" for p in files),
+            "ecar": any("ecar" in p.name for p in files),
+            "zeek_http": any("http" in p.name and p.suffix == ".json" for p in files),
+        }
+        for r in _ap_records(out):
+            for src in r["expected_sources"]:
+                assert present.get(src), (
+                    f"{r['family']}/{r['surface']} claims {src!r} but no file exists"
+                )
+
     def test_control_byte_payload_on_user_agent_matches_disk(self, tmp_path):
         # Regression: a control-byte payload (CRLF) on http_user_agent must record a
         # rendered_value byte-equal to disk. The web emitter re-escapes control/

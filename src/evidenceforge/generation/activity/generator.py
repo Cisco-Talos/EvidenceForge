@@ -18463,12 +18463,27 @@ class ActivityGenerator:
             raw_here = surface in _raw_surfaces_for(resolved_family or None)
             encoding = "raw" if (raw_here or unchanged) else "escaped"
 
-        # A plaintext-http payload is ALSO visible on the wire (Zeek http.log) where a
-        # network IDS can catch it; record that as an expected source so an IDS-only
-        # collection still credits the landing. https is encrypted (web_access only).
+        # A plaintext-http payload MAY also be visible on the wire in Zeek http.log — but only
+        # claim it as an expected source when it will ACTUALLY land in this dataset: the
+        # zeek_http emitter must be configured AND a network sensor on the path must observe Zeek
+        # for this connection (with no sensor there is no Zeek output, and an unconfigured format
+        # is never written). expected_sources must mean "exists in this dataset", not
+        # "theoretically visible there". https is encrypted, so web_access only.
         expected_sources = list(render.expected_sources)
         if surface in HTTP_SURFACES and effective_scheme == "http":
-            expected_sources.append("zeek_http")
+            dispatcher = getattr(self, "dispatcher", None)
+            visibility = self._network_visibility or (
+                dispatcher.visibility_engine if dispatcher else None
+            )
+            zeek_configured = dispatcher is not None and "zeek_http" in dispatcher.emitters
+            zeek_observed = (
+                visibility is not None
+                and visibility.enabled
+                and "zeek_http"
+                in visibility.get_log_formats_for_connection(system.ip, target_system.ip)
+            )
+            if zeek_configured and zeek_observed:
+                expected_sources.append("zeek_http")
 
         # Surface the live-callback host when this payload actually embeds it, so an
         # operator knows exactly which OOB record to watch on their Collaborator.
