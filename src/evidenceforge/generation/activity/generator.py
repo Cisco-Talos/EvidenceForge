@@ -6117,7 +6117,7 @@ class ActivityGenerator:
         if (http.method or "").upper() == "CONNECT":
             target = http.uri or http.host or ""
             _host, separator, port_text = target.rpartition(":")
-            if separator and port_text.isdigit():
+            if separator and port_text.isdigit() and len(port_text) <= 5:
                 port = int(port_text)
                 if 1 <= port <= 65535:
                     return port
@@ -6126,10 +6126,11 @@ class ActivityGenerator:
         if url.startswith(("http://", "https://")):
             try:
                 parsed = urlsplit(url)
+                parsed_port = parsed.port
             except ValueError:
                 return 443 if url.startswith("https://") else 80
-            if parsed.port is not None:
-                return parsed.port
+            if parsed_port is not None:
+                return parsed_port
             return 443 if parsed.scheme == "https" else 80
         return 80
 
