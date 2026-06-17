@@ -192,11 +192,11 @@ payload is interpreted by EvidenceForge — it is only ever written as text.
 
 By default the canary is non-resolving, so payloads are inert. To actually validate
 hardening end-to-end — confirming a vulnerable target *calls back* — register your
-own out-of-band host (a Burp Collaborator / interactsh / DNS-sinkhole domain) at
-generation time:
+own out-of-band host (a Burp Collaborator / interactsh / DNS-sinkhole domain — a
+concrete registrable domain or IP literal) at generation time:
 
 ```bash
-eforge generate scenario.yaml --oob-host <your-collab-domain> --i-am-authorized
+eforge generate scenario.yaml --oob-host <your-collab-domain>
 ```
 
 In live mode the family `{canary}` resolves to your host (e.g.
@@ -204,12 +204,15 @@ In live mode the family `{canary}` resolves to your host (e.g.
 your **own fuzzer payloads** (supplied as a literal `value:`) pointing at your
 Collaborator pass validation instead of being rejected as a real host. Safety stays
 tight: **only the host(s) you explicitly register are accepted** (every other
-non-reserved host is still rejected), `--i-am-authorized` is mandatory, the marker is
-still required on every line, generation prints a loud `LIVE CALLBACK MODE` banner,
-and each affected record carries a `callback_host` attribute so you know exactly which
-OOB interaction to watch for. `--oob-host` is repeatable; subdomains of a registered
-host are accepted (so a per-payload `<unique>.<your-collab>` works). Default runs
-record `callback_host: null` and remain fully inert.
+non-reserved host is still rejected), each `--oob-host` must be a concrete registrable
+domain or IP literal (bare TLDs like `com` and public suffixes like `co.uk` are
+refused, so a single entry can never allowlist a whole namespace), the marker is still
+required on every line, generation prints a loud `LIVE CALLBACK MODE` banner, and each
+affected record carries a `callback_host` attribute so you know exactly which OOB
+interaction to watch for. Passing `--oob-host` is itself the explicit opt-in. `--oob-host`
+is repeatable; subdomains of a registered host are accepted (so a per-payload
+`<unique>.<your-collab>` works). Default runs record `callback_host: null` and remain
+fully inert.
 
 ## Ground truth
 

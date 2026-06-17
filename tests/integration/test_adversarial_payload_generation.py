@@ -929,20 +929,23 @@ class TestAdversarialPayloadValidateCLI:
         )
         assert runner.invoke(app, ["validate", str(bad)]).exit_code == 2
 
-    def test_generate_oob_host_requires_authorization(self, scenarios_dir):
-        # --oob-host enables live callbacks; without --i-am-authorized it must refuse.
+    def test_generate_oob_host_alone_enables_live_callback(self, scenarios_dir, tmp_path):
+        # --oob-host is now the explicit opt-in (no separate --i-am-authorized flag): it is
+        # accepted on its own and prints the loud LIVE CALLBACK MODE warning.
         result = runner.invoke(
             app,
             [
                 "generate",
                 str(scenarios_dir / "adversarial_payload.yaml"),
                 "-f",
+                "--output",
+                str(tmp_path / "oob"),
                 "--oob-host",
                 "abc.oast.fun",
             ],
         )
-        assert result.exit_code != 0
-        assert "authorized" in result.output.lower()
+        assert result.exit_code == 0
+        assert "live callback mode" in result.output.lower()
 
     @pytest.mark.parametrize(
         "bad_host",
@@ -958,11 +961,29 @@ class TestAdversarialPayloadValidateCLI:
                 "generate",
                 str(scenarios_dir / "adversarial_payload.yaml"),
                 "-f",
-                "--i-am-authorized",
                 "--oob-host",
                 bad_host,
             ],
         )
         assert result.exit_code == 1
         assert "bare host" in result.output.lower()
+        assert "generation complete" not in result.output.lower()
+
+    @pytest.mark.parametrize("bad_host", ["com", "fun", "local", "co.uk", "ac.uk"])
+    def test_generate_oob_host_rejects_non_registrable_fast(self, scenarios_dir, bad_host):
+        # A bare TLD / single label or a public suffix is too broad — it would allowlist an
+        # entire namespace. Reject at the boundary (exit 1) with the registrable-domain
+        # message, BEFORE any generation.
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "adversarial_payload.yaml"),
+                "-f",
+                "--oob-host",
+                bad_host,
+            ],
+        )
+        assert result.exit_code == 1
+        assert "registrable" in result.output.lower()
         assert "generation complete" not in result.output.lower()

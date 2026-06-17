@@ -137,6 +137,64 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
     )
 
 
+def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
+    """Normalize and validate operator-supplied --oob-host values (live-callback opt-in).
+
+    Each value replaces the inert canary inside an adversarial_payload and is matched
+    against the safety allowlist (which lowercases), so a value must be a BARE, lowercased
+    hostname or IP — never a scheme/path/userinfo/port form. To keep the allowlist narrow,
+    a hostname must be a concrete registrable domain (e.g. example.com, oast.fun) or a
+    subdomain of one: bare TLDs / single labels (com, fun, local) and public suffixes
+    (co.uk) are rejected, because an over-broad entry would allowlist an entire namespace
+    (e.g. an entry of `com` would let a payload host of `evil.com` pass the suffix match).
+    IP literals are accepted as-is. Shared by `generate` and `validate` so the contract is
+    identical. Prints an error and raises typer.Exit(EXIT_INPUT_ERROR) on a bad value.
+    """
+    import ipaddress
+    import re
+
+    def _is_registrable_domain(host: str) -> bool:
+        from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
+
+        labels = [label for label in host.split(".") if label]
+        if len(labels) < 2:
+            return False  # single label: a bare TLD / hostname (com, fun, local)
+        return host not in multi_label_public_suffixes()  # reject co.uk / ac.uk / com.au / ...
+
+    normalized: list[str] = []
+    for raw in oob_host:
+        host = raw.strip().lower()
+        if not host:
+            continue
+        malformed = "://" in host or any(c in host for c in "/\\ \t\r\n@?#%")
+        candidate = host.strip("[]")
+        valid_ip = False
+        if not malformed:
+            try:
+                ipaddress.ip_address(candidate)
+                valid_ip = True
+            except ValueError:
+                valid_ip = False
+        if malformed or not (valid_ip or re.fullmatch(r"[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?", host)):
+            console.print(
+                f"[bold red]Error:[/bold red] --oob-host {raw!r} is not a bare host; pass just "
+                "a hostname or IP (e.g. 127.0.0.1, oast.fun) with no scheme, path, port, "
+                "userinfo, or whitespace.",
+                style="red",
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        if not valid_ip and not _is_registrable_domain(host):
+            console.print(
+                f"[bold red]Error:[/bold red] --oob-host {raw!r} must be a concrete registrable "
+                "domain (e.g. example.com, oast.fun) or an IP literal; bare TLDs (com, fun, "
+                "local) and public suffixes (co.uk) are not specific enough.",
+                style="red",
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        normalized.append(candidate if valid_ip else host)
+    return tuple(dict.fromkeys(normalized))
+
+
 @app.command()
 def generate(
     scenario_file: Path = typer.Argument(
@@ -179,14 +237,10 @@ def generate(
         help="LIVE CALLBACK (out-of-band) testing: register an operator-controlled host "
         "(e.g. a Burp Collaborator / interactsh / sinkhole domain) for adversarial_payload "
         "events. The payload's canary is replaced with this host so a vulnerable target "
-        "actually calls back to YOU. Repeatable. Requires --i-am-authorized. Off by default "
-        "(payloads use the inert, non-resolving canary).",
-    ),
-    i_am_authorized: bool = typer.Option(
-        False,
-        "--i-am-authorized",
-        help="Acknowledge you are authorized to test the target systems; required to use "
-        "--oob-host (live callbacks).",
+        "actually calls back to YOU. Must be a concrete registrable domain (e.g. oast.fun) "
+        "or an IP literal. Repeatable. Passing it is the explicit opt-in: only use against "
+        "systems you are authorized to test. Off by default (payloads use the inert, "
+        "non-resolving canary).",
     ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
@@ -209,57 +263,11 @@ def generate(
         console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR) from exc
 
-    # Live-callback (OOB) opt-in for adversarial_payload events. Off by default; only
-    # the explicitly-registered host(s) become allowlisted, and only with the
-    # authorization acknowledgment, so a payload can never silently point anywhere else.
-    # Normalize + validate at the boundary (fail fast): each value is substituted for the
-    # canary inside a payload and matched against the safety allowlist (which lowercases),
-    # so an --oob-host must be a BARE, lowercased hostname or IP — never a scheme/path/
-    # userinfo/port form. (A bare uppercase host like CANARY-SINK.LOCAL would otherwise
-    # crash mid-generation when the lowercased extracted host fails the allowlist match.)
-    import ipaddress as _ipaddress
-    import re as _re
-
-    oob_hosts_list: list[str] = []
-    for _raw in oob_host:
-        _h = _raw.strip().lower()
-        if not _h:
-            continue
-        _malformed = "://" in _h or any(c in _h for c in "/\\ \t\r\n@?#%")
-        _candidate = _h.strip("[]")
-        _valid_ip = False
-        if not _malformed:
-            try:
-                _ipaddress.ip_address(_candidate)
-                _valid_ip = True
-            except ValueError:
-                _valid_ip = False
-        _valid_host = (not _malformed) and (
-            _valid_ip or bool(_re.fullmatch(r"[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?", _h))
-        )
-        if not _valid_host:
-            console.print(
-                f"[bold red]Error:[/bold red] --oob-host {_raw!r} is not a bare host; pass just "
-                "a hostname or IP (e.g. 127.0.0.1, oob-sink.local) with no scheme, path, port, "
-                "userinfo, or whitespace.",
-                style="red",
-            )
-            raise typer.Exit(EXIT_INPUT_ERROR)
-        oob_hosts_list.append(_candidate if _valid_ip else _h)
-    oob_hosts: tuple[str, ...] = tuple(dict.fromkeys(oob_hosts_list))
-    if oob_hosts and not i_am_authorized:
-        console.print(
-            "[bold red]Error:[/bold red] --oob-host enables LIVE callbacks to the given "
-            "host(s) if a target is vulnerable; pass --i-am-authorized to confirm you are "
-            "authorized to test the target systems.",
-            style="red",
-        )
-        raise typer.Exit(EXIT_INPUT_ERROR)
-    if not oob_hosts and i_am_authorized:
-        console.print(
-            "[yellow]Note:[/yellow] --i-am-authorized has no effect without --oob-host.",
-            style="yellow",
-        )
+    # Live-callback (OOB) opt-in for adversarial_payload events. Off by default; passing
+    # --oob-host IS the explicit opt-in, and only the explicitly-registered host(s) become
+    # allowlisted, so a payload can never silently point anywhere else. Normalize + validate
+    # at the boundary (fail fast) via the shared helper that generate and validate share.
+    oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
 
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
     console.print(f"Scenario: {scenario_file}")

