@@ -1235,19 +1235,21 @@ class ScenarioValidator:
                     continue
                 field_path = f"storyline.{idx}.events.{spec_idx}"
 
-                # shell_history/syslog are Linux-modeled; emitting them on Windows
-                # would silently drop the credential while still labeling it in
-                # ground truth — a phantom positive — so this is a hard error.
-                # (process_command_line is cross-OS, so it is exempt.)
-                if os_cat == "windows" and spec.surface in LINUX_ONLY_SURFACES:
+                # shell_history/syslog are Linux-modeled; emitting them on any non-Linux
+                # host (Windows OR an unknown OS such as macOS/BSD/Solaris) would silently
+                # drop the credential while still labeling it in ground truth — a phantom
+                # positive — so this is a hard error. The emitter only handles linux, so
+                # gate on != "linux", not == "windows". (process_command_line is cross-OS,
+                # so it is exempt.)
+                if os_cat != "linux" and spec.surface in LINUX_ONLY_SURFACES:
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
                             field_path=field_path,
                             message=(
                                 f"[{event.id}] Spillage surface '{spec.surface}' is "
-                                f"Linux-modeled but system '{event.system}' is windows; the "
-                                "credential would not be emitted"
+                                f"Linux-modeled but system '{event.system}' is not Linux "
+                                f"(detected: {os_cat}); the credential would not be emitted"
                             ),
                             suggestion="Target a Linux host for this spillage surface",
                         )

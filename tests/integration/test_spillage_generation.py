@@ -1146,6 +1146,28 @@ class TestSpillageValidation:
         )
         assert any("needs output format 'bash_history'" in m for m in errs)
 
+    @pytest.mark.parametrize("surface", ["shell_history", "syslog_message"])
+    @pytest.mark.parametrize("actor_os", ["macOS 14", "FreeBSD 14", "Windows 10"])
+    def test_linux_only_surface_on_non_linux_host_rejected(self, actor_os, surface):
+        # Regression: the Linux-only-surface gate must reject ANY non-Linux host (Windows OR
+        # an unknown OS such as macOS/BSD), not just Windows — else shell_history/syslog on a
+        # macOS/BSD actor validates clean but is dropped at emit (a phantom positive). A Linux
+        # host is present so the bash_history format has a valid home.
+        scenario = _linux_scenario(
+            [{"type": "spillage", "surface": surface, "family": "aws_iam"}],
+            actor_os=actor_os,
+        )
+        scenario["environment"]["systems"].append(
+            {
+                "hostname": "LIN-AUX",
+                "ip": "192.168.20.99",
+                "os": "Ubuntu 22.04 LTS",
+                "type": "server",
+            }
+        )
+        msgs = _errors(scenario)
+        assert any("Linux-modeled" in m and "not Linux" in m for m in msgs), (actor_os, msgs)
+
     def test_noninteractive_actor_is_error(self):
         errs = _errors(
             _linux_scenario(
