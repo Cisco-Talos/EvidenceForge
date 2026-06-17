@@ -144,11 +144,14 @@ def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
     against the safety allowlist (which lowercases), so a value must be a BARE, lowercased
     hostname or IP — never a scheme/path/userinfo/port form. To keep the allowlist narrow,
     a hostname must be a concrete registrable domain (e.g. example.com, oast.fun) or a
-    subdomain of one: bare TLDs / single labels (com, fun, local) and public suffixes
-    (co.uk) are rejected, because an over-broad entry would allowlist an entire namespace
-    (e.g. an entry of `com` would let a payload host of `evil.com` pass the suffix match).
-    IP literals are accepted as-is. Shared by `generate` and `validate` so the contract is
-    identical. Prints an error and raises typer.Exit(EXIT_INPUT_ERROR) on a bad value.
+    subdomain of one: bare TLDs / single labels (com, fun, local) and multi-label public
+    suffixes (co.uk, co.in, github.io, herokuapp.com, ...) are rejected, because an
+    over-broad entry would allowlist an entire namespace (e.g. an entry of `com` would let a
+    payload host of `evil.com` pass the suffix match). The public-suffix set is the curated,
+    overlay-extensible list shared with TLS/DNS realism (tls_realism.yaml) — a common subset,
+    not the full PSL (no external dependency, per issue #284). IP literals are accepted
+    as-is. Shared by `generate` and `validate` so the contract is identical. Prints an error
+    and raises typer.Exit(EXIT_INPUT_ERROR) on a bad value.
     """
     import ipaddress
     import re
@@ -159,7 +162,9 @@ def _normalize_oob_hosts(oob_host: list[str]) -> tuple[str, ...]:
         labels = [label for label in host.split(".") if label]
         if len(labels) < 2:
             return False  # single label: a bare TLD / hostname (com, fun, local)
-        return host not in multi_label_public_suffixes()  # reject co.uk / ac.uk / com.au / ...
+        # reject a bare multi-label public suffix (co.uk, co.in, github.io, ...); a name
+        # UNDER one (abc.github.io) has more labels than the suffix, so it stays registrable.
+        return host not in multi_label_public_suffixes()
 
     normalized: list[str] = []
     for raw in oob_host:

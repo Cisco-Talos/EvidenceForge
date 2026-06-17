@@ -50,7 +50,13 @@ def reset_tls_realism_cache() -> None:
 
 
 def multi_label_public_suffixes() -> set[str]:
-    """Return configured multi-label public suffixes for wildcard SAN generation."""
+    """Return the curated multi-label public-suffix set (lowercased).
+
+    Shared by TLS SAN / DNS realism (registrable-domain computation) and the
+    ``--oob-host`` safety gate (rejecting a bare public suffix that would allowlist a whole
+    namespace). A curated common subset, not the full Public Suffix List (no external
+    dependency, per issue #284); overlay-extensible via tls_realism.yaml.
+    """
     data = load_tls_realism()
     suffixes = data.get("san", {}).get("multi_label_public_suffixes", [])
     return {str(suffix).lower() for suffix in suffixes}

@@ -341,10 +341,23 @@ class TestNormalizeOobHosts:
     """The --oob-host boundary contract shared by `eforge generate` and `eforge validate`."""
 
     def test_rejects_single_label_and_public_suffix(self):
-        # A bare TLD / single label or a public suffix would allowlist an entire namespace.
+        # A bare TLD / single label or a bare public suffix would allowlist an entire
+        # namespace. Covers ICANN ccTLD second-levels AND vendor "private" suffixes.
         from evidenceforge.cli.commands import _normalize_oob_hosts
 
-        for bad in ["com", "fun", "local", "co.uk", "ac.uk", "com.au"]:
+        for bad in [
+            "com",
+            "fun",
+            "local",
+            "co.uk",
+            "ac.uk",
+            "com.au",
+            "co.in",
+            "github.io",
+            "herokuapp.com",
+            "ngrok.io",
+            "s3.amazonaws.com",
+        ]:
             with pytest.raises(typer.Exit):
                 _normalize_oob_hosts([bad])
 
@@ -357,6 +370,10 @@ class TestNormalizeOobHosts:
         assert _normalize_oob_hosts(["myhost.mysubdomain.oast.fun"]) == (
             "myhost.mysubdomain.oast.fun",
         )
+        # a name UNDER a vendor public suffix is registrable and accepted
+        assert _normalize_oob_hosts(["abc.github.io"]) == ("abc.github.io",)
+        assert _normalize_oob_hosts(["mybucket.s3.amazonaws.com"]) == ("mybucket.s3.amazonaws.com",)
+        assert _normalize_oob_hosts(["sub.co.in"]) == ("sub.co.in",)
 
     def test_preserves_ip_literals(self):
         from evidenceforge.cli.commands import _normalize_oob_hosts
