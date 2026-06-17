@@ -49,19 +49,21 @@ class ProcessExecutionRequest:
     suppress_command_file_effect: bool = False
     allow_existing_browser_reuse: bool = True
     allow_browser_launch_spacing: bool = True
+    concurrency_group_id: str = ""
     source: str = "activity_generator"
 
     @property
     def stable_id(self) -> str:
         """Return a deterministic intent identifier for durable references."""
 
+        concurrency_suffix = f":{self.concurrency_group_id}" if self.concurrency_group_id else ""
         seed = _stable_seed(
             "action_bundle:process_execution:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.logon_id}:{self.process_name}:{self.command_line}:"
             f"{self.parent_pid}:{self.ensure_file_event}:{self.from_storyline}:"
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
-            f"{self.allow_browser_launch_spacing}:{self.source}"
+            f"{self.allow_browser_launch_spacing}{concurrency_suffix}:{self.source}"
         )
         return f"process-execution-{seed:016x}"
 
