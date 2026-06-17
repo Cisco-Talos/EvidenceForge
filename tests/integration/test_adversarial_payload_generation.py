@@ -233,12 +233,37 @@ class TestAdversarialPayloadGeneration:
             logs=[{"format": "web_access"}, {"format": "zeek_http"}],
             web_server=True,
         )
+        # A captured Zeek http.log requires a network sensor on the path: both hosts share
+        # 192.168.20.0/24, so a span sensor on that segment observes the east-west request.
+        scenario["environment"]["network"] = {
+            "segments": [
+                {
+                    "name": "servers",
+                    "cidr": "192.168.20.0/24",
+                    "description": "app + web servers",
+                    "exposure": "internal",
+                    "systems": ["APP-SRV-01", "WEB-01"],
+                }
+            ],
+            "sensors": [
+                {
+                    "type": "network",
+                    "name": "tap",
+                    "monitoring_segments": ["servers"],
+                    "direction": "bidirectional",
+                    "placement": "span",
+                    "log_formats": ["zeek"],
+                }
+            ],
+        }
         out = _generate(scenario, tmp_path / "wire")
         rec = _ap_records(out)[0]
         assert rec["scheme"] == "http"
-        wire = "\n".join(
-            p.read_text(errors="replace") for p in out.rglob("*http*.json") if p.is_file()
-        )
+        http_files = [p for p in out.rglob("*http*.json") if p.is_file()]
+        # zeek_http is sensor-routed: the http.log must land under the sensor subdir, not as a
+        # flat file (guards against a silent regression back to the removed no-sensor fallback).
+        assert any(p.parent.name == "tap" for p in http_files)
+        wire = "\n".join(p.read_text(errors="replace") for p in http_files)
         assert rec["rendered_value"] in wire  # the JNDI payload is on the wire (cleartext)
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**scenario)).run()
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
