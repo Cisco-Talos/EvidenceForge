@@ -92,6 +92,11 @@ class TestWebEmitterCanHandle:
         event = _make_event(dst_host=host, http=_HTTP)
         assert emitter.can_handle(event) is True
 
+    def test_normalized_web_server_role_accepted(self, emitter):
+        host = _make_host("server", ["web-server"])
+        event = _make_event(dst_host=host, http=_HTTP)
+        assert emitter.can_handle(event) is True
+
     def test_workstation_no_role_rejected(self, emitter):
         """Regression: WSUS→workstation HTTP (port 8530) must not emit web_access."""
         host = _make_host("workstation", [])

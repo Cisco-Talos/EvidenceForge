@@ -403,6 +403,20 @@ class TestSpillageAccuracy:
             for row in ecar_rows
         )
 
+    def test_http_spillage_with_normalized_web_server_role_lands_on_disk(self, tmp_path):
+        scenario = _linux_scenario(
+            [{"type": "spillage", "surface": "http_request_url", "family": "gcp_api_key"}],
+            logs=[{"format": "web_access"}],
+            web_server=True,
+            web_server_roles=["web-server"],
+        )
+        out = _generate(scenario, tmp_path / "out")
+        rec = next(r for r in _records(out) if r["surface"] == "http_request_url")
+        web = "\n".join(p.read_text() for p in out.rglob("web_access.log"))
+
+        assert rec["expected_sources"] == ["web_access"]
+        assert rec["rendered_value"] in web
+
     def test_db_uri_through_http_url_is_percent_encoded_on_disk(self, tmp_path):
         # db_uri is the heaviest-encoding family (:// @ : /). Through http_request_url
         # the on-disk form must be percent-encoded and the raw value absent unencoded.
@@ -1028,6 +1042,7 @@ def _linux_scenario(
     actor_os="Ubuntu 22.04 LTS",
     web_server_hostname="WEB-01",
     web_server_services=None,
+    web_server_roles=None,
     network=None,
 ):
     logs = logs or [{"format": "bash_history"}, {"format": "syslog"}, {"format": "ecar"}]
@@ -1047,7 +1062,7 @@ def _linux_scenario(
                 "ip": "192.168.20.40",
                 "os": "Ubuntu 22.04 LTS",
                 "type": "server",
-                "roles": ["web_server"],
+                "roles": web_server_roles or ["web_server"],
                 "services": web_server_services or [],
             }
         )

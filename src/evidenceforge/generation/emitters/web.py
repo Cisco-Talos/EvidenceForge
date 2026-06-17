@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.generation.spillage import web_server_supported_schemes
 from evidenceforge.output_targets import OutputTarget
 
 
@@ -139,7 +140,7 @@ class WebEmitter(HostMultiplexEmitter):
             event.event_type in self._supported_types
             and event.http is not None
             and event.dst_host is not None
-            and "web_server" in event.dst_host.roles
+            and bool(web_server_supported_schemes(event.dst_host))
         )
 
     def emit(self, event: SecurityEvent) -> None:
