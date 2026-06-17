@@ -260,7 +260,7 @@ def _add_detected_log(
     validator: str | None,
     unsupported_reason: str | None = None,
 ) -> None:
-    path = path.resolve()
+    path = path.absolute()
     logs_by_path[path] = DetectedLog(
         path=path,
         host=_host_for_path(data_dir, path),
@@ -275,9 +275,9 @@ def _add_detected_log(
 def _candidate_log_files(data_dir: Path) -> tuple[Path, ...]:
     return tuple(
         sorted(
-            path.resolve()
+            path.absolute()
             for path in data_dir.rglob("*")
-            if path.is_file() and path.suffix in _LOG_FILE_SUFFIXES
+            if not path.is_symlink() and path.is_file() and path.suffix in _LOG_FILE_SUFFIXES
         )
     )
 

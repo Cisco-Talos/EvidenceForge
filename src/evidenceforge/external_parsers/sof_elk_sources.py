@@ -25,8 +25,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import stat
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -282,6 +284,7 @@ def stage_source_logs(
     logs: list[StagedSourceLog] = []
     for source_name in spec.source_names:
         for source in sorted(source_root.rglob(source_name)):
+            _validate_source_log_path(source_root, source)
             sensor = _source_name(source_root, source)
             source_year = _source_year(source) if spec.staged_directory == "syslog" else None
             if spec.staged_directory == "syslog" and source_year is not None:
@@ -289,7 +292,7 @@ def stage_source_logs(
             else:
                 destination = source_stage_root / sensor / spec.staged_name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
+            _copy_regular_source_file(source, destination)
             logs.append(
                 StagedSourceLog(
                     source=source,
@@ -307,6 +310,43 @@ def stage_source_logs(
         )
 
     return SofElkSourceManifest(spec=spec, logstash_root=logstash_root, logs=tuple(logs))
+
+
+def _validate_source_log_path(source_root: Path, source: Path) -> None:
+    """Validate that a staged source log is a regular file contained by the source root."""
+    if source.is_symlink():
+        raise SofElkHarnessError(
+            f"refusing to stage symlinked {source.name} outside generated output boundary: {source}"
+        )
+    try:
+        resolved_source = source.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise SofElkHarnessError(f"source log disappeared before staging: {source}") from exc
+    try:
+        resolved_source.relative_to(source_root)
+    except ValueError as exc:
+        raise SofElkHarnessError(
+            f"refusing to stage {source.name} outside generated output boundary: {source}"
+        ) from exc
+    if not resolved_source.is_file():
+        raise SofElkHarnessError(f"refusing to stage non-file source log: {source}")
+
+
+def _copy_regular_source_file(source: Path, destination: Path) -> None:
+    """Copy a regular source file without following a final-path symlink race."""
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    try:
+        source_fd = os.open(source, flags)
+    except OSError as exc:
+        raise SofElkHarnessError(f"failed to open source log for staging: {source}") from exc
+    with os.fdopen(source_fd, "rb") as source_file:
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            raise SofElkHarnessError(f"refusing to stage non-regular source log: {source}")
+        with destination.open("wb") as destination_file:
+            shutil.copyfileobj(source_file, destination_file)
 
 
 def build_sof_elk_source_configs(
