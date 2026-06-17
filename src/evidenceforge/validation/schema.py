@@ -1516,21 +1516,6 @@ class ScenarioValidator:
                                 ),
                             )
                         )
-                    if fam.get("proposed"):
-                        self.issues.append(
-                            ValidationIssue(
-                                severity="warning",
-                                field_path=field_path,
-                                message=(
-                                    f"[{event.id}] Adversarial payload family '{spec.family}' is "
-                                    "marked 'proposed' (pending maintainer sign-off); it may "
-                                    "change or be removed"
-                                ),
-                                suggestion=(
-                                    "Use a locked family, or accept the proposed family knowingly"
-                                ),
-                            )
-                        )
 
                 if spec.value is not None:
                     try:

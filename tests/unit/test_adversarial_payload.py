@@ -445,13 +445,23 @@ class TestSynthesisRendering:
             finally:
                 apmod.get_family = orig
 
-    def test_xss_reflection_is_proposed_and_still_renders(self):
-        fam = get_family("xss_reflection")
-        assert fam.get("proposed") is True  # flagged for maintainer sign-off
+    def test_xss_reflection_renders(self):
         value = ap.synthesize_value("xss_reflection", "k")
         ap.check_payload_safety(value, family="xss_reflection")
         render = ap.render_for_surface(value, "http_request_url", "xss_reflection", "k")
         assert "%3Cscript%3E" in render.encoded_value  # percent-encoded <script>
+
+    def test_payload_family_entry_rejects_proposed_field(self):
+        # The 'proposed' concept was removed: every shipped family is supported, so the
+        # schema must reject a stray `proposed:` key (extra="forbid").
+        from pydantic import ValidationError
+
+        from evidenceforge.config.schemas import PayloadFamilyEntry
+
+        with pytest.raises(ValidationError):
+            PayloadFamilyEntry(
+                name="x", surfaces=["syslog_message"], value_template="{marker}", proposed=True
+            )
 
     def test_carrier_callback_hosts_covers_url_vectors_not_binaries(self):
         # Parity with the value extractor's vectors: scheme://, scheme-relative //, and

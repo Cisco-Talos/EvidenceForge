@@ -2035,7 +2035,6 @@ class PayloadFamilyEntry(BaseModel, extra="forbid"):
     # whenever ids_sid is set (else the signature would fire on every variant, including
     # the ones it is designed to miss).
     ids_fires_on: str | None = None
-    proposed: bool = False
 
     @model_validator(mode="after")
     def _check_family(self) -> Self:

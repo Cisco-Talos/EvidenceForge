@@ -102,10 +102,10 @@ The curated set is **data** in `config/activity/payload_families.yaml`:
 | `crlf_log_forging` | CRLF log forging | a parser/shipper that lets an embedded `\r\n` (or lone `\r`/`\n`) forge a second, attacker-controlled log line | `2012887` |
 | `csv_formula` | CSV/formula injection | a spreadsheet/CSV export that evaluates `=`/`+`/`-`/`@`-prefixed cells (`=WEBSERVICE(...)`); models **`syslog_message` only** (the whole logged field must be the formula) | — |
 | `log4shell` | JNDI/expression-language lookup | a logger/SIEM that interpolates `${jndi:ldap://…}` (the Log4Shell class), incl. obfuscated lookups | `2024317` |
-| `xss_reflection` *(proposed)* | stored/reflected XSS | a log-viewer web UI that renders `<script>`/`<img onerror>` from a stored field without escaping | — |
-| `sql_injection` *(proposed)* | SQL injection (CWE-89) | a SQL-backed SIEM/log store that string-concatenates a field into a query; a WAF/IDS SQLi rule | `2009714` |
-| `structured_log_injection` *(proposed)* | structured-log (JSON/logfmt) injection | a shipper that concatenates untrusted text into a JSON/key-value record, forging sibling fields | — |
-| `oversized_field` *(proposed)* | oversized/unbounded field (CWE-400) | a pipeline's field-length caps, truncation behavior, and regex/ingest cost on a multi-KB value | — |
+| `xss_reflection` | stored/reflected XSS | a log-viewer web UI that renders `<script>`/`<img onerror>` from a stored field without escaping | — |
+| `sql_injection` | SQL injection (CWE-89) | a SQL-backed SIEM/log store that string-concatenates a field into a query; a WAF/IDS SQLi rule | `2009714` |
+| `structured_log_injection` | structured-log (JSON/logfmt) injection | a shipper that concatenates untrusted text into a JSON/key-value record, forging sibling fields | — |
+| `oversized_field` | oversized/unbounded field (CWE-400) | a pipeline's field-length caps, truncation behavior, and regex/ingest cost on a multi-KB value | — |
 
 Each family declares its payload as `value_templates` (variant list), a single
 `value_template`, or literal `examples` — with marker/canary/control-byte tokens —
@@ -118,9 +118,7 @@ families. Template tokens (`{marker}`, `{canary}`, `{esc}`, `{cr}`, `{lf}`, `{ta
 poison marker so each produced line stays provably synthetic. `eforge
 validate-config` synthesizes and safety-checks **every variant** of every family,
 and runs a self-test (built from the config's own marker) that fails loudly if an
-overlay weakened the marker, canary, or host allowlist. Families marked *proposed*
-emit a validation **warning** (not error) when used — they are candidates pending
-maintainer sign-off, easy to drop.
+overlay weakened the marker, canary, or host allowlist.
 
 ### On-wire IDS detection
 
@@ -217,8 +215,10 @@ record `callback_host: null` and remain fully inert.
 
 Each event is recorded in two places: a **full machine-readable label** in the
 canonical `GROUND_TRUTH.json` document (`kind: "adversarial_payload"`), and a
-**redacted human-readable summary** (control-byte-escaped preview + SHA-256) in the
-`GROUND_TRUTH.md` derived from it. The document is the same schema-versioned canonical
+**human-readable summary** (control-byte-escaped preview + SHA-256) in the
+`GROUND_TRUTH.md` derived from it. These payloads are inert, marked test artifacts —
+not secrets — so the preview shows the payload content in full; control bytes are
+escaped only so the Markdown renders safely. The document is the same schema-versioned canonical
 ground-truth introduced for spillage; adversarial_payload is one more record `kind` in
 its `events` list, with the per-kind facts nested under `attributes`:
 
