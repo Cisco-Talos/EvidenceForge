@@ -172,3 +172,33 @@ def test_detect_external_parser_plan_reports_unknown_log_files(tmp_path: Path) -
 
     assert plan.validators == ()
     assert unsupported_summary(plan.unsupported_logs) == {"unknown": ["mystery.log"]}
+
+
+def test_detect_external_parser_plan_skips_symlinked_logs_outside_data_dir(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    outside_log = tmp_path / "outside.log"
+    outside_log.write_text("secret\n", encoding="utf-8")
+    (data_dir / "mystery.log").symlink_to(outside_log)
+
+    plan = detect_external_parser_plan(data_dir)
+
+    assert plan.validators == ()
+    assert plan.logs == ()
+
+
+def test_detect_external_parser_plan_skips_named_symlinked_logs_outside_data_dir(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    outside_log = tmp_path / "outside.log"
+    outside_log.write_text("secret\n", encoding="utf-8")
+    (data_dir / "conn.json").symlink_to(outside_log)
+
+    plan = detect_external_parser_plan(data_dir)
+
+    assert plan.validators == ()
+    assert plan.logs == ()

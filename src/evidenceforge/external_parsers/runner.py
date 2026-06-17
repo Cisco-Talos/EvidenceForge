@@ -260,10 +260,13 @@ def _add_detected_log(
     validator: str | None,
     unsupported_reason: str | None = None,
 ) -> None:
-    path = path.resolve()
-    logs_by_path[path] = DetectedLog(
-        path=path,
-        host=_host_for_path(data_dir, path),
+    resolved_path = _resolve_log_file_in_data_dir(data_dir, path)
+    if resolved_path is None:
+        return
+
+    logs_by_path[resolved_path] = DetectedLog(
+        path=resolved_path,
+        host=_host_for_path(data_dir, resolved_path),
         logtype=logtype,
         subtype=subtype,
         format_name=format_name,
@@ -273,13 +276,23 @@ def _add_detected_log(
 
 
 def _candidate_log_files(data_dir: Path) -> tuple[Path, ...]:
-    return tuple(
-        sorted(
-            path.resolve()
-            for path in data_dir.rglob("*")
-            if path.is_file() and path.suffix in _LOG_FILE_SUFFIXES
-        )
-    )
+    candidates: list[Path] = []
+    for path in data_dir.rglob("*"):
+        if path.suffix not in _LOG_FILE_SUFFIXES or not path.is_file():
+            continue
+        resolved_path = _resolve_log_file_in_data_dir(data_dir, path)
+        if resolved_path is not None:
+            candidates.append(resolved_path)
+    return tuple(sorted(candidates))
+
+
+def _resolve_log_file_in_data_dir(data_dir: Path, path: Path) -> Path | None:
+    resolved_path = path.resolve()
+    try:
+        resolved_path.relative_to(data_dir)
+    except ValueError:
+        return None
+    return resolved_path
 
 
 def _host_for_path(data_dir: Path, path: Path) -> str:
