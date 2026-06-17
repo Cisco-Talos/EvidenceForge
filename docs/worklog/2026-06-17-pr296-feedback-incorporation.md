@@ -135,6 +135,44 @@ documented; surface-gating offered to the maintainer); **spillage = standalone P
 **`--oob-host` public-suffix list = kept shared** with TLS/DNS realism (expanded ~12→38,
 documented; decouple-into-a-dedicated-list remains an offered follow-up).
 
+## Round 2 — maintainer (DavidJBianco) re-test, 2 required fixes (FIXED)
+
+David re-tested against head `496a7c61` and found two issues our review missed. Both fixed:
+
+1. **OOB safety enforced at the wrong layer (FIXED).** The CLI rejected broad `--oob-host`
+   values (`com`), but `check_payload_safety()` / `resolve_value()` trusted whatever `oob_hosts`
+   they were handed — so a *broad value reaching the safety path directly* still allowlisted a
+   whole namespace (`evil.com` suffix-matches `.com`). Moved the contract into a single
+   `adversarial_payload.normalize_oob_host()` enforced AT the safety boundary (the CLI now calls
+   the same helper for fail-fast UX). Regression test: broad values passed straight to
+   `check_payload_safety`/`resolve_value` now raise.
+2. **`expected_sources` overclaimed (FIXED).** `zeek_http` was appended for any cleartext-http
+   payload (theoretical wire visibility), even when zeek wasn't configured or no sensor observed
+   it — so GROUND_TRUTH named a source with no file. Now gated on the `zeek_http` emitter being
+   configured AND a sensor on the path actually observing Zeek; `expected_sources` means "exists
+   in this dataset." Tests: excluded when not observed, included when observed, plus an
+   inverse-completeness test asserting every claimed source produced a file.
+
+### Lessons learned (why our extensive review missed these)
+
+- **Test the invariant at its owning boundary, not just the caller.** We verified the CLI gate
+  and that `check_payload_safety` rejects bad *payload hosts*, but never called the safety core
+  with a *broad `oob_hosts`*. We fixed the symptom where the value enters (CLI) instead of where
+  the invariant lives (the allowlist construction). Fix root causes at the owning layer (AGENTS.md).
+- **Assert completeness, not just presence.** Our "lands on disk" / eval checks asserted the
+  payload appears in *at least one* expected source — never that *every* claimed source exists.
+  A phantom *source* (vs. the phantom *record* we did catch) was structurally invisible. New
+  invariant test: `set(expected_sources)` ⊆ sources actually produced.
+- **Don't prime an "independent" reviewer with our conclusions.** The independent pass was seeded
+  with our framing ("registrable detection reuses the list; bare suffix rejected"), so it verified
+  that premise *at the CLI* rather than re-deriving the invariant. Give a reviewer the raw
+  invariants to attack.
+- **Author bias:** we tested "does my code do what I intended"; the owner tested "does the system
+  uphold the property, including where my code doesn't reach." Both new tests encode the property.
+
+These three checks (boundary-direct hostile-input tests; expected-vs-produced completeness; raw
+invariants for reviewers) are now part of the audit checklist below.
+
 ## Open / next
 
 - Awaiting maintainer review on PR #296 and PR #323; CI runs on both.
