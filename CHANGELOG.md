@@ -10,8 +10,9 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 This patch release integrates the accepted Codex hardening fixes queued on
 `dev`, plus a local SOF-ELK harness fixture cleanup found during slow-suite
-validation. The branch contains only `fix:`, `docs:`, `test:`, and `chore:`
-work since v1.3.2, so the project moves from `1.3.2` to `1.3.3`.
+validation, a spillage validation fix, and dependency maintenance. The branch
+contains only `fix:`, `docs:`, `test:`, and `chore:` work since v1.3.2, so the
+project moves from `1.3.2` to `1.3.3`.
 
 **External parser and output-target hardening**
 
@@ -45,12 +46,22 @@ work since v1.3.2, so the project moves from `1.3.2` to `1.3.3`.
   `ec00e3d7`, `104c457f`).
 - Added a regression guard for file side-effect event mappings so read-style
   side effects remain covered (`4cf50430`).
+- Rejected Linux-only spillage surfaces such as `shell_history` and
+  `syslog_message` on any non-Linux host, preventing ground-truthed credential
+  labels from being created for evidence that no Linux-modeled emitter can write
+  (`de6fc246`).
 
 **Release documentation**
 
 - Hardened the manual release fallback docs so maintainers have clearer release
   guard and tagging instructions when automation is unavailable (`f292f0ec`,
   `39c8d87a`).
+
+**Dependency maintenance**
+
+- Updated development dependencies to pytest 9.1.0 and Ruff 0.15.17, with
+  slow-inclusive no-coverage validation passing on the upgraded toolchain
+  (`f9db94b3`, `65387363`).
 
 ## v1.3.2 (2026-06-06)
 
