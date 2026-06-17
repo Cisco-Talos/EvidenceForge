@@ -312,6 +312,74 @@ def test_validate_parsed_output_ignores_optional_dns_answer_ip_extraction_tag(
     assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
 
 
+def test_validate_parsed_output_keeps_dns_answer_ip_extraction_tag_fatal_for_address_answers(
+    tmp_path: Path,
+) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "dns.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "dns.log",
+                log_type="zeek_dns",
+                record_count=1,
+            ),
+        ),
+        dns_expectations={
+            ("DNS1", "www.example.com"): DnsExpectation(answers=True, ttls=True),
+        },
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_dns("DNS1", "www.example.com", with_answers=True)
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_grokparsefail_6200-01")
+    dns = event["dns"]
+    assert isinstance(dns, dict)
+    answers = dns["answers"]
+    assert isinstance(answers, dict)
+    answers.pop("ip")
+    _write_jsonl(parsed_dir / "zeek_dns.jsonl", [event])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefail_6200-01"):
+        validate_parsed_output(manifest, parsed_dir)
+
+    report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert report["failure_tag_counts"]["zeek_dns"]["_grokparsefail_6200-01"] == 1
+    assert report["sample_failures"][0]["tags"] == ["_grokparsefail_6200-01"]
+    assert report["dns_failure_qtype_counts"]["A"] == 1
+
+
+def test_validate_parsed_output_reports_address_dns_answer_ip_loss(tmp_path: Path) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "dns.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "dns.log",
+                log_type="zeek_dns",
+                record_count=1,
+            ),
+        ),
+        dns_expectations={
+            ("DNS1", "www.example.com"): DnsExpectation(answers=True, ttls=True),
+        },
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_dns("DNS1", "www.example.com", with_answers=True)
+    dns = event["dns"]
+    assert isinstance(dns, dict)
+    answers = dns["answers"]
+    assert isinstance(answers, dict)
+    answers.pop("ip")
+    _write_jsonl(parsed_dir / "zeek_dns.jsonl", [event])
+
+    with pytest.raises(SofElkParserError, match="dns.answers.ip"):
+        validate_parsed_output(manifest, parsed_dir)
+
+
 def test_validate_parsed_output_reports_unclassified_grokparsefail_tags(
     tmp_path: Path,
 ) -> None:
@@ -329,6 +397,16 @@ def test_validate_parsed_output_reports_unclassified_grokparsefail_tags(
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
     failed_event = _parsed_dns("DNS1", "www.example.com", with_answers=True)
+    dns = failed_event["dns"]
+    assert isinstance(dns, dict)
+    question = dns["question"]
+    answers = dns["answers"]
+    assert isinstance(question, dict)
+    assert isinstance(answers, dict)
+    question["type"] = "NS"
+    answers["data"] = ["ns1.example.com"]
+    answers["ttl"] = [3600.0]
+    answers.pop("ip")
     tags = failed_event["tags"]
     assert isinstance(tags, list)
     tags.append("_grokparsefail_6200-01")
@@ -342,7 +420,7 @@ def test_validate_parsed_output_reports_unclassified_grokparsefail_tags(
     assert "_grokparsefail_6200-01" not in report["failure_tag_counts"]["zeek_dns"]
     assert report["failure_tag_counts"]["zeek_dns"]["_grokparsefail_6200-99"] == 1
     assert report["sample_failures"][0]["tags"] == ["_grokparsefail_6200-99"]
-    assert report["dns_failure_qtype_counts"]["A"] == 1
+    assert report["dns_failure_qtype_counts"]["NS"] == 1
 
 
 def test_validate_parsed_output_ignores_x509_post_2038_date_parser_limitation(
@@ -487,7 +565,7 @@ def _parsed_dns(
         event["dns"] = {
             "question": {"name": question_name, "type": "A"},
             "response": {"code": "NOERROR"},
-            "answers": {"data": "93.184.216.34", "ttl": 3600},
+            "answers": {"data": "93.184.216.34", "ttl": 3600, "ip": "93.184.216.34"},
         }
     return event
 

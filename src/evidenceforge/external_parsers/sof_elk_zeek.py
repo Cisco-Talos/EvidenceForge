@@ -646,6 +646,13 @@ def _event_failures(
             failures.append(f"{prefix}: missing dns.answers.data from raw answers")
         if expectation and expectation.ttls and _get_path(event, "dns.answers.ttl") in (None, ""):
             failures.append(f"{prefix}: missing dns.answers.ttl from raw TTLs")
+        if (
+            expectation
+            and expectation.answers
+            and _is_dns_address_question_type(_get_path(event, "dns.question.type"))
+            and _get_path(event, "dns.answers.ip") in (None, "", [])
+        ):
+            failures.append(f"{prefix}: missing dns.answers.ip from address answers")
 
     return failures
 
@@ -753,6 +760,10 @@ def _dns_failure_qtype_counts(
         qtype = _get_path(event, "dns.question.type")
         counts[str(qtype or "unknown")] += 1
     return dict(sorted(counts.items()))
+
+
+def _is_dns_address_question_type(question_type: Any) -> bool:
+    return str(question_type or "").strip().upper() in {"A", "AAAA"}
 
 
 def _failure_tags(log_type: LogType, event: JsonObject, tags: list[Any]) -> list[str]:
