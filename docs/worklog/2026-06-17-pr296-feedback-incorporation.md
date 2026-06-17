@@ -173,6 +173,20 @@ David re-tested against head `496a7c61` and found two issues our review missed. 
 These three checks (boundary-direct hostile-input tests; expected-vs-produced completeness; raw
 invariants for reviewers) are now part of the audit checklist below.
 
+### Post-fix audit (applying the lessons)
+
+A fresh independent invariant-attack audit (reviewer given the raw invariants, not our
+conclusions) then ran against the round-2 fixes: all load-bearing invariants HOLD under direct
+empirical attack (safety via direct hostile `oob_hosts`; GT⇔disk completeness across topologies
+incl. the full matrix; no-phantom; determinism; the full contract); 155 feature tests + ruff
+clean. It surfaced **one more instance of the same bug-class (a)** — `render_for_surface`'s
+defense-in-depth carrier-host check built its allowlist from raw `oob_hosts` rather than
+`normalize_oob_host`, so that sibling layer was weaker than the safety boundary (not exploitable
+in production, since `check_payload_safety` runs first and aborts, but the same "invariant
+enforced inconsistently across layers" smell). Fixed immediately: that layer now routes through
+`normalize_oob_host` too, with a regression test. This is the lesson in action — when one layer
+owns an invariant, every sibling layer must apply the same contract.
+
 ## Open / next
 
 - Awaiting maintainer review on PR #296 and PR #323; CI runs on both.

@@ -527,7 +527,9 @@ def render_for_surface(
     # check_payload_safety, but a carrier-embedded URL host is not part of the value
     # and would otherwise never be checked. Scope to scheme://host positions (the real
     # callback vector) so a benign binary token like ``cmd.exe`` is not misread as a host.
-    _domains = [*allowlisted_domains(), *(h.lower() for h in oob_hosts)]
+    # Build the allowlist via normalize_oob_host (not a raw lowercase) so this layer applies
+    # the SAME OOB contract as the safety boundary — a broad oob_host can't widen it here.
+    _domains = [*allowlisted_domains(), *(normalize_oob_host(h) for h in oob_hosts)]
     for _host in _carrier_callback_hosts(line):
         if not _host_allowed(_host, _domains):
             raise AdversarialPayloadSafetyError(
