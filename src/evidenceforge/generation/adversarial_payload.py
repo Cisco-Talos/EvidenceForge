@@ -56,6 +56,8 @@ VALID_SURFACES: tuple[str, ...] = (
     "http_referrer",
     "syslog_message",
     "process_command_line",
+    "dns_qname",
+    "auth_user",
 )
 
 # Web-request surfaces: the payload rides in an outbound HTTP/S request field and is
@@ -64,8 +66,9 @@ VALID_SURFACES: tuple[str, ...] = (
 HTTP_SURFACES: frozenset[str] = frozenset({"http_user_agent", "http_request_url", "http_referrer"})
 
 # Surfaces that only model on Linux hosts. process_command_line and the http_*
-# surfaces are cross-OS.
-LINUX_ONLY_SURFACES: frozenset[str] = frozenset({"syslog_message"})
+# surfaces are cross-OS; dns_qname is cross-OS (a Zeek sensor sees it regardless of host
+# OS). auth_user renders a Linux sshd auth.log line (Windows 4625 is a different format).
+LINUX_ONLY_SURFACES: frozenset[str] = frozenset({"syslog_message", "auth_user"})
 
 # Single source of truth: surface -> the output format that records it (also its
 # ground-truth expected_sources). Validation and the eval matcher consume this map.
@@ -75,6 +78,8 @@ SURFACE_FORMATS: dict[str, str] = {
     "http_referrer": "web_access",
     "syslog_message": "syslog",
     "process_command_line": "ecar",
+    "dns_qname": "zeek_dns",
+    "auth_user": "syslog",
 }
 
 # Benign surrounding-field carriers (the realistic context the payload rides in).
@@ -95,6 +100,10 @@ _GENERIC_CARRIERS: dict[str, tuple[str, ...]] = {
         "/usr/bin/env LOG_FIELD={value} printenv LOG_FIELD",
         "/usr/bin/env USER_INPUT={value} true",
     ),
+    # dns_qname: the payload IS the QNAME (already LDH-encoded by _encode_for_surface).
+    "dns_qname": ("{value}",),
+    # auth_user: the payload IS the failed-logon username (control bytes escaped).
+    "auth_user": ("{value}",),
 }
 
 # Windows-native fallback so a Windows actor never renders a Linux command line for
@@ -143,6 +152,8 @@ class SurfaceRender:
     http_uri: str | None = None  # http_* (request path+query)
     http_referrer: str | None = None  # http_referrer (Referer header URL)
     user_agent: str | None = None  # http_user_agent (User-Agent header)
+    dns_query: str | None = None  # dns_qname (the rendered QNAME, LDH under canary domain)
+    auth_username: str | None = None  # auth_user (the injected failed-logon username)
     tags: list[str] = field(default_factory=list)
 
 
@@ -414,6 +425,40 @@ def _raw_surfaces_for(family: str | None) -> set[str]:
     return {"syslog_message"}
 
 
+def _qname_encode(value: str) -> str:
+    """Encode a payload as a DNS QNAME under the reserved canary domain.
+
+    A QNAME is charset/length-limited (LDH labels <=63 bytes, <=253 total), so a DNS
+    injection is necessarily terse. The directive is lowercased and every run of non-LDH
+    bytes collapses to a single hyphen; the echo-canary is pulled out and re-appended as
+    its own label so a long directive can never truncate it; and the QNAME ALWAYS ends in
+    the non-resolving canary domain, so its registrable domain is reserved by construction.
+    A copilot reading zeek dns.log sees the (hyphen-encoded) directive in the QNAME.
+    """
+    suffix = canary_host()  # canary.eforge.invalid (RFC 6761, non-resolving)
+    safe = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    # Pull the DNS-safe canary token (marker-canary-nonce) out first so truncation of a
+    # long directive cannot drop it; build the marker alternation from payload_markers().
+    markers = "|".join(
+        re.escape(re.sub(r"[^a-z0-9]+", "-", m.lower()).strip("-")) for m in payload_markers()
+    )
+    canary_match = re.search(rf"(?:{markers})-canary-[a-z0-9]{{12}}", safe) if markers else None
+    canary_label = canary_match.group(0)[:63] if canary_match else ""
+    directive = safe.replace(canary_label, "").strip("-") if canary_label else safe
+    dlabels = [directive[i : i + 63].strip("-") for i in range(0, len(directive), 63)]
+    dlabels = [label for label in dlabels if label]
+
+    def _build(dl: list[str]) -> str:
+        parts = [*dl, canary_label, suffix] if canary_label else [*dl, suffix]
+        return ".".join(p for p in parts if p)
+
+    # Enforce the 253-octet QNAME limit by dropping directive labels from the END (keeping
+    # the leading instruction and the canary label) until the whole name fits.
+    while dlabels and len(_build(dlabels)) > 253:
+        dlabels.pop()
+    return _build(dlabels)
+
+
 def _encode_for_surface(
     value: str, surface: str, family: str | None, os_category: str = "linux"
 ) -> str:
@@ -439,6 +484,12 @@ def _encode_for_surface(
     if surface == "process_command_line":
         escaped = _escape_controls(value)
         return _quote_windows(escaped) if os_category == "windows" else shlex.quote(escaped)
+    if surface == "dns_qname":
+        return _qname_encode(value)
+    if surface == "auth_user":
+        # A failed-logon username lands in auth.log; never let a raw control byte corrupt
+        # the line (a username is not a modeled raw surface).
+        return _escape_controls(value)
     if surface == "syslog_message":
         return value if surface in raw_surfaces else _escape_controls(value)
     return value
@@ -536,6 +587,28 @@ def render_for_surface(
                 f"carrier for surface {surface!r} embeds non-allowlisted host {_host!r}; "
                 f"use the canary ({canary_host()}) or an RFC-reserved domain/address"
             )
+
+    if surface == "dns_qname":
+        # Defense in depth: the QNAME's registrable domain MUST be reserved (the encoder
+        # always appends the canary domain). Reject if somehow it is not.
+        if not _host_allowed(line, allowlisted_domains()):
+            raise AdversarialPayloadSafetyError(
+                f"dns_qname surface produced a non-reserved QNAME {line!r}"
+            )
+        return SurfaceRender(
+            surface=surface,
+            encoded_value=encoded,
+            expected_sources=expected_sources,
+            dns_query=line,
+        )
+
+    if surface == "auth_user":
+        return SurfaceRender(
+            surface=surface,
+            encoded_value=encoded,
+            expected_sources=expected_sources,
+            auth_username=line,
+        )
 
     if surface == "syslog_message":
         # Keep APP-NAME coherent with the message: a carrier like "nginx: <field>"

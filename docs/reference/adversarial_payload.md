@@ -60,9 +60,13 @@ just presence. A family may instead declare a single `value_template` or literal
 | `http_user_agent` | HTTP/S request to a web server | `web_access` (the payload **is** the `User-Agent` header; the path is benign) | control-escape + `"`→`%22` (cannot break out of the quoted UA field) |
 | `http_request_url` | HTTP/S request to a web server | `web_access` (payload in the request URL/query string → `path` field) | percent-encoding (`urllib.parse.quote`) |
 | `http_referrer` | HTTP/S request to a web server | `web_access` (payload in the `Referer` header; the path is benign) | percent-encoding (`urllib.parse.quote`) |
+| `dns_qname` | DNS query to the resolver (UDP/53) | `zeek_dns` (the payload **is** the query NAME; **requires a network sensor**) | LDH encoding into ≤63-byte labels under the non-resolving canary domain — a terse DGA-style directive; the echo-canary survives as a DNS-safe label |
+| `auth_user` | failed SSH logon (the attempted username) | `syslog` (`…/auth.log`: `Failed password for <user>`; **Linux-modeled**) | control-character escaping (a username must not corrupt the auth line) |
 
-`syslog_message` is Linux-modeled; `process_command_line` and the `http_*` surfaces
-are cross-OS. The `http_*` surfaces model an outbound request **from the actor's
+`syslog_message` and `auth_user` are Linux-modeled; `process_command_line` and the
+`http_*` surfaces are cross-OS; `dns_qname` is cross-OS but **requires a network
+sensor emitting Zeek** (a host keeps no DNS log of its own, so without a sensor the
+payload would be ground-truthed but never land — a hard validation error otherwise). The `http_*` surfaces model an outbound request **from the actor's
 host directly to a web server** — a host with `roles: [web_server]` must exist (a
 hard validation error otherwise), since the payload is recorded by that server's
 `web_access` log. The request is sent direct (proxy-bypassed) so the access-log
@@ -112,10 +116,10 @@ that reads log content as instructions (OWASP LLM01:2025 indirect prompt injecti
 
 | Family | Weakness class | What it tests | On-wire IDS |
 |---|---|---|---|
-| `prompt_injection_persona` *(proposed)* | persona/authority hijack | a copilot that lets an in-field claim of authority downgrade/whitelist a finding | — |
-| `prompt_injection_context` *(proposed)* | context/output-structure manipulation | a copilot summarizer fooled by a forged log/markup boundary into a "BENIGN" verdict | — |
-| `prompt_injection_exfil` *(proposed)* | data-exfiltration / tool-call abuse | a copilot induced to surface secrets, list other events, or call a tool | — |
-| `prompt_injection_control` *(proposed)* | direct override + obfuscation | **labeled negative control** — a hardened copilot resists; emission ⇒ trivially broken | — |
+| `prompt_injection_persona` | persona/authority hijack | a copilot that lets an in-field claim of authority downgrade/whitelist a finding | — |
+| `prompt_injection_context` | context/output-structure manipulation | a copilot summarizer fooled by a forged log/markup boundary into a "BENIGN" verdict | — |
+| `prompt_injection_exfil` | data-exfiltration / tool-call abuse | a copilot induced to surface secrets, list other events, or call a tool | — |
+| `prompt_injection_control` | direct override + obfuscation | **labeled negative control** — a hardened copilot resists; emission ⇒ trivially broken | — |
 
 These reuse the chassis but their proof is callback-free: every variant embeds the
 **echo-canary** `{marker}-CANARY-{alnum:12}` (= `EFORGE_TEST-CANARY-<nonce>`), which is both

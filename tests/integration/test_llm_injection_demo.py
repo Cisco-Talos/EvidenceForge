@@ -22,6 +22,9 @@ _DEMO = Path(__file__).resolve().parents[2] / "scenarios/llm-injection-demo"
 _SCENARIO = _DEMO / "scenario.yaml"
 _TWIN = _DEMO / "scenario-clean.yaml"
 _CANARY_RE = re.compile(r"EFORGE_TEST-CANARY-[A-Za-z0-9]{12}")
+# dns_qname renders the canary DNS-safe (lowercased, '_' folded to '-'): eforge-test-canary-<nonce>.
+_DNS_CANARY_RE = re.compile(r"eforge-test-canary-[a-z0-9]{12}")
+_ANY_CANARY_RE = re.compile(r"EFORGE_TEST-CANARY-[A-Za-z0-9]{12}|eforge-test-canary-[a-z0-9]{12}")
 _HOST_RE = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?//([^/?#\\\s\"'>}]+)")
 
 
@@ -70,12 +73,18 @@ def test_every_injection_has_a_recoverable_canary_in_the_logs(generated):
     # AND lands in the data a copilot would read (byte-for-byte) — that is the grep target.
     _out, gt, corpus = generated
     injections = _injections(gt)
-    assert len(injections) == 10
+    assert len(injections) == 14
+    corpus_lower = corpus.lower()
     for e in injections:
         a = e["attributes"]
         token = _CANARY_RE.search(a["value"])
         assert token, f"no canary in {a['family']} value"
-        assert token.group(0) in corpus, f"{a['family']} canary {token.group(0)} not in logs"
+        # The canary lands verbatim on most surfaces, or DNS-encoded (lowercased) in the
+        # dns_qname QNAME — recover by the 12-char nonce so both forms count as a hit.
+        nonce = token.group(0).split("CANARY-", 1)[1].lower()
+        assert (token.group(0) in corpus) or (f"canary-{nonce}" in corpus_lower), (
+            f"{a['family']}/{a['surface']} canary nonce {nonce} not recoverable in logs"
+        )
         assert a["rendered_value"].replace("\r\n", "\n") in corpus  # the full payload landed
 
 
@@ -150,13 +159,17 @@ def test_clean_twin_shares_a_byte_identical_baseline(generated, tmp_path_factory
         total += max(len(plines), len(clines))
         for line in plines - clines:
             differing += 1
-            # Every line that differs must be an injection-bearing record: a canary-carrying
-            # log line, or the zeek connection row for one of those injection requests.
-            assert _CANARY_RE.search(line) or fname.endswith("zeek_conn.json"), (
+            # Every differing line must be injection-related: a canary-bearing readable line
+            # (uppercase token on most surfaces, or the DNS-encoded lowercase form in zeek
+            # dns.log), or an ephemeral-port network tuple in zeek conn.log (inherently noisy
+            # and not a readable triage surface, so it is allowed to differ).
+            is_conn = Path(fname).name in ("conn.json", "conn.log", "zeek_conn.json")
+            assert _ANY_CANARY_RE.search(line) or is_conn, (
                 f"non-injection baseline line differs in {fname}: {line[:80]!r}"
             )
     assert shared / total > 0.99, f"baseline only {shared}/{total} identical — twin is not matched"
-    assert differing <= 24  # ~10 injections + their zeek conn/http rows, nothing more
-    # the twin itself must be clean — no injection canary anywhere
+    assert differing <= 40  # 14 injections × (readable line + zeek http/conn mirrors)
+    # the twin itself must be clean — no injection canary anywhere, in either form
     twin_text = "\n".join("\n".join(s) for s in clean.values())
     assert "EFORGE_TEST-CANARY-" not in twin_text
+    assert not _DNS_CANARY_RE.search(twin_text)
