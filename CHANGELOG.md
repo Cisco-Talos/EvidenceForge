@@ -6,6 +6,27 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.4.1 (2026-06-18)
+
+This patch release captures the accepted assessment-loop realism fixes queued on
+`dev` after `v1.4.0`. The work improves blind-review realism signals while
+preserving the public generation interface.
+
+**Assessment-loop realism improvements**
+
+- Added coherent collection-imperfection handling across Zeek sibling rows:
+  source-observation format missingness now promotes required same-sensor parent
+  rows and prunes HTTP/SSL reference vectors when dependent files or X.509 rows
+  are absent (`14dccc2f`).
+- Improved source-native web, proxy, eCAR, Linux, Zeek file-analysis, and NTP
+  texture, including cache-buster entropy, host-specific root response sizing,
+  actor-linked eCAR FLOW principals, realistic polkit process start ticks,
+  incomplete Zeek file-analysis rows, NTP precision/poll/cadence/metric
+  semantics, and Linux compound-command process rendering (`14dccc2f`).
+- Added focused regression coverage for the new observation, rendering,
+  lifecycle, and configuration contracts, and recorded the assessment-loop
+  handoff in the tracked worklog (`14dccc2f`).
+
 ## v1.4.0 (2026-06-17)
 
 This release integrates the accepted Codex hardening fixes queued on `dev`, the
