@@ -227,6 +227,46 @@ class TestHttpFormatAccuracy:
         assert "resp_fuids" not in data
         assert "resp_mime_types" not in data
 
+    def test_resp_fuids_omitted_when_files_observation_is_absent(self):
+        """http.log should not reference files.log rows dropped by observation policy."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CHttpFilesAbsent1",
+                    duration=1.0,
+                ),
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri="/index.html",
+                    status_code=200,
+                    status_msg="OK",
+                    response_body_len=2048,
+                    resp_fuids=["FHttpFileAbsent1"],
+                    resp_mime_types=["text/html"],
+                ),
+                _observed_formats={"zeek_conn", "zeek_http"},
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            data = json.loads(output.read_text().splitlines()[0])
+
+        assert "resp_fuids" not in data
+        assert "resp_mime_types" not in data
+
 
 class TestHttpCanHandle:
     """Verify can_handle() filtering."""

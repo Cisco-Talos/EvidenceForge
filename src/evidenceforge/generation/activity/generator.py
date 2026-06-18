@@ -2903,6 +2903,17 @@ def _linux_command_process_from_shell(
     return processes[0] if processes else None
 
 
+def _linux_catalog_processes_from_shell_command(
+    process_name: str,
+    command_line: str,
+    *,
+    username: str = "",
+) -> list[tuple[str, str]]:
+    """Return source-native Linux process argv entries for a catalog shell command."""
+    processes = _linux_command_processes_from_shell(command_line, username=username)
+    return processes or [(process_name, command_line)]
+
+
 def _linux_command_processes_from_shell(
     command: str,
     *,
@@ -3547,11 +3558,34 @@ def _ntp_stratum_and_ref_id(dst_ip: str) -> tuple[int, str]:
     return rng.choice([1, 1, 2]), rng.choice([".GPS.", ".PPS.", ".GOES.", ".ACTS."])
 
 
+_NTP_ASSOCIATION_POLL_CYCLE = (1024, 2048, 2048, 4096, 4096)
+
+
+def _ntp_poll_component(ip: str) -> int:
+    """Return a stable integer component for poll selection."""
+    try:
+        return int(ipaddress.ip_address(ip))
+    except ValueError:
+        return _stable_seed(ip)
+
+
 def _ntp_association_poll_seconds(src_ip: str, dst_ip: str) -> int:
     """Return the stable poll interval for an NTP client/server association."""
-    profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
-    profile_rng.random()  # version draw; keep poll aligned with full profile generation
-    return int(profile_rng.choices([1024, 2048, 4096], weights=[20, 35, 45], k=1)[0])
+    bucket = (
+        _ntp_poll_component(src_ip)
+        + _stable_seed(f"ntp_poll_server:{dst_ip}") % len(_NTP_ASSOCIATION_POLL_CYCLE)
+    ) % len(_NTP_ASSOCIATION_POLL_CYCLE)
+    return _NTP_ASSOCIATION_POLL_CYCLE[bucket]
+
+
+def _ntp_precision_interval_seconds(precision_exponent: int) -> float:
+    """Convert the NTP wire precision exponent into Zeek's interval field."""
+    return float(2**precision_exponent)
+
+
+def _ntp_parser_min_gap_seconds(poll_seconds: float) -> float:
+    """Return the minimum plausible gap between successful parser observations."""
+    return max(300.0, poll_seconds * 0.40)
 
 
 def _ntp_payload_accounting(
@@ -3594,6 +3628,27 @@ def _ntp_payload_accounting(
     if normalized_resp > 0 and (normalized_duration is None or normalized_duration > 0.25):
         normalized_duration = rng.uniform(0.003, 0.12)
     return normalized_orig, normalized_resp, normalized_duration
+
+
+def _ntp_observed_response_fields(
+    server_response: dict[str, float],
+    *,
+    dst_ip: str,
+    event_time: datetime,
+) -> dict[str, float]:
+    """Return NTP response fields with stable server traits and per-poll texture."""
+    root_delay = float(server_response["root_delay"])
+    root_disp = float(server_response["root_disp"])
+    rng = random.Random(_stable_seed(f"ntp_observed_response:{dst_ip}:{event_time.isoformat()}"))
+    observed_delay = root_delay * rng.uniform(0.91, 1.12) + rng.uniform(-0.00025, 0.00035)
+    observed_disp = root_disp * rng.uniform(0.88, 1.16) + rng.uniform(-0.00015, 0.0004)
+    if rng.random() < 0.18:
+        observed_disp += rng.uniform(0.00035, 0.0018)
+    return {
+        "precision": float(server_response["precision"]),
+        "root_delay": round(max(0.00025, observed_delay), 6),
+        "root_disp": round(max(0.00025, observed_disp), 6),
+    }
 
 
 def _select_public_ntp_ip(src_ip: str, dst_ip: str, time: datetime) -> str | None:
@@ -3774,6 +3829,7 @@ class ActivityGenerator:
         self._tls_ocsp_response_sizes: dict[tuple[str, str, str, float, float, str], int] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._ntp_server_response_profiles: dict[str, dict[str, float]] = {}
+        self._ntp_last_parser_times: dict[tuple[str, str], datetime] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
@@ -4073,7 +4129,7 @@ class ActivityGenerator:
 
         profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
         version = 3 if profile_rng.random() < 0.08 else 4
-        poll = float(profile_rng.choices([1024, 2048, 4096], weights=[20, 35, 45], k=1)[0])
+        poll = float(_ntp_association_poll_seconds(src_ip, dst_ip))
         profile = {
             "version": version,
             "poll": poll,
@@ -4094,8 +4150,9 @@ class ActivityGenerator:
         else:
             root_delay = profile_rng.uniform(0.001, 0.08)
             root_disp = profile_rng.uniform(0.001, 0.04)
+        precision_exponent = profile_rng.randint(-24, -19)
         profile = {
-            "precision": float(profile_rng.randint(-24, -19)),
+            "precision": _ntp_precision_interval_seconds(precision_exponent),
             "root_delay": root_delay,
             "root_disp": root_disp,
         }
@@ -12178,29 +12235,45 @@ class ActivityGenerator:
             # Stratum-aware timing via log-normal distribution
             stratum, ref_id = _ntp_stratum_and_ref_id(dst_ip)
             association = self._ntp_association_profile(event.network.src_ip, dst_ip)
-            server_response = self._ntp_server_response_profile(dst_ip)
-            _ntp_mean_ms, _ntp_sigma = _NTP_STRATUM_TIMING.get(stratum, (10.0, 0.7))
-            _ntp_mu = math.log(_ntp_mean_ms) - (_ntp_sigma**2) / 2
-            rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
-            proc_sec = ntp_rng.lognormvariate(math.log(0.5) - 0.3**2 / 2, 0.3) / 1000.0
-            ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
-            ntp_duration = max(0.001, rtt_sec + proc_sec + ntp_rng.uniform(0.001, 0.008))
-            if event.network.duration is None or event.network.duration < ntp_duration:
-                event.network.duration = ntp_duration
-            event.ntp = NtpContext(
-                version=int(association["version"]),
-                mode=4,  # server response
-                stratum=stratum,
-                poll=float(association["poll"]),
-                precision=float(server_response["precision"]),
-                root_delay=float(server_response["root_delay"]),
-                root_disp=float(server_response["root_disp"]),
-                ref_id=ref_id,
-                ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
-                org_ts=round(ntp_epoch + ntp_jitter, 6),
-                rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),
-                xmt_ts=round(ntp_epoch + ntp_jitter + rtt_sec + proc_sec, 6),
+            poll_seconds = float(association["poll"])
+            last_parser_time = self._ntp_last_parser_times.get((event.network.src_ip, dst_ip))
+            parser_gap = (
+                None
+                if last_parser_time is None
+                else (event.timestamp - last_parser_time).total_seconds()
             )
+            if parser_gap is None or parser_gap >= _ntp_parser_min_gap_seconds(poll_seconds):
+                self._ntp_last_parser_times[(event.network.src_ip, dst_ip)] = event.timestamp
+                server_response = self._ntp_server_response_profile(dst_ip)
+                observed_response = _ntp_observed_response_fields(
+                    server_response,
+                    dst_ip=dst_ip,
+                    event_time=event.timestamp,
+                )
+                _ntp_mean_ms, _ntp_sigma = _NTP_STRATUM_TIMING.get(stratum, (10.0, 0.7))
+                _ntp_mu = math.log(_ntp_mean_ms) - (_ntp_sigma**2) / 2
+                rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
+                proc_sec = ntp_rng.lognormvariate(math.log(0.5) - 0.3**2 / 2, 0.3) / 1000.0
+                ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
+                ntp_duration = max(0.001, rtt_sec + proc_sec + ntp_rng.uniform(0.001, 0.008))
+                if event.network.duration is None or event.network.duration < ntp_duration:
+                    event.network.duration = ntp_duration
+                event.ntp = NtpContext(
+                    version=int(association["version"]),
+                    mode=4,  # server response
+                    stratum=stratum,
+                    poll=poll_seconds,
+                    precision=observed_response["precision"],
+                    root_delay=observed_response["root_delay"],
+                    root_disp=observed_response["root_disp"],
+                    ref_id=ref_id,
+                    ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
+                    org_ts=round(ntp_epoch + ntp_jitter, 6),
+                    rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),
+                    xmt_ts=round(ntp_epoch + ntp_jitter + rtt_sec + proc_sec, 6),
+                )
+            else:
+                event.network.service = ""
 
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
         # the connection must have completed successfully (SF). A connection
@@ -14906,15 +14979,23 @@ class ActivityGenerator:
                         system=system,
                     )
                     process_time = time
+                    shell_command_line = command_line
+                    source_processes = [(process_name, command_line)]
                     if os_category == "linux":
-                        command_line = _background_linux_shell_command_if_needed(command_line)
+                        shell_command_line = _background_linux_shell_command_if_needed(command_line)
                         process_time = self._schedule_bash_history_time(
-                            user, system, time, command_line
+                            user, system, time, shell_command_line
                         )
                         if process_time is None or not self._is_within_scenario_window(
                             process_time
                         ):
                             return
+                        source_processes = _linux_catalog_processes_from_shell_command(
+                            process_name,
+                            shell_command_line,
+                            username=user.username,
+                        )
+                        process_name, command_line = source_processes[0]
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -14925,20 +15006,46 @@ class ActivityGenerator:
                             logon_id=logon_id,
                             parent_pid=parent_pid,
                             requested_time=process_time,
-                            seed_text=command_line,
+                            seed_text=shell_command_line,
                         )
                         if not self._is_within_scenario_window(process_time):
                             return
-                    pid = self.generate_process(
-                        user,
-                        system,
-                        process_time,
-                        logon_id,
-                        process_name,
-                        command_line,
-                        parent_pid=parent_pid,
-                    )
-                    self._record_user_process(system, user, pid, process_name)
+                    pid = -1
+                    created_processes: list[tuple[int, str, str, datetime]] = []
+                    for process_index, (
+                        source_process_name,
+                        source_command_line,
+                    ) in enumerate(source_processes):
+                        source_process_time = process_time + timedelta(
+                            milliseconds=process_index * 35
+                        )
+                        if not self._is_within_scenario_window(source_process_time):
+                            continue
+                        source_pid = self.generate_process(
+                            user,
+                            system,
+                            source_process_time,
+                            logon_id,
+                            source_process_name,
+                            source_command_line,
+                            parent_pid=parent_pid,
+                        )
+                        if pid < 0:
+                            pid = source_pid
+                            process_name = source_process_name
+                            command_line = source_command_line
+                            process_time = source_process_time
+                        created_processes.append(
+                            (
+                                source_pid,
+                                source_process_name,
+                                source_command_line,
+                                source_process_time,
+                            )
+                        )
+                        self._record_user_process(system, user, source_pid, source_process_name)
+                    if not created_processes:
+                        return
                     if active_session:
                         active_session.last_activity_time = process_time
                     effect_process_name, effect_command_line = self._process_effect_context(
@@ -15020,26 +15127,35 @@ class ActivityGenerator:
                             user,
                             system,
                             process_time,
-                            effect_command_line,
+                            shell_command_line,
                         )
-                        lifetime = _linux_foreground_lifetime(
-                            effect_process_name,
-                            effect_command_line,
-                        )
-                        if lifetime is not None:
-                            running_proc = self.state_manager.get_process(system.hostname, pid)
+                        for (
+                            source_pid,
+                            source_process_name,
+                            source_command_line,
+                            source_process_time,
+                        ) in created_processes:
+                            lifetime = _linux_foreground_lifetime(
+                                source_process_name,
+                                source_command_line,
+                            )
+                            if lifetime is None:
+                                continue
+                            running_proc = self.state_manager.get_process(
+                                system.hostname, source_pid
+                            )
                             actual_process_start = (
                                 running_proc.start_time
                                 if running_proc is not None
-                                else process_time
+                                else source_process_time
                             )
                             termination_time = (
                                 self._generate_bounded_foreground_process_termination(
                                     user=user,
                                     system=system,
                                     start_time=actual_process_start,
-                                    pid=pid,
-                                    process_name=effect_process_name,
+                                    pid=source_pid,
+                                    process_name=source_process_name,
                                     logon_id=logon_id,
                                     lifetime=lifetime,
                                     rng=rng,
@@ -15051,7 +15167,7 @@ class ActivityGenerator:
                                 logon_id=logon_id,
                                 parent_pid=parent_pid,
                                 termination_time=termination_time,
-                                seed_text=effect_command_line,
+                                seed_text=source_command_line,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)

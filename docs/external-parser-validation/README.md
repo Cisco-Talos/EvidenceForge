@@ -65,7 +65,9 @@ Splunk CIM validation is controlled with `--cim auto|require|off`. The default
 more local apps are supplied with repeatable `--splunk-app <path>`. `require`
 fails early without supplied apps. EvidenceForge never vendors or downloads
 Splunkbase apps; supplied app directories or archives are copied/unpacked only
-into the ephemeral run work directory.
+into the ephemeral run work directory. See
+[the Splunk output-target guide](../output-targets/splunk.md#required-splunk-apps-for-cim-validation)
+for the required CIM app and TA download pages.
 
 Run the contributor smoke lane when changing emitted formats covered by this
 pipeline:

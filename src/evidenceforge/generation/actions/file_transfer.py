@@ -73,6 +73,7 @@ _HTTP_PE_DEFINITE_MIME_TYPES = {
 _HTTP_ANALYZER_SHORT_BODY_BYTES = 64 * 1024
 _HTTP_BULK_BODY_BYTES = 1_000_000
 _HTTP_PARENT_ANALYZER_MARGIN_SECONDS = 0.75
+_HTTP_FILE_ANALYSIS_LOSS_MIN_BYTES = 128 * 1024
 _PE_COMPILE_EARLIEST_TS = int(datetime(2018, 1, 1, tzinfo=UTC).timestamp())
 _PE_COMPILE_LATEST_TS = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp())
 _PE_COMPILE_OBSERVATION_MARGIN_SECONDS = 30 * 24 * 60 * 60
@@ -168,6 +169,41 @@ def file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, 
     if "SHA256" in analyzer_names:
         hashes["sha256"] = hashlib.sha256(seed_material.encode()).hexdigest()
     return hashes
+
+
+def _file_analysis_missing_bytes(total_bytes: int, rng: random.Random, *, timedout: bool) -> int:
+    """Return source-observed bytes lost before file analyzers completed."""
+
+    if total_bytes <= 0:
+        return 0
+    upper_bound = max(1, min(262_144, total_bytes // (12 if timedout else 35)))
+    lower_bound = min(upper_bound, max(1, total_bytes // 600)) if timedout else 1
+    return rng.randint(lower_bound, upper_bound)
+
+
+def _http_file_analysis_loss(
+    response_body_len: int,
+    rng: random.Random,
+) -> tuple[int, bool]:
+    """Return low-rate HTTP files.log analyzer loss/timeout texture."""
+
+    if response_body_len < _HTTP_FILE_ANALYSIS_LOSS_MIN_BYTES:
+        return 0, False
+
+    if response_body_len >= _HTTP_BULK_BODY_BYTES:
+        missing_probability = 0.08
+        timeout_probability = 0.012
+    else:
+        missing_probability = 0.025
+        timeout_probability = 0.003
+
+    timedout = rng.random() < timeout_probability
+    missing_bytes = (
+        _file_analysis_missing_bytes(response_body_len, rng, timedout=timedout)
+        if timedout or rng.random() < missing_probability
+        else 0
+    )
+    return missing_bytes, timedout
 
 
 def _http_content_seed_material(
@@ -301,6 +337,12 @@ class HttpResponseFileTransferActionBundle:
         fuid = generate_zeek_uid("F")
         file_mime_type = self._request.response_mime_types[0]
         analyzers = ["SHA1"] if file_mime_type in _HTTP_HASH_ANALYZER_MIME_TYPES else []
+        missing_bytes, timedout = _http_file_analysis_loss(
+            self._request.response_body_len,
+            self._rng,
+        )
+        if missing_bytes or timedout:
+            analyzers = []
         content_seed_material = _http_content_seed_material(
             self._request.host,
             self._request.uri,
@@ -321,16 +363,18 @@ class HttpResponseFileTransferActionBundle:
             ),
             local_orig=_is_private_ip(self._request.dst_ip),
             is_orig=False,
-            seen_bytes=self._request.response_body_len,
+            seen_bytes=max(0, self._request.response_body_len - missing_bytes),
             total_bytes=self._request.response_body_len,
-            missing_bytes=0,
+            missing_bytes=missing_bytes,
             overflow_bytes=0,
-            timedout=False,
+            timedout=timedout,
             **file_hashes,
         )
         return HttpResponseFileTransferResult(
             file_transfer=file_transfer,
-            pe=self._maybe_build_pe_context(fuid, file_mime_type, content_seed_material),
+            pe=None
+            if missing_bytes or timedout
+            else self._maybe_build_pe_context(fuid, file_mime_type, content_seed_material),
         )
 
     def _maybe_build_pe_context(
@@ -425,11 +469,14 @@ class SmbFileTransferMetadataActionBundle:
         analyzers = self._pick_analyzers(smb_config)
         missing_probability = float(smb_config.get("missing_bytes_probability", 0.0))
         timeout_probability = float(smb_config.get("timeout_probability", 0.0))
+        timedout = self._rng.random() < timeout_probability
         missing_bytes = (
-            self._rng.randint(1, max(1, min(65536, self._request.transfer_bytes // 20)))
-            if self._rng.random() < missing_probability
+            _file_analysis_missing_bytes(self._request.transfer_bytes, self._rng, timedout=timedout)
+            if timedout or self._rng.random() < missing_probability
             else 0
         )
+        if missing_bytes or timedout:
+            analyzers = []
         fuid = generate_zeek_uid("F")
         file_hashes = file_transfer_hashes(
             f"smb:{self._request.src_ip}:{self._request.dst_ip}:"
@@ -457,7 +504,7 @@ class SmbFileTransferMetadataActionBundle:
             total_bytes=self._request.transfer_bytes,
             missing_bytes=missing_bytes,
             overflow_bytes=0,
-            timedout=self._rng.random() < timeout_probability,
+            timedout=timedout,
             **file_hashes,
         )
 

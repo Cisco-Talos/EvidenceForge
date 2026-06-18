@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.events.observation import (
+    ObservationDecision,
     ObservationPolicy,
     ObservationStatus,
     ObservationSummary,
@@ -75,6 +76,8 @@ FORMAT_GROUPS: dict[str, set[str]] = {
 
 # Formats subject to network visibility filtering (expanded emitter names)
 _NETWORK_FORMATS = FORMAT_GROUPS["zeek"] | {"snort_alert", "cisco_asa"}
+_ZEEK_CONN_DEPENDENTS = FORMAT_GROUPS["zeek"] - {"zeek_conn"}
+_ZEEK_FILES_DEPENDENTS = {"zeek_x509", "zeek_ocsp", "zeek_pe"}
 
 
 def expand_formats(formats: list[str] | set[str]) -> set[str]:
@@ -158,8 +161,20 @@ class EventDispatcher:
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
             return
-        for format_name, emitter in self._get_matching_emitters(event):
-            decision = self.observation_policy.decide(format_name, event)
+        matching_emitters = self._get_matching_emitters(event)
+        decisions = {
+            format_name: self.observation_policy.decide(format_name, event)
+            for format_name, _emitter in matching_emitters
+        }
+        self._enforce_source_observation_contracts(decisions)
+        observed_formats = {
+            format_name
+            for format_name, decision in decisions.items()
+            if decision.status != "dropped"
+        }
+        event._observed_formats = observed_formats
+        for format_name, emitter in matching_emitters:
+            decision = decisions[format_name]
             if decision.status == "dropped":
                 self._record_observation(event, format_name, "dropped")
                 continue
@@ -168,12 +183,41 @@ class EventDispatcher:
             if decision.delay.total_seconds() > 0:
                 event_to_emit = replace(event, timestamp=event.timestamp + decision.delay)
                 status = "delayed"
+            event_to_emit._observed_formats = observed_formats
             event_to_emit = self.source_timing_planner.plan_event(event_to_emit)
             self._record_observation(event, format_name, status)
             if event.raw is not None:
                 emitter.emit_raw(event_to_emit.raw.fields)
             else:
                 emitter.emit(event_to_emit)
+
+    def _enforce_source_observation_contracts(
+        self,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Preserve source-local parent rows when child observations survive."""
+        self._promote_zeek_parent(decisions, "zeek_conn", _ZEEK_CONN_DEPENDENTS)
+        self._promote_zeek_parent(decisions, "zeek_files", _ZEEK_FILES_DEPENDENTS)
+        self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
+
+    @staticmethod
+    def _promote_zeek_parent(
+        decisions: dict[str, ObservationDecision],
+        parent_format: str,
+        child_formats: set[str],
+    ) -> None:
+        parent_decision = decisions.get(parent_format)
+        if parent_decision is None or parent_decision.status != "dropped":
+            return
+        for child_format in child_formats:
+            child_decision = decisions.get(child_format)
+            if child_decision is None or child_decision.status == "dropped":
+                continue
+            decisions[parent_format] = ObservationDecision(
+                status=child_decision.status,
+                delay=child_decision.delay,
+            )
+            return
 
     def dispatch_raw(self, entry: RawLogEntry) -> None:
         """Route a raw log entry directly to a specific emitter (escape hatch).

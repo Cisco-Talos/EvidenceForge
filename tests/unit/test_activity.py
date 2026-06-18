@@ -7858,6 +7858,78 @@ class TestActivityGenerator:
         assert bash_events
         assert bash_events[-1].shell.command == "cat /etc/hosts"
 
+    def test_linux_catalog_compound_command_uses_source_native_child_argv(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Linux catalog shell compounds should not render as one non-shell process argv."""
+        from evidenceforge.generation.activity import application_catalog
+
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user="alice",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+            persona="developer",
+        )
+        state_manager.set_current_time(process_time)
+        mock_emitters["bash_history"] = Mock()
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: ("/usr/bin/make", "make clean && make all"),
+        )
+
+        activity_gen.execute_baseline_activity(user, linux, process_time, "process_build")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        make_commands = [
+            event.process.command_line
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/make"
+        ]
+        bash_events = [
+            call.args[0]
+            for call in mock_emitters["bash_history"].emit.call_args_list
+            if call.args[0].event_type == "bash_command"
+        ]
+
+        assert make_commands[:2] == ["make clean", "make all"]
+        assert all("&&" not in command for command in make_commands)
+        assert bash_events[-1].shell.command == "make clean && make all"
+
     def test_generate_bash_command_emits_correlated_linux_process(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -8731,6 +8803,19 @@ class TestActivityGenerator:
             ("/usr/bin/id", "id"),
             ("/usr/bin/df", "df"),
             ("/usr/bin/uptime", "uptime"),
+        ]
+
+    def test_linux_catalog_compound_command_splits_process_argv(self):
+        """Catalog process commands should use child argv, not shell compound text."""
+        processes = generator_module._linux_catalog_processes_from_shell_command(
+            "/usr/bin/make",
+            "make clean && make all",
+            username="alice",
+        )
+
+        assert processes == [
+            ("/usr/bin/make", "make clean"),
+            ("/usr/bin/make", "make all"),
         ]
 
     def test_linux_shell_single_process_inference_stops_after_first_stage(self, monkeypatch):

@@ -168,7 +168,10 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "service": self._render_service_name(net.service),
             "duration": duration,
             "_min_duration": event.dns.rtt if event.dns is not None else None,
-            "_lock_duration": event.dns is not None,
+            "_lock_duration": event.dns is not None
+            or event.file_transfer is not None
+            or event.x509 is not None
+            or bool(event.x509_chain),
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
             "conn_state": conn_state,

@@ -43,7 +43,10 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
+    SmbFileTransferMetadataActionBundle,
+    SmbFileTransferMetadataRequest,
 )
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter
@@ -312,6 +315,89 @@ class TestFilesUidCorrelation:
         assert data["ts"] >= event.timestamp.timestamp()
         assert data["ts"] + data["duration"] <= event.timestamp.timestamp() + 0.08
 
+    def test_file_transfer_lower_bound_conflict_prefers_parent_connection_interval(self):
+        """files.log rows must stay inside conn even when analyzer lower bounds conflict."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=80,
+                    protocol="tcp",
+                    zeek_uid="CConnUID12345678",
+                    duration=0.15,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FFileUID12345678",
+                    source="HTTP",
+                    duration=0.0,
+                    seen_bytes=1024,
+                    observation_not_before=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            data = json.loads(output.read_text().splitlines()[0])
+
+        conn_start = event.timestamp.timestamp()
+        conn_end = conn_start + 0.15
+        assert conn_start <= data["ts"] <= conn_end
+        assert data["ts"] + data["duration"] <= conn_end
+
+    def test_conn_duration_is_locked_when_files_reference_connection(self):
+        """Per-sensor conn duration texture must not out-shrink dependent files rows."""
+        conn_fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            emitter = ZeekEmitter(conn_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CConnUID12345678",
+                    duration=7.25,
+                    conn_state="SF",
+                    history="ShADadfF",
+                    missed_bytes=512,
+                    orig_bytes=1024,
+                    resp_bytes=8192,
+                    orig_pkts=4,
+                    orig_ip_bytes=1184,
+                    resp_pkts=10,
+                    resp_ip_bytes=8592,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FFileUID12345678",
+                    source="HTTP",
+                    duration=7.0,
+                    seen_bytes=8192,
+                ),
+            )
+            event._sensor_hostnames_by_format = {"zeek_conn": ["core", "dmz"]}
+
+            emitter.emit(event)
+            emitter.close()
+
+            core_conn = json.loads((out_dir / "core" / "conn.json").read_text())
+            dmz_conn = json.loads((out_dir / "dmz" / "conn.json").read_text())
+
+        assert core_conn["duration"] == 7.25
+        assert dmz_conn["duration"] == 7.25
+
     def test_http_file_transfer_timestamp_follows_parent_http_record(self):
         """HTTP response files should not predate the owning http.log row."""
         files_fmt = load_format("zeek_files")
@@ -494,6 +580,29 @@ class TestFilesUidCorrelation:
         assert result.pe is not None
         assert isinstance(result.pe.compile_ts, int)
         assert result.pe.compile_ts <= int(request.timestamp.timestamp()) - (30 * 24 * 60 * 60)
+
+    def test_http_file_analysis_loss_suppresses_hash_and_pe_analyzers(self):
+        """Partial HTTP file observations should not claim full-content analyzers."""
+        request = HttpResponseFileTransferRequest(
+            host="updates.example.test",
+            uri="/agent.exe",
+            dst_ip="10.0.0.10",
+            response_body_len=2_000_000,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            parent_duration=1.0,
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, _AlwaysPeRandom()).execute()
+        ft = result.file_transfer
+
+        assert ft.timedout is True
+        assert ft.missing_bytes > 0
+        assert ft.seen_bytes == request.response_body_len - ft.missing_bytes
+        assert ft.total_bytes == request.response_body_len
+        assert ft.analyzers == []
+        assert ft.sha1 == ""
+        assert result.pe is None
 
     def test_certificate_file_timestamp_follows_parent_ssl_record(self):
         """Certificate files should not predate the owning ssl.log row."""
@@ -785,6 +894,45 @@ class TestFilesUidCorrelation:
                 data = json.loads(f.readline())
 
             assert data["filename"] == r"\\files01\Shared\Finance\budget-review.xlsx"
+
+    def test_smb_file_analysis_loss_suppresses_hash_analyzers(self):
+        """Partial SMB file observations should not claim full-content hashes."""
+        request = SmbFileTransferMetadataRequest(
+            src_ip="10.0.0.5",
+            dst_ip="10.0.0.10",
+            transfer_bytes=4_000_000,
+            duration=2.5,
+            server="FILE-SRV-01",
+            user="alex",
+        )
+        smb_config = {
+            "min_transfer_bytes": 1,
+            "missing_bytes_probability": 1.0,
+            "timeout_probability": 1.0,
+            "mime_types": [{"mime_type": "application/zip", "weight": 1}],
+            "analyzer_sets": [{"analyzers": ["MD5", "SHA1"], "weight": 1}],
+            "filename_templates": [
+                {
+                    "mime_types": ["application/zip"],
+                    "templates": [r"\\{server}\Installers\agent.zip"],
+                    "weight": 1,
+                }
+            ],
+        }
+
+        ft = SmbFileTransferMetadataActionBundle(
+            request,
+            _AlwaysPeRandom(),
+            smb_config=smb_config,
+        ).execute()
+
+        assert ft is not None
+        assert ft.timedout is True
+        assert ft.missing_bytes > 0
+        assert ft.seen_bytes == request.transfer_bytes - ft.missing_bytes
+        assert ft.analyzers == []
+        assert ft.md5 == ""
+        assert ft.sha1 == ""
 
 
 class TestSmbFileTransferConfig:

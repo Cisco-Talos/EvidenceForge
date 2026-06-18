@@ -48,14 +48,16 @@ class TestS0OrigBytes:
 
 
 class TestNtpPrecision:
-    """P1-5: NTP precision must be an integer."""
+    """P1-5: NTP precision must be a Zeek interval."""
 
-    def test_ntp_precision_is_integer(self):
-        """NTP precision should be a whole number (8-bit signed int)."""
+    def test_ntp_precision_is_interval_seconds(self):
+        """NTP precision should be converted from wire exponent to seconds."""
+        from evidenceforge.generation.activity.generator import _ntp_precision_interval_seconds
+
         rng = random.Random(42)
         for _ in range(100):
-            val = float(rng.randint(-25, -18))
-            assert val == int(val), f"NTP precision {val} is not an integer"
+            val = _ntp_precision_interval_seconds(rng.randint(-25, -18))
+            assert 0 < val < 0.001, f"NTP precision {val} is not an interval"
 
 
 class TestDnsIpPairing:

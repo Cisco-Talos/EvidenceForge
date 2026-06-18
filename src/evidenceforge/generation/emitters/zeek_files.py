@@ -398,6 +398,8 @@ def _bounded_file_transfer_observation(
     max_duration = max(0.0, conn_duration - epsilon)
     bounded_duration = min(max(0.0, file_duration), max_duration)
     latest_start = conn_end - timedelta(seconds=bounded_duration + epsilon)
+    if lower_bound > latest_start:
+        lower_bound = latest_start
     if file_ts > latest_start and lower_bound <= latest_start:
         file_ts = latest_start
     if file_ts < lower_bound:

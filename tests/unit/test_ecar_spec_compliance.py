@@ -1761,6 +1761,58 @@ class TestChronologicalOutput:
 
         assert "principal" not in emitted[0]
 
+    def test_actor_linked_user_flow_preserves_principal(self, emitter, monkeypatch, ts):
+        """Actor-linked user FLOW rows should not drop a known user principal."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 0.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 0.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="WS-MCHEN-01",
+                ip="10.10.1.24",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws-mchen-01.example.org",
+            ),
+            process=ProcessContext(
+                pid=6124,
+                parent_pid=3340,
+                image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                command_line="chrome.exe --type=utility",
+                username="marcus.chen",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.10.1.24",
+                src_port=50124,
+                dst_ip="142.250.72.14",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=6124,
+            ),
+            edr=EdrContext(
+                object_id="11111111-2222-3333-4444-555555555555",
+                actor_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "OUTBOUND"
+        assert emitted[0]["actorID"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        assert emitted[0]["principal"] == "marcus.chen"
+
     def test_inbound_flow_uses_destination_listener_pid(self, emitter, monkeypatch, ts):
         """Inbound host observations should use the local listener PID when known."""
         emitted: list[dict] = []

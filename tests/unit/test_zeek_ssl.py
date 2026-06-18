@@ -289,6 +289,49 @@ class TestSslUidCorrelation:
             assert len(files_data["sha1"]) == 40
             assert files_data["ts"] >= ssl_data["ts"]
 
+    def test_ssl_cert_chain_fuids_omitted_when_x509_observation_is_absent(self):
+        """ssl.log should not reference certificate rows absent from x509/files logs."""
+        ssl_fmt = load_format("zeek_ssl")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "ssl.json"
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CNoX509Observation",
+                    conn_state="SF",
+                    duration=1.5,
+                ),
+                ssl=SslContext(
+                    version="TLSv12",
+                    cipher="TLS_AES_128_GCM_SHA256",
+                    cert_chain_fuids=["Fabcdef1234567890"],
+                ),
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="a" * 40,
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+                _observed_formats={"zeek_conn", "zeek_ssl", "zeek_files"},
+            )
+
+            ssl_emitter.emit(event)
+            ssl_emitter.close()
+
+            ssl_data = json.loads(output.read_text().splitlines()[0])
+
+        assert "cert_chain_fuids" not in ssl_data
+
     def test_files_host_lists_follow_sensor_nat_view(self):
         """files.log tx/rx hosts should agree with the same-sensor conn endpoint view."""
         files_fmt = load_format("zeek_files")

@@ -52,7 +52,18 @@ profiles:
           min_ms: 0
           max_ms: 0
       zeek:
-        missingness: 0.002
+        missingness: 0.001
+        format_missingness:
+          zeek_conn: 0.001
+          zeek_dns: 0.003
+          zeek_http: 0.006
+          zeek_ssl: 0.006
+          zeek_files: 0.010
+          zeek_x509: 0.010
+          zeek_ocsp: 0.012
+          zeek_ntp: 0.003
+          zeek_weird: 0.006
+          zeek_pe: 0.010
         delay_ms:
           min_ms: 0
           max_ms: 3
@@ -114,7 +125,18 @@ profiles:
           min_ms: 0
           max_ms: 0
       zeek:
-        missingness: 0.006
+        missingness: 0.003
+        format_missingness:
+          zeek_conn: 0.003
+          zeek_dns: 0.008
+          zeek_http: 0.016
+          zeek_ssl: 0.016
+          zeek_files: 0.024
+          zeek_x509: 0.024
+          zeek_ocsp: 0.030
+          zeek_ntp: 0.008
+          zeek_weird: 0.014
+          zeek_pe: 0.024
         delay_ms:
           min_ms: 0
           max_ms: 8

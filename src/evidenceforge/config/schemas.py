@@ -1540,12 +1540,25 @@ class ObservationSourceProfile(BaseModel, extra="forbid"):
     """Source-level observation behavior for a profile."""
 
     missingness: float = Field(default=0.0, ge=0.0, le=1.0)
+    format_missingness: dict[str, float] = Field(default_factory=dict)
     delay_ms: ObservationDelayRange = Field(
         default_factory=lambda: ObservationDelayRange(min_ms=0, max_ms=0)
     )
     host_missingness_multiplier: ObservationMultiplierRange = Field(
         default_factory=lambda: ObservationMultiplierRange(min=1.0, max=1.0)
     )
+
+    @field_validator("format_missingness")
+    @classmethod
+    def format_missingness_probabilities_are_valid(cls, v: dict[str, float]) -> dict[str, float]:
+        """Reject invalid per-format missingness probabilities."""
+        invalid = sorted(name for name, probability in v.items() if not 0.0 <= probability <= 1.0)
+        if invalid:
+            raise ValueError(
+                "format_missingness probabilities must be between 0 and 1 for: "
+                + ", ".join(invalid)
+            )
+        return v
 
 
 class ObservationProfileEntry(BaseModel, extra="forbid"):
@@ -1563,6 +1576,30 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
         "asa",
         "ids",
     }
+    FORMAT_SOURCE_FAMILIES: ClassVar[dict[str, str]] = {
+        "windows_event_security": "windows_security",
+        "windows_event_sysmon": "sysmon",
+        "ecar": "ecar",
+        "syslog": "syslog",
+        "bash_history": "bash_history",
+        "zeek_conn": "zeek",
+        "zeek_dns": "zeek",
+        "zeek_http": "zeek",
+        "zeek_ssl": "zeek",
+        "zeek_files": "zeek",
+        "zeek_x509": "zeek",
+        "zeek_dhcp": "zeek",
+        "zeek_ntp": "zeek",
+        "zeek_weird": "zeek",
+        "zeek_ocsp": "zeek",
+        "zeek_pe": "zeek",
+        "zeek_packet_filter": "zeek",
+        "zeek_reporter": "zeek",
+        "proxy_access": "proxy",
+        "web_access": "web",
+        "cisco_asa": "asa",
+        "snort_alert": "ids",
+    }
 
     description: str = ""
     default: ObservationSourceProfile = Field(default_factory=ObservationSourceProfile)
@@ -1570,10 +1607,28 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
 
     @model_validator(mode="after")
     def source_names_are_known(self) -> Self:
-        """Reject source-family typos."""
+        """Reject source-family and format-level typos."""
         unknown = sorted(set(self.sources) - self.VALID_SOURCE_FAMILIES)
         if unknown:
             raise ValueError(f"unknown observation source families: {', '.join(unknown)}")
+        for source, profile in self.sources.items():
+            unknown_formats = sorted(
+                set(profile.format_missingness) - set(self.FORMAT_SOURCE_FAMILIES)
+            )
+            if unknown_formats:
+                raise ValueError(
+                    f"unknown observation formats for {source}: {', '.join(unknown_formats)}"
+                )
+            wrong_source = sorted(
+                format_name
+                for format_name in profile.format_missingness
+                if self.FORMAT_SOURCE_FAMILIES[format_name] != source
+            )
+            if wrong_source:
+                raise ValueError(
+                    f"format_missingness entries do not belong to {source}: "
+                    + ", ".join(wrong_source)
+                )
         return self
 
 

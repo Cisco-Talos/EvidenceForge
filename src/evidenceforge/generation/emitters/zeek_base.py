@@ -56,6 +56,16 @@ from evidenceforge.utils.rng import _stable_seed
 logger = logging.getLogger(__name__)
 
 
+def zeek_format_observed(event: Any, format_name: str) -> bool:
+    """Return whether a Zeek sibling format survived source observation.
+
+    Direct emitter tests and low-level callers do not run through the dispatcher,
+    so an empty observed-format set means "unknown" rather than "dropped".
+    """
+    observed_formats = getattr(event, "_observed_formats", set())
+    return not observed_formats or format_name in observed_formats
+
+
 def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     """Apply a per-sensor NAT IP view to Zeek list-valued host fields."""
     if (

@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter, zeek_format_observed
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP = timedelta(milliseconds=1)
@@ -140,6 +140,9 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             event_ts,
             seed_parts=http_seed_parts,
         )
+        if resp_fuids and not zeek_format_observed(event, "zeek_files"):
+            resp_fuids = None
+            resp_mime_types = None
         event_data: dict[str, Any] = {
             "ts": event_ts,
             "uid": net.zeek_uid,

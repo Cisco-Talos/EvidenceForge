@@ -180,6 +180,11 @@ def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_mana
         for message in messages
         if (match := re.search(r"unix-process:(\d+):", message))
     ]
+    process_start_ticks = [
+        int(match.group(1))
+        for message in messages
+        if (match := re.search(r"unix-process:\d+:(\d+)", message))
+    ]
 
     assert session_ids
     assert max(session_ids) < 1000
@@ -188,6 +193,10 @@ def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_mana
     assert len(set(bus_ids)) > 4
     assert process_ids
     assert min(process_ids) >= 300
+    assert process_start_ticks
+    assert set(process_start_ticks).isdisjoint({0, 1000, 2000})
+    assert min(process_start_ticks) > 10_000
+    assert len(set(process_start_ticks)) > 4
 
 
 def test_polkit_action_messages_pair_action_with_source_native_program(linux_system, state_manager):

@@ -270,6 +270,189 @@ class TestObservationProfiles:
         assert conn_event.timestamp == http_event.timestamp
         assert conn_event.timestamp > event.timestamp
 
+    def test_zeek_format_missingness_can_drop_child_without_dropping_conn(self, monkeypatch):
+        """Zeek companion analyzers may be missing while conn.log stays visible."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_http": 1.0},
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        http = _make_mock_emitter("zeek_http", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_conn": conn, "zeek_http": http},
+            observation_policy=ObservationPolicy("zeek_child_gap_test"),
+        )
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        conn.emit.assert_called_once()
+        http.emit.assert_not_called()
+        assert conn.emit.call_args.args[0]._observed_formats == {"zeek_conn"}
+        assert dispatcher.source_evidence_status["story-001"]["zeek"] == {
+            "visible": 1,
+            "dropped": 1,
+        }
+
+    def test_zeek_visible_child_promotes_dropped_conn_parent(self, monkeypatch):
+        """A visible Zeek child row must not orphan its conn.log parent."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_conn": 1.0, "zeek_http": 0.0},
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        http = _make_mock_emitter("zeek_http", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_conn": conn, "zeek_http": http},
+            observation_policy=ObservationPolicy("zeek_child_parent_test"),
+        )
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=80,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        conn.emit.assert_called_once()
+        http.emit.assert_called_once()
+        assert conn.emit.call_args.args[0]._observed_formats == {"zeek_conn", "zeek_http"}
+        assert http.emit.call_args.args[0]._observed_formats == {"zeek_conn", "zeek_http"}
+        assert dispatcher.source_evidence_status["story-001"]["zeek"] == {"visible": 2}
+
+    def test_zeek_visible_x509_promotes_dropped_files_parent(self, monkeypatch):
+        """Visible x509 rows require visible files.log certificate objects."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_files": 1.0, "zeek_x509": 0.0},
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        files = _make_mock_emitter("zeek_files", handles=True)
+        x509 = _make_mock_emitter("zeek_x509", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_files": files, "zeek_x509": x509},
+            observation_policy=ObservationPolicy("zeek_x509_parent_test"),
+        )
+
+        event = SecurityEvent(timestamp=_make_ts(), event_type="connection")
+        dispatcher.dispatch(event)
+
+        files.emit.assert_called_once()
+        x509.emit.assert_called_once()
+        assert files.emit.call_args.args[0]._observed_formats == {"zeek_files", "zeek_x509"}
+        assert x509.emit.call_args.args[0]._observed_formats == {"zeek_files", "zeek_x509"}
+
+    def test_zeek_format_missingness_keeps_delay_coherent_when_visible(self, monkeypatch):
+        """Format-specific drop policy must not split same-UID source delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_http": 0.0},
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        http = _make_mock_emitter("zeek_http", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_conn": conn, "zeek_http": http},
+            observation_policy=ObservationPolicy("zeek_child_delay_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        conn_event = conn.emit.call_args.args[0]
+        http_event = http.emit.call_args.args[0]
+        assert conn_event.timestamp == http_event.timestamp
+        assert conn_event.timestamp > event.timestamp
+
     def test_ecar_storyline_process_observation_delay_is_coherent(self, monkeypatch):
         """Storyline eCAR process graphs should not orphan source-local references."""
         monkeypatch.setattr(

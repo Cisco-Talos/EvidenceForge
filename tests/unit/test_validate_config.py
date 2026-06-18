@@ -321,6 +321,44 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_mismatched_observation_format_missingness(self, monkeypatch):
+        from evidenceforge.config import observation_profiles
+
+        def load_invalid_observation_profiles():
+            return {
+                "profiles": {
+                    "complete": {
+                        "description": "bad",
+                        "default": {
+                            "missingness": 0.0,
+                            "delay_ms": {"min_ms": 0, "max_ms": 0},
+                            "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                        },
+                        "sources": {
+                            "zeek": {
+                                "missingness": 0.0,
+                                "format_missingness": {"proxy_access": 0.1},
+                            }
+                        },
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            observation_profiles,
+            "load_observation_profiles",
+            load_invalid_observation_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "observation_profiles.yaml"
+            and "format_missingness entries do not belong to zeek" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_unknown_host_activity_family(self, monkeypatch):
         from evidenceforge.generation.activity import host_activity_profiles
 

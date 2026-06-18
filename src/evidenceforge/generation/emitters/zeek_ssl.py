@@ -26,7 +26,7 @@ from datetime import timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter, zeek_format_observed
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _SOURCE_TIMING = SourceTimingPlanner()
@@ -85,6 +85,12 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             not_before=conn_ts,
             within=within,
         )
+        cert_chain_fuids = ssl.cert_chain_fuids or None
+        if cert_chain_fuids and (
+            not zeek_format_observed(event, "zeek_files")
+            or not zeek_format_observed(event, "zeek_x509")
+        ):
+            cert_chain_fuids = None
         event_data: dict[str, Any] = {
             "ts": event_ts,
             "uid": net.zeek_uid,
@@ -98,7 +104,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "resumed": ssl.resumed,
             "established": ssl.established,
             "ssl_history": ssl.ssl_history or None,
-            "cert_chain_fuids": ssl.cert_chain_fuids or None,
+            "cert_chain_fuids": cert_chain_fuids,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:

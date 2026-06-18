@@ -10,6 +10,7 @@ definitions, and CDN domain associations.
 
 from __future__ import annotations
 
+import hashlib
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -17,7 +18,6 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.utils.rng import _stable_seed
 
 _SITE_MAPS_PATH = get_activity_directory() / "site_maps.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -114,9 +114,10 @@ def _uses_stable_asset_tokens(path: str, content_type: str | None) -> bool:
 def _stable_hex_token(hostname: str, template: str, token: str, occurrence: int) -> str:
     bits = 64 if token == "{hex16}" else 32
     width = bits // 4
-    mask = (1 << bits) - 1
-    seed = _stable_seed(f"site_map_asset:{hostname}:{template}:{token}:{occurrence}")
-    return f"{seed & mask:0{width}x}"
+    digest = hashlib.sha256(
+        f"site_map_asset:{hostname}:{template}:{token}:{occurrence}".encode()
+    ).hexdigest()
+    return digest[:width]
 
 
 def _replace_token_occurrences(
