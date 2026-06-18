@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import ipaddress
 import logging
 from datetime import UTC, datetime
@@ -491,9 +492,13 @@ class GroundTruthGenerator:
             digest = hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
             # An adversarial payload is an inert, marker-bearing test artifact (NOT a
             # secret), so show the FULL value — an analyst must recognize it to score a
-            # detection. Escape control bytes and the table delimiter so the payload
-            # cannot corrupt/inject the table; truncate only a very long (oversized) one.
-            shown = value.encode("unicode_escape").decode("ascii", "replace").replace("|", "\\|")
+            # detection. Escape control bytes, Markdown table delimiters, and raw HTML so the
+            # payload cannot corrupt/inject the table or execute in Markdown renderers;
+            # truncate only a very long (oversized) one.
+            shown = html.escape(
+                value.encode("unicode_escape").decode("ascii", "replace").replace("|", "\\|"),
+                quote=True,
+            )
             if len(shown) > 200:
                 shown = shown[:200] + f"…(+{len(shown) - 200} more chars)"
             # Surface the on-wire IDS alert a network sensor should fire on (compact
@@ -502,7 +507,7 @@ class GroundTruthGenerator:
             ids_alert = event.get("ids_alert") or {}
             ids_suffix = ""
             if ids_alert:
-                msg = str(ids_alert.get("message", "")).replace("|", "\\|")
+                msg = html.escape(str(ids_alert.get("message", "")).replace("|", "\\|"), quote=True)
                 ids_suffix = f" [IDS {ids_alert.get('sid')}: {msg}]"
             return (
                 f"Adversarial payload ({family}) to {surface} [{encoding}]: "
