@@ -36,7 +36,11 @@ import pytest
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.generator import _ntp_payload_accounting
+from evidenceforge.generation.activity.generator import (
+    _ntp_association_poll_seconds,
+    _ntp_parser_min_gap_seconds,
+    _ntp_payload_accounting,
+)
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
     _LINUX_AMBIENT_SSH_NOISE_BAND,
@@ -491,13 +495,23 @@ class TestIdsAlertCorrelation:
         assert event.network.resp_bytes == 0
         assert event.network.resp_pkts == 0
 
-    def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
-        """NTP association and server response fields should be stable."""
-        for minute in (0, 10):
+    def test_ntp_association_fields_keep_observed_response_texture(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """NTP association traits should stay stable while per-poll metrics vary."""
+        src_ip = "10.0.1.50"
+        dst_ip = "129.6.15.28"
+        poll_seconds = _ntp_association_poll_seconds(src_ip, dst_ip)
+        min_gap = _ntp_parser_min_gap_seconds(float(poll_seconds))
+
+        for offset in (0, min_gap + 60):
             activity_gen.generate_connection(
-                src_ip="10.0.1.50",
-                dst_ip="129.6.15.28",
-                time=timestamp.replace(minute=minute),
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                time=timestamp + timedelta(seconds=offset),
                 dst_port=123,
                 proto="udp",
                 service="ntp",
@@ -512,11 +526,69 @@ class TestIdsAlertCorrelation:
         assert first.version == second.version
         assert first.poll == second.poll
         assert first.precision == second.precision
-        assert first.root_delay == second.root_delay
-        assert first.root_disp == second.root_disp
+        assert first.root_delay != second.root_delay
+        assert first.root_disp != second.root_disp
+        assert 0 < first.precision < 0.001
 
-    def test_ntp_response_fields_are_server_owned(self, activity_gen, mock_emitters, timestamp):
-        """Server-owned NTP response fields should not vary by requesting client."""
+    def test_ntp_association_poll_has_host_texture(self):
+        """NTP poll intervals should not collapse to one value across clients."""
+        polls = {
+            _ntp_association_poll_seconds(src_ip, dst_ip)
+            for src_ip, dst_ip in (
+                ("10.10.3.10", "17.253.34.125"),
+                ("10.10.3.10", "23.186.168.130"),
+                ("10.10.3.10", "91.189.89.198"),
+                ("10.10.3.20", "129.6.15.28"),
+                ("10.10.3.20", "162.159.200.1"),
+                ("10.10.3.20", "17.253.34.125"),
+            )
+        }
+
+        assert polls == {1024, 2048, 4096}
+
+    def test_ntp_parser_rows_respect_association_cadence(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """Too-soon UDP/123 responses should stay as conn rows without ntp.log fan-out."""
+        src_ip = "10.10.3.20"
+        dst_ip = "162.159.200.1"
+        poll_seconds = _ntp_association_poll_seconds(src_ip, dst_ip)
+        min_gap = _ntp_parser_min_gap_seconds(float(poll_seconds))
+
+        assert poll_seconds == 2048
+        assert min_gap > 240
+
+        for offset in (0, 240, min_gap + 20):
+            activity_gen.generate_connection(
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=123,
+                proto="udp",
+                service="ntp",
+                duration=0.02,
+                orig_bytes=48,
+                resp_bytes=48,
+            )
+
+        conn_rows = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        ntp_rows = [
+            call.args[0]
+            for call in mock_emitters["zeek_ntp"].emit.call_args_list
+            if call.args[0].ntp is not None
+        ]
+
+        assert len(conn_rows) == 3
+        assert len(ntp_rows) == 2
+        assert [row.network.service for row in conn_rows] == ["ntp", "", "ntp"]
+        assert conn_rows[1].ntp is None
+        assert ntp_rows[1].timestamp - ntp_rows[0].timestamp >= timedelta(seconds=min_gap)
+
+    def test_ntp_response_traits_are_server_owned(self, activity_gen, mock_emitters, timestamp):
+        """Stable NTP server traits should not vary by requesting client."""
         for src_ip in ("10.0.1.50", "10.0.1.51", "10.0.2.10"):
             activity_gen.generate_connection(
                 src_ip=src_ip,
@@ -533,8 +605,14 @@ class TestIdsAlertCorrelation:
         ntp_rows = [call.args[0].ntp for call in mock_emitters["zeek_ntp"].emit.call_args_list]
         assert len(ntp_rows) == 3
         assert {row.precision for row in ntp_rows} == {ntp_rows[0].precision}
-        assert {row.root_delay for row in ntp_rows} == {ntp_rows[0].root_delay}
-        assert {row.root_disp for row in ntp_rows} == {ntp_rows[0].root_disp}
+        assert all(row.root_delay > 0 for row in ntp_rows)
+        assert all(row.root_disp > 0 for row in ntp_rows)
+        assert (
+            max(row.root_delay for row in ntp_rows) - min(row.root_delay for row in ntp_rows) < 0.01
+        )
+        assert (
+            max(row.root_disp for row in ntp_rows) - min(row.root_disp for row in ntp_rows) < 0.01
+        )
 
     def test_ntp_payload_accounting_clamps_udp_123_probe_sizes(self, timestamp):
         """UDP/123 conn rows should not inherit generic high-byte probe payloads."""

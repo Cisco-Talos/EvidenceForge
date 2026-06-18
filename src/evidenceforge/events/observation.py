@@ -111,13 +111,21 @@ class ObservationPolicy:
         """Return the source-observation decision for an event/emitter pair."""
         source = source_family_for_format(format_name)
         settings = self._settings_for_source(source)
-        missingness = self._effective_missingness(source, event, settings)
-        identity = self._event_identity(source, format_name, event)
-        drop_rng = random.Random(_stable_seed(f"observation.drop|{self.profile_name}|{identity}"))
+        missingness = self._effective_missingness(source, format_name, event, settings)
+        drop_identity = self._event_identity(
+            source,
+            format_name,
+            event,
+            force_format_specific=self._has_format_missingness(settings, format_name),
+        )
+        delay_identity = self._event_identity(source, format_name, event)
+        drop_rng = random.Random(
+            _stable_seed(f"observation.drop|{self.profile_name}|{drop_identity}")
+        )
         if missingness > 0 and drop_rng.random() < missingness:
             return ObservationDecision(status="dropped")
 
-        delay = self._sample_delay(source, event, settings, identity)
+        delay = self._sample_delay(source, event, settings, delay_identity)
         if delay > timedelta(0):
             return ObservationDecision(status="delayed", delay=delay)
         return ObservationDecision(status="visible")
@@ -126,7 +134,12 @@ class ObservationPolicy:
         """Return the source-observation decision for a direct raw entry."""
         source = source_family_for_format(entry.target_emitter)
         settings = self._settings_for_source(source)
-        missingness = self._effective_missingness_for_host(source, "", settings)
+        missingness = self._effective_missingness_for_host(
+            source,
+            "",
+            settings,
+            format_name=entry.target_emitter,
+        )
         identity = self._raw_identity(source, entry)
         drop_rng = random.Random(_stable_seed(f"observation.drop|{self.profile_name}|{identity}"))
         if missingness > 0 and drop_rng.random() < missingness:
@@ -144,17 +157,22 @@ class ObservationPolicy:
         return merged
 
     def _effective_missingness(
-        self, source: str, event: SecurityEvent, settings: dict[str, Any]
+        self, source: str, format_name: str, event: SecurityEvent, settings: dict[str, Any]
     ) -> float:
         if self._preserve_ssh_session_lifecycle(source, event):
             return 0.0
         host = self._host_key_for_event(event)
-        return self._effective_missingness_for_host(source, host, settings)
+        return self._effective_missingness_for_host(source, host, settings, format_name=format_name)
 
     def _effective_missingness_for_host(
-        self, source: str, host: str, settings: dict[str, Any]
+        self,
+        source: str,
+        host: str,
+        settings: dict[str, Any],
+        *,
+        format_name: str | None = None,
     ) -> float:
-        base = _safe_probability(settings.get("missingness", 0.0))
+        base = self._base_missingness(settings, format_name)
         multiplier_range = settings.get("host_missingness_multiplier", {})
         if not isinstance(multiplier_range, dict):
             multiplier_range = {}
@@ -168,6 +186,21 @@ class ObservationPolicy:
             seed = _stable_seed(f"observation.host-mult|{self.profile_name}|{source}|{host}")
             multiplier = random.Random(seed).uniform(min_mult, max_mult)
         return max(0.0, min(base * multiplier, 1.0))
+
+    @staticmethod
+    def _base_missingness(settings: dict[str, Any], format_name: str | None) -> float:
+        """Return source-level missingness with an optional format override."""
+        if format_name:
+            format_missingness = settings.get("format_missingness", {})
+            if isinstance(format_missingness, dict) and format_name in format_missingness:
+                return _safe_probability(format_missingness.get(format_name, 0.0))
+        return _safe_probability(settings.get("missingness", 0.0))
+
+    @staticmethod
+    def _has_format_missingness(settings: dict[str, Any], format_name: str) -> bool:
+        """Return True when a source profile overrides missingness for a format."""
+        format_missingness = settings.get("format_missingness", {})
+        return isinstance(format_missingness, dict) and format_name in format_missingness
 
     def _sample_delay(
         self,
@@ -189,11 +222,18 @@ class ObservationPolicy:
         delay_ms = random.Random(seed).randint(min_ms, max_ms)
         return timedelta(milliseconds=delay_ms)
 
-    def _event_identity(self, source: str, format_name: str, event: SecurityEvent) -> str:
+    def _event_identity(
+        self,
+        source: str,
+        format_name: str,
+        event: SecurityEvent,
+        *,
+        force_format_specific: bool = False,
+    ) -> str:
         group = self._coherent_group_key(source, event)
         host = self._host_key_for_event(event)
         timestamp = int(event.timestamp.timestamp() * 1_000_000)
-        coherent = self._uses_coherent_source_identity(source, group)
+        coherent = self._uses_coherent_source_identity(source, group) and not force_format_specific
         return "|".join(
             [
                 source,

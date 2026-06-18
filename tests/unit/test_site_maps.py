@@ -61,6 +61,22 @@ class TestHexTokenReplacement:
         assert segments[1] != segments[2]
         assert len(segments[3]) == 16
 
+    def test_stable_hex16_tokens_are_not_32_bit_values_zero_padded_to_64_bit(self):
+        rng = random.Random(42)
+        path = "/assets/app.{hex16}.js"
+
+        replaced = _replace_hex_tokens(
+            rng,
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=True,
+        )
+
+        token = replaced.rsplit(".", 2)[1]
+        assert len(token) == 16
+        assert not token.startswith("00000000")
+
 
 class TestLoadSiteMaps:
     """Verify site_maps.yaml loads and has expected structure."""

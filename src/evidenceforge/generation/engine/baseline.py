@@ -1523,6 +1523,43 @@ class BaselineMixin:
             return str(action), str(process)
         return rng.choice(profiles)
 
+    def _polkit_process_start_ticks(
+        self,
+        hostname: str,
+        process_id: int,
+        timestamp: datetime,
+    ) -> str:
+        """Return Linux clock ticks since boot for a polkit unix-process subject."""
+        event_time = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+        boot_time = None
+        get_boot_time = getattr(self.state_manager, "get_boot_time", None)
+        if callable(get_boot_time):
+            boot_time = get_boot_time(hostname)
+
+        if boot_time is not None:
+            boot = boot_time if boot_time.tzinfo is not None else boot_time.replace(tzinfo=UTC)
+            uptime_seconds = max(60.0, (event_time - boot).total_seconds())
+        else:
+            boot_uptime = getattr(self, "_kernel_boot_uptimes", {}).get(hostname)
+            uptime_seconds = (
+                float(boot_uptime)
+                if boot_uptime is not None
+                else float(
+                    3 * 86400 + (_stable_seed(f"polkit_boot_uptime:{hostname}") % (27 * 86400))
+                )
+            )
+
+        rng = random.Random(
+            _stable_seed(f"polkit_process_start:{hostname}:{process_id}:{event_time.isoformat()}")
+        )
+        max_age_seconds = max(0.05, min(900.0, uptime_seconds - 0.01))
+        age_seconds = min(
+            max_age_seconds,
+            max(0.02, rng.lognormvariate(math.log(2.0), 0.85)),
+        )
+        start_ticks = int((uptime_seconds - age_seconds) * 100) + rng.randint(0, 99)
+        return str(max(100, start_ticks))
+
     def _render_polkit_syslog_message(
         self,
         entry: dict[str, Any],
@@ -1556,6 +1593,7 @@ class BaselineMixin:
         values = {
             "action_id": action_id,
             "bus_id": agent["bus_id"],
+            "monotonic_start": self._polkit_process_start_ticks(hostname, process_id, timestamp),
             "process_path": action_process_path
             if "action {action_id}" in template
             else agent["process_path"],

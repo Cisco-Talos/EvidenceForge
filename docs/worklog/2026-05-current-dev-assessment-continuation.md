@@ -912,6 +912,173 @@ or follow-up batch is needed.
   child-log gaps, fewer one-command SSH history stubs, denser primary-user bash
   histories, and the isolated Zeek files/protocol timestamp edge case.
 
+- Loop 278 started a new requested 10-loop assessment batch and tested
+  collection-imperfection texture by adding source-observation
+  `format_missingness` plus Zeek files/conn interval guards. Focused tests,
+  config validation, scenario validation, Ruff checks, generation, eval, and the
+  full `uv run pytest --no-cov` suite passed (`4446 passed, 19 skipped`).
+  Automated eval passed at 97.2183584632452 over 89427 records, with
+  Parseability 100.0, Plausibility 95.92217578332037, Causality
+  94.69898357220872, and Timing 97.81534312181459. The hard probe found 13198
+  Zeek conn UIDs and 0 `files.json` rows outside the parent conn interval. Blind initial
+  scores were 31/62/36/52, average 45.25; deliberation settled at 39/64/40/54,
+  final average 49.25. Reviewers judged the sparse Zeek child gaps realistic in
+  spirit but too independent: visible SSL/DNS/HTTP/files/x509 references can
+  survive after same-sensor sibling rows or conn parents are dropped. The next
+  target is coherent Zeek sibling suppression, then Linux server desktop/Polkit
+  gating and eCAR FLOW attribution.
+
+- Loop 279 fixed the loop-278 Zeek orphan-reference finding by batching
+  observation decisions per event, promoting required same-sensor parent rows,
+  and pruning HTTP/SSL reference vectors when dependent files/x509 rows are
+  absent. Focused dispatcher/Zeek tests, config validation, scenario validation,
+  Ruff checks, generation, eval, and the full `uv run pytest --no-cov` suite
+  passed (`4450 passed, 19 skipped`). Automated eval passed at
+  97.46871613111875 over 89448 records, with Parseability 100.0, Plausibility
+  96.9220144746488, Causality 94.70057555237452, and Timing
+  97.81534312181459. The hard probe found 0 Zeek protocol UID or FUID orphan
+  groups across core and DMZ sensors. Blind initial scores were 34/54/39/56,
+  average 45.75; deliberation was not triggered because all reviewers returned
+  Inconclusive and the score spread was below threshold. Both detection and
+  network reviewers explicitly called Zeek UID/FUID integrity strong. The next
+  target is proxy/web application texture: reduce generic inspected root `GET`
+  rows for CDN/API hosts, replace zero-heavy synthetic asset hashes with
+  vendor-specific path shapes, and keep Zeek integrity as a regression anchor.
+
+- Loop 280 fixed proxy/web texture by generating stable cache-buster `{hex16}`
+  tokens from full SHA-256 digest entropy instead of zero-padded 32-bit seeds
+  and by keeping root/index HTML response sizes host-specific while preserving
+  shared byte stability for true static assets. Focused HTTP/site-map tests,
+  config validation, scenario validation, Ruff checks, generation, eval, and the
+  full `uv run pytest --no-cov` suite passed (`4452 passed, 19 skipped`).
+  Automated eval passed at 96.88503046001232 over 83733 records, with
+  Parseability 100.0, Plausibility 97.22367794053588, Causality
+  93.03634850166482, and Timing 96.60011924731073. The hard probe found
+  zero-padded hex64 proxy URI rows reduced from 131 to 0, root HTML top-size
+  ratio reduced by 0.0095, and root HTML unique-size ratio improved by 0.2406.
+  Blind initial scores were 52/52/36/74, average 53.5; deliberation settled at
+  56/57/41/72, final average 56.5. Network reviewers validated the proxy/Zeek
+  texture improvement, while Host/EDR and Threat Hunter converged on a broader
+  next target: role-aware endpoint and server/DC behavior, including eCAR
+  identity propagation, Linux syslog role profiles, and suppressing
+  workstation-like browsing/scripting from infrastructure hosts.
+
+- Loop 281 fixed eCAR actor-linked user FLOW identity by preserving `principal`
+  whenever an outbound FLOW is safely linked to a known user-owned actor process,
+  while retaining service/root principal gaps. Focused eCAR tests, config
+  validation, scenario validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4453 passed, 19 skipped`). Automated
+  eval held at 96.88503046001232 over 83733 records, with Parseability 100.0,
+  Plausibility 97.22367794053588, Causality 93.03634850166482, and Timing
+  96.60011924731073. The hard probe found actor-linked user outbound FLOW rows
+  with missing/mismatched principals reduced from 64 to 0 across 815 loop-281
+  candidate rows. Blind initial scores were 36/38/42/78, average 48.5;
+  deliberation settled at 40/45/46/76, final average 51.75. Detection and threat
+  hunting scores improved substantially, while Host/EDR surfaced sharper
+  source-native tells: Linux `polkitd` `unix-process:PID:<value>` values use
+  UID-like buckets (`0`, `1000`, `2000`), Windows 4800/4801 lock/unlock fields
+  have non-native `TargetUser*`/`TargetLogonId` shape, and server listener FLOW
+  attribution remains uneven. The next target is Host/EDR source-native
+  rendering and background texture, starting with polkit PID/starttime realism
+  and Windows 4800/4801 native field semantics.
+
+- Loop 282 fixed the strongest loop-281 Host/EDR source-native tell by rendering
+  realistic Linux polkit `unix-process:PID:STARTTIME` start ticks from host boot
+  time and transient PID identity instead of using YAML placeholder values
+  (`0`, `1000`, `2000`). Focused polkit tests, config validation, scenario
+  validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4453 passed, 19 skipped`). Automated
+  eval passed at 97.34383523719569 over 89408 records, with Parseability 100.0,
+  Plausibility 97.18509319457112, Causality 94.62633938333698, and Timing
+  96.9548854635933. The hard probe found canned polkit process-start values
+  reduced from 238/238 rows to 0/288 rows, and unique start-tick values increased
+  from 3 to 288. Blind initial scores were 28/34/32/34, average 32.0; deliberation
+  was skipped because all reviewers judged the dataset Real and the score spread
+  was only 6. Host/EDR no longer repeated the polkit finding, and Detection did
+  not repeat the Windows 4800/4801 field-shape concern. The next target is
+  source-specific collection texture: endpoint/eCAR normalization asymmetry,
+  Zeek file-analysis imperfections, DHCP/NTP texture, and TLS edge cases.
+
+- Loop 283 added Zeek file-analysis collection texture by introducing low-rate
+  missing-byte/timeout imperfections for HTTP and SMB file-analysis rows and
+  suppressing analyzers/hashes when capture is incomplete. Focused Zeek files
+  tests, config validation, scenario validation, Ruff checks, generation, eval,
+  and the full `uv run pytest --no-cov` suite passed (`4455 passed, 19 skipped`).
+  Automated eval passed at 96.26962688034575 over 85795 records, with
+  Parseability 100.0, Plausibility 97.03030721919626, Causality
+  91.54145089770225, and Timing 95.6334367556056. The hard probe increased
+  imperfect non-SSL Zeek file rows from 1/231 to 10/223 while keeping hash
+  contradictions at 0. Blind initial scores were 43/34/34/30, average 35.25;
+  deliberation was skipped because the spread was only 13 and reviewers found no
+  hard source-native contradiction. The next target is Zeek NTP source-native
+  texture: normalize poll/precision representation and add host/server/poll
+  diversity without breaking conn/ntp UID correlation.
+
+- Loop 284 fixed Zeek NTP source-native representation by rendering precision as
+  a small interval in seconds and diversifying association poll values across
+  client/server pairs while preserving UID correlation. Focused NTP tests,
+  config validation, scenario validation, Ruff checks, generation, eval, and the
+  full `uv run pytest --no-cov` suite passed (`4456 passed, 19 skipped`).
+  Automated eval held at 96.26962688034575 over 85795 records, with Parseability
+  100.0, Plausibility 97.03030721919626, Causality 91.54145089770225, and
+  Timing 95.6334367556056. The hard probe changed NTP poll values from only
+  `[4096.0]` to `[1024.0, 2048.0, 4096.0]`, reduced negative precision rows
+  from 8 to 0, and preserved 0 orphan/non-response NTP UID rows. Blind initial
+  scores were 46/58/32/58, average 48.5; deliberation was skipped because the
+  spread was 26 and all reviewers stayed inconclusive. Network no longer flagged
+  the precision representation, but found a remaining cadence contradiction
+  where a `poll=2048.0` association repeated after about 241 seconds. Host/EDR
+  found a high-confidence shell-rendering tell (`make clean && make all`
+  attached to `/usr/bin/make`), and Detection flagged Squid inbound/outbound
+  FLOW principal asymmetry. Next targets: NTP cadence semantics, then Linux shell
+  compound command rendering and proxy process principal consistency.
+
+- Loop 285 tightened Zeek NTP cadence semantics by adding a canonical parser
+  cadence guard for same client/server NTP associations. Too-soon response-bearing
+  UDP/123 connections remain visible as `conn.log` evidence, but no longer fan out
+  to `ntp.log` before a plausible association interval has elapsed. Focused NTP
+  tests, config validation, scenario validation, Ruff checks, generation, eval,
+  and the full `uv run pytest --no-cov` suite passed (`4457 passed, 19 skipped`).
+  Automated eval passed at 96.65290772815344 over 85286 records. The hard probe
+  found 10 NTP rows, 0 cadence violations, 0 orphan UIDs, 0 non-response NTP rows,
+  0 negative precision rows, and poll values `[1024.0, 2048.0, 4096.0]`. Blind
+  initial scores were 38/32/34/30, average 33.5; deliberation was skipped. Network
+  and Threat Hunter reviewers still saw the suppressed NTP parser row as a possible
+  conn/detail contract gap because the corresponding `conn.log` row retained
+  `service="ntp"`. Next targets: Linux shell compound command rendering and then
+  proxy process principal consistency / NTP detail-label semantics.
+
+- Loop 286 fixed Linux catalog compound-command rendering by splitting shell
+  compound commands into source-native child process rows while preserving the
+  full typed command in bash history. Focused shell/catalog tests, config
+  validation, scenario validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4459 passed, 19 skipped`). Automated
+  eval passed at 96.27765021125614 over 83339 records. The hard probe found
+  0 Linux non-shell compound process rows; `/usr/bin/make` rows now use
+  `make clean` and `make all` command lines, while bash history still includes
+  full compound shell text. Blind initial scores were 34/18/28/52, average 33.0;
+  deliberation was skipped. Host/EDR no longer repeated the Linux `make clean &&
+  make all` source-native process tell, while Network flagged repeated NTP
+  `root_delay`/`root_disp` values and Host/EDR flagged eCAR module-load /
+  one-shot process lifetime semantics. Next targets: NTP per-poll metric texture
+  and eCAR lifecycle semantics.
+
+- Loop 287 fixed NTP per-poll metric texture and parser-label semantics. Stable
+  server/association traits remain stable, while `root_delay` and `root_disp`
+  now vary deterministically per observed poll; too-soon UDP/123 responses remain
+  visible in `conn.json` but no longer retain `service=ntp` when the NTP parser
+  row is intentionally suppressed. Focused NTP tests, config validation,
+  scenario validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4459 passed, 19 skipped`). Automated
+  eval passed at 96.27765021125614 over 83339 records. The hard probe reduced
+  exact repeated NTP metric excess from 3 to 0 and `conn.service=ntp` rows missing
+  NTP detail from 1 to 0, while cadence, orphan, non-response, and negative
+  precision checks stayed at 0. Blind initial scores were 34/41/38/42, average
+  38.75; deliberation was skipped because the spread was only 8. Reviewers did
+  not repeat the NTP metric finding. Next targets: proxy/web search-referrer and
+  cache semantics, Linux session parentage (`systemd -> -bash`), eCAR FLOW actor
+  attribution near known processes, and multi-sensor Zeek mirroring texture.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
@@ -929,11 +1096,11 @@ or follow-up batch is needed.
 
 1. Start from the current `dev` state and read `TODO.md` for durable priorities.
 2. Select the next assessment target from the latest verified blind-review or
-   hard-probe findings.
+  hard-probe findings.
 3. Fix the owning layer, not an emitter symptom, unless the defect is truly
-   source-local rendering.
+  source-local rendering.
 4. Verify with focused tests, `uv run eforge validate-config`, Ruff checks, and
-   normal `uv run pytest --no-cov` unless the loop specifically requires slow
+  normal `uv run pytest --no-cov` unless the loop specifically requires slow
    coverage.
 5. Record only the concise loop outcome, next target, and validation result here.
 

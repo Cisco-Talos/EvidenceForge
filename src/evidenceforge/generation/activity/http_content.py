@@ -282,6 +282,14 @@ def is_stable_resource_path(uri: str) -> bool:
     }
 
 
+def _uses_shared_static_response_seed(uri: str) -> bool:
+    """Return whether stable bytes should be shared across virtual hosts."""
+    clean_path = uri.split("?", 1)[0].split("#", 1)[0].lower()
+    if clean_path in {"/", "/index.html"}:
+        return False
+    return is_stable_resource_path(uri)
+
+
 def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     """Return a stable source-native web response body size for an HTTP status."""
     if status_code in {204, 304}:
@@ -293,7 +301,7 @@ def response_size_for_status(status_code: int, host: str, uri: str) -> int:
         return response_size_for_health_endpoint(status_code, host, uri)
     if status_code < 400:
         stable_resource = is_stable_resource_path(uri)
-        seed_host = "static-resource" if stable_resource else host
+        seed_host = "static-resource" if _uses_shared_static_response_seed(uri) else host
         seed_uri = uri.split("?", 1)[0].split("#", 1)[0] if stable_resource else uri
         rng = random.Random(_stable_seed(f"web_response:{status_code}:{seed_host}:{seed_uri}"))
         return response_size_for_mime(rng, normalize_mime_type_for_path(uri, "text/html"))

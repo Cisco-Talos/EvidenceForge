@@ -155,6 +155,10 @@ class SecurityEvent:
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format
     _sensor_hostnames_by_format: dict[str, list[str]] = field(default_factory=dict)
+    # Format names that survived source-observation policy for this dispatch.
+    # Emitters use this to avoid rendering source-local references to sibling
+    # rows that the same observation profile intentionally dropped.
+    _observed_formats: set[str] = field(default_factory=set)
     # NAT swap metadata: maps sensor hostname → dict of IP/port swaps for post-NAT sensors
     _nat_swaps_by_sensor: dict[str, dict[str, Any]] = field(default_factory=dict)
 

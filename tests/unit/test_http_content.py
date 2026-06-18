@@ -166,6 +166,18 @@ def test_static_response_size_is_stable_across_virtual_hosts():
     assert dynamic_first != dynamic_second
 
 
+def test_root_document_response_size_is_host_specific():
+    first = response_size_for_status(200, "upload.wikimedia.org", "/")
+    second = response_size_for_status(200, "cdn.sstatic.net", "/")
+    repeat = response_size_for_status(200, "upload.wikimedia.org", "/")
+    index_first = response_size_for_status(200, "portal.example.com", "/index.html")
+    index_second = response_size_for_status(200, "intranet.example.net", "/index.html")
+
+    assert first == repeat
+    assert first != second
+    assert index_first != index_second
+
+
 def test_transfer_variant_keeps_static_resource_bytes_stable_across_clients():
     base = response_size_for_status(200, "portal.example.com", "/assets/main.css")
     client_a = apply_transfer_size_variance(

@@ -1070,6 +1070,13 @@ class EcarEmitter(HostMultiplexEmitter):
         username = str(getattr(process, "username", "") or "").strip()
         if not username or username == "-":
             return ""
+        if (
+            direction == "OUTBOUND"
+            and event.edr is not None
+            and event.edr.actor_id
+            and username.strip().lower() not in _SERVICE_PRINCIPAL_NAMES
+        ):
+            return username
         pid = int(getattr(process, "pid", -1) or -1)
         probability = _flow_principal_probability(username, direction)
         key = (
