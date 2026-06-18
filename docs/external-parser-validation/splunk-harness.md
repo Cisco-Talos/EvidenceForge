@@ -93,10 +93,12 @@ are copied or unpacked only into `<work-dir>/splunk/runtime-config-src/` for the
 run. EvidenceForge does not download, commit, or redistribute those apps.
 
 For current CIM smoke coverage, provide the Splunk Common Information Model app
-plus local TA archives/directories for the source families under test, such as
-Microsoft Windows, Sysmon, Unix/Linux, Cisco ASA, Zeek, and Apache Web Server.
-Proxy and eCAR currently rely on EvidenceForge-owned base validation rather than
-third-party CIM TA mapping.
+plus local TA archives/directories for the source families under test: Microsoft
+Windows, Sysmon, Cisco ASA, Zeek, and Apache Web Server. The canonical download
+page list lives in
+[docs/output-targets/splunk.md](../output-targets/splunk.md#required-splunk-apps-for-cim-validation).
+Linux syslog and eCAR currently rely on EvidenceForge-owned base validation
+rather than third-party CIM TA mapping.
 
 ## Validation And Artifacts
 

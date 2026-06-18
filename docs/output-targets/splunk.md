@@ -27,6 +27,28 @@ needs a different shape.
 No binary EVTX is generated in v1. The Linux Docker harness validates Windows
 Event XML file ingest instead.
 
+## Required Splunk Apps For CIM Validation
+
+EvidenceForge does not vendor, download, or redistribute Splunkbase apps. To run
+`--cim require`, download the needed apps from Splunkbase yourself, then pass the
+local app directories or archives with repeated `--splunk-app <path>` arguments.
+Splunkbase may require login before it allows archive downloads.
+
+The current CIM dataset checks cover Windows Security authentication, Sysmon
+process lifecycle, Zeek network/web records, Cisco ASA network traffic, web
+access, and proxy access. Linux syslog and eCAR receive base Splunk
+ingest/field validation only, so the Splunk Add-on for Unix and Linux is not
+required by the current CIM checks.
+
+| Validation area | Splunk app/add-on | Download page |
+| --- | --- | --- |
+| CIM data models | Splunk Common Information Model (CIM) | <https://splunkbase.splunk.com/app/1621> |
+| Windows Security | Splunk Add-on for Microsoft Windows | <https://splunkbase.splunk.com/app/742> |
+| Windows Sysmon | Splunk Add-on for Sysmon | <https://splunkbase.splunk.com/app/5709> |
+| Cisco ASA | Splunk Add-on for Cisco ASA | <https://splunkbase.splunk.com/app/1620> |
+| Zeek connection and HTTP logs | TA for Zeek | <https://splunkbase.splunk.com/app/5466> |
+| Web and proxy access logs | Splunk Add-on for Apache Web Server | <https://splunkbase.splunk.com/app/3186> |
+
 ## Generate And Validate
 
 Base ingest validation:
@@ -53,6 +75,9 @@ uv run python scripts/external_parser.py <scenario-output>/data \
   --splunk-app /path/to/ta-for-zeek.tgz \
   --splunk-app /path/to/splunk-add-on-for-apache-web-server.spl
 ```
+
+See [Required Splunk Apps For CIM Validation](#required-splunk-apps-for-cim-validation)
+for the official download pages for those local app archives.
 
 `--backend auto` also selects Splunk when `OUTPUT_TARGET.txt` contains
 `splunk`.
