@@ -226,6 +226,51 @@ class TestHostnameConsistency:
         assert dns_event.dns.query == hostname
         assert conn_event.network.dst_ip in dns_event.dns.answers
 
+    def test_registered_multi_ip_prerequisite_orders_connected_ip_first(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Registered multi-IP domains should answer first with the flow destination."""
+        import evidenceforge.generation.activity.generator as generator_module
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        rng = random.Random(42)
+        monkeypatch.setattr(rng, "random", lambda: 0.5)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        state_manager.set_current_time(timestamp)
+
+        for index, hostname in enumerate(
+            ("archive.ubuntu.com", "security.ubuntu.com", "api.snapcraft.io")
+        ):
+            ips = get_domain_ips(hostname)
+            assert len(ips) >= 2
+            connected_ip = ips[1]
+
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip=connected_ip,
+                time=timestamp + timedelta(hours=index),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                emit_dns=True,
+                hostname=hostname,
+                conn_state="SF",
+            )
+
+            dns_event = [
+                call.args[0]
+                for call in mock_emitters["zeek_dns"].emit.call_args_list
+                if call.args[0].dns
+                and call.args[0].dns.query == hostname
+                and call.args[0].dns.query_type == "A"
+            ][0]
+            conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+
+            assert conn_event.network.dst_ip == connected_ip
+            assert dns_event.dns.answers[0] == connected_ip
+            assert set(dns_event.dns.answers) == set(ips)
+            mock_emitters["zeek_conn"].emit.reset_mock()
+
     def test_dns_response_completes_before_dependent_connection(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

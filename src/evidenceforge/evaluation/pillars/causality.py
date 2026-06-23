@@ -920,11 +920,16 @@ class CausalityScorer(DimensionScorer):
         # landing (expected_sources), but recognizing the value in zeek_http lets a
         # defender forcing `scheme: http` see it matched in network evidence too.
         "zeek_http": ("uri", "referrer", "user_agent"),
+        # dns_qname encodes the payload into a DNS query NAME; a host keeps no DNS log of
+        # its own, so the network sensor's Zeek dns.log `query` field is the authoritative
+        # landing (expected_sources), matched by the unique marked QNAME value.
+        "zeek_dns": ("query",),
     }
 
-    # Web/network http evidence lands on the destination server / sensor path (not
-    # event.system), so it is matched by the unique, marked payload value alone.
-    _ADVERSARIAL_HOST_AGNOSTIC = frozenset({"web_access", "zeek_http"})
+    # Web/network evidence lands on the destination server / sensor path (not
+    # event.system), so it is matched by the unique, marked payload value alone. zeek_dns
+    # joins this set: the dns.log row is keyed by the actor's IP, not a hostname field.
+    _ADVERSARIAL_HOST_AGNOSTIC = frozenset({"web_access", "zeek_http", "zeek_dns"})
 
     @staticmethod
     def _normalize_nl(text: str) -> str:

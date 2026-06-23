@@ -1035,6 +1035,8 @@ class AdversarialPayloadEventSpec(_EventSpecBase):
         "http_referrer",
         "syslog_message",
         "process_command_line",
+        "dns_qname",
+        "auth_user",
     ]
     family: str | None = None
     # Bound a literal payload's length: the oversized_field family tops out ~4 KB, and

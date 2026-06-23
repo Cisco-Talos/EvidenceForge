@@ -934,3 +934,29 @@ class TestGroundTruthGenerator:
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
         details = generator._format_event_details(event)
         assert "Added backdoor_admin to group Domain Admins" in details
+
+    def test_format_event_details_adversarial_payload_html_escapes_value(
+        self, minimal_scenario, malicious_events
+    ):
+        """_format_event_details() should HTML-escape adversarial payloads for Markdown."""
+        event = {
+            "type": "adversarial_payload",
+            "surface": "http_user_agent",
+            "family": "xss_reflection",
+            "encoding": "raw",
+            "value": '<script>fetch("https://canary.eforge.invalid/EFORGE_TEST")</script>|x',
+            "ids_alert": {
+                "sid": 900001,
+                "message": "Payload <script> marker | observed",
+            },
+        }
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+
+        details = generator._format_event_details(event)
+
+        assert "<script>" not in details
+        assert "</script>" not in details
+        assert "&lt;script&gt;" in details
+        assert "\\|x" in details
+        assert "Payload &lt;script&gt; marker \\| observed" in details
+        assert "sha256:" in details

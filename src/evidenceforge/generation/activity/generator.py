@@ -2827,6 +2827,8 @@ def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) 
         return [dst_ip]
     if dst_ip not in domain_ips:
         domain_ips.insert(0, dst_ip)
+    elif domain_ips[0] != dst_ip:
+        domain_ips = [dst_ip, *(ip for ip in domain_ips if ip != dst_ip)]
     if len(domain_ips) <= 4:
         return domain_ips
 
@@ -2836,7 +2838,7 @@ def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) 
     )
     selected = set(ranked[:4])
     selected.add(dst_ip)
-    return [ip for ip in domain_ips if ip in selected]
+    return [dst_ip, *(ip for ip in domain_ips if ip in selected and ip != dst_ip)]
 
 
 def _dns_hostname_allows_mx(hostname: str) -> bool:
@@ -18602,6 +18604,91 @@ class ActivityGenerator:
                 }
             pivot["dst_ip"] = target_system.ip
             pivot["dst_port"] = conn_dst_port
+        elif surface == "dns_qname":
+            # The payload rides in a DNS query NAME the actor's host looks up, captured by
+            # the network sensor's Zeek dns.log. A non-resolving .invalid canary QNAME
+            # yields NXDOMAIN (no answer, no follow-on TCP). Route through the canonical
+            # connection path (UDP/53, service=dns) so the zeek_dns emitter renders it
+            # natively. zeek_dns is the ONLY source for this surface, so if no network
+            # sensor observes the lookup, nothing lands and the payload is not_emitted —
+            # never a ground-truth label without bytes on disk.
+            qname = render.dns_query or render.encoded_value
+            dns_server_ips = getattr(self, "_dns_server_ips", None) or ["10.0.0.1"]
+            dns_rng = random.Random(_stable_seed(f"{seed_key}:dns"))
+            dns_server_ip = dns_rng.choice(sorted(dns_server_ips))
+            dns_ctx = DnsContext(
+                query=qname,
+                query_type="A",
+                qtype=1,
+                rcode="NXDOMAIN",
+                rcode_num=3,
+                answers=[],
+                TTLs=[],
+                trans_id=dns_rng.randint(1, 65535),
+                AA=False,
+                RD=True,
+                RA=True,
+                rejected=False,
+                rtt=_dns_rtt(dns_rng, dns_server_ip),
+            )
+            uid = self.generate_connection(
+                src_ip=system.ip,
+                dst_ip=dns_server_ip,
+                time=time,
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                source_system=system,
+                dns=dns_ctx,
+                emit_dns=False,
+                orig_bytes=dns_rng.randint(40, 100),
+                resp_bytes=dns_rng.randint(40, 80),
+                conn_state="SF",
+                duration=dns_rng.uniform(0.001, 0.05),
+            )
+            # zeek_dns is the ONLY source for this surface (a Linux host keeps no DNS log
+            # of its own), and it renders ONLY when a network sensor on the path observes
+            # the UDP/53 lookup. generate_connection allocates a uid regardless of
+            # visibility, so uid alone is NOT proof of emission — gate on actual zeek_dns
+            # observation, mirroring the http_user_agent → zeek_http check, so ground truth
+            # never claims a row that no sensor wrote.
+            dispatcher = getattr(self, "dispatcher", None)
+            visibility = self._network_visibility or (
+                dispatcher.visibility_engine if dispatcher else None
+            )
+            zeek_dns_observed = bool(
+                uid
+                and dispatcher is not None
+                and "zeek_dns" in dispatcher.emitters
+                and visibility is not None
+                and visibility.enabled
+                and "zeek_dns"
+                in visibility.get_log_formats_for_connection(system.ip, dns_server_ip)
+            )
+            if not zeek_dns_observed:
+                return {
+                    "surface": surface,
+                    "family": resolved_family,
+                    "skipped_reason": "not_emitted",
+                }
+            pivot["dst_ip"] = dns_server_ip
+            pivot["dst_port"] = 53
+        elif surface == "auth_user":
+            # The payload rides in a failed-logon USERNAME, captured by the host's auth.log
+            # (sshd "Failed password for <user> from <ip>"). A remote SSH attempt with an
+            # injected username is the realistic vector a copilot reads. Linux-only (the
+            # validator gates non-Linux), so the syslog auth line is the rendered surface.
+            username = render.auth_username or render.encoded_value
+            attacker_octet = random.Random(_stable_seed(f"{seed_key}:authsrc")).randint(2, 254)
+            attacker_ip = f"203.0.113.{attacker_octet}"
+            self.generate_failed_logon(
+                user=user,
+                system=system,
+                time=time,
+                logon_type=3,
+                source_ip=attacker_ip,
+                target_username=username,
+            )
         else:  # pragma: no cover - guarded by render_for_surface/model Literal
             raise ValueError(f"unsupported adversarial payload surface: {surface!r}")
 
@@ -18614,6 +18701,10 @@ class ActivityGenerator:
             encoding = "raw" if unchanged else "percent"
         elif surface == "process_command_line":
             encoding = "raw" if unchanged else "shell_quote"
+        elif surface == "dns_qname":
+            encoding = "qname"  # LDH-encoded into a DNS query name under the canary domain
+        elif surface == "auth_user":
+            encoding = "raw" if unchanged else "escaped"  # control bytes escaped in the username
         else:  # syslog_message — use the SAME family resolution the encoder used
             raw_here = surface in _raw_surfaces_for(resolved_family or None)
             encoding = "raw" if (raw_here or unchanged) else "escaped"

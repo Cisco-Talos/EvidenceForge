@@ -72,6 +72,11 @@ scenarios/spillage-full-matrix-test/*
 !scenarios/spillage-full-matrix-test/scenario.yaml
 !scenarios/spillage-full-matrix-test/ENVIRONMENT.md
 !scenarios/spillage-full-matrix-test/README.md
+!scenarios/llm-injection-demo/
+scenarios/llm-injection-demo/*
+!scenarios/llm-injection-demo/scenario.yaml
+!scenarios/llm-injection-demo/scenario-clean.yaml
+!scenarios/llm-injection-demo/README.md
 
 
 # Scan / analysis tool output

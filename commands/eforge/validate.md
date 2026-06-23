@@ -93,8 +93,11 @@ semantic `surface`) have the same shape of extra validation. Common errors:
   physical line** (so a CRLF-forged line stays synthetic), and any embedded host must
   be the canary (`canary.eforge.invalid`) or an RFC-reserved domain/address.
 - **http_* with no web_server** — add a system with `roles: [web_server]`.
-- **syslog_message on a Windows host** — syslog_message is Linux-modeled; put the
-  actor on a Linux host (process_command_line and http_* are cross-OS).
+- **syslog_message / auth_user on a non-Linux host** — both are Linux-modeled; put the
+  actor on a Linux host (process_command_line, http_*, and dns_qname are cross-OS).
+- **dns_qname with no network sensor** — `dns_qname` lands only in the network sensor's
+  Zeek `dns.log` (a host keeps no DNS log of its own); add an `environment.network`
+  sensor whose `log_formats` include `zeek`, or the payload would never be emitted.
 - **literal `value:` pointing at an operator out-of-band host** — by default `eforge
   validate` uses the inert canary and rejects a non-reserved host as unsafe. To validate
   a live-callback scenario whose literal payload targets your own OOB host, pass `eforge

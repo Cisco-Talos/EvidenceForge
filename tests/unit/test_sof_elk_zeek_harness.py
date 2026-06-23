@@ -35,6 +35,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
     SOF_ELK_FILTER_FILES,
     ZEEK_LOG_SPECS,
     DnsExpectation,
+    SofElkHarnessError,
     SofElkParserError,
     StagedLog,
     ZeekStageManifest,
@@ -78,6 +79,21 @@ def test_stage_zeek_logs_preserves_sensor_subdirectories(
     assert manifest.dns_expectations[("DZlXkN35cGKtEu5678", "www.example.com")] == (
         DnsExpectation(answers=True, ttls=True)
     )
+
+
+def test_stage_zeek_logs_rejects_symlinked_source_files(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source" / "sensor-a"
+    source_dir.mkdir(parents=True)
+    secret = tmp_path / "operator_secret.txt"
+    secret.write_text("SECRET_CANARY_EFORGE_ZEEK_SYMLINK_LEAK\n", encoding="utf-8")
+    symlink = source_dir / "conn.json"
+    symlink.symlink_to(secret)
+    stage_root = tmp_path / "stage"
+
+    with pytest.raises(SofElkHarnessError, match="refusing to stage symlinked Zeek source log"):
+        stage_zeek_logs(tmp_path / "source", stage_root)
+
+    assert not list(stage_root.rglob("conn.log"))
 
 
 def test_stage_zeek_logs_adapts_flat_generated_files_for_sof_elk(

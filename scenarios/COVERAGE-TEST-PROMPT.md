@@ -202,8 +202,9 @@
   GROUND_TRUTH.jsonl; GROUND_TRUTH.md carries a redacted human-readable summary.
   - NOTE: adversarial_payload is the counterpart to spillage — it injects a known
   log-pipeline weakness payload (ansi_escape/crlf_log_forging/csv_formula/log4shell/
-  xss_reflection) into a semantic surface (syslog_message/process_command_line, or
-  http_user_agent/http_request_url/http_referrer which require a roles:[web_server] host).
+  xss_reflection) into a semantic surface (syslog_message/process_command_line/auth_user, or
+  http_user_agent/http_request_url/http_referrer which require a roles:[web_server] host, or
+  dns_qname which requires a network sensor emitting Zeek).
   Control bytes are permitted (the modeled weakness) but every payload carries the
   EFORGE_TEST marker on every physical line. Labeled in GROUND_TRUTH.jsonl as
   kind:adversarial_payload. A family only models the surfaces it declares.
