@@ -6,6 +6,20 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.4.2 (2026-06-23)
+
+This patch release fixes authored HTTP response-size realism for web access
+records generated from storyline `connection` and `beacon` events.
+
+**Authored HTTP error sizing**
+
+- Routed authored HTTP response body sizing through status-aware logic so
+  4xx/5xx responses, including download-like paths such as `.zip`, render small
+  error-page bodies instead of served-file-sized payloads (`e329cb43`).
+- Honored `response_body_len` and, when that dedicated HTTP override is absent,
+  explicit `resp_bytes` for access-log body bytes, and documented the authoring
+  contract with focused regression coverage (`e329cb43`).
+
 ## v1.4.1 (2026-06-18)
 
 This patch release captures the accepted assessment-loop realism fixes queued on
