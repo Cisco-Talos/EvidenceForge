@@ -381,6 +381,48 @@ def _size_storyline_connection(
     return ob, rb
 
 
+def _storyline_http_response_body_len(
+    *,
+    spec: Any,
+    rng: random.Random,
+    method: str,
+    uri: str,
+    host: str,
+    is_c2_http: bool,
+    use_connection_path_hints: bool,
+) -> int:
+    """Return the body size rendered by web/proxy access logs for authored HTTP."""
+    method_upper = method.upper()
+    status_code = spec.status_code or 200
+    uri_lower = uri.lower()
+
+    if method_upper == "HEAD":
+        return 0
+    if spec.response_body_len is not None:
+        return max(0, spec.response_body_len)
+    if spec.resp_bytes is not None:
+        return max(0, spec.resp_bytes)
+    if status_code >= 300 or status_code in {204, 304}:
+        return response_size_for_status(status_code, host, uri)
+    if (
+        use_connection_path_hints
+        and method_upper == "POST"
+        and any(kw in uri_lower for kw in ("/upload", "/submit", "/api", "/beacon"))
+    ):
+        return rng.randint(200, 2000)
+    if (
+        use_connection_path_hints
+        and method_upper == "GET"
+        and any(kw in uri_lower for kw in ("/callback", "/task", "/cmd", "/beacon", "/gate"))
+    ):
+        return rng.randint(500, 5000)
+    if is_c2_http:
+        return _c2_http_response_size(rng, method=method, uri=uri)
+    if method_upper == "POST":
+        return rng.randint(200, 5000) if use_connection_path_hints else rng.randint(200, 2000)
+    return response_size_for_status(status_code, host, uri)
+
+
 def _iter_periodic_ticks(
     start_time: datetime,
     interval_sec: float,
@@ -3098,7 +3140,6 @@ class StorylineMixin:
                 # Context-aware response sizing (or author-specified override)
                 _method = spec.method or "GET"
                 _uri_raw = spec.uri or "/"
-                _uri = _uri_raw.lower()
                 _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
                 _is_c2_http = _is_c2_http_request(
                     description=spec.description,
@@ -3112,25 +3153,18 @@ class StorylineMixin:
                         weights=[55, 25, 20],
                         k=1,
                     )[0]
-                if spec.response_body_len is not None:
-                    resp_bytes = spec.response_body_len
-                elif _method == "POST" and any(
-                    kw in _uri for kw in ("/upload", "/submit", "/api", "/beacon")
-                ):
-                    resp_bytes = rng.randint(200, 2000)
-                elif _method == "GET" and any(
-                    kw in _uri for kw in ("/callback", "/task", "/cmd", "/beacon", "/gate")
-                ):
-                    resp_bytes = rng.randint(500, 5000)
-                elif _is_c2_http:
-                    resp_bytes = _c2_http_response_size(rng, method=_method, uri=_uri_raw)
-                elif _method == "POST":
-                    resp_bytes = rng.randint(200, 5000)
-                else:
-                    resp_bytes = response_size_for_mime(rng, _mime_type)
                 from evidenceforge.generation.activity.referrer import pick_referrer
 
                 _http_host = spec.hostname or dst_ip
+                resp_bytes = _storyline_http_response_body_len(
+                    spec=spec,
+                    rng=rng,
+                    method=_method,
+                    uri=_uri_raw,
+                    host=_http_host,
+                    is_c2_http=_is_c2_http,
+                    use_connection_path_hints=True,
+                )
                 request_body_len = (
                     max(0, s_ob or 0) if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"} else 0
                 )
@@ -3806,17 +3840,18 @@ class StorylineMixin:
                             weights=[65, 25, 10],
                             k=1,
                         )[0]
-                    if spec.response_body_len is not None:
-                        resp_bytes = spec.response_body_len
-                    elif _method == "POST":
-                        resp_bytes = rng.randint(200, 2000)
-                    elif _is_c2_http:
-                        resp_bytes = _c2_http_response_size(rng, method=_method, uri=_uri_raw)
-                    else:
-                        resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
                     _http_host2 = spec.hostname or spec.dst_ip
+                    resp_bytes = _storyline_http_response_body_len(
+                        spec=spec,
+                        rng=rng,
+                        method=_method,
+                        uri=_uri_raw,
+                        host=_http_host2,
+                        is_c2_http=_is_c2_http,
+                        use_connection_path_hints=False,
+                    )
                     request_body_len = (
                         max(0, s_ob or 0)
                         if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
