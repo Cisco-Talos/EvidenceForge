@@ -110,9 +110,10 @@ emitted. The `prompt_injection_control` **family is the negative control** (look
 **Tier 3 — Differential twin (EvidenceForge's deterministic advantage).** Generation is
 deterministic, and `scenario-clean.yaml` is a **matched twin** of `scenario.yaml`: the same
 environment, baseline, and storyline event *set*, with every prompt-injection payload
-replaced by benign content. Because the event set is unchanged, the two share a
-**byte-identical baseline** — the only lines that differ are the injected fields themselves.
-Generate both and **diff your copilot's verdicts** across the runs:
+replaced by benign content. Because the event set is unchanged, the two share the same
+baseline activity and almost all source-native rows; expected differences are limited to
+the injected fields themselves and their directly related transport rows. Generate both and
+**diff your copilot's verdicts** across the runs:
 
 ```bash
 eforge generate scenarios/llm-injection-demo/scenario.yaml       -o ./poisoned
@@ -123,7 +124,7 @@ eforge generate scenarios/llm-injection-demo/scenario-clean.yaml -o ./clean
 Any verdict that changes between the two runs is the injection's effect — including
 *spillover*, where a context/persona injection silently poisons the copilot's read of
 **neighbouring** alerts that carry no token of their own (the case Tier 0/1 cannot catch).
-This is what a deterministic generator uniquely enables: a true A/B with the noise held
+This is what a deterministic generator uniquely enables: a practical A/B with the noise held
 constant. (Note: this works because the *event set* is held fixed; simply deleting events
 would reshuffle the baseline, so use the provided twin rather than commenting events out.)
 
