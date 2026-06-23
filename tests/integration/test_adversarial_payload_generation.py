@@ -86,7 +86,7 @@ class TestAdversarialPayloadGeneration:
             for fam in sorted(family_names())
             for surface in (get_family(fam).get("surfaces") or [])
         ]
-        scenario = _linux_scenario(events, web_server=True)
+        scenario = _linux_scenario(events, web_server=True, network_sensor=True)
         # _linux_scenario spaces events at +10*(i+1)m; widen the window so all combos fall
         # inside it (an event scheduled past the window is a separate engine edge case, not
         # what this lands-on-disk matrix is testing).
@@ -104,7 +104,11 @@ class TestAdversarialPayloadGeneration:
         assert {r["family"] for r in recs} == set(family_names())  # all families present
         for r in recs:
             v = r["rendered_value"]
-            assert "EFORGE_TEST" in v, f"{r['family']}/{r['surface']} lost its poison marker"
+            # dns_qname renders the marker DNS-safe (lowercased, '_' folded to '-'); every
+            # other surface carries it verbatim. Both are self-evidently synthetic.
+            assert "EFORGE_TEST" in v or "eforge-test" in v, (
+                f"{r['family']}/{r['surface']} lost its poison marker"
+            )
             on_disk = (
                 json.dumps(v)[1:-1]
                 if "ecar" in r["expected_sources"]
@@ -144,6 +148,31 @@ class TestAdversarialPayloadGeneration:
         )
         assert "EFORGE_TEST" not in blob  # nothing leaked to disk
         assert "jndi" not in blob
+
+    def test_dns_qname_without_sensor_not_emitted(self, tmp_path):
+        # Belt-and-suspenders for the validator gate: even via the direct engine (no CLI
+        # validation, as a reviewer runs it), a dns_qname payload with no network sensor must
+        # be emitted:false and leave NO bytes on disk — zeek_dns is its only source, so
+        # ground truth must never claim a phantom row no sensor wrote.
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "adversarial_payload",
+                    "surface": "dns_qname",
+                    "family": "prompt_injection_control",
+                }
+            ],
+            logs=[{"format": "syslog"}, {"format": "zeek"}],
+        )
+        out = _generate(scenario, tmp_path / "nodns")
+        recs = [r for r in _records(out) if r.get("kind") == "adversarial_payload"]
+        assert len(recs) == 1 and recs[0]["emitted"] is False
+        blob = "".join(
+            p.read_text(errors="replace")
+            for p in out.rglob("*")
+            if p.is_file() and not p.name.startswith("GROUND_TRUTH")
+        )
+        assert "canary.eforge.invalid" not in blob  # the QNAME never reached disk
 
     def test_crlf_payload_is_a_genuine_two_line_split(self, ap_scenario, tmp_path):
         # The whole point of crlf_log_forging: a single record becomes multiple physical
@@ -256,7 +285,7 @@ class TestAdversarialPayloadGeneration:
             for fam in sorted(family_names())
             for surface in (get_family(fam).get("surfaces") or [])
         ]
-        scenario = _linux_scenario(events, web_server=True)
+        scenario = _linux_scenario(events, web_server=True, network_sensor=True)
         scenario["time_window"]["duration"] = f"{len(events) // 6 + 2}h"
         out = _generate(scenario, tmp_path / "matrix")
         files = [p for p in out.rglob("*") if p.is_file()]
@@ -265,6 +294,7 @@ class TestAdversarialPayloadGeneration:
             "syslog": any("syslog" in p.name and p.suffix == ".log" for p in files),
             "ecar": any("ecar" in p.name for p in files),
             "zeek_http": any("http" in p.name and p.suffix == ".json" for p in files),
+            "zeek_dns": any(p.name == "dns.json" for p in files),
         }
         for r in _ap_records(out):
             for src in r["expected_sources"]:
@@ -781,9 +811,17 @@ class TestAdversarialPayloadEval:
 
 
 def _linux_scenario(
-    events, *, logs=None, actor="nina", actor_os="Ubuntu 22.04 LTS", web_server=False
+    events,
+    *,
+    logs=None,
+    actor="nina",
+    actor_os="Ubuntu 22.04 LTS",
+    web_server=False,
+    network_sensor=False,
 ):
     logs = logs or [{"format": "syslog"}, {"format": "ecar"}, {"format": "web_access"}]
+    if network_sensor and not any(log.get("format") == "zeek" for log in logs):
+        logs = [*logs, {"format": "zeek"}]
     systems = [
         {
             "hostname": "APP-SRV-01",
@@ -803,7 +841,7 @@ def _linux_scenario(
                 "roles": ["web_server"],
             }
         )
-    return {
+    scenario = {
         "version": "1.0",
         "name": "adversarial-validate",
         "description": "validation harness",
@@ -835,6 +873,30 @@ def _linux_scenario(
             for i, ev in enumerate(events)
         ],
     }
+    if network_sensor:
+        scenario["environment"]["network"] = {
+            "segments": [
+                {
+                    "name": "lan",
+                    "cidr": "192.168.20.0/24",
+                    "description": "lan",
+                    "exposure": "internal",
+                    "systems": [s["hostname"] for s in systems],
+                }
+            ],
+            "sensors": [
+                {
+                    "type": "network",
+                    "name": "span",
+                    "hostname": "ZEEK-1",
+                    "monitoring_segments": ["lan"],
+                    "direction": "bidirectional",
+                    "placement": "span",
+                    "log_formats": ["zeek"],
+                }
+            ],
+        }
+    return scenario
 
 
 def _ids_scenario(family, surface, *, scheme=None):
@@ -1044,14 +1106,18 @@ class TestAdversarialPayloadValidation:
         assert not _errors(scenario)
 
     @pytest.mark.parametrize("actor_os", ["macOS 14", "FreeBSD 14", "Windows 10"])
-    def test_linux_only_surface_on_non_linux_host_rejected(self, actor_os):
+    @pytest.mark.parametrize(
+        "surface,family",
+        [("syslog_message", "ansi_escape"), ("auth_user", "prompt_injection_control")],
+    )
+    def test_linux_only_surface_on_non_linux_host_rejected(self, actor_os, surface, family):
         # Regression: the Linux-only-surface gate must reject ANY non-Linux host (Windows
-        # OR an unknown OS such as macOS/BSD), not just Windows. Otherwise syslog_message on
-        # a macOS/BSD actor validates clean but is dropped at emit -> a phantom-positive
-        # ground-truth label. A Linux host is present so the 'syslog' format has a valid
-        # home, isolating the OS-gate error.
+        # OR an unknown OS such as macOS/BSD), not just Windows. Otherwise a Linux-modeled
+        # surface on a macOS/BSD actor validates clean but is dropped at emit -> a phantom-
+        # positive ground-truth label. A Linux host is present so the 'syslog' format has a
+        # valid home, isolating the OS-gate error. Covers EVERY LINUX_ONLY surface.
         scenario = _linux_scenario(
-            [{"type": "adversarial_payload", "surface": "syslog_message", "family": "ansi_escape"}],
+            [{"type": "adversarial_payload", "surface": surface, "family": family}],
             actor_os=actor_os,
         )
         scenario["environment"]["systems"].append(
@@ -1064,6 +1130,35 @@ class TestAdversarialPayloadValidation:
         )
         msgs = _errors(scenario)
         assert any("Linux-modeled" in m and "not Linux" in m for m in msgs), (actor_os, msgs)
+
+    def test_dns_qname_without_sensor_rejected(self):
+        # dns_qname renders ONLY to zeek_dns (a network-sensor log); without a sensor the
+        # payload is labeled but never lands -> phantom positive. Fail fast at validation.
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "adversarial_payload",
+                    "surface": "dns_qname",
+                    "family": "prompt_injection_control",
+                }
+            ],
+            logs=[{"format": "syslog"}, {"format": "zeek"}],
+        )
+        assert any("dns_qname" in m and "network sensor" in m for m in _errors(scenario))
+
+    def test_dns_qname_with_sensor_validates_clean(self):
+        scenario = _linux_scenario(
+            [
+                {
+                    "type": "adversarial_payload",
+                    "surface": "dns_qname",
+                    "family": "prompt_injection_control",
+                }
+            ],
+            logs=[{"format": "syslog"}, {"format": "zeek"}],
+            network_sensor=True,
+        )
+        assert not _errors(scenario)
 
 
 class TestAdversarialPayloadValidateCLI:

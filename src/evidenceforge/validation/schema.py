@@ -1445,6 +1445,34 @@ class ScenarioValidator:
                         )
                     )
 
+                # dns_qname renders ONLY to zeek_dns, a network-sensor log; a host keeps no
+                # DNS log of its own, so without a sensor emitting Zeek nothing lands and the
+                # payload would be ground-truthed but dropped — a phantom positive.
+                if spec.surface == "dns_qname":
+                    from evidenceforge.events.dispatcher import expand_formats
+
+                    sensors = (
+                        self.scenario.environment.network.sensors
+                        if self.scenario.environment.network
+                        else []
+                    )
+                    if not any("zeek_dns" in expand_formats(sn.log_formats) for sn in sensors):
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] Adversarial payload surface 'dns_qname' needs a "
+                                    "network sensor emitting Zeek (zeek_dns) to record the lookup, "
+                                    "but none exists; the payload would not be emitted"
+                                ),
+                                suggestion=(
+                                    "Add an environment.network sensor with log_formats "
+                                    "including 'zeek'"
+                                ),
+                            )
+                        )
+
                 # An http_* surface needs a web_server-role host to record the request.
                 if spec.surface in HTTP_SURFACES and not has_web_server:
                     self.issues.append(
