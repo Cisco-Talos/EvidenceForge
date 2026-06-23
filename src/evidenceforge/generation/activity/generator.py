@@ -2827,6 +2827,8 @@ def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) 
         return [dst_ip]
     if dst_ip not in domain_ips:
         domain_ips.insert(0, dst_ip)
+    elif domain_ips[0] != dst_ip:
+        domain_ips = [dst_ip, *(ip for ip in domain_ips if ip != dst_ip)]
     if len(domain_ips) <= 4:
         return domain_ips
 
@@ -2836,7 +2838,7 @@ def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) 
     )
     selected = set(ranked[:4])
     selected.add(dst_ip)
-    return [ip for ip in domain_ips if ip in selected]
+    return [dst_ip, *(ip for ip in domain_ips if ip in selected and ip != dst_ip)]
 
 
 def _dns_hostname_allows_mx(hostname: str) -> bool:
