@@ -25,7 +25,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -309,10 +311,11 @@ def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
     for spec in ZEEK_LOG_SPECS:
         for source_name in spec.source_names:
             for source in sorted(source_root.rglob(source_name)):
+                _validate_zeek_source_log_path(source_root, source)
                 sensor = _sensor_name(source_root, source.parent)
                 destination = zeek_root / sensor / spec.staged_name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, destination)
+                _copy_regular_zeek_source_file(source, destination)
                 record_count = _count_jsonl_lines(destination)
                 logs.append(
                     StagedLog(
@@ -339,6 +342,43 @@ def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
         logs=tuple(logs),
         dns_expectations=dns_expectations,
     )
+
+
+def _validate_zeek_source_log_path(source_root: Path, source: Path) -> None:
+    """Validate that a staged Zeek log is a regular file contained by the source root."""
+    if source.is_symlink():
+        raise SofElkHarnessError(
+            f"refusing to stage symlinked Zeek source log outside generated output boundary: {source}"
+        )
+    try:
+        resolved_source = source.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise SofElkHarnessError(f"Zeek source log disappeared before staging: {source}") from exc
+    try:
+        resolved_source.relative_to(source_root)
+    except ValueError as exc:
+        raise SofElkHarnessError(
+            f"refusing to stage Zeek source log outside generated output boundary: {source}"
+        ) from exc
+    if not resolved_source.is_file():
+        raise SofElkHarnessError(f"refusing to stage non-file Zeek source log: {source}")
+
+
+def _copy_regular_zeek_source_file(source: Path, destination: Path) -> None:
+    """Copy a regular Zeek source file without following a final-path symlink race."""
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    try:
+        source_fd = os.open(source, flags)
+    except OSError as exc:
+        raise SofElkHarnessError(f"failed to open Zeek source log for staging: {source}") from exc
+    with os.fdopen(source_fd, "rb") as source_file:
+        if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+            raise SofElkHarnessError(f"refusing to stage non-regular Zeek source log: {source}")
+        with destination.open("wb") as destination_file:
+            shutil.copyfileobj(source_file, destination_file)
 
 
 def build_sof_elk_zeek_configs(work_dir: Path) -> SofElkGeneratedConfig:
