@@ -6,6 +6,42 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.5.0 (2026-06-23)
+
+This minor release adds the LLM prompt-injection demo scenario, extends
+adversarial-payload coverage to additional surfaces, and includes security and
+DNS-realism fixes queued on `dev`.
+
+**LLM prompt-injection demo**
+
+- Added the `scenarios/llm-injection-demo` sample scenario and clean twin so
+  users can generate comparable datasets with and without prompt-injection
+  activity (`170ef29d`).
+- Added scenario documentation and integration coverage for recoverable canary
+  payloads, decoy credentials, negative controls, eval cleanliness, and
+  byte-identical clean-baseline behavior (`170ef29d`, `5009700d`).
+
+**Adversarial-payload surfaces**
+
+- Added `dns_qname` and Linux `auth_user` adversarial-payload surfaces with
+  guardrail variants and validation/generation coverage (`a038cc60`).
+- Expanded prompt-injection payload families and references used by the new demo
+  scenario while keeping generated callbacks canary-only (`170ef29d`).
+
+**Security and rendering fixes**
+
+- Escaped adversarial payload values in generated ground-truth markdown to avoid
+  rendering unsafe raw payload content in documentation outputs (`170d50d6`).
+- Rejected symlinked Zeek parser logs in the SOF-ELK harness path so parser
+  validation cannot follow unexpected filesystem links (`985d2473`).
+
+**DNS answer coherence**
+
+- Ordered generated DNS address RRsets so the actual TCP destination IP appears
+  first while preserving the full configured multi-answer set, reducing false
+  unmatched-resolution pivots for Ubuntu/Canonical-style benign traffic
+  (`9cbeb9c8`).
+
 ## v1.4.2 (2026-06-23)
 
 This patch release fixes authored HTTP response-size realism for web access
