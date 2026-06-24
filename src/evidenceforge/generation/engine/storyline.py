@@ -68,7 +68,12 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
-from evidenceforge.models.scenario import ConnectionEventSpec, System, User
+from evidenceforge.models.scenario import (
+    MAX_HTTP_RESPONSE_BODY_LEN,
+    ConnectionEventSpec,
+    System,
+    User,
+)
 from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
@@ -399,9 +404,9 @@ def _storyline_http_response_body_len(
     if method_upper == "HEAD":
         return 0
     if spec.response_body_len is not None:
-        return max(0, spec.response_body_len)
+        return min(max(0, spec.response_body_len), MAX_HTTP_RESPONSE_BODY_LEN)
     if spec.resp_bytes is not None:
-        return max(0, spec.resp_bytes)
+        return min(max(0, spec.resp_bytes), MAX_HTTP_RESPONSE_BODY_LEN)
     if status_code >= 300 or status_code in {204, 304}:
         return response_size_for_status(status_code, host, uri)
     if (
