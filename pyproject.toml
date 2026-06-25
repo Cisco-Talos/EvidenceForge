@@ -32,7 +32,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "click>=8.0.0",
+    "click>=8.4.2",
     "pydantic>=2.13.4",
     "typer>=0.26.7",
     "rich>=15.0.0",
