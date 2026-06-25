@@ -26,7 +26,11 @@ import random
 
 from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.generation.engine.storyline import _storyline_http_response_body_len
-from evidenceforge.models.scenario import BeaconEventSpec, ConnectionEventSpec
+from evidenceforge.models.scenario import (
+    MAX_HTTP_RESPONSE_BODY_LEN,
+    BeaconEventSpec,
+    ConnectionEventSpec,
+)
 
 
 def test_connection_zip_404_uses_error_page_size_not_asset_size() -> None:
@@ -79,6 +83,32 @@ def test_connection_resp_bytes_controls_http_body_when_body_override_absent() ->
     )
 
     assert body_len == 548
+
+
+def test_connection_resp_bytes_http_body_fallback_is_bounded() -> None:
+    """Unbounded connection resp_bytes cannot become an unsafe HTTP body size."""
+    spec = ConnectionEventSpec(
+        dst_ip="192.168.101.14",
+        dst_port=80,
+        service="http",
+        hostname="halcyon-grants.org",
+        method="GET",
+        uri="/backup.zip",
+        status_code=200,
+        resp_bytes=MAX_HTTP_RESPONSE_BODY_LEN + 1,
+    )
+
+    body_len = _storyline_http_response_body_len(
+        spec=spec,
+        rng=random.Random(1234),
+        method=spec.method or "GET",
+        uri=spec.uri or "/",
+        host=spec.hostname or spec.dst_ip,
+        is_c2_http=False,
+        use_connection_path_hints=True,
+    )
+
+    assert body_len == MAX_HTTP_RESPONSE_BODY_LEN
 
 
 def test_connection_response_body_len_takes_precedence_over_resp_bytes() -> None:

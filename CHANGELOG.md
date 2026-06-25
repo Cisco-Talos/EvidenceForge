@@ -6,6 +6,26 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.5.1 (2026-06-25)
+
+This patch release bounds authored HTTP response-body sizing and refreshes
+recent test/build dependencies queued on `dev`.
+
+**HTTP response-size safety**
+
+- Bounded authored HTTP `resp_bytes` fallback sizing through a shared
+  `MAX_HTTP_RESPONSE_BODY_LEN` limit and clamped storyline body sizing before
+  values are stored on `HttpContext.response_body_len` (`2ed170c1`).
+- Reused the shared response-body limit for authored connection and beacon
+  `response_body_len` schema validation, with regression coverage for oversized
+  `resp_bytes` fallback behavior (`2ed170c1`).
+
+**Dependency maintenance**
+
+- Updated CI workflows to `actions/checkout@v7` (`f4568bf7`).
+- Updated dev/runtime dependency pins for `pytest` 9.1.1, `click` 8.4.2, and
+  `ruff` 0.15.19 (`a08b23ed`, `9d1114ba`, `42ca5db5`).
+
 ## v1.5.0 (2026-06-23)
 
 This minor release adds the LLM prompt-injection demo scenario, extends
