@@ -1043,6 +1043,7 @@ class ScpReceiverFileActionBundle:
                 time=self._request.transfer_time,
                 source_ip=self._request.source_system.ip,
                 source_port=self._request.source_port,
+                target_user=self._request.target_user,
             )
 
         parent_pid = self._executor.activity_generator._get_system_pid(

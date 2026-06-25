@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.contexts import HostContext, NetworkContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
@@ -711,6 +711,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.src_host),
             }
+            if self._flow_connection_failed(net):
+                event_data["outcome"] = "failure"
+                event_data["connection_state"] = net.conn_state
             principal = self._flow_principal_for_process(
                 event,
                 event.src_host,
@@ -771,10 +774,10 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.dst_host),
             }
-            if not listener_observed:
+            if self._flow_connection_failed(net):
                 event_data["outcome"] = "failure"
                 event_data["connection_state"] = net.conn_state
-            else:
+            if listener_observed:
                 inbound_proc = self._lookup_running_process(event.dst_host, inbound_pid)
                 if inbound_proc is not None:
                     event_ts, process_identity_safe = self._flow_source_time(
@@ -1038,6 +1041,15 @@ class EcarEmitter(HostMultiplexEmitter):
         if duration_us <= margin_us:
             margin_us = max(0, duration_us // 2)
         return close_time - timedelta(microseconds=margin_us)
+
+    @staticmethod
+    def _flow_connection_failed(net: NetworkContext | None) -> bool:
+        """Return whether source-native FLOW should expose a failed connection outcome."""
+        if net is None:
+            return False
+        if net.protocol.lower() != "tcp":
+            return False
+        return net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR", "OTH"}
 
     @staticmethod
     def _apply_flow_edr_context(

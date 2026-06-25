@@ -1936,6 +1936,85 @@ class TestExplicitProxyVisibility:
         lead_seconds = (request_time - proc.start_time).total_seconds()
         assert 0 < lead_seconds <= 8.0
 
+    def test_server_like_proxy_client_hint_suppresses_workstation_web_tools(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+        server = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.2.20",
+            os="Windows Server 2022",
+            type="server",
+            roles=["file_server"],
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+        )
+
+        for source_system in (server, dc):
+            for user_agent in (
+                "curl/8.4.0",
+                "Wget/1.21.4",
+                "python-requests/2.31.0",
+                "Mozilla/5.0 Chrome/123.0.0.0",
+            ):
+                hint = generator._explicit_proxy_client_process_hint(
+                    user_agent=user_agent,
+                    hostname="downloads.cloud.com",
+                    dst_port=443,
+                    proxy_sys=proxy,
+                    source_system=source_system,
+                )
+
+                assert hint is None
+
+    def test_server_like_proxy_client_hint_keeps_service_style_owners(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+        server = System(
+            hostname="APP-01",
+            ip="10.0.2.30",
+            os="Windows Server 2022",
+            type="server",
+            roles=["app_server"],
+        )
+
+        hint = generator._explicit_proxy_client_process_hint(
+            user_agent="Go-http-client/1.1",
+            hostname="status.example.com",
+            dst_port=443,
+            proxy_sys=proxy,
+            source_system=server,
+        )
+
+        assert hint is not None
+        image, command_line = hint
+        assert image.endswith("service-healthcheck.exe")
+        assert "status.example.com" in command_line
+
     def test_one_shot_proxy_client_process_terminates_after_request(self):
         generator, _emitters = _generator(
             [
@@ -2986,6 +3065,49 @@ class TestExplicitProxyVisibility:
         assert proxy_context.cache_result == "REVALIDATED"
         assert proxy_context.content_type == "application/javascript"
         assert proxy_context.sc_bytes == 50
+
+    def test_proxy_304_revalidation_is_not_gated_by_cacheable_mime(self):
+        generator, _ = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy_system = generator._ip_to_system["10.0.3.10"]
+
+        proxy_context = generator._build_proxy_context(
+            src_ip="10.0.1.10",
+            dst_ip="13.107.6.171",
+            dst_port=443,
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=0,
+            hostname="res.cdn.office.net",
+            source_system=generator._ip_to_system["10.0.1.10"],
+            proxy_sys=proxy_system,
+            http=HttpContext(
+                method="GET",
+                host="res.cdn.office.net",
+                uri="/",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=0,
+                status_code=304,
+                status_msg="Not Modified",
+                resp_mime_types=["text/html"],
+            ),
+            explicit_mode=True,
+        )
+
+        assert proxy_context.status_code == 304
+        assert proxy_context.cache_result == "REVALIDATED"
+        assert proxy_context.content_type == "text/html"
 
     def test_proxy_304_revalidation_keeps_origin_and_omits_zeek_response_mime(self):
         generator, emitters = _generator(

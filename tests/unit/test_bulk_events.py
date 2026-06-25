@@ -6,6 +6,7 @@
 import random
 import re
 from collections import Counter
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from evidenceforge.generation.actions import (
     WebScanActionBundle,
     WebScanRequest,
 )
+from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
     _c2_http_response_size,
@@ -759,6 +761,52 @@ class TestScannerProbeActionBundles:
         assert anchor.family == "scheduled_scan_overlap"
         assert anchor.stable_id == request.stable_id
         assert anchor.stable_id.startswith("scheduled-scan-overlap-")
+
+    def test_scheduled_scan_overlap_uses_closed_port_profile_for_missing_services(self):
+        scanner = System(hostname="SCAN-01", ip="10.0.0.5", os="Ubuntu 22.04", type="server")
+        target = System(
+            hostname="APP-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+            roles=["app_server"],
+        )
+        captured: list[dict[str, object]] = []
+
+        class ScanRandom(random.Random):
+            def randint(self, a: int, b: int) -> int:
+                if (a, b) == (2, 4):
+                    return 2
+                return super().randint(a, b)
+
+            def sample(self, population: Sequence[int], k: int) -> list[int]:
+                return [445, 3389]
+
+        class StateManager:
+            def set_current_time(self, _time: datetime) -> None:
+                return None
+
+        class ActivityGenerator:
+            def generate_connection(self, **kwargs: object) -> None:
+                captured.append(kwargs)
+
+        executor = SimpleNamespace(
+            state_manager=StateManager(),
+            activity_generator=ActivityGenerator(),
+        )
+        request = ScheduledScanOverlapRequest(
+            scanner=scanner,
+            targets=(target,),
+            time=datetime(2026, 4, 16, 12, 5, 0, tzinfo=UTC),
+            rng=ScanRandom(29),
+        )
+
+        BaselineMixin._execute_scheduled_scan_overlap_bundle(executor, request)
+
+        assert {record["dst_port"] for record in captured} == {445, 3389}
+        assert all(record["conn_state"] != "SF" for record in captured)
+        assert all(record["service"] == "" for record in captured)
 
 
 class TestPortScanConnectionProfile:

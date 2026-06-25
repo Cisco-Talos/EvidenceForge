@@ -247,6 +247,7 @@ class RdpSessionActionBundle:
             time=logon_time,
             logon_type=10,
             source_ip=source_ip,
+            source_system=source_system,
             source_port=src_port,
             emit_network_evidence=False,
             logon_id=logon_id or None,

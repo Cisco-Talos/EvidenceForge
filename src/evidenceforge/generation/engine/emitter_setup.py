@@ -808,7 +808,7 @@ class EmitterSetupMixin:
         logind_path = "/usr/lib/systemd/systemd-logind"
         pids["logind"] = _c(pids["systemd"], logind_path, logind_path, "root")
 
-        pids["sshd"] = _c(pids["systemd"], "/usr/sbin/sshd", "/usr/sbin/sshd -D [listener]", "root")
+        pids["sshd"] = _c(pids["systemd"], "/usr/sbin/sshd", "/usr/sbin/sshd -D", "root")
 
         roles = {role.lower() for role in (system.roles or [])}
         service_defaults = getattr(self, "_system_service_defaults", {})

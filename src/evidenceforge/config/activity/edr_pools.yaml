@@ -8,7 +8,8 @@
 # key you include fully replaces the corresponding default section.
 #
 # Template variables: {user} = process owner username, {rand} = 5-digit random,
-# {hex} = 8-character hexadecimal token
+# {hex} = 8-character hexadecimal token, {process_prefetch_name} = owning
+# process basename uppercased for Windows Prefetch artifacts.
 
 # Process-aware file side effects for ambient eCAR/Sysmon FILE telemetry.
 # Only processes matching one of these profiles emit probabilistic file events;
@@ -149,6 +150,25 @@ file_side_effect_profiles:
     paths_linux:
       - "/var/tmp/pkg-{rand}.tmp"
 
+  - name: windows_prefetch_execution
+    executables:
+      - "cmd.exe"
+      - "powershell.exe"
+      - "pwsh.exe"
+      - "rundll32.exe"
+      - "schtasks.exe"
+      - "svchost.exe"
+      - "taskhostw.exe"
+      - "tiworker.exe"
+      - "usoclient.exe"
+      - "wmiprvse.exe"
+      - "wscript.exe"
+      - "cscript.exe"
+    actions: ["modify"]
+    probability: 0.35
+    paths_windows:
+      - "C:\\Windows\\Prefetch\\{process_prefetch_name}-{hex}.pf"
+
   - name: archive_and_runtime_artifacts
     executables: ["mysqldump", "gzip", "tar", "zip", "python", "python3", "node", "java"]
     actions: ["create", "modify"]
@@ -207,8 +227,6 @@ file_paths_windows:
   - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
   # System paths
   - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
-  - "C:\\Windows\\Prefetch\\CMD.EXE-{hex}.pf"
-  - "C:\\Windows\\Prefetch\\SVCHOST.EXE-{hex}.pf"
   - "C:\\Windows\\Temp\\{rand}.tmp"
   - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
   - "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"

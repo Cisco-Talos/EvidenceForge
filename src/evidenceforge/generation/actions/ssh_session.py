@@ -269,6 +269,7 @@ class SshSessionExecutor(Protocol):
         time: datetime,
         source_ip: str,
         source_port: int,
+        target_user: str | None = None,
     ) -> int:
         """Return or materialize the destination-side sshd process."""
         ...
@@ -856,6 +857,7 @@ class SshSessionActionBundle:
                 + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
                 source_ip=request.source_ip,
                 source_port=state.source_port,
+                target_user=request.user.username,
             )
         executor._remember_ssh_responder_pid(
             request.source_ip,
@@ -1083,7 +1085,7 @@ class SshSessionActionBundle:
         if running is None:
             return
         command_line = running.command_line or ""
-        if "sshd: [accepted]" not in command_line and "sshd:" not in command_line:
+        if "sshd:" not in command_line:
             return
         seed = _stable_seed(
             "ssh_session_responder_terminate:"

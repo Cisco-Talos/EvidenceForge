@@ -1449,9 +1449,27 @@ class DhcpInterfaceRegistryNoiseConfig(BaseModel, extra="forbid"):
         return v
 
 
+class StaticInventoryRegistryNoiseConfig(BaseModel, extra="forbid"):
+    """Policy for static software-inventory registry values."""
+
+    suppress_in_ambient_noise: bool = True
+    key_substrings: list[str]
+    value_names: list[str]
+
+    @field_validator("key_substrings", "value_names")
+    @classmethod
+    def entries_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("entries must not be empty")
+        if any(not entry for entry in v):
+            raise ValueError("entries must be non-empty")
+        return v
+
+
 class RegistryNoiseConfig(BaseModel, extra="forbid"):
     """Ambient endpoint registry-noise policy."""
 
+    static_inventory_values: StaticInventoryRegistryNoiseConfig
     dhcp_interface_values: DhcpInterfaceRegistryNoiseConfig
 
 

@@ -4295,6 +4295,70 @@ class ActivityGenerator:
             return None
         return target_system.ip, normalized
 
+    def _process_network_target_supports_service(
+        self,
+        target_system: Any | None,
+        service: str,
+        dst_port: int,
+    ) -> bool:
+        """Return whether a process-network side effect can succeed on a target."""
+        if target_system is None:
+            return False
+
+        services = {
+            str(value).lower().replace(" ", "-").replace("_", "-")
+            for value in (getattr(target_system, "services", []) or [])
+        }
+        roles = {
+            str(value).lower().replace(" ", "-").replace("_", "-")
+            for value in (getattr(target_system, "roles", []) or [])
+        }
+        os_category = _get_os_category(str(getattr(target_system, "os", "") or ""))
+        system_type = str(getattr(target_system, "type", "") or "").lower()
+
+        if service == "smb" or dst_port == 445:
+            if services & {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}:
+                return True
+            return os_category == "windows"
+        if service == "rdp" or dst_port == 3389:
+            if services & {"rdp", "termservice", "terminal-services", "xrdp"}:
+                return True
+            return os_category == "windows" and system_type in {"server", "domain_controller"}
+        if service == "ssh" or dst_port == 22:
+            return os_category == "linux" or bool(services & {"ssh", "sshd", "openssh"})
+        if service in {"http", "ssl"} or dst_port in {80, 443, 8080, 8443}:
+            if services & {
+                "http",
+                "https",
+                "apache",
+                "apache2",
+                "nginx",
+                "httpd",
+                "iis",
+                "gunicorn",
+                "tomcat",
+                "squid",
+            }:
+                return True
+            return bool(roles & {"web-server", "app-server", "forward-proxy"})
+        return True
+
+    def _process_network_target_ips(
+        self,
+        source_system: System,
+        service: str,
+        dst_port: int,
+    ) -> list[str]:
+        """Return internal target IPs compatible with a process-network service."""
+        ips: list[str] = []
+        for target in self._unique_environment_systems():
+            target_ip = str(getattr(target, "ip", "") or "")
+            if not target_ip or target_ip == source_system.ip:
+                continue
+            if self._process_network_target_supports_service(target, service, dst_port):
+                ips.append(target_ip)
+        return ips
+
     def _fallback_database_network_target(
         self,
         target: str,
@@ -5335,7 +5399,7 @@ class ActivityGenerator:
 
         apply_domain_user_agent = http is None or (
             not _is_tool_http_user_agent(http.user_agent)
-            and not is_browser_like_proxy_domain(proxy_hostname)
+            and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
         domain_user_agent = (
             pick_proxy_domain_user_agent(
@@ -5393,7 +5457,7 @@ class ActivityGenerator:
         if http is not None:
             # When the request already carries canonical HTTP outcome data,
             # proxy rendering should not independently invent a policy denial.
-            if proxy_cacheable and http.status_code == 304:
+            if http.status_code == 304:
                 cache_result = "REVALIDATED"
             elif proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
                 cache_result = "HIT"
@@ -5522,7 +5586,8 @@ class ActivityGenerator:
     ) -> tuple[str, str] | None:
         """Map user-owned proxy User-Agents to the process that owns the socket."""
         os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
-        if os_category == "windows":
+        server_like_source = self._is_proxy_server_like_source(source_system)
+        if os_category == "windows" and not server_like_source:
             browser_hint = self._browser_http_client_process_hint(
                 user_agent=user_agent,
                 hostname=hostname,
@@ -5548,6 +5613,16 @@ class ActivityGenerator:
             )
             if package_hint is not None:
                 return package_hint
+            if server_like_source:
+                if ua.startswith("go-http-client/"):
+                    return "/usr/local/bin/service-healthcheck", (
+                        f"service-healthcheck --url {target_url}"
+                    )
+                if ua.startswith("apache-httpclient/"):
+                    return "/usr/bin/java", (
+                        f"java -jar /opt/meridian/integration-worker.jar --check-url {target_url}"
+                    )
+                return None
             if "firefox/" in ua:
                 return "/usr/bin/firefox", f"firefox --new-window {target_url}"
             if "edg/" in ua or "edge/" in ua:
@@ -5580,6 +5655,15 @@ class ActivityGenerator:
                 return "/usr/bin/pwsh", f"pwsh -NoProfile -Command Invoke-WebRequest {target_url}"
             return None
 
+        if server_like_source:
+            if ua.startswith("go-http-client/"):
+                image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
+                return image, f'"{image}" --url "{target_url}"'
+            if ua.startswith("apache-httpclient/"):
+                image = r"C:\Program Files\Eclipse Adoptium\jdk-17\bin\java.exe"
+                return image, f'"{image}" -jar C:\\ProgramData\\Meridian\\integration-worker.jar'
+            return None
+
         if ua.startswith("curl/") or " curl/" in ua:
             image = r"C:\Windows\System32\curl.exe"
             return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
@@ -5602,6 +5686,35 @@ class ActivityGenerator:
                 f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
             )
         return None
+
+    @staticmethod
+    def _is_proxy_server_like_source(source_system: System | None) -> bool:
+        """Return whether proxy client PID synthesis should avoid workstation tooling."""
+        if source_system is None:
+            return False
+        roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
+        server_roles = {
+            "app_server",
+            "database",
+            "dns_server",
+            "domain_controller",
+            "file_server",
+            "forward_proxy",
+            "log_server",
+            "mail_server",
+            "monitoring",
+            "web_server",
+        }
+        if roles & server_roles:
+            return True
+        system_type = (getattr(source_system, "type", "") or "").lower()
+        if (
+            system_type == "server"
+            and _get_os_category(source_system.os) == "linux"
+            and getattr(source_system, "assigned_user", None)
+        ):
+            return False
+        return system_type in {"server", "domain_controller"}
 
     @staticmethod
     def _linux_package_manager_proxy_client_hint(
@@ -6325,6 +6438,14 @@ class ActivityGenerator:
             source_system=source_system,
         )
         if hint is None:
+            os_category = _get_os_category(source_system.os)
+            if os_category == "windows" and self._windows_proxy_pid_should_be_replaced(running):
+                return None
+            if os_category == "linux" and self._linux_proxy_pid_should_be_replaced(
+                running,
+                expected_exe="",
+            ):
+                return None
             return candidate_image
 
         expected_image = hint[0]
@@ -7239,6 +7360,7 @@ class ActivityGenerator:
         time: datetime,
         logon_type: int = 2,
         source_ip: str | None = None,
+        source_system: System | None = None,
         source_port: int | None = None,
         emit_transport_syslog: bool = True,
         emit_network_evidence: bool = True,
@@ -7268,6 +7390,7 @@ class ActivityGenerator:
             time=time,
             logon_type=logon_type,
             source_ip=source_ip,
+            source_system=source_system,
             source_port=source_port,
             emit_transport_syslog=emit_transport_syslog,
             emit_network_evidence=emit_network_evidence,
@@ -7282,6 +7405,7 @@ class ActivityGenerator:
         time = request.time
         logon_type = request.logon_type
         source_ip = request.source_ip
+        source_system = request.source_system
         source_port = request.source_port
         emit_transport_syslog = request.emit_transport_syslog
         emit_network_evidence = request.emit_network_evidence
@@ -7485,12 +7609,16 @@ class ActivityGenerator:
 
         if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
             self._emit_linux_local_logon_syslog(user, system, time, logon_id)
+            session_for_guid = self.state_manager.get_session(logon_id)
+            session_id = session_for_guid.session_id if session_for_guid is not None else 0
 
         # Phase 2: Build SecurityEvent with all contexts
         # For network logons (type 3, 10), resolve source host from source_ip
         src_host_ctx = None
         if logon_type in (3, 10) and source_ip and source_ip != "-":
-            if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+            if source_system is not None:
+                src_host_ctx = self._build_host_context(source_system)
+            elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
                 src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
@@ -7506,6 +7634,15 @@ class ActivityGenerator:
                 logon_id,
                 time.isoformat(),
             )
+        subject = self._successful_logon_subject_fields(
+            user=user,
+            system=system,
+            logon_type=logon_type,
+            time=time,
+            source_ip=auth_source_ip,
+            source_system=source_system,
+            logon_id=logon_id,
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -7524,10 +7661,10 @@ class ActivityGenerator:
                 logon_process=auth_pkg.get("LogonProcessName", ""),
                 lm_package=auth_pkg.get("LmPackageName", "-"),
                 logon_guid=auth_logon_guid,
-                subject_sid=self._get_sid("SYSTEM"),
-                subject_username="SYSTEM",
-                subject_domain="NT AUTHORITY",
-                subject_logon_id="0x3e7",
+                subject_sid=subject["sid"],
+                subject_username=subject["username"],
+                subject_domain=subject["domain"],
+                subject_logon_id=subject["logon_id"],
                 privilege_list=privilege_list,
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
@@ -7692,6 +7829,7 @@ class ActivityGenerator:
             logind_time,
         )
         self._linux_local_logind_session_ids[logon_id] = session_id
+        self.state_manager.update_session_metadata(logon_id, session_id=session_id)
         self.generate_syslog_event(
             system=system,
             time=logind_time,
@@ -8099,6 +8237,63 @@ class ActivityGenerator:
             "domain": self._build_host_context(system).netbios_domain,
             "logon_id": logon_id or self._get_user_logon_id(username, system.hostname),
         }
+
+    def _successful_logon_subject_fields(
+        self,
+        *,
+        user: User,
+        system: System,
+        logon_type: int,
+        time: datetime,
+        source_ip: str,
+        logon_id: str,
+        source_system: System | None = None,
+    ) -> dict[str, str]:
+        """Return source-native Windows 4624 subject fields for successful logons."""
+        system_subject = self._account_subject_fields("SYSTEM", system, logon_id="0x3e7")
+        if _get_os_category(system.os) != "windows":
+            return system_subject
+
+        username = user.username
+        if username in _SYSTEM_ACCOUNT_LOGON_IDS or username.endswith("$") or logon_type == 5:
+            return system_subject
+
+        if logon_type == 7:
+            session = self.state_manager.get_session(logon_id)
+            if (
+                session is not None
+                and session.system == system.hostname
+                and session.username == username
+            ):
+                return self._account_subject_fields(username, system, logon_id=session.logon_id)
+            active = self._active_user_interactive_windows_session(user, system, time)
+            if active is not None:
+                return self._account_subject_fields(username, system, logon_id=active.logon_id)
+            return system_subject
+
+        if logon_type not in {3, 10} or not source_ip or source_ip in {"-", system.ip}:
+            return system_subject
+
+        resolved_source_system = source_system or getattr(self, "_ip_to_system", {}).get(
+            source_ip.removeprefix("::ffff:")
+        )
+        if (
+            resolved_source_system is None
+            or _get_os_category(resolved_source_system.os) != "windows"
+        ):
+            return system_subject
+        source_session = self._active_user_interactive_windows_session(
+            user,
+            resolved_source_system,
+            time,
+        )
+        if source_session is None:
+            return system_subject
+        return self._account_subject_fields(
+            username,
+            resolved_source_system,
+            logon_id=source_session.logon_id,
+        )
 
     def _failed_logon_profile(
         self,
@@ -9804,6 +9999,7 @@ class ActivityGenerator:
         time: datetime,
         source_ip: str,
         source_port: int,
+        target_user: str | None = None,
     ) -> int:
         """Return the destination-side sshd process that owns one SSH 5-tuple."""
         remembered = self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
@@ -9825,11 +10021,12 @@ class ActivityGenerator:
             f"{target_system.hostname}:{source_ip}:{source_port}:"
             f"{target_system.ip}:{time.isoformat()}"
         )
+        process_user = target_user or "unknown"
         sshd_pid = self.generate_system_process(
             system=target_system,
             time=time + timedelta(milliseconds=8 + (sshd_seed % 72)),
             process_name="/usr/sbin/sshd",
-            command_line="sshd: [accepted]",
+            command_line=f"sshd: {process_user} [priv]",
             parent_pid=parent_pid,
             username="root",
             emit_linux_syslog=False,
@@ -9996,6 +10193,7 @@ class ActivityGenerator:
 
         source_ip = ""
         source_port = 0
+        target_user = None
         conn_match = re.match(
             r"^Connection from (?P<src_ip>\S+) port (?P<src_port>\d+) "
             r"on (?P<dst_ip>\S+) port 22$",
@@ -10006,13 +10204,14 @@ class ActivityGenerator:
             source_port = int(conn_match.group("src_port"))
         else:
             accepted_match = re.match(
-                r"^Accepted \S+ for (?:invalid user )?\S+ "
+                r"^Accepted \S+ for (?:invalid user )?(?P<target_user>\S+) "
                 r"from (?P<src_ip>\S+) port (?P<src_port>\d+) ",
                 message,
             )
             if accepted_match:
                 source_ip = accepted_match.group("src_ip")
                 source_port = int(accepted_match.group("src_port"))
+                target_user = accepted_match.group("target_user")
 
         if not source_ip or source_port <= 0:
             return pid
@@ -10022,6 +10221,7 @@ class ActivityGenerator:
             time=time,
             source_ip=source_ip,
             source_port=source_port,
+            target_user=target_user,
         )
         self._remember_ssh_pid_alias(system.hostname, pid, responder_pid)
         return responder_pid
@@ -11895,7 +12095,7 @@ class ActivityGenerator:
 
                 apply_domain_user_agent = event.http is None or (
                     not _is_tool_http_user_agent(event.http.user_agent)
-                    and not is_browser_like_proxy_domain(proxy_hostname)
+                    and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
                 )
                 domain_user_agent = (
                     pick_proxy_domain_user_agent(
@@ -11929,7 +12129,7 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
                 if event.http is not None:
-                    if proxy_cacheable and event.http.status_code == 304:
+                    if event.http.status_code == 304:
                         cache_result = "REVALIDATED"
                     elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
                         cache_result = "HIT"
@@ -12106,7 +12306,9 @@ class ActivityGenerator:
                 ua = domain_user_agent
             elif http_ua_override:
                 ua = http_ua_override
-            elif not is_browser_like_proxy_domain(web_host):
+            elif self._is_proxy_server_like_source(
+                source_system
+            ) or not is_browser_like_proxy_domain(web_host, domain_tags=web_domain_tags):
                 ua = pick_proxy_user_agent(
                     rng,
                     source_system,
@@ -14623,6 +14825,15 @@ class ActivityGenerator:
                 if command_hostname:
                     ext_hostname = command_hostname
                     emit_dns = True
+                target_system = getattr(self, "_ip_to_system", {}).get(dst_ip)
+                if not self._process_network_target_supports_service(
+                    target_system,
+                    service,
+                    dst_port,
+                ):
+                    failure_conn_state = "S0"
+                    service = ""
+                    resp_bytes = 0
             elif command_target:
                 fallback_target = (
                     self._fallback_database_network_target(command_target, system)
@@ -14655,7 +14866,13 @@ class ActivityGenerator:
                 db_entry = rng.choice(compatible)
                 dst_ip = db_entry["ip"] if isinstance(db_entry, dict) else db_entry
             elif all_ips:
-                dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
+                compatible_ips = self._process_network_target_ips(system, service, dst_port)
+                if compatible_ips:
+                    dst_ip = rng.choice(compatible_ips)
+                elif service in {"smb", "rdp", "ssh"} or dst_port in {22, 445, 3389}:
+                    return
+                else:
+                    dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
             else:
                 return  # No internal targets available
 

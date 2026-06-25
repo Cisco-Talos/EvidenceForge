@@ -143,16 +143,14 @@ domains:
     cdn_domains: ["aadcdn.msftauth.net", "aadcdn.msauth.net"]
     pages:
       - path: "/common/oauth2/v2.0/authorize"
-        nav_targets: ["/common/oauth2/v2.0/token"]
+        nav_targets: ["/common/oauth2/v2.0/authorize"]
         subresources:
           - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/js/ConvergedLogin_PCore.js", type: "application/javascript"}
           - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/css/converged_login.css", type: "text/css"}
           - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/images/microsoft_logo.png", type: "image/png"}
-          - {path: "/favicon.ico", type: "image/x-icon"}
-      - path: "/common/oauth2/v2.0/token"
-        nav_targets: ["/common/oauth2/v2.0/authorize"]
-        subresources:
+          - {path: "/common/oauth2/v2.0/token", type: "application/json", method: "POST"}
           - {path: "/common/discovery/instance", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
 
   login.live.com:
     cdn_domains: ["aadcdn.msftauth.net"]

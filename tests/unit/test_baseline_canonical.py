@@ -140,6 +140,53 @@ def test_linux_server_ambient_logind_noise_is_thinned():
     assert _linux_ambient_logind_probability("server") <= 0.05
 
 
+def test_server_like_persona_sessions_use_server_admin_overlay():
+    """Server/DC persona traffic should not inherit workstation web/app owners."""
+    from types import SimpleNamespace
+
+    from evidenceforge.generation.engine.baseline import BaselineMixin
+
+    engine = SimpleNamespace()
+    engine._activity_roles_for_system = BaselineMixin._activity_roles_for_system.__get__(engine)
+    engine._is_server_admin_persona_source = BaselineMixin._is_server_admin_persona_source.__get__(
+        engine
+    )
+    engine._use_server_admin_persona = BaselineMixin._use_server_admin_persona.__get__(engine)
+
+    dc = SimpleNamespace(
+        hostname="DC-01",
+        type="domain_controller",
+        roles=[],
+        assigned_user=None,
+    )
+    file_server = SimpleNamespace(
+        hostname="FILE-SRV-01",
+        type="server",
+        roles=["file_server"],
+        assigned_user=None,
+    )
+    own_workstation = SimpleNamespace(
+        hostname="WS-MCHEN-01",
+        type="workstation",
+        roles=[],
+        assigned_user="marcus.chen",
+    )
+    other_workstation = SimpleNamespace(
+        hostname="WS-AJOHNSON-01",
+        type="workstation",
+        roles=[],
+        assigned_user="aisha.johnson",
+    )
+    local_admin_session = SimpleNamespace(username="marcus.chen", logon_type=2)
+    own_session = SimpleNamespace(username="marcus.chen", logon_type=2)
+    remote_session = SimpleNamespace(username="marcus.chen", logon_type=10)
+
+    assert engine._use_server_admin_persona(dc, local_admin_session)
+    assert engine._use_server_admin_persona(file_server, local_admin_session)
+    assert not engine._use_server_admin_persona(own_workstation, own_session)
+    assert engine._use_server_admin_persona(other_workstation, remote_session)
+
+
 def test_server_pam_initiator_favors_sudo_over_local_login():
     """Server baseline session noise should not overproduce LOGIN(uid=0)."""
     samples = [
@@ -908,6 +955,52 @@ class TestWebAccessCorrelation:
         )
         assert event.http.resp_mime_types == ["image/x-icon"]
 
+    def test_server_like_auto_http_uses_service_user_agent(
+        self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
+    ):
+        """Server/DC HTTP auto-contexts should not synthesize workstation browser owners."""
+        from evidenceforge.generation.activity import generator as generator_module
+        from evidenceforge.generation.activity import proxy_uri
+
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system[dc.ip] = dc
+        monkeypatch.setattr(
+            proxy_uri,
+            "pick_proxy_uri",
+            lambda *args, **kwargs: ("/", "text/html", "GET", "", "none"),
+        )
+        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+
+        activity_gen.generate_connection(
+            src_ip=dc.ip,
+            dst_ip="10.10.3.10",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.25,
+            orig_bytes=350,
+            resp_bytes=2200,
+            conn_state="SF",
+            source_system=dc,
+            hostname="WEB-EXT-01.meridianhcs.local",
+        )
+
+        event = mock_emitters["zeek_http"].emit.call_args[0][0]
+        assert event.http is not None
+        assert "Mozilla/" not in event.http.user_agent
+        if event.process is not None:
+            assert not re.search(
+                r"(?i)\\(msedge|chrome|firefox|iexplore)\.exe$",
+                event.process.image,
+            )
+
 
 class TestSmbFileTransferCorrelation:
     """SMB data transfers should produce Zeek files.log context when substantial."""
@@ -1653,6 +1746,55 @@ class TestBaselineRegistryRealism:
             cfg,
         )
 
+    def test_ambient_registry_noise_suppresses_static_inventory_values(self):
+        """Ambient churn should not rewrite static installed-software inventory fields."""
+        workstation = System(
+            hostname="WS-01",
+            ip="10.10.2.55",
+            os="Windows 11",
+            type="workstation",
+        )
+        cfg = {
+            "static_inventory_values": {
+                "suppress_in_ambient_noise": True,
+                "key_substrings": [
+                    "\\CurrentVersion\\Uninstall\\",
+                    "\\CurrentVersion\\Installer\\UserData\\",
+                ],
+                "value_names": ["DisplayName", "DisplayVersion", "Publisher"],
+            },
+            "dhcp_interface_values": {
+                "value_names": ["DhcpIPAddress"],
+                "require_dhcp_state": True,
+                "emit_on_lease_events": True,
+                "suppress_system_types": ["server", "domain_controller"],
+                "suppress_roles": [],
+            },
+        }
+
+        assert not _ambient_registry_entry_allowed(
+            workstation,
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{ABC}",
+            "DisplayName",
+            None,
+            cfg,
+        )
+        assert not _ambient_registry_entry_allowed(
+            workstation,
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData"
+            r"\S-1-5-18\Products\ABC\InstallProperties",
+            "DisplayVersion",
+            None,
+            cfg,
+        )
+        assert _ambient_registry_entry_allowed(
+            workstation,
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            "Path",
+            None,
+            cfg,
+        )
+
 
 class TestWindowsScheduledProcessNoise:
     """Regression tests for Windows scheduled/background process timing."""
@@ -2095,6 +2237,84 @@ class TestWebAccessExternalVisitors:
         assert len(page_rows) == 2
         assert len(asset_rows) == 1
         assert asset_rows[0]["http"].status_code == 200
+
+    def test_internal_human_browser_web_access_uses_workstation_sources(self, monkeypatch):
+        """Internal browser visitors should not be sourced from servers or DCs."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                },
+            ),
+        )
+
+        target = self._make_web_system("internal")
+        dc = SimpleNamespace(
+            hostname="DC-01",
+            ip="10.0.10.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+            services=["ad-ds"],
+        )
+        file_server = SimpleNamespace(
+            hostname="FILE-SRV-01",
+            ip="10.0.10.20",
+            os="Windows Server 2022",
+            type="server",
+            roles=["file_server"],
+            services=["lanmanserver"],
+        )
+        workstation = SimpleNamespace(
+            hostname="WS-01",
+            ip="10.0.10.30",
+            os="Windows 11",
+            type="workstation",
+            roles=[],
+            services=[],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {
+            dc.ip: dc,
+            file_server.ip: file_server,
+            workstation.ip: workstation,
+        }
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (6, 6)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="internal",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.8.8"
+        self._attach_web_helpers(engine)
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            target,
+            [target, dc, file_server, workstation],
+            Random(42),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        assert collected
+        assert {kw["src_ip"] for kw in collected} == {workstation.ip}
+        assert all(kw["source_system"] is workstation for kw in collected)
 
     def test_web_server_access_preserves_cache_and_partial_statuses(self, monkeypatch):
         """Browser cache hits and partial content must not be rewritten as 200 responses."""

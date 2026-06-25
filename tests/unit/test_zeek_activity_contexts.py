@@ -772,7 +772,7 @@ class TestSslContextPopulation:
                 system=target.hostname,
                 parent_pid=0,
                 image="/usr/sbin/sshd",
-                command_line="sshd: [accepted]",
+                command_line="sshd: admin [priv]",
                 username="admin",
                 integrity_level="Medium",
             )
@@ -1669,7 +1669,7 @@ class TestSslContextPopulation:
             for event in events
             if event.event_type == "system_process_create"
             and event.process is not None
-            and event.process.command_line == "sshd: [accepted]"
+            and event.process.command_line == "sshd: admin [priv]"
         ]
         assert transport_events
         assert transport_event.network.responding_pid == transport_events[0].process.pid
@@ -1771,7 +1771,7 @@ class TestSslContextPopulation:
             for event in events
             if event.event_type == "system_process_create"
             and event.process is not None
-            and event.process.command_line == "sshd: [accepted]"
+            and event.process.command_line == "sshd: unknown [priv]"
         ]
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid
@@ -1810,7 +1810,7 @@ class TestSslContextPopulation:
             for event in events
             if event.event_type == "system_process_create"
             and event.process is not None
-            and event.process.command_line == "sshd: [accepted]"
+            and event.process.command_line == "sshd: unknown [priv]"
         ]
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid

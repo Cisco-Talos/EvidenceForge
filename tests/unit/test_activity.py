@@ -734,7 +734,7 @@ class TestActivityGenerator:
             time=timestamp + timedelta(seconds=1),
             logon_id="",
             process_name="/usr/sbin/sshd",
-            command_line="/usr/sbin/sshd -D [listener]",
+            command_line="/usr/sbin/sshd -D",
             parent_pid=systemd_pid,
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
@@ -1368,7 +1368,85 @@ class TestActivityGenerator:
         assert [session.logon_id for session in sessions] == [logon_id]
         assert sessions[0].last_activity_time == later_time
         assert len(emitted_logons) == 1
+        assert emitted_logons[0].auth.session_id == sessions[0].session_id
+        assert sessions[0].session_id > 1
         assert any("New session" in msg and test_user.username in msg for msg in syslog_messages)
+
+    def test_overlapping_linux_local_sessions_keep_distinct_ecar_session_ids(
+        self, state_manager, test_user
+    ):
+        """Linux eCAR login/logout rows should preserve source-native logind session IDs."""
+        syslog_emitter = Mock()
+        syslog_emitter.can_handle.side_effect = lambda event: event.syslog is not None
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.side_effect = lambda event: (
+            event.event_type
+            in {
+                "logon",
+                "logoff",
+            }
+        )
+        emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        linux_system = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.0.41",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        other_user = User(
+            username="other.user",
+            full_name="Other User",
+            email="other.user@example.com",
+            enabled=True,
+        )
+        first_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        second_time = first_time + timedelta(minutes=8)
+        first_logoff_time = first_time + timedelta(minutes=20)
+
+        first_logon_id = activity_gen.generate_logon(
+            test_user,
+            linux_system,
+            first_time,
+            logon_type=2,
+        )
+        second_logon_id = activity_gen.generate_logon(
+            other_user,
+            linux_system,
+            second_time,
+            logon_type=2,
+        )
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            first_logoff_time,
+            first_logon_id,
+            logon_type=2,
+        )
+
+        ecar_events = [call.args[0] for call in ecar_emitter.emit.call_args_list]
+        first_login = next(
+            event
+            for event in ecar_events
+            if event.event_type == "logon" and event.auth.logon_id == first_logon_id
+        )
+        second_login = next(
+            event
+            for event in ecar_events
+            if event.event_type == "logon" and event.auth.logon_id == second_logon_id
+        )
+        first_logout = next(
+            event
+            for event in ecar_events
+            if event.event_type == "logoff" and event.auth.logon_id == first_logon_id
+        )
+
+        assert first_login.auth.session_id > 1
+        assert second_login.auth.session_id > 1
+        assert first_login.auth.session_id != second_login.auth.session_id
+        assert first_logout.auth.session_id == first_login.auth.session_id
 
     def test_interactive_logons_get_distinct_userinit_parents(
         self, activity_gen, test_user, test_system, state_manager
@@ -2133,6 +2211,7 @@ class TestActivityGenerator:
         assert network_event.network.conn_state == "SF"
         assert network_event.network.initiating_pid == source_process.process.pid
         assert logon_event.auth.source_port == network_event.network.src_port
+        assert logon_event.auth.subject_username == test_user.username
         assert logon_event.timestamp > network_event.timestamp
         network_close_time = network_event.timestamp + timedelta(
             seconds=network_event.network.duration
@@ -2146,6 +2225,7 @@ class TestActivityGenerator:
         assert running_source_process.last_activity_time > network_close_time
         source_session = state_manager.get_session(running_source_process.logon_id)
         assert source_session is not None
+        assert logon_event.auth.subject_logon_id == source_session.logon_id
         assert source_session.last_activity_time == running_source_process.last_activity_time
 
     def test_generate_rdp_session_does_not_self_source_target(
@@ -2626,6 +2706,63 @@ class TestActivityGenerator:
         assert event.auth.logon_type == 3
         assert event.auth.source_ip == source_ip
         assert event.auth.source_port > 0
+
+    def test_network_logon_with_modeled_source_session_uses_user_subject(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Known source sessions should own Type 3 4624 Subject fields."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_system = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._ip_to_system = {source_system.ip: source_system, test_system.ip: test_system}
+        state_manager.set_current_time(timestamp - timedelta(minutes=5))
+        source_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=source_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=timestamp - timedelta(minutes=5),
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_system.ip,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 3
+        assert event.auth.subject_username == test_user.username
+        assert event.auth.subject_logon_id == source_logon_id
+
+    def test_network_logon_without_modeled_source_keeps_system_subject(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """External Type 3 logons should not invent a user Subject session."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip="45.83.221.45",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.subject_username == "SYSTEM"
+        assert event.auth.subject_domain == "NT AUTHORITY"
+        assert event.auth.subject_logon_id == "0x3e7"
 
     def test_generate_logon_network_with_inventory_avoids_missing_human_source(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -4123,6 +4260,112 @@ class TestActivityGenerator:
 
         assert network_events[-1].network.dst_ip != test_system.ip
         assert network_events[-1].network.dst_ip.startswith("10.0.0.")
+
+    def test_smb_process_network_effect_uses_service_compatible_target(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Explorer SMB side effects should target Windows/Samba hosts, not Linux app hosts."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        linux_app = System(
+            hostname="APP-01",
+            ip="10.0.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+            roles=["app_server"],
+        )
+        file_server = System(
+            hostname="FILE-01",
+            ip="10.0.2.20",
+            os="Windows Server 2019",
+            type="server",
+            services=["smb", "dns-client"],
+            roles=["file_server"],
+        )
+        activity_gen._ip_to_system = {
+            workstation.ip: workstation,
+            linux_app.ip: linux_app,
+            file_server.ip: file_server,
+        }
+        activity_gen._all_system_ips = [workstation.ip, linux_app.ip, file_server.ip]
+        state_manager.set_current_time(timestamp)
+        process_name = r"C:\Windows\explorer.exe"
+        command_line = "explorer.exe"
+        pid = activity_gen.generate_process(
+            test_user,
+            workstation,
+            timestamp,
+            "0x12345",
+            process_name,
+            command_line,
+        )
+        mock_emitters["zeek_conn"].reset_mock()
+
+        activity_gen._emit_process_network_correlation(
+            workstation,
+            process_name,
+            command_line,
+            timestamp,
+            pid,
+            random.Random(1),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert network_events
+        assert network_events[-1].network.dst_ip == file_server.ip
+        assert network_events[-1].network.dst_port == 445
+        assert network_events[-1].network.conn_state != "S0"
+
+    def test_smb_process_network_effect_skips_without_service_compatible_target(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Explorer SMB side effects should not invent successful SMB to Linux-only hosts."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        linux_app = System(
+            hostname="APP-01",
+            ip="10.0.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+            roles=["app_server"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, linux_app.ip: linux_app}
+        activity_gen._all_system_ips = [workstation.ip, linux_app.ip]
+        state_manager.set_current_time(timestamp)
+        process_name = r"C:\Windows\explorer.exe"
+        command_line = "explorer.exe"
+
+        activity_gen._emit_process_network_correlation(
+            workstation,
+            process_name,
+            command_line,
+            timestamp,
+            4242,
+            random.Random(1),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert not network_events
 
     def test_sqlcmd_local_instance_does_not_emit_network_attempt(
         self, activity_gen, test_system, mock_emitters
@@ -7777,7 +8020,7 @@ class TestActivityGenerator:
             linux.hostname,
             systemd_pid,
             "/usr/sbin/sshd",
-            "/usr/sbin/sshd -D [listener]",
+            "/usr/sbin/sshd -D",
             "root",
             "System",
         )
@@ -7838,7 +8081,7 @@ class TestActivityGenerator:
             linux.hostname,
             systemd_pid,
             "/usr/sbin/sshd",
-            "/usr/sbin/sshd -D [listener]",
+            "/usr/sbin/sshd -D",
             "root",
             "System",
         )
@@ -7956,7 +8199,7 @@ class TestActivityGenerator:
             linux.hostname,
             systemd_pid,
             "/usr/sbin/sshd",
-            "/usr/sbin/sshd -D [listener]",
+            "/usr/sbin/sshd -D",
             "root",
             "System",
         )
@@ -8196,7 +8439,7 @@ class TestActivityGenerator:
             linux.hostname,
             systemd_pid,
             "/usr/sbin/sshd",
-            "/usr/sbin/sshd -D [listener]",
+            "/usr/sbin/sshd -D",
             "root",
             "System",
         )
@@ -8395,7 +8638,7 @@ class TestActivityGenerator:
             linux.hostname,
             systemd_pid,
             "/usr/sbin/sshd",
-            "/usr/sbin/sshd -D [listener]",
+            "/usr/sbin/sshd -D",
             "root",
             "System",
         )

@@ -70,6 +70,24 @@ _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
         "navigations": (1, 3),
     },
 }
+_AUTH_LANDING_HOST_PREFIXES = (
+    "accounts.",
+    "api-",
+    "auth.",
+    "identity.",
+    "login.",
+    "sso.",
+)
+_AUTH_LANDING_PATH_MARKERS = (
+    "/authorize",
+    "/common/",
+    "/login",
+    "/oauth",
+    "/ppsecure",
+    "/saml",
+    "/signin",
+    "/token",
+)
 
 
 def _response_size(
@@ -243,6 +261,19 @@ def _source_native_browser_referrer(referrer: str, *, port: int) -> str:
     return referrer
 
 
+def _allows_search_landing_referrer(hostname: str, path: str, content_type: str) -> bool:
+    """Return whether a top-level navigation plausibly came from public search."""
+    normalized_host = hostname.strip().lower().rstrip(".")
+    normalized_path = path.split("?", 1)[0].split("#", 1)[0].lower()
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+
+    if normalized_type != "text/html":
+        return False
+    if normalized_host.startswith(_AUTH_LANDING_HOST_PREFIXES):
+        return False
+    return not any(marker in normalized_path for marker in _AUTH_LANDING_PATH_MARKERS)
+
+
 def _pick_subresources(
     rng: random.Random,
     page: PageDef,
@@ -305,7 +336,10 @@ def generate_browsing_session(
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
     """
-    if require_browser_like_domain and not is_browser_like_proxy_domain(hostname):
+    if require_browser_like_domain and not is_browser_like_proxy_domain(
+        hostname,
+        domain_tags=domain_tags,
+    ):
         return []
 
     site_map = get_site_map(hostname, domain_tags, rng)
@@ -317,19 +351,8 @@ def generate_browsing_session(
     requests: list[BrowsingRequest] = []
     current_ms = 0
 
-    # Landing page referrer: most sessions start from a direct navigation
-    # (typed URL, bookmark) with no referrer. ~20% come from a search engine
-    # link click, which carries the search page as referrer.
     landing_roll = rng.random()
-    if landing_roll < 0.80:
-        previous_page_url = ""  # Direct navigation / bookmark
-    else:
-        # Arrived via search engine link click
-        search_engines = [
-            "https://www.google.com/search?q=",
-            "https://www.bing.com/search?q=",
-        ]
-        previous_page_url = rng.choice(search_engines) + hostname.replace(".", "+")
+    previous_page_url = ""  # Direct navigation / bookmark unless the landing page allows search.
 
     # Determine number of pages to visit
     n_pages_lo, n_pages_hi = params["pages"]
@@ -347,6 +370,18 @@ def generate_browsing_session(
         current_page_idx = 0
     else:
         current_page_idx = rng.randint(0, len(site_map.pages) - 1)
+    landing_page = site_map.pages[current_page_idx]
+    if landing_roll >= 0.80 and _allows_search_landing_referrer(
+        hostname,
+        landing_page.path,
+        landing_page.content_type,
+    ):
+        # Arrived via search engine link click.
+        search_engines = [
+            "https://www.google.com/search?q=",
+            "https://www.bing.com/search?q=",
+        ]
+        previous_page_url = rng.choice(search_engines) + hostname.replace(".", "+")
 
     for page_num in range(total_pages):
         if page_num == 0:

@@ -61,6 +61,7 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _linux_foreground_lifetime,
     _linux_uid_for_user,
+    _nmap_probe_profile,
     _nmap_target_exposes_port,
     _ntp_association_poll_seconds,
     _service_for_port,
@@ -106,6 +107,23 @@ logger = logging.getLogger(__name__)
 _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
 _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
 _LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
+_BASELINE_GUARDED_SUCCESS_PORTS = {445, 3389}
+_BASELINE_RDP_SERVICE_ALIASES = {"rdp", "termservice", "terminal-services", "xrdp"}
+_BASELINE_SMB_SERVICE_ALIASES = {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}
+_BASELINE_SUCCESS_FALLBACK_PORTS = (22, 80, 443, 8080, 3306, 5432, 53)
+_BASELINE_SERVER_ADMIN_PERSONA_TYPES = {"server", "domain_controller"}
+_BASELINE_SERVER_ADMIN_PERSONA_ROLES = {
+    "app_server",
+    "database",
+    "dns_server",
+    "domain_controller",
+    "file_server",
+    "forward_proxy",
+    "log_server",
+    "mail_server",
+    "monitoring",
+    "web_server",
+}
 
 
 def _ufw_block_syn_packet_len(src_ip: str) -> int:
@@ -153,6 +171,90 @@ def _baseline_inbound_ids_probe_profile(
 
     service = _service_for_port(dst_port) or {443: "ssl", 80: "http", 53: "dns"}.get(dst_port, "")
     return service, None, rng.uniform(0.001, 5.0), rng.randint(40, 2000), rng.randint(0, 1000)
+
+
+def _baseline_inventory_tokens(values: list[str] | tuple[str, ...] | None) -> set[str]:
+    """Normalize inventory service/role names for service-capability checks."""
+    return {value.lower().replace(" ", "-").replace("_", "-") for value in (values or []) if value}
+
+
+def _baseline_guarded_success_port_allowed(target_system: System, port: int) -> bool:
+    """Return whether a generic successful baseline connection may use a guarded port."""
+    services = _baseline_inventory_tokens(target_system.services)
+    if port == 3389:
+        if services & _BASELINE_RDP_SERVICE_ALIASES:
+            return True
+        return _get_os_category(target_system.os) == "windows" and target_system.type in {
+            "server",
+            "domain_controller",
+        }
+    if port == 445:
+        if services & _BASELINE_SMB_SERVICE_ALIASES:
+            return True
+        return _get_os_category(target_system.os) == "windows"
+    return True
+
+
+def _baseline_service_for_success_port(port: int) -> str | None:
+    """Return the service label for a generic successful baseline connection."""
+    return _service_for_port(port) or {443: "ssl", 80: "http", 53: "dns"}.get(port)
+
+
+def _baseline_success_port_for_target(
+    target_system: System,
+    requested_port: int,
+    requested_service: str | None,
+    rng: random.Random,
+) -> tuple[int, str | None] | None:
+    """Return a target-compatible port/service for generic successful baseline traffic.
+
+    Compound protocols such as RDP and SMB need target-side service evidence. If a
+    generic noise pattern selected one of those ports for an incompatible host,
+    remap to an inventory-supported service so the logs do not imply a successful
+    RDP/SMB session without the owning session/service bundle.
+    """
+    if requested_port not in _BASELINE_GUARDED_SUCCESS_PORTS:
+        return requested_port, requested_service
+    if _baseline_guarded_success_port_allowed(target_system, requested_port):
+        return requested_port, requested_service
+
+    candidates = [
+        port
+        for port in _BASELINE_SUCCESS_FALLBACK_PORTS
+        if _nmap_target_exposes_port(port, target_system)
+        and port not in _BASELINE_GUARDED_SUCCESS_PORTS
+    ]
+    if not candidates:
+        return None
+    fallback_port = rng.choice(candidates)
+    return fallback_port, _baseline_service_for_success_port(fallback_port)
+
+
+def _baseline_success_target_for_guarded_port(
+    systems: list[System],
+    source_system: System,
+    target_system: System | None,
+    requested_port: int,
+    rng: random.Random,
+) -> System | None:
+    """Return a target that can plausibly accept a guarded successful connection."""
+    if requested_port not in _BASELINE_GUARDED_SUCCESS_PORTS:
+        return target_system
+    if target_system is not None and _baseline_guarded_success_port_allowed(
+        target_system,
+        requested_port,
+    ):
+        return target_system
+
+    candidates = [
+        system
+        for system in systems
+        if system.ip != source_system.ip
+        and _baseline_guarded_success_port_allowed(system, requested_port)
+    ]
+    if not candidates:
+        return None
+    return rng.choice(candidates)
 
 
 def _ntp_sync_interval_seconds(
@@ -994,6 +1096,16 @@ def _is_dhcp_managed_registry_value(
     return value_name.lower() in managed_names
 
 
+def _is_static_inventory_registry_value(key: str, value_name: str, policy: dict[str, Any]) -> bool:
+    """Return whether a registry value describes static software inventory."""
+    inventory_names = {str(name).lower() for name in policy.get("value_names", [])}
+    key_substrings = [str(part).lower() for part in policy.get("key_substrings", [])]
+    key_lower = key.lower()
+    return value_name.lower() in inventory_names and any(
+        part in key_lower for part in key_substrings
+    )
+
+
 def _system_suppresses_dhcp_registry_noise(system: Any, policy: dict[str, Any]) -> bool:
     """Return whether DHCP registry noise should be suppressed for this static host."""
     system_type = str(getattr(system, "type", "") or "").lower()
@@ -1015,6 +1127,11 @@ def _ambient_registry_entry_allowed(
         from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
         registry_cfg = registry_noise_config()
+    inventory_policy = registry_cfg.get("static_inventory_values", {})
+    if inventory_policy.get("suppress_in_ambient_noise", True) and (
+        _is_static_inventory_registry_value(key, value_name, inventory_policy)
+    ):
+        return False
     policy = registry_cfg.get("dhcp_interface_values", {})
     if not _is_dhcp_managed_registry_value(key, value_name, policy):
         return True
@@ -1664,6 +1781,26 @@ class BaselineMixin:
         if host_type == "domain_controller" and "domain_controller" not in roles:
             roles.append("domain_controller")
         return roles
+
+    def _is_server_admin_persona_source(self, system: Any) -> bool:
+        """Return whether persona traffic should avoid workstation-style process owners."""
+
+        host_type = (getattr(system, "type", None) or "workstation").lower()
+        if host_type in _BASELINE_SERVER_ADMIN_PERSONA_TYPES:
+            return True
+        return bool(
+            set(self._activity_roles_for_system(system)) & _BASELINE_SERVER_ADMIN_PERSONA_ROLES
+        )
+
+    def _use_server_admin_persona(self, system: Any, session: Any) -> bool:
+        """Return whether this session should use the server-admin traffic overlay."""
+
+        host_type = (getattr(system, "type", None) or "workstation").lower()
+        assigned_user = getattr(system, "assigned_user", None)
+        is_own_workstation = host_type == "workstation" and assigned_user == session.username
+        return self._is_server_admin_persona_source(system) or (
+            not is_own_workstation and session.logon_type in (10, 11)
+        )
 
     def _resolve_activity_profile(self, system: Any, persona: str | None = None) -> Any:
         """Resolve and cache host activity profile multipliers."""
@@ -2643,6 +2780,11 @@ class BaselineMixin:
 
         def _emit_conn(src_sys, dst_sys, port, service=None, proto="tcp", pattern_key=""):
             """Helper: emit a connection with hash-based periodic offset."""
+            if proto == "tcp":
+                effective = _baseline_success_port_for_target(dst_sys, port, service, rng)
+                if effective is None:
+                    return
+                port, service = effective
             # Deterministic phase per (pattern, src, dst) triple for reproducibility
             phase_seed = f"lat_{pattern_key}_{src_sys.hostname}_{dst_sys.hostname}_{port}"
             phase = _stable_seed(phase_seed) % 3600
@@ -3204,15 +3346,25 @@ class BaselineMixin:
             for port in rng.sample(scan_ports, rng.randint(2, 4)):
                 scan_time = request.time + timedelta(seconds=rng.uniform(0, 30))
                 self.state_manager.set_current_time(scan_time)
+                conn_state, service, duration, orig_bytes, resp_bytes = _nmap_probe_profile(
+                    port,
+                    target,
+                    rng,
+                )
                 self.activity_generator.generate_connection(
                     src_ip=request.scanner.ip,
                     dst_ip=target.ip,
                     time=scan_time,
                     dst_port=port,
                     proto="tcp",
-                    duration=rng.uniform(0.01, 0.5),
-                    orig_bytes=rng.randint(50, 200),
-                    resp_bytes=rng.randint(50, 500),
+                    service=service,
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                    source_system=request.scanner,
+                    conn_state=conn_state,
+                    emit_dns=False,
+                    suppress_application_side_effects=True,
                 )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
@@ -5185,6 +5337,10 @@ class BaselineMixin:
                             emit_dns=False,
                         )
                     else:
+                        if conn["port"] in _BASELINE_GUARDED_SUCCESS_PORTS and not (
+                            _baseline_guarded_success_port_allowed(system, conn["port"])
+                        ):
+                            continue
                         if (
                             conn.get("service") == "kerberos"
                             and conn.get("port") == 88
@@ -5295,8 +5451,8 @@ class BaselineMixin:
                 continue
             # Remote admin sessions on other machines use _server_admin profile
             # instead of the user's normal persona (no Outlook/Teams on servers).
-            is_own_workstation = system.assigned_user == session.username
-            if not is_own_workstation and session.logon_type in (10, 11):
+            use_server_admin_persona = self._use_server_admin_persona(system, session)
+            if use_server_admin_persona:
                 persona_conns = get_persona_connections("_server_admin", os_cat)
             else:
                 persona_conns = get_persona_connections(persona, os_cat)
@@ -5341,6 +5497,26 @@ class BaselineMixin:
                 if not dst_ip:
                     continue
 
+                if conn["port"] in _BASELINE_GUARDED_SUCCESS_PORTS:
+                    ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+                    target_system = ip_map.get(dst_ip)
+                    guarded_target = _baseline_success_target_for_guarded_port(
+                        self.scenario.environment.systems,
+                        system,
+                        target_system,
+                        conn["port"],
+                        rng,
+                    )
+                    if guarded_target is None:
+                        continue
+                    if guarded_target is not target_system:
+                        dst_ip = guarded_target.ip
+                        hostname = (
+                            self.world_model.fqdn_for_system(guarded_target)
+                            if hasattr(self, "world_model")
+                            else guarded_target.hostname
+                        )
+
                 # Compute timestamp with burst clustering, clamped to session window
                 raw_offset = _burst_offset()
                 offset = max(session_start_sec, min(_max_offset, raw_offset))
@@ -5349,11 +5525,7 @@ class BaselineMixin:
                 persona_pid = -1
                 # Thread effective persona so _server_admin sessions don't
                 # get browser/SaaS processes attributed on servers.
-                eff_persona = (
-                    "_server_admin"
-                    if (not is_own_workstation and session.logon_type in (10, 11))
-                    else None
-                )
+                eff_persona = "_server_admin" if use_server_admin_persona else None
                 if user_obj and conn.get("service"):
                     persona_pid = self.world_planner.ensure_connection_process(
                         user=user_obj,
@@ -5371,20 +5543,7 @@ class BaselineMixin:
                 # For HTTP/HTTPS: generate browsing session with subresources,
                 # referrer chains, and cross-domain CDN fan-out.
                 svc = conn.get("service", "")
-                is_server_source = system.type == "server" or bool(
-                    set(system.roles or [])
-                    & {
-                        "app_server",
-                        "database",
-                        "dns_server",
-                        "domain_controller",
-                        "file_server",
-                        "log_server",
-                        "mail_server",
-                        "monitoring",
-                        "web_server",
-                    }
-                )
+                is_server_source = self._is_server_admin_persona_source(system)
                 if svc in ("ssl", "http") and hostname and not is_server_source:
                     self._emit_browsing_session(
                         system=system,
@@ -5439,7 +5598,7 @@ class BaselineMixin:
 
         domain_tags = get_domain_tags(hostname) if hostname else []
 
-        if not is_browser_like_proxy_domain(hostname):
+        if not is_browser_like_proxy_domain(hostname, domain_tags=domain_tags):
             self.activity_generator.generate_connection(
                 src_ip=system.ip,
                 dst_ip=dst_ip,
@@ -7649,23 +7808,36 @@ class BaselineMixin:
             return "10.0.0.1"
 
         def _profile_restricted_internal_pool(
+            profile_name: str,
             profile: dict[str, Any],
         ) -> tuple[list[str], list[float]] | None:
             raw_types = profile.get("source_type_any")
             raw_roles = profile.get("source_role_any")
             type_filter = (
-                {str(value) for value in raw_types} if isinstance(raw_types, list) else set()
+                {str(value).lower() for value in raw_types}
+                if isinstance(raw_types, list)
+                else set()
             )
             role_filter = (
-                {str(value) for value in raw_roles} if isinstance(raw_roles, list) else set()
+                {str(value).lower() for value in raw_roles}
+                if isinstance(raw_roles, list)
+                else set()
             )
+            if (
+                not type_filter
+                and not role_filter
+                and (profile_name == "human_browser" or profile.get("kind") == "session")
+            ):
+                type_filter = {"workstation"}
             if not type_filter and not role_filter:
                 return None
 
             candidates = []
             for candidate in internal_client_systems:
-                candidate_type = str(getattr(candidate, "type", ""))
-                candidate_roles = {str(role) for role in (getattr(candidate, "roles", None) or [])}
+                candidate_type = str(getattr(candidate, "type", "")).lower()
+                candidate_roles = {
+                    str(role).lower() for role in (getattr(candidate, "roles", None) or [])
+                }
                 if candidate_type in type_filter or candidate_roles & role_filter:
                     candidates.append(candidate)
             if not candidates:
@@ -7729,7 +7901,7 @@ class BaselineMixin:
 
             restricted_pool = None
             if not is_external_client:
-                restricted_pool = _profile_restricted_internal_pool(profile)
+                restricted_pool = _profile_restricted_internal_pool(profile_name, profile)
             if restricted_pool is not None:
                 restricted_ips, restricted_weights = restricted_pool
                 if not restricted_ips:
