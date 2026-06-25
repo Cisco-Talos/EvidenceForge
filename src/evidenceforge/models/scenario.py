@@ -48,6 +48,8 @@ from pydantic import (
     model_validator,
 )
 
+MAX_HTTP_RESPONSE_BODY_LEN = 10_000_000_000
+
 _HOSTNAME_RE = re.compile(
     r"^(?!-)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)*$"
 )
@@ -471,7 +473,7 @@ class ConnectionEventSpec(_EventSpecBase):
     user_agent: str | None = None  # Client User-Agent string
     referrer: str | None = None  # Referer header value (None = auto-generated)
     response_body_len: int | None = Field(
-        default=None, ge=0, le=10_000_000_000
+        default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN
     )  # Override auto-sized response bytes
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
@@ -686,7 +688,7 @@ class BeaconEventSpec(_PeriodicEventBase):
     status_code: int | None = None
     user_agent: str | None = None
     referrer: str | None = None  # Referer header value (None = auto-generated)
-    response_body_len: int | None = None
+    response_body_len: int | None = Field(default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN)
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None
     resp_bytes: int | None = None
