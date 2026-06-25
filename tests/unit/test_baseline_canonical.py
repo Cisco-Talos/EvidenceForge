@@ -1760,8 +1760,9 @@ class TestBaselineRegistryRealism:
                 "key_substrings": [
                     "\\CurrentVersion\\Uninstall\\",
                     "\\CurrentVersion\\Installer\\UserData\\",
+                    "\\CurrentVersion\\App Paths\\",
                 ],
-                "value_names": ["DisplayName", "DisplayVersion", "Publisher"],
+                "value_names": ["DisplayName", "DisplayVersion", "Publisher", "Path"],
             },
             "dhcp_interface_values": {
                 "value_names": ["DhcpIPAddress"],
@@ -1787,10 +1788,17 @@ class TestBaselineRegistryRealism:
             None,
             cfg,
         )
-        assert _ambient_registry_entry_allowed(
+        assert not _ambient_registry_entry_allowed(
             workstation,
             r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
             "Path",
+            None,
+            cfg,
+        )
+        assert _ambient_registry_entry_allowed(
+            workstation,
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
+            "EnableLUA",
             None,
             cfg,
         )

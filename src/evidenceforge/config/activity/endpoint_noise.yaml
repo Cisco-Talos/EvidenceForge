@@ -23,10 +23,12 @@ registry_noise:
     key_substrings:
       - "\\CurrentVersion\\Uninstall\\"
       - "\\CurrentVersion\\Installer\\UserData\\"
+      - "\\CurrentVersion\\App Paths\\"
     value_names:
       - DisplayName
       - DisplayVersion
       - Publisher
+      - Path
   dhcp_interface_values:
     value_names:
       - DhcpIPAddress

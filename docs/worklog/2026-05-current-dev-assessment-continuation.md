@@ -1183,6 +1183,26 @@ or follow-up batch is needed.
   App Paths on server/DC hosts, but no longer as PROCESS/FLOW ownership in the
   selected Host/EDR family.
 
+- Loop 293 generated a fresh dataset from the same iteration-test scenario and
+  ran the Host reviewer only. Automated eval passed at 97.49445666259291 over
+  78191 records. Host/EDR scored the data as Real with verdict confidence 64
+  and synthetic-confidence 34. A follow-up hard probe found browser App Paths
+  registry inventory texture still present on server/DC hosts (`DC-01`: 12,
+  `FILE-SRV-01`: 10), but not as PROCESS/FLOW ownership.
+
+- Loop 294 fixed the browser App Paths root cause by classifying
+  `CurrentVersion\App Paths` `Path` values as static installed-software
+  inventory in the endpoint noise policy, so the baseline ambient registry
+  generator suppresses them before event construction. Focused regression,
+  config validation, Ruff checks, and the full `uv run pytest --no-cov -q`
+  suite passed (`4519 passed, 19 skipped`). A regenerated dataset passed
+  automated eval at 97.03288664965147 over 81786 records. The hard probe found
+  0 browser App Paths registry rows on server-like hosts. The Host-only rerun
+  scored Inconclusive with verdict confidence 64 and synthetic-confidence 54;
+  findings shifted to Linux sysstat cron timing, syslog/eCAR cron PID/TID
+  agreement, perfect chronological ordering texture, and eCAR collection-window
+  shape. The browser App Paths issue was not repeated in the Host findings.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
