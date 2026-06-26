@@ -81,3 +81,55 @@ Implement two Host/EDR reviewer-driven root-cause fixes on
   scanner long-tail texture, and a weak signal around Windows-like Linux eCAR
   session IDs. Those are follow-on realism backlog items rather than blockers
   for the identity and endpoint host-clock plan.
+
+## Follow-Up Host Review Variance
+
+Three additional blind Host-only reviews were run against the same post-change
+dataset using neutral temp copies and no prior review context:
+
+| Run | Assessment | Verdict confidence | Synthetic-confidence score |
+| --- | --- | ---: | ---: |
+| 1 | Synthetic | 76 | 66 |
+| 2 | Real | 64 | 28 |
+| 3 | Real | 61 | 34 |
+
+Average synthetic-confidence score across these three reviews was 42.7. Including
+the prior post-fix Host review score of 43, the four-review average was 42.8.
+
+Common agreement:
+
+- All reviewers praised endpoint lifecycle and cross-source correlation.
+- All reviewers found no hard endpoint causality contradiction.
+- Linux maintenance/syslog cadence remained the most repeated realism pressure.
+
+Why reviewer 1 scored higher:
+
+- Reviewer 1 weighted dataset-wide background texture much more heavily than the
+  other two reviewers.
+- Reviewer 1 found multiple medium/high-impact families in one pass: dense Linux
+  journald capacity messages, GUI polkit agent churn on server roles, abstract
+  DC remote-command ownership, Windows maintenance utility runtimes, and compact
+  LSASS call-trace palettes.
+- Reviewers 2 and 3 anchored more heavily on lifecycle correctness and treated
+  the remaining findings as weak or explainable texture.
+
+Reviewer 1 finding priority order:
+
+1. Reduce high-volume Linux `systemd-journald` capacity-message filler. This is
+   the highest-leverage item because it is dataset-wide, repeated across Linux
+   server roles, and was also noticed by lower-scoring reviewers as related
+   syslog cadence texture.
+2. Gate Linux GUI/polkit authentication-agent records by desktop-capable host
+   role and active graphical sessions. This is lower volume than journald, but it
+   creates a clearer host-role plausibility tell on DB, proxy, app, and web
+   servers.
+3. Route DC remote-command execution through concrete owners such as PsExec, WMI,
+   WinRM, Task Scheduler, or a service binary instead of generic
+   `svchost.exe -k netsvcs` parentage. This repeated in reviewer 3 as a weak
+   signal and is already in the roadmap as a P1 root-cause family.
+4. Tune Windows maintenance utility runtime/cadence by host role and executable.
+   Reviewer 1 called out `CompatTelRunner.exe` and `cleanmgr.exe`; this is
+   medium leverage but broader and riskier than the first two Linux syslog fixes.
+5. Diversify or source-image-bind Sysmon Event ID 10 LSASS call traces. This was
+   a low-impact weak signal in reviewer 1 only, so it should follow the broader
+   texture and ownership fixes.
