@@ -31,6 +31,36 @@ _NON_BROWSER_DOMAIN_CLASSES = {
     "windows_trust_list",
     "windows_update",
 }
+_BROWSER_SESSION_TAGS = {
+    "email",
+    "git",
+    "internal",
+    "saas",
+    "social",
+    "web",
+}
+_NON_BROWSER_INFRA_TAGS = {
+    "background",
+    "dev",
+    "linux",
+    "storage",
+    "windows",
+}
+_NON_BROWSER_HOST_PREFIXES = (
+    "api.",
+    "api-",
+    "assets.",
+    "cdn.",
+    "content.",
+    "res.",
+    "static.",
+)
+_NON_BROWSER_HOST_SUFFIXES = (
+    "-edge.com",
+    ".dropboxapi.com",
+    ".githubassets.com",
+    ".gstatic.com",
+)
 _SLUGS = [
     "getting-started",
     "best-practices",
@@ -47,6 +77,22 @@ _INTERNAL_HOST_SUFFIXES = (
     ".internal",
     ".lan",
     ".local",
+)
+_NON_NAVIGATION_PATH_MARKERS = (
+    "/api/",
+    "/oauth",
+    "/token",
+    "/autodiscover",
+    "/ews/",
+    "/mapi/",
+    "/service/update",
+    "/v1/",
+    "/v2/",
+    "/beta/",
+    "/common/discovery",
+    "/common/oauth",
+    "/2/",
+    "/wbxappapi/",
 )
 
 
@@ -170,10 +216,53 @@ def plaintext_http_redirect_status(
     return 301 if _stable_seed(seed) % 4 else 302
 
 
-def is_browser_like_proxy_domain(hostname: str) -> bool:
+def is_browser_like_proxy_domain(
+    hostname: str,
+    *,
+    domain_tags: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> bool:
     """Return whether hostname should be eligible for browser-style site visits."""
+    normalized = hostname.strip().lower().rstrip(".")
     domain_class = get_proxy_domain_class(hostname)
-    return domain_class not in _NON_BROWSER_DOMAIN_CLASSES
+    if domain_class in _NON_BROWSER_DOMAIN_CLASSES:
+        return False
+    if normalized.startswith(_NON_BROWSER_HOST_PREFIXES):
+        return False
+    if ".cdn." in normalized or normalized.endswith(_NON_BROWSER_HOST_SUFFIXES):
+        return False
+
+    normalized_tags = {str(tag).strip().lower() for tag in domain_tags or []}
+    if "cdn" in normalized_tags:
+        return False
+    if (
+        normalized_tags
+        and normalized_tags.isdisjoint(_BROWSER_SESSION_TAGS)
+        and not normalized_tags.isdisjoint(_NON_BROWSER_INFRA_TAGS)
+    ):
+        return False
+    return True
+
+
+def _inferred_template_tag_for_hostname(hostname: str) -> str:
+    """Return a conservative URI-template tag inferred from hostname shape."""
+    normalized = hostname.strip().lower().rstrip(".")
+    if (
+        normalized.startswith(("assets.", "cdn.", "static."))
+        or ".cdn." in normalized
+        or normalized.endswith(
+            (
+                "-edge.com",
+                ".githubassets.com",
+                ".gstatic.com",
+            )
+        )
+    ):
+        return "cdn"
+    if normalized.endswith(".dropboxapi.com"):
+        return "storage"
+    if normalized.startswith(("api.", "api-", "collector.", "events.", "metrics.", "telemetry.")):
+        return "background"
+    return ""
 
 
 def _entry_matches_source(
@@ -196,6 +285,21 @@ def _entry_matches_source(
         hostname,
         source_system_type,
     )
+
+
+def _referrer_policy_for_request(method: str, path: str, content_type: str) -> str:
+    """Return a conservative referrer policy for one selected proxy request."""
+    normalized_method = method.upper()
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    normalized_path = path.split("?", 1)[0].split("#", 1)[0].lower()
+
+    if normalized_method != "GET":
+        return "none"
+    if normalized_type != "text/html":
+        return "none"
+    if any(marker in normalized_path for marker in _NON_NAVIGATION_PATH_MARKERS):
+        return "none"
+    return "normal"
 
 
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
@@ -255,15 +359,23 @@ def pick_proxy_uri(
         entry = None
 
     # 2. Tag-based fallback
+    tags = data.get("tags", {})
     if entry is None:
-        tags = data.get("tags", {})
         for tag in domain_tags:
             candidate = tags.get(tag)
             if _entry_matches_source(hostname, candidate, source_os, source_system_type):
                 entry = candidate
                 break
 
-    # 3. Generic fallback
+    # 3. Hostname-shape fallback for unregistered CDN/API endpoints.
+    if entry is None:
+        inferred_tag = _inferred_template_tag_for_hostname(hostname)
+        if inferred_tag:
+            candidate = tags.get(inferred_tag)
+            if _entry_matches_source(hostname, candidate, source_os, source_system_type):
+                entry = candidate
+
+    # 4. Generic fallback
     if entry is None:
         entry = data.get("generic", {})
 
@@ -293,6 +405,8 @@ def pick_proxy_uri(
     path = _substitute_vars(rng, path, data)
 
     content_type = normalize_mime_type_for_path(path, content_type)
+    if referrer_policy != "none":
+        referrer_policy = _referrer_policy_for_request(method, path, content_type)
     if referrer_policy != "none" and is_stable_resource_path(path):
         referrer_policy = "none"
 

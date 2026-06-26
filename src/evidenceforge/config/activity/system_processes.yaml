@@ -12,79 +12,124 @@
 
 scheduled_tasks:
   - image: "C:\\Windows\\System32\\svchost.exe"
+    weight: 8
     command_templates:
       - "svchost.exe -k netsvcs -p -s {service}"
     params:
       service: [Schedule, BITS, wuauserv, Winmgmt, LanmanServer, CryptSvc, AppXSvc]
     parent: services
   - image: "C:\\Windows\\System32\\taskhostw.exe"
+    weight: 7
     command_templates:
       - "taskhostw.exe /Run"
       - "taskhostw.exe"
     parent: svchost_local_system
   - image: "C:\\Windows\\System32\\usoclient.exe"
+    weight: 2
+    max_per_host_window: 1
+    cooldown_hours: 6
     command_templates:
       - "usoclient.exe StartScan"
       - "usoclient.exe StartInteractiveScan"
       - "usoclient.exe ResumeUpdate"
     parent: svchost_wusvcs
   - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
+    weight: 2
+    max_per_host_window: 1
+    cooldown_hours: 6
     command_templates:
       - "TiWorker.exe -Embedding"
     parent: svchost_netsvcs
   - image: "C:\\Windows\\System32\\MpCmdRun.exe"
+    weight: 3
+    max_per_host_window: 2
+    cooldown_hours: 2
     command_templates:
       - "MpCmdRun.exe -Scan -ScanType 1"
       - "MpCmdRun.exe -SignatureUpdate"
     parent: services
   - image: "C:\\Windows\\System32\\cleanmgr.exe"
+    system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 24
     command_templates:
       - "cleanmgr.exe /autoclean /d C:"
     parent: svchost_local_system
   - image: "C:\\Windows\\System32\\wsqmcons.exe"
+    weight: 4
     command_templates:
       - "wsqmcons.exe"
     parent: svchost_local_system
   - image: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"
     system_types: [workstation]
+    weight: 2
+    max_per_host_window: 2
+    cooldown_hours: 2
     command_templates:
       - "GoogleUpdate.exe /ua /installsource scheduler"
       - "GoogleUpdate.exe /c"
     parent: taskhostw
   - image: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"
     system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 4
     command_templates:
       - "AdobeARM.exe /Update"
       - "AdobeARM.exe /NOUAC"
     parent: taskhostw
   - image: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"
     system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 4
     command_templates:
       - "DropboxUpdate.exe /ua /installsource scheduler"
       - "DropboxUpdate.exe /c"
     parent: taskhostw
   - image: "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe"
     system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 4
     command_templates:
       - "ZoomUpdate.exe --mode=silent"
       - "ZoomUpdate.exe --check"
     parent: taskhostw
   - image: "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe"
     system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 4
     command_templates:
       - "OneDriveStandaloneUpdater.exe /silent"
     parent: taskhostw
   - image: "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe"
     system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 24
     command_templates:
       - "dcu-cli.exe /scan -silent"
       - "dcu-cli.exe /applyUpdates -silent"
     parent: taskhostw
   - image: "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"
     system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 24
     command_templates:
       - "HPImageAssistant.exe /Operation:Analyze /Silent"
     parent: taskhostw
+  - image: "C:\\Windows\\System32\\CompatTelRunner.exe"
+    system_types: [workstation]
+    weight: 1
+    max_per_host_window: 1
+    cooldown_hours: 24
+    command_templates:
+      - "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun"
+    parent: svchost_local_system
 
 system_services:
   all:
@@ -208,10 +253,6 @@ system_services:
       params:
         filter_id: ["804", "812", "820", "828"]
       parent: search_indexer
-    - image: "C:\\Windows\\System32\\CompatTelRunner.exe"
-      command_templates:
-        - "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun"
-      parent: svchost_local_system
 
 # Common loaded modules — the OS loader chain loaded by every Windows process.
 # These DLLs are injected by the kernel/NTDLL during process initialization;

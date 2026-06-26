@@ -1358,6 +1358,52 @@ class ProcessAccessPatternEntry(BaseModel, extra="forbid"):
         return v
 
 
+class CallTracePatternEntry(BaseModel, extra="forbid"):
+    """A concrete Sysmon Event 10 CallTrace palette in calltrace_patterns.yaml."""
+
+    id: str | None = None
+    modules: list[str]
+    offset_ranges: dict[str, list[int]]
+
+    @field_validator("modules")
+    @classmethod
+    def modules_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("modules must not be empty")
+        if any(not module for module in v):
+            raise ValueError("modules entries must be non-empty")
+        return v
+
+    @field_validator("offset_ranges")
+    @classmethod
+    def offset_ranges_valid(cls, v: dict[str, list[int]]) -> dict[str, list[int]]:
+        for module, bounds in v.items():
+            if len(bounds) != 2:
+                raise ValueError(f"{module} offset range must be [lo, hi]")
+            lo, hi = bounds
+            if lo <= 0 or hi <= 0:
+                raise ValueError(f"{module} offset range values must be positive")
+            if lo >= hi:
+                raise ValueError(f"{module} offset range lo must be less than hi")
+        return v
+
+
+class CallTraceSourceFamilyEntry(BaseModel, extra="forbid"):
+    """Source process selector for CallTrace palettes."""
+
+    match_exes: list[str] | None = None
+    pattern_ids: list[str]
+
+    @field_validator("pattern_ids")
+    @classmethod
+    def pattern_ids_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("pattern_ids must not be empty")
+        if any(not pattern_id for pattern_id in v):
+            raise ValueError("pattern_ids entries must be non-empty")
+        return v
+
+
 # --- EDR Pools ---
 
 
@@ -1449,9 +1495,27 @@ class DhcpInterfaceRegistryNoiseConfig(BaseModel, extra="forbid"):
         return v
 
 
+class StaticInventoryRegistryNoiseConfig(BaseModel, extra="forbid"):
+    """Policy for static software-inventory registry values."""
+
+    suppress_in_ambient_noise: bool = True
+    key_substrings: list[str]
+    value_names: list[str]
+
+    @field_validator("key_substrings", "value_names")
+    @classmethod
+    def entries_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("entries must not be empty")
+        if any(not entry for entry in v):
+            raise ValueError("entries must be non-empty")
+        return v
+
+
 class RegistryNoiseConfig(BaseModel, extra="forbid"):
     """Ambient endpoint registry-noise policy."""
 
+    static_inventory_values: StaticInventoryRegistryNoiseConfig
     dhcp_interface_values: DhcpInterfaceRegistryNoiseConfig
 
 
@@ -1536,6 +1600,23 @@ class ObservationMultiplierRange(BaseModel, extra="forbid"):
         return self
 
 
+class ObservationCollectionBatching(BaseModel, extra="forbid"):
+    """Optional coherent collection batching delay for a source family."""
+
+    enabled: bool = False
+    interval_ms: ObservationDelayRange = Field(
+        default_factory=lambda: ObservationDelayRange(min_ms=0, max_ms=0)
+    )
+
+
+class ObservationCollectionWindow(BaseModel, extra="forbid"):
+    """Optional collection deployment window for a source family."""
+
+    enabled: bool = False
+    start: str | None = None
+    end: str | None = None
+
+
 class ObservationSourceProfile(BaseModel, extra="forbid"):
     """Source-level observation behavior for a profile."""
 
@@ -1546,6 +1627,12 @@ class ObservationSourceProfile(BaseModel, extra="forbid"):
     )
     host_missingness_multiplier: ObservationMultiplierRange = Field(
         default_factory=lambda: ObservationMultiplierRange(min=1.0, max=1.0)
+    )
+    collection_batching: ObservationCollectionBatching = Field(
+        default_factory=ObservationCollectionBatching
+    )
+    collection_window: ObservationCollectionWindow = Field(
+        default_factory=ObservationCollectionWindow
     )
 
     @field_validator("format_missingness")
@@ -1744,11 +1831,16 @@ class SpawnRuleEntry(BaseModel, extra="forbid"):
 class ScheduledTaskEntry(BaseModel, extra="forbid"):
     """A scheduled task entry in system_processes.yaml."""
 
+    id: str | None = None
     image: str
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
     system_types: list[str] | None = None
+    weight: int = Field(default=1, gt=0)
+    max_per_host_window: int | None = Field(default=None, gt=0)
+    cooldown_seconds: float | None = Field(default=None, gt=0)
+    cooldown_hours: float | None = Field(default=None, gt=0)
 
 
 class SystemServiceEntry(BaseModel, extra="forbid"):

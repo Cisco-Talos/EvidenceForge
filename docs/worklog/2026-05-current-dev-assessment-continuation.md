@@ -1079,6 +1079,130 @@ or follow-up batch is needed.
   cache semantics, Linux session parentage (`systemd -> -bash`), eCAR FLOW actor
   attribution near known processes, and multi-sensor Zeek mirroring texture.
 
+- Loop 288 fixed proxy/web search-referrer and cache semantics at the proxy URI
+  planning, browsing-session eligibility, and site-metadata layers. Search
+  referrers are now limited to human-visible landing/content pages, API/auth/CDN
+  paths suppress inherited referrers, CDN-shaped hosts use asset templates, and
+  proxy `304` rows render as revalidations without being gated by cacheable MIME
+  checks. Focused tests passed (`131 passed`), config validation and scenario
+  validation passed, Ruff checks passed, and generation/eval completed after the
+  final hostname hardening. The full suite also passed during the loop before the
+  last `api-` hardening patch (`4498 passed, 19 skipped`). Automated eval passed
+  at 97.35856812863797 over 84790 records. The hard probe found API search
+  referrers at 0, CDN root HTML success rows at 0, and bad 304 cache rows at 0.
+  Blind initial scores were 38/54/42/67, average 50.25; deliberation triggered
+  on verdict disagreement and averaged 53.5. The next target is RDP/service-role
+  contracts: source-host RDP client/process companions for successful RDP flows
+  and suppression or service-backed modeling of RDP/SMB-like traffic to
+  Linux-looking receivers.
+
+- Loop 289 fixed RDP/SMB service-role contracts across baseline, profile,
+  process-network, scanner-overlap, and eCAR failed-flow rendering paths.
+  Successful guarded-port traffic now requires a compatible receiver role,
+  service alias, or OS capability; unsupported probes remain visible as failed
+  attempts. Focused RDP/scanner/activity/eCAR tests, config validation, scenario
+  validation, Ruff checks, generation, eval, and the full `uv run pytest
+  --no-cov` suite passed (`4507 passed, 19 skipped`). Automated eval passed at
+  97.41034946914596 over 84607 records, with Parseability 100.0, Plausibility
+  97.155877218378, Causality 94.64830022918258, and Timing 97.29652553627908.
+  The hard probe found 0 successful RDP-to-Linux-without-xrdp and 0 successful
+  SMB-to-Linux-without-Samba violations in both Zeek and eCAR. Blind initial
+  scores were 42/42/48/65, average 49.25; deliberation was skipped because all
+  reviewers stayed mixed/inconclusive and the spread was 23. The next target is
+  Linux eCAR session identity/lifecycle ownership, especially same-host session
+  ID reuse across users, followed by SSH process-label source-native rendering.
+
+- Loop 290 fixed Linux eCAR local session identity and SSH process-label
+  source-native rendering. Linux `systemd-logind` session IDs are now persisted
+  back onto canonical `ActiveSession` state before eCAR USER_SESSION rendering,
+  overlapping local Linux sessions keep distinct source-native IDs, and SSH
+  listener/responder process labels no longer leak `[listener]` or `[accepted]`
+  placeholders. Focused Linux-session, SSH/Zeek responder, and EDR-pool tests
+  passed; config validation, scenario validation, Ruff checks, generation, eval,
+  and the full `uv run pytest --no-cov` suite passed (`4508 passed, 19
+  skipped`). Automated eval passed at 97.41034946914596 over 84607 records.
+  The hard probe found 0 same-host Linux session-ID multi-user groups, 0
+  multi-logon groups, 0 login/logout mismatches for non-empty LogonIDs, and 0
+  SSH placeholder labels. Blind initial scores were 52/52/68/66, average 59.5;
+  deliberation triggered on verdict disagreement and averaged 61.5. The next
+  target is endpoint texture: repeated static uninstall registry writes,
+  DC/server workstation-style user activity, and one-sided Sysmon-before-Security
+  process timing bias.
+
+- Loop 291 fixed repeated ambient static software-inventory registry churn by
+  adding a data-driven `registry_noise.static_inventory_values` policy and
+  suppressing uninstall/installer inventory fields from ambient registry noise
+  at the baseline selection layer. Explicit installer/update templates remain
+  available in the EDR pools. Focused registry/config tests passed (`9 passed`);
+  config validation, Ruff checks, generation, eval, and the full
+  `uv run pytest --no-cov` suite passed (`4510 passed, 19 skipped`). Automated
+  eval passed at 96.91951923183318 over 84763 records, with Parseability 100.0,
+  Plausibility 97.12001102692554, Causality 93.83522324592488, and Timing
+  95.90355331810284. The hard probe reduced eCAR static inventory registry
+  writes from 1014 to 0 and found 0 matching Sysmon text occurrences. Blind
+  initial scores were 38/22/34/64, average 39.5; deliberation triggered on
+  verdict disagreement and averaged 46.25 with final scores 46/38/39/62. The
+  next target, if resumed, is Windows endpoint texture: eCAR Prefetch actor/source
+  semantics and Windows 4624 subject-field variation, followed by Zeek DMZ
+  TLS/files/x509 grouped certificate contract repair.
+
+- Loop 292 target contracts started on branch `codex/host-edr-root-cause-fixes`.
+  The selected Host/EDR families are: (1) Prefetch FILE ownership, owned by the
+  EDR pool config/loader and process-aware side-effect selector; invariant:
+  ambient churn must not attach arbitrary actors to Prefetch artifacts, and
+  process-side Prefetch paths must derive from the owning executable name.
+  (2) Windows 4624 subject identity, owned by canonical `AuthContext` assignment
+  in the successful-logon bundle; invariant: service/machine/system logons keep
+  source-native SYSTEM/0x3e7 or anonymous subjects, while user-driven remote and
+  unlock/reauth paths can inherit a real session/caller subject when state has
+  one. (3) Server/DC workstation-style web-tool bleed, owned by explicit proxy
+  client hints and world-planner connection-process selection; invariant:
+  server/DC proxy or admin traffic should use service/package/admin-tool owners
+  or omit PID attribution, not spawn generic workstation web tools such as
+  `curl.exe`, `wget.exe`, or `python.exe` unless explicit scenario/storyline
+  intent created them.
+- Loop 292 fixed those three Host/EDR families at their owning layers. Prefetch
+  paths moved out of generic ambient churn and into process-aware side-effect
+  profiles; Windows successful-logon subject fields now use modeled caller/source
+  session state for user-driven Type 3/10/7 paths while preserving SYSTEM,
+  machine, service, and anonymous subjects; server/DC web/proxy ownership now
+  uses server/admin/service UAs, server-admin persona overlays, restricted
+  internal web-access source pools, and explicit-proxy PID repair that either
+  owns a matching process or omits stale shell/daemon/tool attribution. Focused
+  tests passed (`66 passed`), full Ruff checks passed, `uv run eforge
+  validate-config` passed with 0 issues, scenario validation remained valid with
+  the existing 16 warnings, and the full `uv run pytest --no-cov -q` suite passed
+  (`4519 passed, 19 skipped`). Automated eval passed at 97.49445666259291 over
+  78191 records. The loop-292 hard probe artifact
+  `scenarios/iteration-test/blind-test/loop-292/post_probe_host_edr_root_causes.json`
+  found 0 Prefetch bad actions, 0 Prefetch process-name mismatches, 0 server-like
+  workstation-tool eCAR PROCESS hits, and 0 server-like workstation-tool eCAR FLOW
+  hits; Windows 4624 Type 10 and Type 7 subjects now show real user/session
+  subjects for user-driven paths, with Type 5 service logons still SYSTEM.
+  Residual note: broad registry/software-inventory texture still includes browser
+  App Paths on server/DC hosts, but no longer as PROCESS/FLOW ownership in the
+  selected Host/EDR family.
+
+- Loop 293 generated a fresh dataset from the same iteration-test scenario and
+  ran the Host reviewer only. Automated eval passed at 97.49445666259291 over
+  78191 records. Host/EDR scored the data as Real with verdict confidence 64
+  and synthetic-confidence 34. A follow-up hard probe found browser App Paths
+  registry inventory texture still present on server/DC hosts (`DC-01`: 12,
+  `FILE-SRV-01`: 10), but not as PROCESS/FLOW ownership.
+
+- Loop 294 fixed the browser App Paths root cause by classifying
+  `CurrentVersion\App Paths` `Path` values as static installed-software
+  inventory in the endpoint noise policy, so the baseline ambient registry
+  generator suppresses them before event construction. Focused regression,
+  config validation, Ruff checks, and the full `uv run pytest --no-cov -q`
+  suite passed (`4519 passed, 19 skipped`). A regenerated dataset passed
+  automated eval at 97.03288664965147 over 81786 records. The hard probe found
+  0 browser App Paths registry rows on server-like hosts. The Host-only rerun
+  scored Inconclusive with verdict confidence 64 and synthetic-confidence 54;
+  findings shifted to Linux sysstat cron timing, syslog/eCAR cron PID/TID
+  agreement, perfect chronological ordering texture, and eCAR collection-window
+  shape. The browser App Paths issue was not repeated in the Host findings.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

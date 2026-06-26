@@ -21,6 +21,8 @@ _MAX_COLLISION_NEAR_ZERO_UNTIL = 10_000
 _MAX_COLLISION_GAP_US = 1_000_000
 _MAX_COLLISION_GAP_MS = 60_000
 _MAX_SENSOR_TIMING_US = 1_000_000
+_MAX_ENDPOINT_CLOCK_OFFSET_MS = 300_000
+_MAX_ENDPOINT_CLOCK_DRIFT_PPM = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,16 @@ class NetworkSensorObservationTiming:
     clock_skew_max_us: int
     path_delay_min_us: int
     path_delay_max_us: int
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointClockTiming:
+    """Per-host endpoint clock offset and drift bounds."""
+
+    host_offset_min_ms: int
+    host_offset_max_ms: int
+    host_drift_min_ppm: int
+    host_drift_max_ppm: int
 
 
 def load_timing_profiles() -> dict[str, Any]:
@@ -180,6 +192,46 @@ def network_sensor_observation_timing() -> NetworkSensorObservationTiming:
         clock_skew_max_us=skew_max,
         path_delay_min_us=delay_min,
         path_delay_max_us=delay_max,
+    )
+
+
+def endpoint_clock_timing(profile_name: str, os_category: str) -> EndpointClockTiming:
+    """Return safe endpoint host-clock bounds for an observation profile and OS."""
+    data = load_timing_profiles().get("endpoint_clock", {})
+    if not isinstance(data, dict):
+        data = {}
+    profiles = data.get("profiles", {})
+    if not isinstance(profiles, dict):
+        profiles = {}
+    profile = profiles.get(profile_name)
+    if not isinstance(profile, dict):
+        profile = profiles.get("complete", {})
+    if not isinstance(profile, dict):
+        profile = {}
+
+    os_key = "windows" if os_category == "windows" else "linux"
+    os_profile = profile.get(os_key, {})
+    if not isinstance(os_profile, dict):
+        os_profile = {}
+    offset_min, offset_max = _safe_int_range(
+        os_profile.get("host_offset_ms"),
+        fallback_min=0,
+        fallback_max=0,
+        minimum=-_MAX_ENDPOINT_CLOCK_OFFSET_MS,
+        maximum=_MAX_ENDPOINT_CLOCK_OFFSET_MS,
+    )
+    drift_min, drift_max = _safe_int_range(
+        os_profile.get("host_drift_ppm"),
+        fallback_min=0,
+        fallback_max=0,
+        minimum=-_MAX_ENDPOINT_CLOCK_DRIFT_PPM,
+        maximum=_MAX_ENDPOINT_CLOCK_DRIFT_PPM,
+    )
+    return EndpointClockTiming(
+        host_offset_min_ms=offset_min,
+        host_offset_max_ms=offset_max,
+        host_drift_min_ppm=drift_min,
+        host_drift_max_ppm=drift_max,
     )
 
 

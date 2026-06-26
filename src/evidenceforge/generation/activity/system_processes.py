@@ -172,19 +172,29 @@ def _scheduled_task_allowed(entry: dict[str, Any], host: Any | None) -> bool:
     return "all" in normalized_allowed or host_type in normalized_allowed
 
 
-def pick_scheduled_task(rng: random.Random, host: Any | None = None) -> tuple[str, str, str]:
-    """Pick a random scheduled task.
+def scheduled_task_key(entry: dict[str, Any]) -> str:
+    """Return a stable key for scheduled-task policy state."""
+    if entry.get("id"):
+        return str(entry["id"])
+    templates = entry.get("command_templates") or []
+    first_template = str(templates[0]) if templates else ""
+    return f"{entry.get('image', '')}:{first_template}"
 
-    Returns (image_path, command_line, parent_key).
-    """
+
+def get_scheduled_task_entries(host: Any | None = None) -> list[dict[str, Any]]:
+    """Return scheduled-task config entries allowed for a host."""
     data = load_system_processes()
-    tasks = [
+    return [
         entry for entry in data.get("scheduled_tasks", []) if _scheduled_task_allowed(entry, host)
     ]
-    if not tasks:
-        return (r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe /Run", "svchost_local_system")
 
-    entry = rng.choice(tasks)
+
+def materialize_scheduled_task_entry(
+    entry: dict[str, Any],
+    rng: random.Random,
+    host: Any | None = None,
+) -> tuple[str, str, str]:
+    """Materialize one scheduled-task config entry."""
     cmd_template = rng.choice(entry["command_templates"])
     cmd = _resolve_template(cmd_template, rng, entry.get("params"))
     return (
@@ -192,6 +202,28 @@ def pick_scheduled_task(rng: random.Random, host: Any | None = None) -> tuple[st
         _resolve_host_placeholders(cmd, host),
         entry.get("parent", "services"),
     )
+
+
+def _task_weight(entry: dict[str, Any]) -> int:
+    """Return a positive scheduled-task selection weight."""
+    try:
+        weight = int(entry.get("weight", 1))
+    except (TypeError, ValueError, OverflowError):
+        return 1
+    return max(1, weight)
+
+
+def pick_scheduled_task(rng: random.Random, host: Any | None = None) -> tuple[str, str, str]:
+    """Pick a random scheduled task.
+
+    Returns (image_path, command_line, parent_key).
+    """
+    tasks = get_scheduled_task_entries(host)
+    if not tasks:
+        return (r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe /Run", "svchost_local_system")
+
+    entry = rng.choices(tasks, weights=[_task_weight(candidate) for candidate in tasks], k=1)[0]
+    return materialize_scheduled_task_entry(entry, rng, host)
 
 
 def pick_system_service_process(

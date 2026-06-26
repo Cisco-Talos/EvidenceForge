@@ -18,6 +18,17 @@ windows_scheduled_processes:
   skip_probability: 0.08
 
 registry_noise:
+  static_inventory_values:
+    suppress_in_ambient_noise: true
+    key_substrings:
+      - "\\CurrentVersion\\Uninstall\\"
+      - "\\CurrentVersion\\Installer\\UserData\\"
+      - "\\CurrentVersion\\App Paths\\"
+    value_names:
+      - DisplayName
+      - DisplayVersion
+      - Publisher
+      - Path
   dhcp_interface_values:
     value_names:
       - DhcpIPAddress

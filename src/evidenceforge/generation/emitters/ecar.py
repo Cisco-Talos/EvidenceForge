@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.contexts import HostContext, NetworkContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
@@ -711,6 +711,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.src_host),
             }
+            if self._flow_connection_failed(net):
+                event_data["outcome"] = "failure"
+                event_data["connection_state"] = net.conn_state
             principal = self._flow_principal_for_process(
                 event,
                 event.src_host,
@@ -771,10 +774,10 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.dst_host),
             }
-            if not listener_observed:
+            if self._flow_connection_failed(net):
                 event_data["outcome"] = "failure"
                 event_data["connection_state"] = net.conn_state
-            else:
+            if listener_observed:
                 inbound_proc = self._lookup_running_process(event.dst_host, inbound_pid)
                 if inbound_proc is not None:
                     event_ts, process_identity_safe = self._flow_source_time(
@@ -1040,6 +1043,15 @@ class EcarEmitter(HostMultiplexEmitter):
         return close_time - timedelta(microseconds=margin_us)
 
     @staticmethod
+    def _flow_connection_failed(net: NetworkContext | None) -> bool:
+        """Return whether source-native FLOW should expose a failed connection outcome."""
+        if net is None:
+            return False
+        if net.protocol.lower() != "tcp":
+            return False
+        return net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR", "OTH"}
+
+    @staticmethod
     def _apply_flow_edr_context(
         event_data: dict[str, Any],
         event: SecurityEvent,
@@ -1249,6 +1261,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "target_image_path": target_image,
             "target_process_uuid": access.target_process_object_id if access else "",
             "granted_access": granted_access,
+            "call_trace": access.call_trace if access else "",
             "_host_fqdn": self._host_fqdn(host),
         }
         self.emit_event(event_data)
@@ -1265,16 +1278,6 @@ class EcarEmitter(HostMultiplexEmitter):
         hostname = host.hostname if host is not None else ""
         start_time = proc.start_time or event.timestamp
         not_before = start_time
-        if host is not None and host.os_category == "windows":
-            return _SOURCE_TIMING.source_time_after_source(
-                event,
-                "source.ecar_process_create",
-                after_source_key="source.sysmon_process_create",
-                gap_key="source.ecar_after_sysmon_process_create_gap",
-                seed_parts=(hostname, proc.pid, start_time),
-                after_not_before=start_time,
-                not_before=start_time,
-            )
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_process_create",
@@ -2288,6 +2291,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "user_stack_base",
         "user_stack_limit",
         "granted_access",
+        "call_trace",
         "target_pid",
         "target_image_path",
         "target_process_uuid",

@@ -262,6 +262,11 @@ fields:
     required: false
     description: "Access mask for PROCESS/OPEN events (e.g., 0x1410)"
 
+  - name: call_trace
+    type: string
+    required: false
+    description: "Source-owned call trace for PROCESS/OPEN events"
+
   # SERVICE/CREATE properties
   - name: service_name
     type: string

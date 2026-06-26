@@ -42,6 +42,7 @@ class LogonRequest:
     time: datetime
     logon_type: int = 2
     source_ip: str | None = None
+    source_system: System | None = None
     source_port: int | None = None
     emit_transport_syslog: bool = True
     emit_network_evidence: bool = True
@@ -52,12 +53,13 @@ class LogonRequest:
     def stable_id(self) -> str:
         """Return a deterministic intent identifier for durable references."""
 
+        source_host = self.source_system.hostname if self.source_system is not None else ""
         seed = _stable_seed(
             "action_bundle:logon:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.logon_type}:{self.source_ip or ''}:{self.source_port or ''}:"
             f"{self.emit_transport_syslog}:{self.emit_network_evidence}:"
-            f"{self.logon_id or ''}:{self.source}"
+            f"{self.logon_id or ''}:{source_host}:{self.source}"
         )
         return f"logon-{seed:016x}"
 

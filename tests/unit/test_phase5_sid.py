@@ -248,21 +248,19 @@ class TestEngineSIDRegistry:
         assert SID_PATTERN.match(registry["user.one"])
         assert SID_PATTERN.match(registry["user.two"])
 
-        # User RIDs: start at 1001, monotonically increasing (single domain counter)
+        # Workgroup user SIDs are deterministic host-local SIDs, not domain RID-master SIDs.
         rid_one = int(registry["user.one"].rsplit("-", 1)[1])
         rid_two = int(registry["user.two"].rsplit("-", 1)[1])
-        assert rid_one == 1001  # First user always starts at 1001
-        assert rid_two == rid_one + 1  # Monotonic, no gaps
+        assert rid_one >= 1001
+        assert rid_two >= 1001
+        assert registry["user.one"] != registry["user.two"]
 
-        # Computer account SIDs (follow users in the single counter)
+        # Computer account SIDs remain available in the compatibility view.
         assert "WKS-01$" in registry
-        comp_rid = int(registry["WKS-01$"].rsplit("-", 1)[1])
-        assert comp_rid > rid_two  # After users
+        assert SID_PATTERN.match(registry["WKS-01$"])
 
         # Service account SID
         assert SID_PATTERN.match(registry["svc_backup"])
-        rid_svc = int(registry["svc_backup"].rsplit("-", 1)[1])
-        assert rid_svc > comp_rid  # Service accounts after computer accounts
 
     def test_build_sid_registry_deterministic(self):
         """Same scenario name produces same domain base SID."""

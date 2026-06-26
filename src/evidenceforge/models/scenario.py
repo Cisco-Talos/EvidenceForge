@@ -246,6 +246,55 @@ class Group(BaseModel):
     permissions: list[str] | None = None
 
 
+class WindowsIdentityOverride(BaseModel):
+    """Optional per-user Windows account override."""
+
+    scope: Literal["auto", "domain", "local", "disabled"] = Field(default="auto")
+    account_name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._$-]+$")
+    sid: str | None = Field(
+        default=None,
+        pattern=r"^S-1-5-(18|19|20|21-\d+-\d+-\d+-\d+)$",
+        description="Optional explicit Windows SID. SID uniqueness is per Windows namespace.",
+    )
+
+
+class LinuxIdentityOverride(BaseModel):
+    """Optional per-user Linux account override."""
+
+    scope: Literal["auto", "directory", "local", "disabled"] = Field(default="auto")
+    account_name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._-]+$")
+    uid: int | None = Field(default=None, ge=0, le=60_000)
+    gid: int | None = Field(default=None, ge=0, le=60_000)
+    home: str | None = Field(default=None)
+    shell: str | None = Field(default=None)
+
+
+class UserIdentityOverride(BaseModel):
+    """Optional platform account overrides for one logical scenario user."""
+
+    windows: WindowsIdentityOverride | None = None
+    linux: LinuxIdentityOverride | None = None
+
+
+class IdentityConfig(BaseModel):
+    """Optional identity-directory defaults and per-user overrides."""
+
+    windows_default_scope: Literal["auto", "domain", "local"] = Field(default="auto")
+    linux_default_scope: Literal["directory", "local"] = Field(default="directory")
+    users: dict[str, UserIdentityOverride] = Field(default_factory=dict)
+
+    @field_validator("users")
+    @classmethod
+    def override_usernames_are_simple(
+        cls, v: dict[str, UserIdentityOverride]
+    ) -> dict[str, UserIdentityOverride]:
+        """Reject identity override keys that cannot be logical usernames."""
+        invalid = sorted(name for name in v if not re.match(r"^[a-zA-Z0-9._$-]+$", name))
+        if invalid:
+            raise ValueError(f"invalid identity override usernames: {', '.join(invalid)}")
+        return v
+
+
 class Persona(BaseModel):
     """Persona definition with optional LLM expansion fields.
 
@@ -1480,6 +1529,13 @@ class Environment(BaseModel):
         default_factory=ProxyConfig,
         description="Forward proxy deployment semantics for proxy_access generation.",
     )
+    identity: IdentityConfig = Field(
+        default_factory=IdentityConfig,
+        description=(
+            "Optional logical-person to platform-account overrides. Omitted fields "
+            "use deterministic defaults and existing scenario users remain valid."
+        ),
+    )
 
     @field_validator("users")
     @classmethod
@@ -1496,6 +1552,43 @@ class Environment(BaseModel):
         if not v:
             raise ValueError("Environment must have at least one system")
         return v
+
+    @model_validator(mode="after")
+    def validate_identity_overrides(self) -> "Environment":
+        """Validate optional identity overrides against the environment."""
+        user_names = {user.username for user in self.users}
+        unknown = sorted(set(self.identity.users) - user_names)
+        if unknown:
+            raise ValueError(
+                "environment.identity.users contains unknown scenario users: " + ", ".join(unknown)
+            )
+
+        explicit_sids: dict[str, str] = {}
+        explicit_uids: dict[int, str] = {}
+        for username, override in self.identity.users.items():
+            if override.windows and override.windows.scope != "disabled" and override.windows.sid:
+                sid = override.windows.sid
+                existing = explicit_sids.get(sid)
+                if existing is not None:
+                    raise ValueError(
+                        "environment.identity Windows SID overrides must be unique: "
+                        f"{sid} used by {existing} and {username}"
+                    )
+                explicit_sids[sid] = username
+            if (
+                override.linux
+                and override.linux.scope != "disabled"
+                and override.linux.uid is not None
+            ):
+                uid = override.linux.uid
+                existing = explicit_uids.get(uid)
+                if existing is not None:
+                    raise ValueError(
+                        "environment.identity Linux UID overrides must be unique: "
+                        f"{uid} used by {existing} and {username}"
+                    )
+                explicit_uids[uid] = username
+        return self
 
 
 class OutputSpec(BaseModel):

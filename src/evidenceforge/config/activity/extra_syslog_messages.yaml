@@ -255,7 +255,9 @@ programs:
       - "bound to {ip} -- renewal in {renewal} seconds."
 
   - app: polkitd
+    system_types: [workstation]
     weight: 2
+    max_per_host_window: 6
     params:
       action_id:
         - org.freedesktop.systemd1.manage-units
@@ -290,8 +292,42 @@ programs:
         - deploy
         - admin
     messages:
-      - "Registered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id} [{process_path}], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)"
+      - "Registered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id} [{agent_process_path}], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)"
       - "Unregistered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id}, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)"
+      - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
+      - "Subject unix-process:{0}:{monotonic_start} is authorized for action {action_id}"
+
+  - app: polkitd
+    system_types: [server]
+    weight: 1
+    max_per_host_window: 3
+    params:
+      action_id:
+        - org.freedesktop.systemd1.manage-units
+        - org.freedesktop.packagekit.system-update
+        - org.freedesktop.timedate1.set-timezone
+      auth_user:
+        - root
+        - deploy
+        - admin
+      subject_user:
+        - root
+        - deploy
+        - admin
+      bus_id:
+        - "42"
+        - "118"
+        - "203"
+        - "417"
+      monotonic_start:
+        - "0"
+        - "1000"
+        - "2000"
+      process_path:
+        - /usr/bin/systemctl
+        - /usr/lib/packagekit/packagekitd
+        - /usr/bin/timedatectl
+    messages:
       - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
       - "Subject unix-process:{0}:{monotonic_start} is authorized for action {action_id}"
 

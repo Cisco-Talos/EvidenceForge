@@ -2082,6 +2082,41 @@ class TestChronologicalOutput:
         assert "pid" not in rendered
         assert "tid" not in rendered
 
+    def test_failed_outbound_flow_includes_failure_outcome(self, emitter, monkeypatch, ts):
+        """Outbound endpoint FLOW rows should expose failed transport outcomes."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=62552,
+                dst_ip="10.0.0.22",
+                dst_port=445,
+                protocol="tcp",
+                conn_state="S0",
+                history="S",
+                orig_bytes=0,
+                resp_bytes=0,
+                initiating_pid=4,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "OUTBOUND"
+        assert emitted[0]["outcome"] == "failure"
+        assert emitted[0]["connection_state"] == "S0"
+
     def test_outbound_flow_with_pid_only_renders_after_process_create(
         self, emitter, monkeypatch, ts
     ):

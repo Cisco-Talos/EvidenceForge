@@ -30,7 +30,11 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+from evidenceforge.generation.activity.extra_syslog import (
+    filter_syslog_message_entries,
+    load_extra_syslog_messages,
+    render_extra_syslog_message,
+)
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
@@ -47,6 +51,7 @@ from evidenceforge.generation.engine.baseline import (
     _pick_dc_kerberos_target,
     _registry_writer_candidates,
     _resolve_cron_command,
+    _windows_background_process_lifetime_seconds,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
@@ -147,10 +152,81 @@ def test_rsyslog_fd_state_stays_process_local(linux_system):
     assert fds == sorted(fds)
 
 
+def test_journald_housekeeping_is_sparse_over_visible_window(linux_system):
+    """Journald capacity rows should be housekeeping, not high-frequency filler."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.end_time = engine.start_time + timedelta(hours=6)
+    engine._machine_ids = {linux_system.hostname: "0123456789abcdef0123456789abcdef"}
+
+    schedule = engine._journald_housekeeping_schedule(linux_system, random.Random(5))
+
+    assert len(schedule) <= 3
+    capacity_rows = [message for _time, message in schedule if " Journal (" in message]
+    assert len(capacity_rows) <= 1
+    if len(schedule) > 1:
+        gaps = [
+            (later[0] - earlier[0]).total_seconds()
+            for earlier, later in zip(schedule, schedule[1:], strict=False)
+        ]
+        assert min(gaps) >= 3600
+
+
+def test_emit_journald_housekeeping_emits_each_scheduled_row_once(linux_system):
+    """Hourly baseline passes should not duplicate journald housekeeping rows."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.end_time = engine.start_time + timedelta(hours=6)
+    engine._machine_ids = {linux_system.hostname: "0123456789abcdef0123456789abcdef"}
+    engine.activity_generator = Mock()
+    sys_pids = {"journald": 410}
+
+    for hour in range(6):
+        current = engine.start_time + timedelta(hours=hour)
+        engine._emit_journald_housekeeping(linux_system, current, random.Random(hour), sys_pids)
+        engine._emit_journald_housekeeping(linux_system, current, random.Random(hour), sys_pids)
+
+    schedule = engine._journald_housekeeping_schedule(linux_system, random.Random(5))
+    assert engine.activity_generator.generate_syslog_event.call_count == len(schedule)
+
+
+def test_polkit_desktop_agent_messages_are_workstation_only(linux_system):
+    """Server-role Linux hosts should not emit GNOME/KDE polkit agent churn."""
+    entries = load_extra_syslog_messages()
+
+    server_entries = filter_syslog_message_entries(
+        entries,
+        is_rhel_like=False,
+        host_roles=["database"],
+        system_type="server",
+    )
+    workstation_entries = filter_syslog_message_entries(
+        entries,
+        is_rhel_like=False,
+        host_roles=["workstation"],
+        system_type="workstation",
+    )
+
+    server_polkit_messages = [
+        message
+        for entry in server_entries
+        if entry["app"] == "polkitd"
+        for message in entry["messages"]
+    ]
+    workstation_polkit_messages = [
+        message
+        for entry in workstation_entries
+        if entry["app"] == "polkitd"
+        for message in entry["messages"]
+    ]
+
+    assert server_polkit_messages
+    assert not any("Authentication Agent" in message for message in server_polkit_messages)
+    assert any("Authentication Agent" in message for message in workstation_polkit_messages)
+
+
 def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_manager):
     """Polkit payloads should not contain random six-digit sessions or bus IDs."""
-    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
-
     engine = type("FakeEngine", (BaselineMixin,), {})()
     engine.state_manager = state_manager
     entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
@@ -201,8 +277,6 @@ def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_mana
 
 def test_polkit_action_messages_pair_action_with_source_native_program(linux_system, state_manager):
     """Polkit authorization rows should not mix unrelated actions and binaries."""
-    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
-
     engine = type("FakeEngine", (BaselineMixin,), {})()
     engine.state_manager = state_manager
     entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
@@ -247,6 +321,67 @@ def test_polkit_action_messages_pair_action_with_source_native_program(linux_sys
         path = re.search(r"\[([^]]+)\]", message)
         if path is not None:
             assert path.group(1) in allowed_paths[action]
+
+
+def test_windows_scheduled_task_selector_honors_per_host_window_caps(win_system):
+    """Capped maintenance tasks should not repeat after one visible-window selection."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    entry = {
+        "image": r"C:\Windows\System32\cleanmgr.exe",
+        "command_templates": ["cleanmgr.exe /autoclean /d C:"],
+        "parent": "svchost_local_system",
+        "max_per_host_window": 1,
+        "cooldown_hours": 24,
+        "weight": 1,
+    }
+    timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    with patch(
+        "evidenceforge.generation.activity.system_processes.get_scheduled_task_entries",
+        return_value=[entry],
+    ):
+        first = engine._select_windows_scheduled_task(
+            system=win_system,
+            rng=random.Random(1),
+            time=timestamp,
+        )
+        second = engine._select_windows_scheduled_task(
+            system=win_system,
+            rng=random.Random(2),
+            time=timestamp + timedelta(hours=2),
+        )
+
+    assert first == (
+        r"C:\Windows\System32\cleanmgr.exe",
+        "cleanmgr.exe /autoclean /d C:",
+        "svchost_local_system",
+    )
+    assert second is None
+
+
+def test_windows_maintenance_lifetimes_are_executable_specific():
+    """Flagged maintenance tools should have bounded source-native runtimes."""
+    rng = random.Random(31)
+
+    compat_samples = [
+        _windows_background_process_lifetime_seconds(
+            r"C:\Windows\System32\CompatTelRunner.exe",
+            "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun",
+            rng,
+        )
+        for _ in range(40)
+    ]
+    cleanmgr_samples = [
+        _windows_background_process_lifetime_seconds(
+            r"C:\Windows\System32\cleanmgr.exe",
+            "cleanmgr.exe /autoclean /d C:",
+            rng,
+        )
+        for _ in range(40)
+    ]
+
+    assert all(sample is not None and sample <= 900 for sample in compat_samples)
+    assert all(sample is not None and sample <= 1500 for sample in cleanmgr_samples)
 
 
 def test_dbus_bus_state_stays_source_native(linux_system):

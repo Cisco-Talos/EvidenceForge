@@ -139,6 +139,23 @@ it, and independent events may still share source timestamps. Across different
 source families there is no global total order; each source is responsible for
 preserving its own causal order with stable, explainable offsets.
 
+Endpoint source timing includes host-clock profiles from
+`config/activity/timing_profiles.yaml`. Windows Security, Sysmon, and
+host-resident eCAR on a Windows host share that host's offset/drift; Linux
+syslog, bash history, and host-resident eCAR on a Linux host share the Linux
+host clock. eCAR does not have a separate default clock domain because the agent
+is modeled as running on the endpoint. Network, proxy, firewall, and IDS sensors
+remain independent appliance clocks with their own observation profiles.
+
+`IdentityDirectory` (`src/evidenceforge/generation/identity.py`) is built during
+engine setup before baseline/storyline execution. It treats scenario `users` as
+logical people and resolves separate Windows and Linux platform accounts for
+them. Windows accounts may be domain-backed or host-local with SIDs and SAM
+names; Linux accounts may be directory-backed or host-local with UIDs, GIDs,
+home directories, and shells. The legacy `sid_registry` is now a compatibility
+view of this directory for older Windows callers while generation code migrates
+toward directory lookups.
+
 `ObservationPolicy` (`src/evidenceforge/events/observation.py`) is the
 source-coverage contract. It applies named `observation_profile`s after
 canonical state is updated and before a matching emitter renders. Profiles may
@@ -463,7 +480,10 @@ occurrence. `LogClearedActionBundle`, `ScheduledTaskActionBundle`, account and
 group management bundles, `CreateRemoteThreadActionBundle`, and
 `ProcessAccessActionBundle` own subject/session ownership, target identity,
 source-ready timing, process/thread lifecycle validation, and shared Sysmon/eCAR
-context. Generator adapters still perform the existing source-native field
+context. For Sysmon Event 10/eCAR PROCESS OPEN evidence, the bundle also assigns
+the source-image-aware CallTrace palette before rendering so Defender, CSRSS,
+services, svchost, WMI, and suspicious tools do not collapse into one generic
+stack family. Generator adapters still perform the existing source-native field
 construction, but storyline and causal call sites no longer independently build
 the same 1102, 4698, 472x/4738/475x, Sysmon Event 8, or Sysmon Event 10
 evidence.
@@ -783,7 +803,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Process→network correlation:** Baseline process creation triggers correlated network connections when the executable normally generates traffic (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID carried for eCAR FLOW correlation.
 
-**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages including SSH login/key exchange (70% key / 30% password), package management (apt-daily / dnf-automatic), systemd timer execution, logrotate file detail, and journald statistics — alongside existing systemd lifecycle, cron, UFW, logind, snapd, NTP, and other daemon messages.
+**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages including SSH login/key exchange (70% key / 30% password), package management (apt-daily / dnf-automatic), systemd timer execution, logrotate file detail, and sparse journald housekeeping — alongside existing systemd lifecycle, cron, UFW, logind, snapd, NTP, and other daemon messages. Journald capacity/vacuum/rotation messages are scheduled as per-host housekeeping episodes instead of ambient filler, and polkit desktop authentication-agent churn is restricted to desktop-capable Linux hosts while server-side authorization messages remain rare and service-action oriented.
 
 **Centralized image path resolution:** `resolve_image_path(exe_basename, os_category)` in `application_catalog.py` is the single source of truth for bare-name → full-path resolution. All fallback code paths (parent chain creation, connection process creation, Sysmon rendering) call this instead of hardcoding System32. The function checks the application catalog first (user apps → Program Files/AppData), then a curated set of known system binaries (→ System32), and only uses System32 as a last resort for truly unknown executables.
 
@@ -794,6 +814,8 @@ The baseline generation engine includes several layers of realism beyond simple 
 **Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
 **Rule-based process trees:** Parent-child relationships are defined in `src/evidenceforge/generation/activity/spawn_rules.yaml` — a data-driven mapping of which processes can spawn which children, with command-line templates, lifetime metadata (long/short), and spawn delay ranges. The `_resolve_parent()` method on ActivityGenerator transparently finds an existing valid parent from the user's process history or auto-creates intermediate chains (e.g., explorer→powershell→dotnet.exe) with realistic backward timing. Long-lived parents created early in the scenario (first 30 minutes) have a 70% chance of being registered as pre-existing (no Sysmon Event 1 emitted). Depth is limited to 3 auto-created levels. Falls back to legacy `_select_parent_pid()` for processes not in the rules. `ProcessContext.parent_command_line` is populated from the parent process's StateManager entry.
+
+**Windows maintenance cadence:** Baseline Windows scheduled/background utility launches are data-driven through `system_processes.yaml`. Scheduled-task entries can declare optional selection weights, host-type eligibility, per-host window caps, and cooldowns, while the generator applies executable-specific lifetime profiles for common maintenance tools such as `CompatTelRunner.exe`, `usoclient.exe`, `MpCmdRun.exe`, and `cleanmgr.exe`. Remote/admin command parents are resolved by execution family above generic process-tree selection, preferring concrete owners such as live `PSEXESVC.exe`, `WmiPrvSE.exe`, Task Scheduler, service/SCM context, or PowerShell/WinRM when the command shape indicates them.
 
 **PID allocation diversity:** PIDs use a lognormal distribution for gap sizes (Windows: `lognormvariate(1.2, 0.8)` in multiples of 4; Linux: `lognormvariate(0.5, 0.6)`), producing a heavy-tailed gap distribution with no fixed-set fingerprint. Wraparound at 65536 skips PIDs still held by running processes.
 

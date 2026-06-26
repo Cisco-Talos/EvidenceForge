@@ -296,6 +296,86 @@ class TestProxyUriOsFiltering:
         assert path == "/favicon.ico"
         assert referrer_policy == "none"
 
+    def test_api_proxy_paths_do_not_claim_search_referrers(self):
+        """API and auth endpoints should not look like search-result page visits."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        api_hosts = {
+            "login.microsoftonline.com",
+            "graph.microsoft.com",
+            "api.dropboxapi.com",
+            "content.dropboxapi.com",
+        }
+
+        for host in api_hosts:
+            _path, content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
+                random.Random(0),
+                host,
+                ["saas"],
+                source_os="windows",
+            )
+            assert content_type != "text/html"
+            assert referrer_policy == "none"
+
+    def test_cdn_tag_templates_render_assets_without_referrers(self):
+        """CDN-only hosts should not fall back to generic root-page searches."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        path, content_type, method, _ua_override, referrer_policy = pick_proxy_uri(
+            random.Random(4),
+            "static.licdn.com",
+            ["cdn"],
+            source_os="windows",
+        )
+
+        assert method == "GET"
+        assert path != "/"
+        assert content_type in {
+            "application/javascript",
+            "text/css",
+            "image/png",
+            "font/woff2",
+            "image/x-icon",
+        }
+        assert referrer_policy == "none"
+
+    def test_cdn_shaped_hosts_without_registry_tags_render_assets(self):
+        """Unregistered CDN-shaped hosts should still avoid generic HTML root pages."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        path, content_type, method, _ua_override, referrer_policy = pick_proxy_uri(
+            random.Random(8),
+            "cdn.formstack.com",
+            [],
+            source_os="windows",
+        )
+
+        assert method == "GET"
+        assert path != "/"
+        assert content_type in {
+            "application/javascript",
+            "text/css",
+            "image/png",
+            "font/woff2",
+            "image/x-icon",
+        }
+        assert referrer_policy == "none"
+
+    def test_api_shaped_hosts_without_registry_tags_render_json(self):
+        """Unregistered API-shaped hosts should not look like human HTML browsing."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        path, content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
+            random.Random(8),
+            "api.hubspot.com",
+            [],
+            source_os="windows",
+        )
+
+        assert path != "/"
+        assert content_type == "application/json"
+        assert referrer_policy == "none"
+
     def test_non_browser_proxy_domains_are_not_browser_session_targets(self):
         """Proxy domain_class controls whether a host can use browser-style site maps."""
         from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
@@ -308,6 +388,36 @@ class TestProxyUriOsFiltering:
         assert is_browser_like_proxy_domain("archive.ubuntu.com") is False
         assert is_browser_like_proxy_domain("www.bing.com") is True
         assert is_browser_like_proxy_domain("unknown.example.test") is True
+
+    def test_cdn_and_api_tags_are_not_browser_session_targets(self):
+        """Asset and API endpoints should not receive browser landing-page sessions."""
+        from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+
+        assert is_browser_like_proxy_domain("a.slack-edge.com", domain_tags=["cdn"]) is False
+        assert (
+            is_browser_like_proxy_domain(
+                "content.dropboxapi.com",
+                domain_tags=["storage", "cdn"],
+            )
+            is False
+        )
+        assert (
+            is_browser_like_proxy_domain(
+                "graph.microsoft.com",
+                domain_tags=["dev", "outlook", "teams"],
+            )
+            is False
+        )
+        assert is_browser_like_proxy_domain("api-17.duosecurity.com") is False
+        assert is_browser_like_proxy_domain("api.github.com", domain_tags=["dev", "git"]) is False
+        assert (
+            is_browser_like_proxy_domain(
+                "www.dropbox.com",
+                domain_tags=["web", "saas", "storage"],
+            )
+            is True
+        )
+        assert is_browser_like_proxy_domain("github.com", domain_tags=["git"]) is True
 
     def test_proxy_user_agent_normalization_replaces_windows_browser_for_linux(self):
         from evidenceforge.generation.activity.proxy_user_agents import (

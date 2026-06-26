@@ -4,59 +4,98 @@
 # from the given ranges. Each pattern represents a distinct call chain
 # observed in real telemetry.
 #
-# Override via .eforge/config/activity/calltrace_patterns.yaml — the
-# entire patterns list is replaced if present in the overlay.
+# Override via .eforge/config/activity/calltrace_patterns.yaml. Top-level
+# overlay keys replace defaults; keep both patterns and source_families when
+# supplying a full custom palette.
 
 patterns:
   # Direct NtOpenProcess via KERNELBASE
-  - modules: ["ntdll.dll", "KERNELBASE.dll"]
+  - id: direct_ntopenprocess
+    modules: ["ntdll.dll", "KERNELBASE.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
 
   # Via kernel32 (OpenProcess -> NtOpenProcess)
-  - modules: ["ntdll.dll", "KERNELBASE.dll", "kernel32.dll"]
+  - id: kernel32_openprocess
+    modules: ["ntdll.dll", "KERNELBASE.dll", "kernel32.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
       kernel32.dll: [0x1C000, 0x1F000]
 
   # Remote access via RPCRT4
-  - modules: ["ntdll.dll", "RPCRT4.dll", "KERNELBASE.dll"]
+  - id: rpc_service
+    modules: ["ntdll.dll", "RPCRT4.dll", "KERNELBASE.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       RPCRT4.dll: [0x7C000, 0x7F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
 
   # WMI-based access (wmiprvse.exe)
-  - modules: ["ntdll.dll", "KERNELBASE.dll", "wbemcomn.dll"]
+  - id: wmi_wbem
+    modules: ["ntdll.dll", "KERNELBASE.dll", "wbemcomn.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
       wbemcomn.dll: [0x15000, 0x18000]
 
   # COM/DCOM-based access
-  - modules: ["ntdll.dll", "KERNELBASE.dll", "combase.dll"]
+  - id: com_dcom
+    modules: ["ntdll.dll", "KERNELBASE.dll", "combase.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
       combase.dll: [0x28000, 0x2B000]
 
   # AV/EDR access (MsMpEng, csrss)
-  - modules: ["ntdll.dll", "KERNELBASE.dll", "advapi32.dll"]
+  - id: defender_av
+    modules: ["ntdll.dll", "KERNELBASE.dll", "advapi32.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
       advapi32.dll: [0x4A000, 0x4D000]
 
   # Direct ntdll only (rare, kernel-mode callers)
-  - modules: ["ntdll.dll"]
+  - id: direct_ntdll
+    modules: ["ntdll.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
 
   # Via sechost.dll (service control operations)
-  - modules: ["ntdll.dll", "KERNELBASE.dll", "sechost.dll"]
+  - id: service_sechost
+    modules: ["ntdll.dll", "KERNELBASE.dll", "sechost.dll"]
     offset_ranges:
       ntdll.dll: [0x9C000, 0x9F000]
       KERNELBASE.dll: [0x2C000, 0x2F000]
       sechost.dll: [0x12000, 0x15000]
+
+source_families:
+  defender:
+    match_exes: ["MsMpEng.exe", "MpCmdRun.exe", "SenseIR.exe", "SenseNdr.exe"]
+    pattern_ids: ["defender_av"]
+  csrss:
+    match_exes: ["csrss.exe"]
+    pattern_ids: ["direct_ntdll"]
+  services:
+    match_exes: ["services.exe", "TrustedInstaller.exe"]
+    pattern_ids: ["service_sechost"]
+  svchost:
+    match_exes: ["svchost.exe"]
+    pattern_ids: ["rpc_service", "com_dcom", "service_sechost"]
+  wmi:
+    match_exes: ["WmiPrvSE.exe", "wmic.exe"]
+    pattern_ids: ["wmi_wbem", "com_dcom"]
+  suspicious_tool:
+    match_exes: ["mimikatz.exe", "procdump.exe", "procdump64.exe", "rundll32.exe"]
+    pattern_ids: ["kernel32_openprocess", "direct_ntopenprocess"]
+  generic:
+    pattern_ids:
+      - "direct_ntopenprocess"
+      - "kernel32_openprocess"
+      - "rpc_service"
+      - "wmi_wbem"
+      - "com_dcom"
+      - "defender_av"
+      - "direct_ntdll"
+      - "service_sechost"
