@@ -488,6 +488,7 @@ def validate_config() -> ValidationResult:
         },
         "activity/calltrace_patterns.yaml": {
             "list_fields": {"patterns": None},
+            "dict_fields": {"source_families"},
         },
         "activity/edr_pools.yaml": {
             "list_fields": {"file_side_effect_profiles": None, "installed_software_products": None},
@@ -732,6 +733,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.observation_profiles import load_observation_profiles
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
+    from evidenceforge.generation.activity.calltrace_patterns import load_calltrace_config
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
         load_create_remote_thread_config,
         load_create_remote_thread_patterns,
@@ -772,6 +774,7 @@ def validate_config() -> ValidationResult:
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
     process_access_data = load_process_access_patterns()
+    calltrace_config = load_calltrace_config()
     auth_noise_data = load_auth_noise_config()
     create_remote_thread_data = load_create_remote_thread_patterns()
     create_remote_thread_config = load_create_remote_thread_config()
@@ -2349,6 +2352,8 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         AuthNoiseConfig,
+        CallTracePatternEntry,
+        CallTraceSourceFamilyEntry,
         ConnectionEntry,
         CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
@@ -2442,6 +2447,44 @@ def validate_config() -> ValidationResult:
         _SCHEMA_CHECKS.append(
             (process_access_data, ProcessAccessPatternEntry, "process_access_patterns.yaml")
         )
+    if isinstance(calltrace_config, dict):
+        calltrace_patterns = calltrace_config.get("patterns", [])
+        calltrace_families = calltrace_config.get("source_families", {})
+        if isinstance(calltrace_patterns, list):
+            _SCHEMA_CHECKS.append(
+                (calltrace_patterns, CallTracePatternEntry, "calltrace_patterns.yaml patterns")
+            )
+        if isinstance(calltrace_families, dict):
+            family_entries = [
+                family for family in calltrace_families.values() if isinstance(family, dict)
+            ]
+            _SCHEMA_CHECKS.append(
+                (
+                    family_entries,
+                    CallTraceSourceFamilyEntry,
+                    "calltrace_patterns.yaml source_families",
+                )
+            )
+            pattern_ids = {
+                str(pattern.get("id"))
+                for pattern in calltrace_patterns
+                if isinstance(pattern, dict) and pattern.get("id")
+            }
+            for family_name, family_config in calltrace_families.items():
+                if not isinstance(family_config, dict):
+                    continue
+                for pattern_id in family_config.get("pattern_ids", []):
+                    if str(pattern_id) not in pattern_ids:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "calltrace_patterns.yaml",
+                                (
+                                    f'Source family "{family_name}" references unknown '
+                                    f'pattern_id "{pattern_id}"'
+                                ),
+                            )
+                        )
     if isinstance(create_remote_thread_data, list):
         _SCHEMA_CHECKS.append(
             (

@@ -578,7 +578,13 @@ def _windows_background_process_lifetime_seconds(
         return _bounded_lognormal_seconds(
             rng, minimum=90.0, median=480.0, p95=1800.0, maximum=3600.0
         )
-    if exe_name in {"cleanmgr.exe", "hpimageassistant.exe", "dcu-cli.exe"}:
+    if exe_name == "cleanmgr.exe":
+        return _bounded_lognormal_seconds(
+            rng, minimum=35.0, median=260.0, p95=900.0, maximum=1500.0
+        )
+    if exe_name == "compattelrunner.exe":
+        return _bounded_lognormal_seconds(rng, minimum=12.0, median=95.0, p95=420.0, maximum=900.0)
+    if exe_name in {"hpimageassistant.exe", "dcu-cli.exe"}:
         return _bounded_lognormal_seconds(
             rng, minimum=45.0, median=420.0, p95=1800.0, maximum=3600.0
         )
@@ -1560,6 +1566,106 @@ class BaselineMixin:
         host_counts[(system.hostname, command)] = host_counts.get((system.hostname, command), 0) + 1
         return command
 
+    def _journald_housekeeping_schedule(
+        self,
+        system: System,
+        rng: random.Random,
+    ) -> list[tuple[datetime, str]]:
+        """Return low-frequency journald housekeeping messages for one host/window."""
+        schedules = getattr(self, "_linux_journald_housekeeping_schedules", None)
+        if schedules is None:
+            schedules = {}
+            self._linux_journald_housekeeping_schedules = schedules
+        cached = schedules.get(system.hostname)
+        if cached is not None:
+            return cached
+
+        start = (
+            self.start_time
+            if self.start_time.tzinfo is not None
+            else self.start_time.replace(tzinfo=UTC)
+        )
+        end = (
+            self.end_time if self.end_time.tzinfo is not None else self.end_time.replace(tzinfo=UTC)
+        )
+        window_seconds = max(0.0, (end - start).total_seconds())
+        if window_seconds < 1800:
+            schedules[system.hostname] = []
+            return []
+
+        host_rng = random.Random(_stable_seed(f"journald_housekeeping:{system.hostname}"))
+        max_events = min(3, max(1, int(window_seconds // 7200) + 1))
+        count_weights = [1, 4, 3, 1][: max_events + 1]
+        count = host_rng.choices(range(max_events + 1), weights=count_weights, k=1)[0]
+        if count <= 0:
+            schedules[system.hostname] = []
+            return []
+
+        machine_id = self._machine_ids.get(system.hostname, "0" * 32)
+        journal_type = host_rng.choice(["Runtime", "System"])
+        max_size = host_rng.choice([256, 512, 1024, 2048, 4096])
+        base_size = max_size * host_rng.uniform(0.12, 0.36)
+        step = max_size * host_rng.uniform(0.025, 0.095)
+
+        entries: list[tuple[datetime, str]] = []
+        kinds = ["capacity", "rotation", "vacuum"]
+        host_rng.shuffle(kinds)
+        segment = window_seconds / count
+        for idx in range(count):
+            slot_start = idx * segment
+            jitter_floor = min(segment * 0.18, 900.0)
+            jitter_ceiling = max(jitter_floor + 1.0, segment * 0.55)
+            offset = slot_start + host_rng.uniform(jitter_floor, jitter_ceiling)
+            ts = start + timedelta(seconds=min(offset, window_seconds - 1.0))
+            kind = kinds[idx % len(kinds)]
+            if kind == "capacity":
+                size = min(max_size * 0.78, base_size + (idx * step))
+                free = max_size - size
+                path = (
+                    f"/run/log/journal/{machine_id}"
+                    if journal_type == "Runtime"
+                    else f"/var/log/journal/{machine_id}"
+                )
+                msg = (
+                    f"{journal_type} Journal ({path}) is {size:.1f}M, "
+                    f"max {max_size}M, {free:.1f}M free."
+                )
+            elif kind == "rotation":
+                msg = "Rotating system journal."
+            else:
+                freed = host_rng.uniform(18.0, 240.0)
+                msg = f"Vacuuming done, freed {freed:.1f}M of archived journals."
+            entries.append((ts, msg))
+
+        schedules[system.hostname] = sorted(entries, key=lambda item: item[0])
+        return schedules[system.hostname]
+
+    def _emit_journald_housekeeping(
+        self,
+        system: System,
+        current_hour: datetime,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+    ) -> None:
+        """Emit sparse journald housekeeping rows whose schedule falls in this hour."""
+        emitted = getattr(self, "_linux_journald_housekeeping_emitted", None)
+        if emitted is None:
+            emitted = set()
+            self._linux_journald_housekeeping_emitted = emitted
+        hour_end = current_hour + timedelta(hours=1)
+        for ts, msg in self._journald_housekeeping_schedule(system, rng):
+            key = (system.hostname, ts.isoformat(), msg)
+            if key in emitted or ts < current_hour or ts >= hour_end:
+                continue
+            self.activity_generator.generate_syslog_event(
+                system=system,
+                time=ts,
+                app_name="systemd-journald",
+                message=msg,
+                pid=sys_pids.get("journald", rng.randint(200, 500)),
+            )
+            emitted.add(key)
+
     def _polkit_session_pool(self, hostname: str, rng: random.Random) -> list[int]:
         """Return low, source-native session IDs that can represent pre-existing logind sessions."""
         pool_state = getattr(self, "_linux_polkit_session_pools", None)
@@ -1906,6 +2012,68 @@ class BaselineMixin:
 
         key = (target_hostname, source_hostname, username)
         state[key] = self._utc(session_time)
+
+    def _select_windows_scheduled_task(
+        self,
+        *,
+        system: System,
+        rng: random.Random,
+        time: datetime,
+    ) -> tuple[str, str, str] | None:
+        """Pick a scheduled task while honoring per-host caps and cooldowns."""
+        from evidenceforge.generation.activity.system_processes import (
+            get_scheduled_task_entries,
+            materialize_scheduled_task_entry,
+            scheduled_task_key,
+        )
+
+        entries = get_scheduled_task_entries(system)
+        if not entries:
+            return None
+
+        counts = getattr(self, "_windows_scheduled_task_counts", None)
+        if counts is None:
+            counts = {}
+            self._windows_scheduled_task_counts = counts
+        last_seen = getattr(self, "_windows_scheduled_task_last_seen", None)
+        if last_seen is None:
+            last_seen = {}
+            self._windows_scheduled_task_last_seen = last_seen
+
+        candidates: list[tuple[dict[str, Any], int, str]] = []
+        for entry in entries:
+            key = scheduled_task_key(entry)
+            state_key = (system.hostname, key)
+            max_window = int(entry.get("max_per_host_window", 0) or 0)
+            if max_window > 0 and counts.get(state_key, 0) >= max_window:
+                continue
+
+            cooldown_seconds = float(entry.get("cooldown_seconds", 0) or 0)
+            if not cooldown_seconds and entry.get("cooldown_hours") is not None:
+                cooldown_seconds = float(entry.get("cooldown_hours", 0) or 0) * 3600.0
+            previous = last_seen.get(state_key)
+            if previous is not None and (time - previous).total_seconds() < cooldown_seconds:
+                continue
+
+            try:
+                weight = int(entry.get("weight", 1))
+            except (TypeError, ValueError, OverflowError):
+                weight = 1
+            candidates.append((entry, max(1, weight), key))
+
+        if not candidates:
+            return None
+
+        selected_idx = rng.choices(
+            range(len(candidates)),
+            weights=[weight for _entry, weight, _key in candidates],
+            k=1,
+        )[0]
+        entry, _weight, key = candidates[selected_idx]
+        state_key = (system.hostname, key)
+        counts[state_key] = counts.get(state_key, 0) + 1
+        last_seen[state_key] = time
+        return materialize_scheduled_task_entry(entry, rng, system)
 
     def _scaled_interval_range(
         self,
@@ -6239,10 +6407,6 @@ class BaselineMixin:
             # which uses realistic daily/weekly frequencies instead of the
             # legacy 2-5 per hour approach.
             if os_cat == "windows":
-                from evidenceforge.generation.activity.system_processes import (
-                    pick_scheduled_task,
-                )
-
                 for offset in _windows_scheduled_task_offsets(
                     current_hour,
                     system,
@@ -6254,7 +6418,14 @@ class BaselineMixin:
                 ):
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
-                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng, system)
+                    selected_task = self._select_windows_scheduled_task(
+                        system=system,
+                        rng=rng,
+                        time=ts,
+                    )
+                    if selected_task is None:
+                        continue
+                    task_image, task_cmd, task_parent_key = selected_task
                     parent_pid = sys_pids.get(
                         task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
@@ -6912,6 +7083,7 @@ class BaselineMixin:
             self._generate_scheduled_tasks(
                 current_hour, system, rng, sys_pids, is_rhel_like, has_web_role
             )
+            self._emit_journald_housekeeping(system, current_hour, rng, sys_pids)
             if not is_rhel_like and current_hour == self.start_time:
                 anacron_offset = 60 + (_stable_seed(f"anacron_lifecycle:{system.hostname}") % 1800)
                 self._emit_anacron_lifecycle(
@@ -7253,32 +7425,6 @@ class BaselineMixin:
                         app_name="systemd-timesyncd",
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
-                    )
-                elif source_roll < 0.50:
-                    # Journald runtime statistics (max_size and type stable per host)
-                    machine_id = self._machine_ids.get(system.hostname, "0" * 32)
-                    _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
-                    max_size = _j_rng.choice([256, 512, 1024, 2048, 4096])
-                    journal_type = _j_rng.choice(["Runtime", "System"])
-                    # Journal size grows monotonically during uptime (logs accumulate)
-                    jkey = f"_journald_size_{system.hostname}"
-                    prev_size = getattr(self, jkey, max_size * 0.1)
-                    size = prev_size + rng.uniform(0.5, 8.0)
-                    if size > max_size * rng.uniform(0.72, 0.9):
-                        size = rng.uniform(max_size * 0.18, max_size * 0.55)
-                    setattr(self, jkey, size)
-                    free = max_size - size
-                    path = (
-                        f"/run/log/journal/{machine_id}"
-                        if journal_type == "Runtime"
-                        else f"/var/log/journal/{machine_id}"
-                    )
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name="systemd-journald",
-                        message=f"{journal_type} Journal ({path}) is {size:.1f}M, max {max_size}M, {free:.1f}M free.",
-                        pid=sys_pids.get("journald", rng.randint(200, 500)),
                     )
                 else:
                     # Additional diverse syslog programs — loaded from YAML with

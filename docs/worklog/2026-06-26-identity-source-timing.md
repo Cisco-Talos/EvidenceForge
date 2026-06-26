@@ -133,3 +133,76 @@ Reviewer 1 finding priority order:
 5. Diversify or source-image-bind Sysmon Event ID 10 LSASS call traces. This was
    a low-impact weak signal in reviewer 1 only, so it should follow the broader
    texture and ownership fixes.
+
+## Reviewer 1 Root-Cause Fix Implementation
+
+Implemented the five reviewer-1 Host/EDR texture fixes as generation/config
+changes, with no scenario YAML changes required:
+
+- Moved `systemd-journald` capacity/free-space messages out of the high-frequency
+  ambient syslog branch. The engine now emits 0-3 per-host journald
+  capacity/vacuum/rotation housekeeping rows per visible window, spaced by
+  host-stable hours and tracked so each scheduled row emits once.
+- Split `polkitd` syslog texture into workstation GUI auth-agent messages and
+  sparse server authorization messages. GNOME/KDE agent register/unregister rows
+  are workstation-gated through `extra_syslog_messages.yaml`.
+- Added a Windows remote-command execution owner resolver above generic parent
+  selection. Remote/admin utilities now prefer concrete owners such as live
+  `PSEXESVC.exe`, `WmiPrvSE.exe`, Task Scheduler, SCM/service context, or
+  PowerShell/WinRM where command shape indicates the execution family.
+- Extended `system_processes.yaml` scheduled-task policy with optional
+  `weight`, `system_types`, `max_per_host_window`, `cooldown_seconds`, and
+  `cooldown_hours`. `cleanmgr.exe` and `CompatTelRunner.exe` are now
+  workstation-biased/rare, and common Windows maintenance tools have bounded
+  executable-specific runtimes.
+- Added source-image-aware CallTrace palettes in `calltrace_patterns.yaml`.
+  `ProcessAccessActionBundle` populates `ProcessAccessContext.call_trace` before
+  rendering, and eCAR PROCESS/OPEN now carries the same canonical call trace as
+  Sysmon Event 10.
+
+Focused tests passed for the implementation slice:
+
+- `uv run pytest --no-cov tests/unit/test_calltrace_patterns.py
+  tests/unit/test_ecar_thread_process_access.py
+  tests/unit/test_phase5_system_traffic.py tests/unit/test_spawn_rules.py
+  tests/unit/test_phase5_process_pools.py -q -k "..."`
+  returned 37 passed, 107 deselected.
+
+Full validation after implementation:
+
+- `uv run eforge validate-config` passed with 0 errors, 0 warnings, 0 info
+  items across 79 files.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- `uv run pytest --no-cov` passed: 4543 passed, 19 skipped.
+- Local skill validation passed for all `eforge-*` skills after reference
+  updates.
+- `uv run eforge validate scenarios/iteration-test/scenario.yaml` remained
+  valid with the scenario's existing 16 standing warnings.
+- Regenerated `scenarios/iteration-test/scenario.yaml` successfully. Eval
+  passed with an overall score of 97/100 across 79,225 records and 18 sources.
+
+Post-fix mechanical Host/EDR probes on the regenerated dataset:
+
+- Journald housekeeping rows were sparse: 1-3 rows on affected Linux hosts.
+- Server-side polkit GUI auth-agent rows: 0. Workstation auth-agent rows: 11.
+- ProcessAccess call traces covered distinct source-family modules:
+  `advapi32.dll`, `wbemcomn.dll`, `RPCRT4.dll`, `sechost.dll`, `combase.dll`,
+  and `kernel32.dll`.
+- Maintenance utility PROCESS/CREATE counts were low in the six-hour window:
+  `usoclient.exe` 4, `cleanmgr.exe` 4, `MpCmdRun.exe` 6,
+  `CompatTelRunner.exe` 3.
+
+Blind Host-only review against a neutral copy of the regenerated data, with no
+scenario, ground truth, or previous-review context, scored:
+
+| Assessment | Verdict confidence | Synthetic-confidence score |
+| --- | ---: | ---: |
+| Real | 64 | 36 |
+
+The reviewer called the endpoint evidence mostly production-like, specifically
+praising coherent Windows process/session lifecycles, rich Linux syslog/bash
+texture, realistic Kerberos/Security fields, and strong eCAR/Sysmon/Security
+correlation. Remaining weak findings shifted to lower-priority areas:
+dataset-wide uniform Sysmon collection shape, very tight eCAR wrapper/child
+timing around a DC service/task sequence, one service-creation parentage concern,
+and regular eCAR FLOW actor omission patterns.

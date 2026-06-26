@@ -1261,6 +1261,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "target_image_path": target_image,
             "target_process_uuid": access.target_process_object_id if access else "",
             "granted_access": granted_access,
+            "call_trace": access.call_trace if access else "",
             "_host_fqdn": self._host_fqdn(host),
         }
         self.emit_event(event_data)
@@ -2290,6 +2291,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "user_stack_base",
         "user_stack_limit",
         "granted_access",
+        "call_trace",
         "target_pid",
         "target_image_path",
         "target_process_uuid",

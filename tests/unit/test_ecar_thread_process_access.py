@@ -212,6 +212,11 @@ class TestProcessAccess:
             target_image=r"C:\Windows\System32\lsass.exe",
             target_process_object_id="target-process-uuid",
             granted_access="0x1410",
+            call_trace=(
+                r"C:\Windows\SYSTEM32\ntdll.dll+9D120|"
+                r"C:\Windows\SYSTEM32\KERNELBASE.dll+2D440|"
+                r"C:\Windows\SYSTEM32\advapi32.dll+4B810"
+            ),
         )
 
     def test_object_action(self, emitter, ts, windows_host, tmp_path):
@@ -264,6 +269,7 @@ class TestProcessAccess:
         output_file = tmp_path / "WKS-01.corp.local" / "ecar.json"
         record = json.loads(output_file.read_text().strip().split("\n")[0])
         assert record["properties"]["granted_access"] == "0x1410"
+        assert record["properties"]["call_trace"].endswith(r"advapi32.dll+4B810")
 
     def test_target_process_fields_are_explicit(self, emitter, ts, windows_host, tmp_path):
         """Target process details should not be overloaded into command_line."""

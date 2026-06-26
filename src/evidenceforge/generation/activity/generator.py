@@ -17804,6 +17804,15 @@ class ActivityGenerator:
                 _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
             )
             source_thread_id = windows_id_randint(source_thread_rng, 1000, 9999)
+        from evidenceforge.generation.activity.calltrace_patterns import (
+            render_call_trace_for_source,
+        )
+
+        call_trace = render_call_trace_for_source(
+            source_image,
+            system.hostname,
+            seed_parts=(source_pid, target_pid, time.isoformat(), granted_access),
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
@@ -17831,6 +17840,7 @@ class ActivityGenerator:
                 else "NT AUTHORITY\\SYSTEM",
                 target_process_object_id=target_obj_id,
                 granted_access=granted_access,
+                call_trace=call_trace,
             ),
             edr=EdrContext(object_id=target_obj_id, actor_id=source_obj_id),
         )
@@ -19454,6 +19464,46 @@ class ActivityGenerator:
             return False
         return self._is_one_shot_shell_command(proc.image, proc.command_line)
 
+    def _windows_remote_command_owner_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        child_exe: str,
+        child_command_line: str,
+    ) -> int:
+        """Return a concrete service-family owner for a remote/admin shell."""
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        exe = child_exe.lower()
+        command = child_command_line.lower()
+        owner_keys: tuple[str, ...]
+
+        if exe == "schtasks.exe" or "schtasks" in command:
+            owner_keys = ("taskhostw", "svchost_local_system", "services")
+        elif exe in {"wmic.exe", "wmic"} or "wmic " in command:
+            owner_keys = ("wmiprvse", "svchost_dcom", "services")
+        elif exe in {"sc.exe", "sc"} or "sc.exe create" in command or " sc create" in command:
+            owner_keys = ("services", "svchost_dcom", "wmiprvse")
+        elif exe in {"wevtutil.exe", "wevtutil", "net.exe", "net1.exe", "net", "net1"}:
+            owner_keys = ("wmiprvse", "taskhostw", "services")
+        elif "powershell" in command or "winrm" in command or "invoke-command" in command:
+            owner_keys = ("wmiprvse", "svchost_dcom", "services")
+        else:
+            seed = _stable_seed(
+                f"windows_remote_owner:{system.hostname}:{exe}:{child_command_line}"
+            )
+            owner_keys = (
+                ("wmiprvse", "taskhostw", "services")
+                if seed % 2
+                else ("taskhostw", "wmiprvse", "services")
+            )
+
+        for key in owner_keys:
+            pid = sys_pids.get(key)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        return sys_pids.get("services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4)))
+
     def _ensure_windows_service_shell_parent(
         self,
         *,
@@ -19470,10 +19520,11 @@ class ActivityGenerator:
         if child_exe not in self._WINDOWS_SERVICE_SHELL_CHILDREN:
             return None
 
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        parent_pid = sys_pids.get(
-            "svchost_netsvcs",
-            sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
+        parent_pid = self._windows_remote_command_owner_pid(
+            system=system,
+            time=time,
+            child_exe=child_exe,
+            child_command_line=child_command_line,
         )
         shell_time = time - timedelta(
             milliseconds=120
