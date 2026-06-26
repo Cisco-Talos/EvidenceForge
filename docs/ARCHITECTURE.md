@@ -139,6 +139,23 @@ it, and independent events may still share source timestamps. Across different
 source families there is no global total order; each source is responsible for
 preserving its own causal order with stable, explainable offsets.
 
+Endpoint source timing includes host-clock profiles from
+`config/activity/timing_profiles.yaml`. Windows Security, Sysmon, and
+host-resident eCAR on a Windows host share that host's offset/drift; Linux
+syslog, bash history, and host-resident eCAR on a Linux host share the Linux
+host clock. eCAR does not have a separate default clock domain because the agent
+is modeled as running on the endpoint. Network, proxy, firewall, and IDS sensors
+remain independent appliance clocks with their own observation profiles.
+
+`IdentityDirectory` (`src/evidenceforge/generation/identity.py`) is built during
+engine setup before baseline/storyline execution. It treats scenario `users` as
+logical people and resolves separate Windows and Linux platform accounts for
+them. Windows accounts may be domain-backed or host-local with SIDs and SAM
+names; Linux accounts may be directory-backed or host-local with UIDs, GIDs,
+home directories, and shells. The legacy `sid_registry` is now a compatibility
+view of this directory for older Windows callers while generation code migrates
+toward directory lookups.
+
 `ObservationPolicy` (`src/evidenceforge/events/observation.py`) is the
 source-coverage contract. It applies named `observation_profile`s after
 canonical state is updated and before a matching emitter renders. Profiles may

@@ -529,7 +529,12 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"low", "medium", "high"},
         },
         "activity/timing_profiles.yaml": {
-            "dict_fields": {"relationships", "windows_event_time", "network_sensor_observation"},
+            "dict_fields": {
+                "relationships",
+                "endpoint_clock",
+                "windows_event_time",
+                "network_sensor_observation",
+            },
         },
     }
 
@@ -1251,6 +1256,100 @@ def validate_config() -> ValidationResult:
                         f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
                     )
                 )
+
+    endpoint_clock = timing_profiles_data.get("endpoint_clock", {})
+    if not isinstance(endpoint_clock, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "endpoint_clock must be a mapping")
+        )
+    else:
+        profiles = endpoint_clock.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "endpoint_clock.profiles must be a non-empty mapping",
+                )
+            )
+        elif "complete" not in profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    'endpoint_clock.profiles must include "complete"',
+                )
+            )
+        if isinstance(profiles, dict):
+            for profile_name, profile_data in profiles.items():
+                if not isinstance(profile_data, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f'Endpoint clock profile "{profile_name}" must be a mapping',
+                        )
+                    )
+                    continue
+                for os_name in ("windows", "linux"):
+                    os_profile = profile_data.get(os_name)
+                    if not isinstance(os_profile, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"endpoint_clock.profiles.{profile_name}.{os_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    for field_name, minimum, maximum in (
+                        ("host_offset_ms", -300_000, 300_000),
+                        ("host_drift_ppm", -500, 500),
+                    ):
+                        bounds = os_profile.get(field_name)
+                        if not isinstance(bounds, dict):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name} must be a mapping",
+                                )
+                            )
+                            continue
+                        min_value = bounds.get("min")
+                        max_value = bounds.get("max")
+                        if not isinstance(min_value, int) or min_value < minimum:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.min must be an integer >= {minimum}",
+                                )
+                            )
+                        if not isinstance(max_value, int) or max_value > maximum:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.max must be an integer <= {maximum}",
+                                )
+                            )
+                        if (
+                            isinstance(min_value, int)
+                            and isinstance(max_value, int)
+                            and max_value < min_value
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.max must be >= min",
+                                )
+                            )
     spacing = timing_profiles_data.get("windows_event_time", {}).get("collision_spacing", {})
     if not isinstance(spacing, dict):
         result.issues.append(

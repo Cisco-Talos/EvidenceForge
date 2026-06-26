@@ -1098,6 +1098,65 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_endpoint_clock_range(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        def load_invalid_timing_profiles():
+            return {
+                "relationships": {
+                    "network.dns_before_tcp": {
+                        "class": "causal_prerequisite",
+                        "position": "before",
+                        "min_ms": 20,
+                        "max_ms": 1500,
+                    }
+                },
+                "endpoint_clock": {
+                    "profiles": {
+                        "complete": {
+                            "windows": {
+                                "host_offset_ms": {"min": 10, "max": 0},
+                                "host_drift_ppm": {"min": 0, "max": 0},
+                            },
+                            "linux": {
+                                "host_offset_ms": {"min": 0, "max": 0},
+                                "host_drift_ppm": {"min": 0, "max": 0},
+                            },
+                        }
+                    }
+                },
+                "windows_event_time": {
+                    "collision_spacing": {
+                        "near_zero_until": 25,
+                        "near_gap_min_us": 50,
+                        "near_gap_max_us": 500,
+                        "large_gap_min_ms": 1000,
+                        "large_gap_max_ms": 4000,
+                    }
+                },
+                "network_sensor_observation": {
+                    "default_profile": "well_synced",
+                    "profiles": {
+                        "well_synced": {
+                            "clock_skew_us": {"min": -4000, "max": 4000},
+                            "path_delay_us": {"min": 250, "max": 8000},
+                        }
+                    },
+                },
+            }
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "endpoint_clock.profiles.complete.windows.host_offset_ms.max must be >= min"
+            in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_edr_side_effect_profile(self, monkeypatch):
         from evidenceforge.generation.activity import edr_pools
 

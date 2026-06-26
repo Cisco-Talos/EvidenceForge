@@ -807,14 +807,10 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
         process_seed = (host.hostname, proc.pid, process_start_time)
-        render_time = _SOURCE_TIMING.source_time_after_source(
+        render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
-            after_source_key="source.sysmon_process_create",
-            gap_key="source.windows_security_after_sysmon_process_create_gap",
             seed_parts=process_seed,
-            after_seed_parts=process_seed,
-            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -886,14 +882,10 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
         process_seed = (host.hostname, proc.pid, process_start_time)
-        render_time = _SOURCE_TIMING.source_time_after_source(
+        render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
-            after_source_key="source.sysmon_process_create",
-            gap_key="source.windows_security_after_sysmon_process_create_gap",
             seed_parts=process_seed,
-            after_seed_parts=process_seed,
-            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 

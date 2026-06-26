@@ -49,6 +49,7 @@ environment:
       last_active: "2024-01-02"
       reason: "CRM system decommissioned"
   groups: [...]               # Optional
+  identity: ...               # Optional: logical-user to platform-account overrides
 ```
 
 Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic. Each field:
@@ -66,6 +67,49 @@ All internal timestamps are stored in UTC. The timezone configuration controls o
   - Unmatched hostnames use the default
 
 Valid timezone names are any [pytz timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g., `America/New_York`, `Europe/London`, `Asia/Tokyo`, `UTC`).
+
+### Identity Directory
+
+Scenario `users` are logical people. During generation, EvidenceForge builds an
+internal identity directory that maps each logical user to optional Windows and
+Linux platform accounts. Existing scenarios do not need any identity block:
+
+- If `environment.domain` or a domain controller exists, scenario users get
+  Windows domain accounts by default.
+- If no Windows domain exists, Windows accounts default to host-local accounts on
+  the user's assigned or primary Windows workstation.
+- Linux accounts default to directory-backed identities with stable UIDs across
+  Linux hosts.
+- Windows SIDs/RIDs and Linux UIDs/GIDs are never shared identifiers. A user may
+  have both platforms at the same time; the logical username is the join point.
+- Built-in, machine, daemon, and service accounts remain platform-specific.
+
+Optional overrides are available when a scenario needs exact account naming or
+platform scoping:
+
+```yaml
+environment:
+  identity:
+    windows_default_scope: auto      # auto | domain | local
+    linux_default_scope: directory   # directory | local
+    users:
+      aisha.johnson:
+        windows:
+          scope: domain              # auto | domain | local | disabled
+          account_name: aisha.johnson
+        linux:
+          scope: directory           # auto | directory | local | disabled
+          account_name: aisha.johnson
+          uid: 2528                  # Optional, unique in Linux identity namespace
+          gid: 2528                  # Optional
+```
+
+All fields are optional. Explicit Windows SID overrides and Linux UID overrides
+must be unique within their platform namespace. Account existence and activity
+placement are intentionally separate: a directory-backed Linux account can exist
+across Linux hosts, while local interactive activity is still placed by the world
+model using assigned users, primary systems, host roles, and plausible admin
+behavior.
 
 ### Users
 
@@ -433,6 +477,15 @@ Observation decisions are coherent inside source-local lifecycle groups, so a si
 not drop or delay process create/dependent/terminate rows, logon/logoff rows, or same-UID network
 companions independently in a way that would orphan its own evidence.
 
+The same profile name also selects endpoint host-clock defaults from
+`config/activity/timing_profiles.yaml`. `complete` keeps endpoint clocks aligned
+for training-friendly output. `enterprise_standard` and `messy_collection`
+introduce host-level offset/drift plus source-specific observation latency.
+Host-resident eCAR uses the same host clock as Windows Security/Sysmon on
+Windows hosts and syslog/bash-history on Linux hosts; eCAR does not get a
+separate synthetic clock by default. Network, proxy, firewall, and IDS sensors
+keep independent appliance clock profiles.
+
 ## Storyline
 
 Storyline events define specific actions at specific times. Each entry declares what happened (`activity`, for documentation/GROUND_TRUTH.md) and what events to generate (`events` list with typed, validated fields).
@@ -567,7 +620,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
 
-**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records use the well-synced network sensor timing profile in `config/activity/timing_profiles.yaml`. The default profile keeps stable per-sensor clock skew within +/-1.5 ms and per-flow path/capture delay within 50-2000 microseconds. Byte and packet counts remain canonical unless sensor observation variance is explicitly allowed for that source-native row.
+**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records use the network sensor timing profile in `config/activity/timing_profiles.yaml`. The default distributed-tap profile keeps stable per-sensor clock skew within roughly -18 to +22 ms and per-flow path/capture delay within 1.2 to 58 ms. Byte and packet counts remain canonical unless sensor observation variance is explicitly allowed for that source-native row. Endpoint sources use host-clock profiles instead of these network-sensor appliance clocks.
 
 **Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
 
@@ -910,7 +963,7 @@ This safety net catches common cases, but should not be relied upon as the prima
 1. **Always declare the primary action explicitly** -- don't rely on inference for the main event
 2. **Declare correlated events for process commands** -- if a command creates an account, installs a service, clears logs, etc., add the corresponding event type to the `events` list
 3. **Explicitly declare cross-system events** -- inference cannot generate events on other systems (e.g., DC Kerberos for domain logon, RDP logon on target)
-4. **Explicitly declare events when field precision matters** -- auto-inference uses auto-generated values (random SIDs); declare explicitly if SIDs must match across steps
+4. **Explicitly declare events when field precision matters** -- auto-inference uses deterministic identity-directory values; declare typed account/identity events when a specific target, group, SID, UID, or account relationship matters to the exercise
 5. **Use explicit events for specialized detection types** -- CreateRemoteThread, LSASS access; inference doesn't detect these patterns
 
 ### Examples

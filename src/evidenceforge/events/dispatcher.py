@@ -111,7 +111,9 @@ class EventDispatcher:
         self.storyline_cluster_id: str | None = None
         from evidenceforge.generation.source_timing import SourceTimingPlanner
 
-        self.source_timing_planner = SourceTimingPlanner()
+        self.source_timing_planner = SourceTimingPlanner(
+            clock_profile_name=self.observation_policy.profile_name
+        )
 
     @property
     def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:

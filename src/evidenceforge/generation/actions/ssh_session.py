@@ -51,6 +51,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     sample_timing_delta,
 )
+from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
@@ -88,18 +89,7 @@ def _ssh_syslog_time(
 
 def _linux_uid_for_user(username: str) -> int:
     """Return a stable plausible Linux UID for a login username."""
-    if username == "root":
-        return 0
-    well_known = {
-        "ubuntu": 1000,
-        "ec2-user": 1000,
-        "admin": 1001,
-        "ansible": 998,
-        "deploy": 1002,
-    }
-    if username in well_known:
-        return well_known[username]
-    return 2000 + (_stable_seed(f"linux_uid_{username}") % 5000)
+    return default_linux_uid_for_user(username)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +211,7 @@ class SshSessionExecutor(Protocol):
     _ip_to_system: dict[str, System]
     _network_visibility: Any
     _source_timing_planner: SourceTimingPlanner
+    identity_directory: IdentityDirectory | None
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build canonical host context for a scenario system."""
@@ -964,6 +955,14 @@ class SshSessionActionBundle:
 
         request = self.request
         executor = self.executor
+        identity_directory = getattr(executor, "identity_directory", None)
+        if identity_directory is not None:
+            user_uid = identity_directory.linux_uid_for_user(
+                request.user.username,
+                host=request.target_system.hostname,
+            )
+        else:
+            user_uid = _linux_uid_for_user(request.user.username)
         executor.dispatcher.dispatch(
             SecurityEvent(
                 timestamp=auth_state.accepted_time,
@@ -990,7 +989,7 @@ class SshSessionActionBundle:
                     severity=6,
                     message=(
                         "pam_unix(sshd:session): session opened for user "
-                        f"{request.user.username}(uid={_linux_uid_for_user(request.user.username)}) "
+                        f"{request.user.username}(uid={user_uid}) "
                         "by (uid=0)"
                     ),
                 ),

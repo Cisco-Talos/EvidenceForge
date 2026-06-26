@@ -1554,6 +1554,23 @@ class ObservationMultiplierRange(BaseModel, extra="forbid"):
         return self
 
 
+class ObservationCollectionBatching(BaseModel, extra="forbid"):
+    """Optional coherent collection batching delay for a source family."""
+
+    enabled: bool = False
+    interval_ms: ObservationDelayRange = Field(
+        default_factory=lambda: ObservationDelayRange(min_ms=0, max_ms=0)
+    )
+
+
+class ObservationCollectionWindow(BaseModel, extra="forbid"):
+    """Optional collection deployment window for a source family."""
+
+    enabled: bool = False
+    start: str | None = None
+    end: str | None = None
+
+
 class ObservationSourceProfile(BaseModel, extra="forbid"):
     """Source-level observation behavior for a profile."""
 
@@ -1564,6 +1581,12 @@ class ObservationSourceProfile(BaseModel, extra="forbid"):
     )
     host_missingness_multiplier: ObservationMultiplierRange = Field(
         default_factory=lambda: ObservationMultiplierRange(min=1.0, max=1.0)
+    )
+    collection_batching: ObservationCollectionBatching = Field(
+        default_factory=ObservationCollectionBatching
+    )
+    collection_window: ObservationCollectionWindow = Field(
+        default_factory=ObservationCollectionWindow
     )
 
     @field_validator("format_missingness")

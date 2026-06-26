@@ -66,6 +66,19 @@ def _host_context() -> HostContext:
     )
 
 
+def _linux_host_context() -> HostContext:
+    return HostContext(
+        hostname="LINUX-TEST-01",
+        ip="10.0.1.20",
+        fqdn="LINUX-TEST-01.corp.local",
+        os="Ubuntu Linux",
+        os_category="linux",
+        system_type="server",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+
+
 def _process_context(start_time: datetime) -> ProcessContext:
     return ProcessContext(
         pid=4242,
@@ -98,6 +111,111 @@ def test_source_time_is_deterministic() -> None:
     )
 
     assert first == second
+
+
+def test_endpoint_sources_share_host_clock_offset() -> None:
+    """Windows Security, Sysmon, and host-resident eCAR share one host clock."""
+    seed = ("WIN-TEST-01", 4242, _base_time())
+    event_kwargs = {
+        "timestamp": _base_time(),
+        "event_type": "process_create",
+        "src_host": _host_context(),
+        "process": _process_context(_base_time()),
+    }
+    complete = SourceTimingPlanner(clock_profile_name="complete")
+    enterprise = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+
+    deltas = []
+    for source_key in (
+        "source.sysmon_process_create",
+        "source.windows_security_process_create",
+        "source.ecar_process_create",
+    ):
+        complete_event = SecurityEvent(**event_kwargs)
+        enterprise_event = SecurityEvent(**event_kwargs)
+        complete_time = complete.source_time(complete_event, source_key, seed_parts=seed)
+        enterprise_time = enterprise.source_time(enterprise_event, source_key, seed_parts=seed)
+        deltas.append(enterprise_time - complete_time)
+
+    assert len(set(deltas)) == 1
+    assert deltas[0] != timedelta(0)
+
+
+def test_linux_ecar_uses_linux_host_clock_profile() -> None:
+    """Linux eCAR receives host-clock adjustment from the Linux endpoint profile."""
+    seed = ("LINUX-TEST-01", 4242, _base_time())
+    event_kwargs = {
+        "timestamp": _base_time(),
+        "event_type": "process_create",
+        "src_host": _linux_host_context(),
+        "process": _process_context(_base_time()),
+    }
+    complete_event = SecurityEvent(**event_kwargs)
+    enterprise_event = SecurityEvent(**event_kwargs)
+
+    complete_time = SourceTimingPlanner(clock_profile_name="complete").source_time(
+        complete_event,
+        "source.ecar_process_create",
+        seed_parts=seed,
+    )
+    enterprise_time = SourceTimingPlanner(clock_profile_name="enterprise_standard").source_time(
+        enterprise_event,
+        "source.ecar_process_create",
+        seed_parts=seed,
+    )
+
+    assert enterprise_time != complete_time
+
+
+def test_network_sensor_timing_is_independent_from_endpoint_clock_profile() -> None:
+    """Zeek/network sensor source times do not inherit endpoint host clock skew."""
+    seed = ("uid", "query", _base_time())
+    event_kwargs = {
+        "timestamp": _base_time(),
+        "event_type": "connection",
+        "src_host": _host_context(),
+        "network": _network_context(),
+    }
+    complete_time = SourceTimingPlanner(clock_profile_name="complete").source_time(
+        SecurityEvent(**event_kwargs),
+        "source.zeek_dns_query",
+        seed_parts=seed,
+    )
+    enterprise_time = SourceTimingPlanner(clock_profile_name="enterprise_standard").source_time(
+        SecurityEvent(**event_kwargs),
+        "source.zeek_dns_query",
+        seed_parts=seed,
+    )
+
+    assert enterprise_time == complete_time
+
+
+def test_windows_endpoint_process_sources_are_not_globally_one_directional() -> None:
+    """Security and Sysmon process-create source times can land on either side."""
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+    security_before_sysmon = False
+    security_after_sysmon = False
+    for index in range(100):
+        event = SecurityEvent(
+            timestamp=_base_time(),
+            event_type="process_create",
+            src_host=_host_context(),
+            process=_process_context(_base_time()),
+        )
+        seed = ("WIN-TEST-01", 4242, _base_time(), index)
+        sysmon_time = planner.source_time(event, "source.sysmon_process_create", seed_parts=seed)
+        security_time = planner.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=seed,
+        )
+        security_before_sysmon = security_before_sysmon or security_time < sysmon_time
+        security_after_sysmon = security_after_sysmon or security_time > sysmon_time
+        if security_before_sysmon and security_after_sysmon:
+            break
+
+    assert security_before_sysmon
+    assert security_after_sysmon
 
 
 def test_source_time_clamps_to_declared_bounds() -> None:

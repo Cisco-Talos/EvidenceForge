@@ -2211,7 +2211,8 @@ class TestActivityGenerator:
         assert network_event.network.conn_state == "SF"
         assert network_event.network.initiating_pid == source_process.process.pid
         assert logon_event.auth.source_port == network_event.network.src_port
-        assert logon_event.auth.subject_username == test_user.username
+        assert logon_event.auth.subject_username == "SYSTEM"
+        assert logon_event.auth.subject_domain == "NT AUTHORITY"
         assert logon_event.timestamp > network_event.timestamp
         network_close_time = network_event.timestamp + timedelta(
             seconds=network_event.network.duration
@@ -2225,7 +2226,8 @@ class TestActivityGenerator:
         assert running_source_process.last_activity_time > network_close_time
         source_session = state_manager.get_session(running_source_process.logon_id)
         assert source_session is not None
-        assert logon_event.auth.subject_logon_id == source_session.logon_id
+        assert logon_event.auth.subject_logon_id == "0x3e7"
+        assert logon_event.auth.subject_logon_id != source_session.logon_id
         assert source_session.last_activity_time == running_source_process.last_activity_time
 
     def test_generate_rdp_session_does_not_self_source_target(
@@ -2707,10 +2709,10 @@ class TestActivityGenerator:
         assert event.auth.source_ip == source_ip
         assert event.auth.source_port > 0
 
-    def test_network_logon_with_modeled_source_session_uses_user_subject(
+    def test_network_logon_with_modeled_source_session_uses_target_local_subject(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Known source sessions should own Type 3 4624 Subject fields."""
+        """Target Type 3 4624 must not copy source-host LUID into Subject fields."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         source_system = System(
             hostname="WS-SOURCE-01",
@@ -2741,8 +2743,10 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 3
-        assert event.auth.subject_username == test_user.username
-        assert event.auth.subject_logon_id == source_logon_id
+        assert event.auth.subject_username == "SYSTEM"
+        assert event.auth.subject_domain == "NT AUTHORITY"
+        assert event.auth.subject_logon_id == "0x3e7"
+        assert event.auth.subject_logon_id != source_logon_id
 
     def test_network_logon_without_modeled_source_keeps_system_subject(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

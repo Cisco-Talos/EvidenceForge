@@ -24,7 +24,8 @@ caches data after first load. Two files (`network_params.yaml`,
 | `auth_noise.yaml` | `auth_noise.py` | Baseline authentication-noise profiles such as stale scheduled-credential account pools and irregular recurrence timing. |
 | `endpoint_noise.yaml` | `endpoint_noise.py` | Endpoint background timing, registry-emission, and EDR attribution policies for Windows scheduled processes, DHCP interface registry writes, and eCAR FLOW principal context. |
 | `host_activity_profiles.yaml` | `host_activity_profiles.py` | Coarse host/persona/role rate multipliers for baseline volume, endpoint noise, firewall deny bursts, and data-driven artifact variation. |
-| `observation_profiles.yaml` | `config/observation_profiles.py` | Named source-observation profiles for optional source-level missingness and delays. Scenario `observation_profile` defaults to `complete`; generation records status in `OBSERVATION_MANIFEST.json` for eval. |
+| `observation_profiles.yaml` | `config/observation_profiles.py` | Named source-observation profiles for optional source-level missingness, delays, batching, and collection windows. Scenario `observation_profile` defaults to `complete`; generation records status in `OBSERVATION_MANIFEST.json` for eval. |
+| `timing_profiles.yaml` | `generation/activity/timing_profiles.py` | Causal/source-native timing, endpoint host-clock offset/drift shared by OS logs and host-resident eCAR, and independent network sensor clock/path profiles. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates, plaintext HTTP policy, and referrer policy for proxy/HTTP logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, public NTP fallback servers, and DNS tunnel RTT bounds. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |

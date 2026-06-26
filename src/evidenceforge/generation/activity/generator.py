@@ -169,6 +169,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
 )
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
@@ -2860,18 +2861,7 @@ def _dns_hostname_allows_mx(hostname: str) -> bool:
 
 def _linux_uid_for_user(username: str) -> int:
     """Return a stable plausible Linux UID for a login username."""
-    if username == "root":
-        return 0
-    well_known = {
-        "ubuntu": 1000,
-        "ec2-user": 1000,
-        "admin": 1001,
-        "ansible": 998,
-        "deploy": 1002,
-    }
-    if username in well_known:
-        return well_known[username]
-    return 2000 + (_stable_seed(f"linux_uid_{username}") % 5000)
+    return default_linux_uid_for_user(username)
 
 
 def _icmp_echo_payload_size(rng: random.Random, requested: int | None) -> int:
@@ -3764,6 +3754,8 @@ class ActivityGenerator:
         event_record_counter: int = 10000,
         network_visibility=None,
         sid_registry: dict[str, str] | None = None,
+        identity_directory: IdentityDirectory | None = None,
+        source_timing_profile: str = "complete",
         dispatcher: EventDispatcher | None = None,
         causal_engine: CausalExpansionEngine | None = None,
     ):
@@ -3775,6 +3767,8 @@ class ActivityGenerator:
             event_record_counter: Starting EventRecordID
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
+            identity_directory: Optional logical/platform account directory
+            source_timing_profile: Named endpoint clock/source timing profile
             dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
             causal_engine: Optional CausalExpansionEngine for auto-generating
                 prerequisite events (DNS before connections, Kerberos before
@@ -3791,6 +3785,7 @@ class ActivityGenerator:
         self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
+        self.identity_directory = identity_directory
 
         # IP→System lookup for HostContext resolution on connection events
         self._ip_to_system: dict[str, Any] = {}
@@ -3851,7 +3846,7 @@ class ActivityGenerator:
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int], datetime] = {}
         self._process_source_terminate_times: dict[tuple[str, int], datetime] = {}
-        self._source_timing_planner = SourceTimingPlanner()
+        self._source_timing_planner = SourceTimingPlanner(clock_profile_name=source_timing_profile)
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -8271,29 +8266,9 @@ class ActivityGenerator:
                 return self._account_subject_fields(username, system, logon_id=active.logon_id)
             return system_subject
 
-        if logon_type not in {3, 10} or not source_ip or source_ip in {"-", system.ip}:
+        if logon_type in {3, 10}:
             return system_subject
-
-        resolved_source_system = source_system or getattr(self, "_ip_to_system", {}).get(
-            source_ip.removeprefix("::ffff:")
-        )
-        if (
-            resolved_source_system is None
-            or _get_os_category(resolved_source_system.os) != "windows"
-        ):
-            return system_subject
-        source_session = self._active_user_interactive_windows_session(
-            user,
-            resolved_source_system,
-            time,
-        )
-        if source_session is None:
-            return system_subject
-        return self._account_subject_fields(
-            username,
-            resolved_source_system,
-            logon_id=source_session.logon_id,
-        )
+        return system_subject
 
     def _failed_logon_profile(
         self,
@@ -9743,13 +9718,10 @@ class ActivityGenerator:
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
             )
-            self._source_timing_planner.source_time_after_source(
+            self._source_timing_planner.source_time(
                 event,
                 "source.ecar_process_create",
-                after_source_key="source.sysmon_process_create",
-                gap_key="source.ecar_after_sysmon_process_create_gap",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
-                after_not_before=sysmon_not_before,
                 not_before=process_start_time,
             )
             return
