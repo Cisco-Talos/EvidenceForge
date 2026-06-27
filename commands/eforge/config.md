@@ -43,12 +43,17 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 - Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files — use `eforge info`
 - Do NOT read or edit files under `.claude/commands/` (those are read-only skill copies)
 - Do NOT edit files under `paths.*` when `config_writable` is `False` — those are inside the installed Python package
+- If a domain/IP is needed only for one scenario, put it in that scenario's
+  `environment.network_identities` instead of the reusable config overlay. Use
+  `dns_registry.yaml` only for domains that should be available across many
+  scenarios or selected by package traffic profiles, site maps, proxy URI
+  templates, or TLS realism data.
 
 ## Step 2: Classify the Operation
 
 | Operation | Primary File(s) | Cascade Files |
 |-----------|-----------------|---------------|
-| Add/retag domain | `dns_registry.yaml` | `traffic_profiles.yaml`, `proxy_uri_templates.yaml`, `site_maps.yaml` |
+| Add/retag reusable domain | `dns_registry.yaml` | `traffic_profiles.yaml`, `proxy_uri_templates.yaml`, `site_maps.yaml` |
 | Modify traffic patterns | `traffic_profiles.yaml` | `dns_registry.yaml` (validate tags exist) |
 | Add/modify application | `application_catalog.yaml` | `spawn_rules.yaml`, `process_network_map.yaml` |
 | Add/modify DLL load profile | `application_catalog.yaml` or `system_processes.yaml` | `sysmon_filters.yaml` (Event 7 filter) |
@@ -105,7 +110,12 @@ Also read the relevant reference doc for field schemas and conventions:
 
 Ask targeted follow-up questions to ensure the change achieves what the user actually wants. Ask one question at a time.
 
-**Adding a domain:** What dns_tags? Appear in proxy logs? Browsable with page depth? Which personas/roles? Multiple IPs?
+**Adding a domain:** First ask whether it is scenario-local or reusable. For
+scenario-local domains, direct the user to `environment.network_identities` and
+`baseline_activity.traffic_affinities` in the scenario. For reusable config
+domains, ask what `dns_tags` it needs, whether it should appear in proxy logs,
+whether it is browsable with page depth, which personas/roles should select it,
+and whether it has multiple IPs.
 
 **Adding an application:** Which OS(es)? Categories? Which personas? Image path? PE metadata? Command templates? Parent process? Children? Network traffic?
 

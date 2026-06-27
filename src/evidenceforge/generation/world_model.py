@@ -110,6 +110,15 @@ def _normalize_role_name(role: str) -> str:
     return _ROLE_ALIASES.get(key, key)
 
 
+def known_topology_roles() -> set[str]:
+    """Return canonical role names recognized by world-model topology hints."""
+    roles = set(_ROLE_ALIASES.values())
+    roles.update(role for _hints, role in _SERVICE_ROLE_HINTS)
+    roles.update(role for _hints, role in _HOSTNAME_ROLE_HINTS)
+    roles.update(_ROLE_PERSONAS)
+    return roles
+
+
 @dataclass(frozen=True, slots=True)
 class HostWorld:
     """Canonical capabilities for a single system."""

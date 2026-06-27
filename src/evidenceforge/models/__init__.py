@@ -40,9 +40,11 @@ from .exceptions import (
 )
 from .scenario import (
     BaselineActivity,
+    ConnectionProfile,
     Environment,
     Group,
     NetworkConfig,
+    NetworkIdentity,
     NetworkSegment,
     NetworkSensor,
     OutputSpec,
@@ -55,7 +57,14 @@ from .scenario import (
     System,
     TimeWindow,
     Timezone,
+    TrafficAffinity,
+    TrafficAudience,
+    TrafficEndpoint,
+    TrafficSuppression,
     User,
+    WebRequestProfile,
+    WebRouteProfile,
+    WeightedHttpMethodProfile,
 )
 from .state import ActiveSession, GeneratorState, OpenConnection, RunningProcess
 
@@ -78,6 +87,15 @@ __all__ = [
     "Group",
     "Persona",
     "BaselineActivity",
+    "ConnectionProfile",
+    "NetworkIdentity",
+    "TrafficAffinity",
+    "TrafficAudience",
+    "TrafficEndpoint",
+    "TrafficSuppression",
+    "WebRequestProfile",
+    "WebRouteProfile",
+    "WeightedHttpMethodProfile",
     "StorylineEvent",
     "RedHerringEvent",
     "StaleAccount",

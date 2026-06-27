@@ -6,6 +6,45 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.7.1 (2026-06-27)
+
+This release adds scenario-local network identities and authored baseline
+traffic affinities for volumetric and timing-focused threat-hunting labs.
+
+**Scenario network identities**
+
+- Added `environment.network_identities` as a scenario-local host/IP registry
+  that resolves before package DNS without mutating reusable config, with
+  validation for conflicts, undeclared-domain warnings, and host/IP mismatch
+  guidance (`3d0765bd`).
+
+**Baseline traffic affinities**
+
+- Added `baseline_activity.traffic_affinities` and `traffic_suppression` so
+  scenarios can generate scoped benign web or generic connection traffic to
+  authored identities while keeping that activity out of storyline/red-herring
+  ground truth (`3d0765bd`).
+
+**Web route profiles and docs**
+
+- Added route-owned web request profiles that bind paths to valid methods,
+  statuses, body sizes, and content types, plus updated scenario/config/generate
+  skill docs and references for identities, route profiles, suppression, and
+  reusable DNS registry guidance (`3d0765bd`).
+
+**CLI and authoring inventory**
+
+- Fixed `eforge info system_roles` to report author-facing scenario roles from
+  role-aware config and topology hints, including `forward_proxy`, `dns_server`,
+  and other roles that are supported outside `traffic_profiles.yaml`
+  (`9bac74a7`).
+
+**Proxy access fidelity**
+
+- Fixed reused explicit HTTPS proxy tunnels so each inspected logical request
+  still emits a `proxy_access` row while CONNECT transport evidence remains
+  deduplicated inside the tunnel idle window (`7e5b3a61`).
+
 ## v1.6.0 (2026-06-27)
 
 This minor release adds identity-directory and host-clock modeling, improves
