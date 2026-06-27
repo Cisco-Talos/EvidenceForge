@@ -6,6 +6,32 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.6.0 (2026-06-27)
+
+This minor release adds identity-directory and host-clock modeling, improves
+Host/EDR realism contracts, and folds in the latest assessment-loop
+source-native realism fixes queued on `dev`.
+
+**Identity and host-clock modeling**
+
+- Added identity-directory and endpoint host-clock support so generated evidence
+  can share more realistic account, host, and clock semantics across correlated
+  sources (`05dc972d`).
+
+**Host/EDR realism contracts**
+
+- Improved Host/EDR realism contracts for source-native endpoint evidence,
+  including reduced ambient browser App Paths inventory noise and tighter
+  host-review follow-up documentation (`9a130d9f`, `c90b0aee`, `b6270bc3`,
+  `fa58b8d3`, `6b05ee65`).
+
+**Assessment-loop source-native fixes**
+
+- Improved source-native realism contracts from the latest blind-assessment
+  loops, covering DNS/proxy cache texture, Zeek TLS/X.509 companions, Windows
+  Security ordering and WFP semantics, SSH session evidence, eCAR ICMP FLOW
+  properties, and associated regression coverage (`79792928`).
+
 ## v1.5.1 (2026-06-25)
 
 This patch release bounds authored HTTP response-body sizing and refreshes
