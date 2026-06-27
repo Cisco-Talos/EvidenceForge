@@ -6,6 +6,28 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.8.0 (2026-06-27)
+
+This minor release adds optional network-sensor topology support and updates
+proxy access logs to align default and SOF-ELK text output with combined HTTP
+access-log parsing.
+
+**Network sensor topology**
+
+- Made network sensors optional so scenarios can generate supported host and
+  service evidence without requiring network sensor declarations for every
+  topology (`ff132a9e`).
+
+**Proxy access output**
+
+- Changed default and SOF-ELK `proxy_access.log` text rows to Apache/Nginx
+  combined access-log shape, preserving full usernames for default output while
+  normalizing SOF-ELK proxy usernames around current HTTPD parser limitations
+  (`90be8c8e`).
+- Updated the proxy access parser, SOF-ELK validation path, docs, skill
+  references, and regression coverage for combined proxy rows and legacy W3C
+  fallback parsing (`90be8c8e`).
+
 ## v1.7.1 (2026-06-27)
 
 This release adds scenario-local network identities and authored baseline
