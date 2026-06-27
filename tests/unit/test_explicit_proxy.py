@@ -312,13 +312,17 @@ def _emitters() -> dict[str, Mock]:
         "snort_alert": Mock(),
         "cisco_asa": Mock(),
     }
-    emitters["zeek_conn"].can_handle.side_effect = lambda event: event.network is not None
+    emitters["zeek_conn"].can_handle.side_effect = lambda event: (
+        event.network is not None and not event.network.application_layer_only
+    )
     emitters["zeek_dns"].can_handle.side_effect = lambda event: event.dns is not None
     emitters["zeek_http"].can_handle.side_effect = lambda event: event.http is not None
     emitters["zeek_ssl"].can_handle.side_effect = lambda event: event.ssl is not None
     emitters["proxy_access"].can_handle.side_effect = lambda event: event.proxy is not None
     emitters["snort_alert"].can_handle.side_effect = lambda event: event.ids is not None
-    emitters["cisco_asa"].can_handle.side_effect = lambda event: event.network is not None
+    emitters["cisco_asa"].can_handle.side_effect = lambda event: (
+        event.network is not None and not event.network.application_layer_only
+    )
     return emitters
 
 
@@ -2641,8 +2645,217 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs_after_first
         resolved_origin_ip = resolve_domain_ip("example.com", src_host="PROXY-01")
         assert ("10.0.3.10", resolved_origin_ip, 443) in pairs_after_first
-        assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first
+        assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first + 1
+        reused_proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert reused_proxy_event.network.application_layer_only is True
+        assert reused_proxy_event.network.zeek_uid == first_uid
+        assert reused_proxy_event.proxy.url == "https://example.com/app.js"
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
+
+    def test_tight_successful_https_requests_each_emit_proxy_request_on_reused_tunnel(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first_uid = ""
+        pairs_after_first: list[tuple[str, str, int]] = []
+
+        for idx in range(12):
+            uid = generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                time=start_time + timedelta(seconds=idx * 3),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                source_system=generator._ip_to_system["10.0.1.10"],
+                hostname="example.com",
+                emit_dns=True,
+                conn_state="SF",
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=f"/api/export/qlattice?page={idx + 1}",
+                    version="1.1",
+                    user_agent="Mozilla/5.0",
+                    response_body_len=5000,
+                    status_code=200,
+                    status_msg="OK",
+                ),
+            )
+            if idx == 0:
+                first_uid = uid
+                pairs_after_first = list(_conn_pairs(emitters))
+            else:
+                assert uid == first_uid
+                assert _conn_pairs(emitters) == pairs_after_first
+
+        assert emitters["proxy_access"].emit.call_count == 12
+        app_layer_proxy_events = [
+            call.args[0]
+            for call in emitters["proxy_access"].emit.call_args_list
+            if call.args[0].network.application_layer_only
+        ]
+        assert len(app_layer_proxy_events) == 11
+        assert {event.proxy.url for event in app_layer_proxy_events} == {
+            f"https://example.com/api/export/qlattice?page={idx}" for idx in range(2, 13)
+        }
+
+    def test_https_request_after_tunnel_timeout_emits_new_transport(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/first",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+        pairs_after_first = list(_conn_pairs(emitters))
+
+        second_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time + timedelta(seconds=300),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/second",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        assert second_uid != first_uid
+        assert len(_conn_pairs(emitters)) > len(pairs_after_first)
+        assert emitters["proxy_access"].emit.call_count == 2
+        assert not emitters["proxy_access"].emit.call_args.args[0].network.application_layer_only
+
+    def test_non_success_https_status_does_not_use_reused_tunnel_shortcut(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        first_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="example.com",
+                uri="/login",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=300,
+                response_body_len=900,
+                status_code=401,
+                status_msg="Unauthorized",
+            ),
+        )
+        second_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time + timedelta(seconds=3),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="example.com",
+                uri="/login",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=300,
+                response_body_len=900,
+                status_code=401,
+                status_msg="Unauthorized",
+            ),
+        )
+
+        assert second_uid != first_uid
+        assert emitters["proxy_access"].emit.call_count == 2
+        assert all(
+            not call.args[0].network.application_layer_only
+            for call in emitters["proxy_access"].emit.call_args_list
+        )
 
     def test_denied_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(

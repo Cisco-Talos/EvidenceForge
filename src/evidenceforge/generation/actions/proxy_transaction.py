@@ -27,14 +27,16 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Protocol
+from typing import Any, Protocol
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     DnsContext,
     FileTransferContext,
     FirewallContext,
     HttpContext,
     IdsContext,
+    NetworkContext,
     OcspContext,
     PeContext,
     ProxyContext,
@@ -121,6 +123,7 @@ class ProxyTransactionExecutor(Protocol):
     """Runtime hooks supplied by the current activity generator."""
 
     state_manager: StateManager
+    dispatcher: Any
     _explicit_proxy_tunnels: dict[tuple[str, str, str, str, int, str], tuple[datetime, str]]
 
     def _build_proxy_context(
@@ -313,7 +316,16 @@ class ProxyTransactionActionBundle:
                 last_activity, cached_uid = active_tunnel
                 elapsed = (request.time - last_activity).total_seconds()
                 if 0 <= elapsed < generator_utils._EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
+                    # Reuse the client/proxy transport, but still render this
+                    # inspected request in proxy_access. CONNECT setup dedupe
+                    # remains owned by ProxyEmitter's active-tunnel state.
                     executor._explicit_proxy_tunnels[tunnel_key] = (request.time, cached_uid)
+                    self._dispatch_reused_tunnel_proxy_request(
+                        proxy_context=proxy_context,
+                        proxy_sys=proxy_sys,
+                        cached_uid=cached_uid,
+                        listener_port=listener_port,
+                    )
                     return cached_uid
 
         client_http = self._build_client_http(proxy_context)
@@ -510,6 +522,37 @@ class ProxyTransactionActionBundle:
         if request.dst_port == 443:
             executor._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)
         return client_uid
+
+    def _dispatch_reused_tunnel_proxy_request(
+        self,
+        *,
+        proxy_context: ProxyContext,
+        proxy_sys: System,
+        cached_uid: str,
+        listener_port: int,
+    ) -> None:
+        """Dispatch one proxy-visible request on an already-open CONNECT tunnel."""
+
+        request = self.request
+        reused_event = SecurityEvent(
+            timestamp=request.time,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip=request.src_ip,
+                src_port=request.src_port or 0,
+                dst_ip=proxy_sys.ip,
+                dst_port=listener_port,
+                protocol="tcp",
+                service="http",
+                zeek_uid=cached_uid,
+                conn_state="SF",
+                local_orig=True,
+                local_resp=True,
+                application_layer_only=True,
+            ),
+            proxy=proxy_context,
+        )
+        self.executor.dispatcher.dispatch(reused_event)
 
     def _build_client_http(self, proxy_context: ProxyContext) -> HttpContext:
         """Build the client-to-proxy HTTP context."""

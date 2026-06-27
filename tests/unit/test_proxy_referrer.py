@@ -356,6 +356,50 @@ class TestProxyActionSemantics:
         assert inspected_fields[5] == "https://example.com/page"
         assert inspected_fields[-1] == "ssl-inspect"
 
+    def test_reused_https_tunnel_logs_each_request_but_one_connect(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+
+        for idx in range(5):
+            event = SecurityEvent(
+                timestamp=datetime(2024, 3, 15, 10, 0, idx * 5, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="10.0.3.10",
+                    dst_port=8080,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="Cproxyreused",
+                    application_layer_only=idx > 0,
+                ),
+                proxy=ProxyContext(
+                    client_ip="10.0.10.50",
+                    method="GET",
+                    url=f"https://example.com/page-{idx}",
+                    host="example.com",
+                    proxy_fqdn="PROXY-01",
+                    status_code=200,
+                    cache_result="MISS",
+                    proxy_action="ssl-inspect",
+                ),
+            )
+            emitter.emit(event)
+
+        data_lines = [line for line in rendered_lines if not line.startswith("#")]
+        connect_lines = [line for line in data_lines if " CONNECT example.com:443 " in line]
+        request_lines = [line for line in data_lines if " GET https://example.com/page-" in line]
+        assert len(connect_lines) == 1
+        assert len(request_lines) == 5
+
     def test_splunk_target_renders_apache_ta_json_without_w3c_header(self, tmp_path):
         from evidenceforge.formats import load_format
         from evidenceforge.generation.emitters.proxy import ProxyEmitter
