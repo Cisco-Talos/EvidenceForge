@@ -208,7 +208,7 @@ After reviewing output, you can suggest:
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
 | cisco_asa | Cisco ASA firewall syslog — default target flat per-firewall, SOF-ELK target per-firewall/year | Firewall entries (`type: firewall`) |
 | web_access | Apache/Nginx combined access logs | Web servers |
-| proxy_access | HTTP forward proxy access logs (W3C Extended) | Forward proxy systems |
+| proxy_access | HTTP forward proxy access logs (Apache/Nginx combined) | Forward proxy systems |
 
 When `nat_rules` are configured on the firewall sensor, `cisco_asa.log`
 also includes 305011/305012 NAT translation records alongside the normal

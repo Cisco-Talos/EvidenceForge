@@ -32,6 +32,7 @@ from evidenceforge.external_parsers.sof_elk_sources import SOF_ELK_SOURCE_SPECS_
 from evidenceforge.external_parsers.sof_elk_zeek import ZEEK_LOG_SPECS
 from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_PROXY_ACCESS_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
@@ -47,6 +48,7 @@ VALIDATOR_ORDER = (
     SOF_ELK_ZEEK_VALIDATOR,
     SOF_ELK_CISCO_ASA_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
+    SOF_ELK_PROXY_ACCESS_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
     SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
@@ -57,7 +59,6 @@ _UNSUPPORTED_FILE_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("windows_event_security.xml", "windows events", "security", "windows_event_security"),
     ("windows_event_sysmon.xml", "windows events", "sysmon", "windows_event_sysmon"),
     ("snort_alert.log", "ids", "snort", "snort_alert"),
-    ("proxy_access.log", "proxy", "access", "proxy_access"),
     ("ecar.json", "ecar", "ecar", "ecar"),
 )
 _SOF_ELK_TARGET_DEPENDENT_VALIDATORS = {
@@ -70,7 +71,6 @@ _UNSUPPORTED_REASON_BY_FORMAT = {
     "windows_event_security": "SOF-ELK validation uses Snare syslog, not Windows XML",
     "windows_event_sysmon": "SOF-ELK validation uses Snare syslog, not Windows XML",
     "snort_alert": "No SOF-ELK IDS fast-alert validator is wired yet",
-    "proxy_access": "No SOF-ELK proxy/W3C validator is wired yet",
     "ecar": "No stable third-party standard parser target",
     "bash_history": "No stable third-party standard parser target",
 }
