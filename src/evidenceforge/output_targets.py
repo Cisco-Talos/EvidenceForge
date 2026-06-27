@@ -139,11 +139,11 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
     ),
     "proxy_access": TargetFormatPolicy(
         "proxy_access",
-        "w3c_extended",
-        "w3c_extended",
+        "apache_combined",
+        "apache_combined",
         splunk_variant="apache_proxy_json",
         notes=(
-            "Default and SOF-ELK consume W3C Extended proxy logs; Splunk consumes "
+            "Default and SOF-ELK consume Apache/Nginx combined proxy logs; Splunk consumes "
             "Apache TA-compatible JSON proxy access records with CIM proxy tagging."
         ),
     ),

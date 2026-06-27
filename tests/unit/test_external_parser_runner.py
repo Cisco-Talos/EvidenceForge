@@ -28,6 +28,7 @@ from pathlib import Path
 
 from evidenceforge.external_parsers.runner import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_PROXY_ACCESS_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
@@ -87,6 +88,12 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         '200 512 "-" "Mozilla/5.0"\n',
         encoding="utf-8",
     )
+    (data_dir / "proxy-01.example.test").mkdir()
+    (data_dir / "proxy-01.example.test" / "proxy_access.log").write_text(
+        "10.0.10.50 - EXAMPLE\\alice [15/Jun/2026:14:23:05 +0000] "
+        '"CONNECT example.com:443 HTTP/1.1" 200 512 "-" "Mozilla/5.0"\n',
+        encoding="utf-8",
+    )
     (data_dir / "linux-01.example.test" / "2026" / "syslog.log").write_text(
         "<30>Jun 15 14:23:05 linux-01 sshd[1234]: Accepted password for alice "
         "from 198.51.100.25 port 54321 ssh2\n",
@@ -99,12 +106,14 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         SOF_ELK_ZEEK_VALIDATOR,
         SOF_ELK_CISCO_ASA_VALIDATOR,
         SOF_ELK_WEB_ACCESS_VALIDATOR,
+        SOF_ELK_PROXY_ACCESS_VALIDATOR,
         SOF_ELK_SYSLOG_VALIDATOR,
         SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
         SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
     )
     assert {(log.logtype, log.subtype) for log in plan.supported_logs} == {
         ("firewall", "cisco_asa"),
+        ("proxy", "access"),
         ("syslog", "linux"),
         ("web", "access"),
         ("windows events", "security_snare"),

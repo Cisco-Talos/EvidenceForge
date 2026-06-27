@@ -126,6 +126,12 @@ descriptions.
   host history, and add realistic network collection imperfections such as
   occasional Zeek `missed_bytes`, incomplete TLS/x509 companion evidence, and
   less curated IDS alert clustering.
+- [ ] **P2** Track SOF-ELK HTTPD parser handling of domain-qualified and
+  machine-account proxy usernames. The SOF-ELK target currently strips the
+  Windows domain prefix from `DOMAIN\user` and the trailing `$` from `machine$`
+  auth tokens because SOF-ELK's HTTPD grok rejects those values; if SOF-ELK
+  accepts them later, revisit whether the SOF-ELK combined text target should
+  preserve the full value like the default target does.
 - [ ] **P3** Polish proxy/web application semantics for SaaS token endpoints,
   MIME/status combinations, scanner request texture, and selective large-file
   extraction imperfection.

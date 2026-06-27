@@ -22,6 +22,7 @@ accepts in their source-native shape generally stay unchanged.
 | Cisco ASA | `<firewall>/<year>/cisco_asa.log`, keeping native ASA syslog content. |
 | Zeek | Unchanged NDJSON under concrete sensor directories. |
 | Web access | Apache/Nginx combined log text. |
+| Proxy access | Apache/Nginx combined log text with absolute URLs and CONNECT authorities. |
 | Other families | Unchanged, but not necessarily supported by this backend. |
 
 ## Generate And Validate
@@ -58,10 +59,10 @@ Extra requirements and gotchas:
 | Zeek `dhcp`, `ntp`, `ocsp`, `packet_filter`, `pe`, `reporter` | Supported | JSON ingest and count validation through supplemental EvidenceForge inputs. |
 | Cisco ASA | Supported | SOF-ELK Cisco ASA filter validates parse completion and required fields. |
 | Web access | Supported | SOF-ELK HTTPD filters validate parse completion; documented optional enrichment misses may be ignored. |
+| Proxy access | Supported | SOF-ELK HTTPD filters validate parse completion for combined proxy rows. |
 | Linux syslog | Supported | Syslog filters validate parse completion, required fields, and staged year. |
 | Windows Security Snare | Supported | Snare/syslog filters validate `winlog.*` fields, provider/channel metadata, and staged year. |
 | Sysmon Snare | Supported | Snare/syslog filters validate `winlog.*` fields, provider/channel metadata, and staged year. |
-| Proxy access | Unsupported in SOF-ELK backend | Detected outside this backend's supported validation scope. |
 | eCAR | Unsupported in SOF-ELK backend | Custom format with no stable SOF-ELK parser target. |
 | Snort/Suricata fast alert | Unsupported in SOF-ELK backend | Generated when IDS sensors exist, but not validated here. |
 | Bash history | Unsupported in SOF-ELK backend | Command history text, not a parser-normalized log family. |

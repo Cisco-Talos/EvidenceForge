@@ -20,18 +20,33 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Parser for HTTP/HTTPS forward proxy access logs (W3C Extended format)."""
+"""Parser for HTTP/HTTPS forward proxy access logs."""
 
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import LogParser, ParsedRecord, register_parser
 
-# W3C Extended format:
+# Apache/Nginx combined format:
+# client_ip - username [timestamp] "method url protocol" status bytes "referer" "user_agent"
+_COMBINED_PROXY_PATTERN = re.compile(
+    r"^(\S+)\s+"  # client_ip
+    r"\S+\s+"  # ident (always -)
+    r"(\S+)\s+"  # username (or -)
+    r"\[([^\]]+)\]\s+"  # [timestamp]
+    r'"(\S+)\s+(\S+)\s+(\S+)"\s+'  # "method url protocol"
+    r"(\d+)\s+"  # status_code
+    r"(\S+)\s+"  # bytes_sent (or -)
+    r'"([^"]*)"\s+'  # "referer"
+    r'"([^"]*)"'  # "user_agent"
+)
+
+# Legacy W3C Extended format:
 # date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result [x-proxy-action]
-_PROXY_PATTERN = re.compile(
+_LEGACY_W3C_PROXY_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+"  # timestamp
     r"(\S+)\s+"  # client_ip
     r"(\S+)\s+"  # username
@@ -49,6 +64,20 @@ _PROXY_PATTERN = re.compile(
     r"(\S+)"  # cache_result
     r"(?:\s+(\S+))?"  # optional proxy_action
 )
+
+
+def _proxy_host_from_request_target(method: str, request_target: str) -> str | None:
+    """Return destination host from a proxy request target when it is present."""
+    if method.upper() == "CONNECT":
+        authority = request_target.rsplit("@", 1)[-1]
+        host, _separator, _port = authority.partition(":")
+        return host or None
+
+    try:
+        parsed = urlsplit(request_target)
+    except ValueError:
+        return None
+    return parsed.hostname
 
 
 @register_parser
@@ -79,7 +108,64 @@ class ProxyAccessParser(LogParser):
         errors: list[str] = []
         timestamp = None
 
-        match = _PROXY_PATTERN.match(line)
+        match = _COMBINED_PROXY_PATTERN.match(line)
+        if match:
+            (
+                client_ip,
+                username,
+                ts_str,
+                method,
+                request_target,
+                protocol,
+                status,
+                bytes_sent,
+                referrer,
+                user_agent,
+            ) = match.groups()
+
+            try:
+                timestamp = datetime.strptime(ts_str, "%d/%b/%Y:%H:%M:%S %z")
+            except ValueError:
+                try:
+                    timestamp = datetime.strptime(ts_str, "%d/%b/%Y:%H:%M:%S").replace(tzinfo=UTC)
+                except ValueError:
+                    errors.append(f"Invalid timestamp: {ts_str}")
+
+            fields["timestamp"] = ts_str
+            fields["client_ip"] = client_ip
+            if username != "-":
+                fields["username"] = username
+            fields["method"] = method
+            fields["url"] = request_target
+            fields["path"] = request_target
+            fields["protocol"] = protocol
+            fields["status_code"] = int(status)
+            if bytes_sent != "-":
+                try:
+                    parsed_bytes = int(bytes_sent)
+                    fields["bytes_sent"] = parsed_bytes
+                    fields["sc_bytes"] = parsed_bytes
+                except ValueError:
+                    fields["bytes_sent"] = bytes_sent
+            if referrer != "-":
+                fields["referrer"] = referrer
+            if user_agent != "-":
+                fields["user_agent"] = user_agent
+            host = _proxy_host_from_request_target(method, request_target)
+            if host:
+                fields["host"] = host
+
+            return ParsedRecord(
+                source_format=self.format_name,
+                raw=line,
+                fields=fields,
+                timestamp=timestamp,
+                parse_errors=errors,
+                line_number=line_number,
+                source_host=hostname,
+            )
+
+        match = _LEGACY_W3C_PROXY_PATTERN.match(line)
         if not match:
             errors.append("Line does not match proxy access format")
             return ParsedRecord(

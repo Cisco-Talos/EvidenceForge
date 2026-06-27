@@ -157,6 +157,7 @@ SOF-ELK then sees that directory mounted as `/logstash`.
 | `<sensor>/conn.json` | `/logstash/zeek/<sensor>/conn.log` |
 | `<sensor>/dns.json` | `/logstash/zeek/<sensor>/dns.log` |
 | `<host>/web_access.log` | `/logstash/httpd/<host>/web_access.log` |
+| `<host>/proxy_access.log` | `/logstash/httpd/<host>/proxy_access.log` |
 | `<host>/<year>/syslog.log` (`sof-elk` target) | `/logstash/syslog/<year>/<host>/syslog.log` |
 | `<sensor>/<year>/cisco_asa.log` (`sof-elk` target) | `/logstash/syslog/<year>/<sensor>/cisco_asa.log` |
 | `<host>/<year>/windows_event_security_snare.log` (`sof-elk` target) | `/logstash/syslog/<year>/<host>/windows_event_security_snare.log` |

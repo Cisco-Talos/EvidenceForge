@@ -7,8 +7,39 @@ import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
+
+
+def _parse_proxy_fields(line: str) -> dict:
+    """Parse one rendered proxy access row for assertions."""
+    record = ProxyAccessParser()._parse_line(line, 1)
+    assert record.parse_errors == []
+    return record.fields
+
+
+def _proxy_event_with_username(username: str) -> SecurityEvent:
+    """Return a minimal proxy event with an authenticated username."""
+    return SecurityEvent(
+        timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        event_type="connection",
+        network=NetworkContext(
+            src_ip="10.0.10.50",
+            src_port=54321,
+            dst_ip="93.184.216.34",
+            dst_port=80,
+            protocol="tcp",
+        ),
+        proxy=ProxyContext(
+            client_ip="10.0.10.50",
+            username=username,
+            method="GET",
+            url="http://example.com/",
+            host="example.com",
+            proxy_fqdn="PROXY-01",
+        ),
+    )
 
 
 class TestProxyContextReferrer:
@@ -101,8 +132,55 @@ class TestProxyEmitterReferrer:
         emitter.emit(event)
 
         assert len(rendered_lines) == 1
-        fields = rendered_lines[0].split()
-        assert fields[13] == "-"
+        fields = _parse_proxy_fields(rendered_lines[0])
+        assert "referrer" not in fields
+
+    def test_default_combined_output_preserves_full_username(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        for username in (
+            r"NORTHSTAR-BRANCH\lena.morris",
+            r"NORTHSTAR-BRANCH\WS-01$",
+        ):
+            emitter.emit(_proxy_event_with_username(username))
+
+        assert len(rendered_lines) == 2
+        human_fields = _parse_proxy_fields(rendered_lines[0])
+        machine_fields = _parse_proxy_fields(rendered_lines[1])
+        assert human_fields["username"] == r"NORTHSTAR-BRANCH\lena.morris"
+        assert machine_fields["username"] == r"NORTHSTAR-BRANCH\WS-01$"
+
+    def test_sof_elk_combined_output_strips_domain_and_machine_suffix_from_username(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+        emitter.configure_output_target("sof-elk")
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        for username in (
+            r"NORTHSTAR-BRANCH\lena.morris",
+            r"NORTHSTAR-BRANCH\WS-01$",
+        ):
+            emitter.emit(_proxy_event_with_username(username))
+
+        assert len(rendered_lines) == 2
+        human_fields = _parse_proxy_fields(rendered_lines[0])
+        machine_fields = _parse_proxy_fields(rendered_lines[1])
+        assert human_fields["username"] == "lena.morris"
+        assert machine_fields["username"] == "WS-01"
 
     def test_proxy_access_flush_sorts_by_request_timestamp(self, tmp_path):
         from evidenceforge.formats import load_format
@@ -139,12 +217,10 @@ class TestProxyEmitterReferrer:
         emitter.close()
 
         lines = (tmp_path / "PROXY-01" / "proxy_access.log").read_text().splitlines()
-        assert lines[0] == "#Software: Meridian Secure Web Gateway"
-        assert lines[2].endswith("x-proxy-action")
-        data_lines = [line for line in lines if not line.startswith("#")]
-        assert data_lines[0].startswith("2024-03-15 10:01:00")
-        assert data_lines[1].startswith("2024-03-15 10:03:00")
-        assert data_lines[2].startswith("2024-03-15 10:05:00")
+        assert len(lines) == 3
+        assert lines[0].startswith("10.0.10.50 - - [15/Mar/2024:10:01:00 +0000]")
+        assert lines[1].startswith("10.0.10.50 - - [15/Mar/2024:10:03:00 +0000]")
+        assert lines[2].startswith("10.0.10.50 - - [15/Mar/2024:10:05:00 +0000]")
 
 
 class TestConnectTunnelBehavior:
@@ -346,15 +422,15 @@ class TestProxyActionSemantics:
         emitter.emit(event)
 
         assert len(rendered_lines) == 2
-        fields = rendered_lines[0].split()
-        assert fields[4] == "CONNECT"
-        assert fields[5] == "example.com:443"
-        assert fields[6] == "HTTP/1.1"
-        assert fields[-1] == "tunnel-setup"
-        inspected_fields = rendered_lines[1].split()
-        assert inspected_fields[4] == "GET"
-        assert inspected_fields[5] == "https://example.com/page"
-        assert inspected_fields[-1] == "ssl-inspect"
+        fields = _parse_proxy_fields(rendered_lines[0])
+        assert fields["method"] == "CONNECT"
+        assert fields["url"] == "example.com:443"
+        assert fields["protocol"] == "HTTP/1.1"
+        inspected_fields = _parse_proxy_fields(rendered_lines[1])
+        assert inspected_fields["method"] == "GET"
+        assert inspected_fields["url"] == "https://example.com/page"
+        assert "tunnel-setup" not in rendered_lines[0]
+        assert "ssl-inspect" not in rendered_lines[1]
 
     def test_reused_https_tunnel_logs_each_request_but_one_connect(self):
         from pathlib import Path
@@ -395,8 +471,10 @@ class TestProxyActionSemantics:
             emitter.emit(event)
 
         data_lines = [line for line in rendered_lines if not line.startswith("#")]
-        connect_lines = [line for line in data_lines if " CONNECT example.com:443 " in line]
-        request_lines = [line for line in data_lines if " GET https://example.com/page-" in line]
+        connect_lines = [
+            line for line in data_lines if '"CONNECT example.com:443 HTTP/1.1"' in line
+        ]
+        request_lines = [line for line in data_lines if '"GET https://example.com/page-' in line]
         assert len(connect_lines) == 1
         assert len(request_lines) == 5
 
@@ -420,7 +498,7 @@ class TestProxyActionSemantics:
             ),
             proxy=ProxyContext(
                 client_ip="10.0.10.50",
-                username="alice",
+                username=r"NORTHSTAR-BRANCH\alice",
                 method="GET",
                 url="https://updates.example.com/page?q=1",
                 host="updates.example.com",
@@ -445,11 +523,13 @@ class TestProxyActionSemantics:
         connect = json.loads(lines[0])
         inspected = json.loads(lines[1])
         assert connect["http_method"] == "CONNECT"
+        assert connect["user"] == r"NORTHSTAR-BRANCH\alice"
         assert connect["server"] == "updates.example.com"
         assert connect["dest_port"] == 443
         assert connect["uri_path"] == "/"
         assert connect["proxy_action"] == "tunnel-setup"
         assert inspected["http_method"] == "GET"
+        assert inspected["user"] == r"NORTHSTAR-BRANCH\alice"
         assert inspected["uri_path"] == "/page"
         assert inspected["uri_query"] == "?q=1"
         assert inspected["bytes_in"] == 700
@@ -508,17 +588,12 @@ class TestProxyActionSemantics:
         emitter.emit(event)
 
         assert len(rendered_lines) == 2
-        connect_fields = rendered_lines[0].split()
-        inspected_fields = rendered_lines[1].split()
-        assert connect_fields[4] == "CONNECT"
-        assert inspected_fields[4] == "GET"
-        assert connect_fields[-1] == "tunnel-setup"
-        assert inspected_fields[-1] == "ssl-inspect"
-        assert connect_fields[0:2] <= inspected_fields[0:2]
-        assert connect_fields[7:10] != inspected_fields[7:10]
-        assert connect_fields[7] == "200"
-        assert int(connect_fields[8]) < int(inspected_fields[8])
-        assert int(connect_fields[9]) < int(inspected_fields[9])
+        connect_fields = _parse_proxy_fields(rendered_lines[0])
+        inspected_fields = _parse_proxy_fields(rendered_lines[1])
+        assert connect_fields["method"] == "CONNECT"
+        assert inspected_fields["method"] == "GET"
+        assert connect_fields["status_code"] == 200
+        assert connect_fields["sc_bytes"] < inspected_fields["sc_bytes"]
 
     def test_inspected_https_denial_has_successful_connect_setup(self):
         from pathlib import Path
@@ -559,14 +634,12 @@ class TestProxyActionSemantics:
         emitter.emit(event)
 
         assert len(rendered_lines) == 2
-        connect_fields = rendered_lines[0].split()
-        denied_fields = rendered_lines[1].split()
-        assert connect_fields[4] == "CONNECT"
-        assert connect_fields[7] == "200"
-        assert connect_fields[-1] == "tunnel-setup"
-        assert denied_fields[4] == "GET"
-        assert denied_fields[7] == "403"
-        assert denied_fields[-1] == "deny"
+        connect_fields = _parse_proxy_fields(rendered_lines[0])
+        denied_fields = _parse_proxy_fields(rendered_lines[1])
+        assert connect_fields["method"] == "CONNECT"
+        assert connect_fields["status_code"] == 200
+        assert denied_fields["method"] == "GET"
+        assert denied_fields["status_code"] == 403
 
     def test_denied_connect_does_not_emit_inspected_request(self):
         from pathlib import Path
@@ -607,10 +680,9 @@ class TestProxyActionSemantics:
         emitter.emit(event)
 
         assert len(rendered_lines) == 1
-        denied_fields = rendered_lines[0].split()
-        assert denied_fields[4] == "CONNECT"
-        assert denied_fields[7] == "403"
-        assert denied_fields[-1] == "deny"
+        denied_fields = _parse_proxy_fields(rendered_lines[0])
+        assert denied_fields["method"] == "CONNECT"
+        assert denied_fields["status_code"] == 403
 
     def test_tunnel_reuse_within_timeout(self):
         """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""
@@ -648,7 +720,7 @@ class TestProxyActionSemantics:
             emitter.emit(event)
 
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
-        get_count = sum(1 for line in all_lines if " GET " in line)
+        get_count = sum(1 for line in all_lines if '"GET https://example.com/page' in line)
 
         assert connect_count == 1, f"Expected 1 CONNECT, got {connect_count}"
         assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"

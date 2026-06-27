@@ -3460,7 +3460,7 @@ def _proxy_action_for_context(
     dst_port: int | None = None,
     explicit_mode: bool = False,
 ) -> str:
-    """Return a source-native proxy policy/action hint for W3C logs."""
+    """Return a source-native proxy policy/action hint for proxy events."""
     normalized_cache = (cache_result or "").upper()
     if normalized_cache == "DENIED":
         return "deny"
@@ -12321,7 +12321,7 @@ class ActivityGenerator:
                     cache_result = "AUTH_REQUIRED"
                 else:
                     cache_result = "GATEWAY_ERROR"
-                # W3C sc-bytes/cs-bytes are proxy-side accounting fields:
+                # Proxy sc_bytes/cs_bytes are source-side accounting fields:
                 # payload plus HTTP/proxy headers for allowed responses,
                 # or proxy-generated error pages for failures.
                 _cs = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)

@@ -31,6 +31,7 @@ import pytest
 
 from evidenceforge.external_parsers.runner import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_PROXY_ACCESS_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
@@ -60,12 +61,14 @@ def test_stage_sof_elk_logs_combines_all_supported_families(
         "zeek_conn": 2,
         "zeek_dns": 2,
         "cisco_asa": 1,
+        "proxy_access": 1,
         "web_access": 1,
         "syslog": 1,
     }
     staged = {log.staged.relative_to(manifest.logstash_root) for log in manifest.staged_logs}
     assert Path("zeek/sensor-a/conn.log") in staged
     assert Path("syslog/2026/fw-01/cisco_asa.log") in staged
+    assert Path("httpd/proxy-01/proxy_access.log") in staged
     assert Path("httpd/web-01/web_access.log") in staged
     assert Path("syslog/2026/linux-01/syslog.log") in staged
 
@@ -118,7 +121,7 @@ def test_validate_sof_elk_output_writes_one_consolidated_failure_report(
         parsed_dir / "syslog.jsonl",
         [_parsed_cisco_asa_event(), _parsed_syslog_event(failed=True)],
     )
-    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", _parsed_httpd_events())
 
     with pytest.raises(SofElkParserError, match="_grokparsefailure_6015-01"):
         validate_sof_elk_output(manifest, parsed_dir)
@@ -126,6 +129,7 @@ def test_validate_sof_elk_output_writes_one_consolidated_failure_report(
     report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
     assert report["expected_counts"] == {
         "cisco_asa": 1,
+        "proxy_access": 1,
         "syslog": 1,
         "web_access": 1,
         "zeek_conn": 2,
@@ -135,6 +139,7 @@ def test_validate_sof_elk_output_writes_one_consolidated_failure_report(
     assert report["failure_count"] == 1
     assert report["failure_tag_counts"]["syslog"]["_grokparsefailure_6015-01"] == 1
     assert "cisco_asa" in report["log_support"]
+    assert "proxy_access" in report["log_support"]
     assert "web_access" in report["log_support"]
     assert "zeek_conn" in report["parsed_outputs"]
     assert "syslog" in report["parsed_outputs"]
@@ -164,7 +169,7 @@ def test_validate_sof_elk_output_ignores_parsed_sshd_pam_session_overlap(
         parsed_dir / "syslog.jsonl",
         [_parsed_cisco_asa_event(), _parsed_syslog_pam_session_event()],
     )
-    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", _parsed_httpd_events())
 
     events_by_type = validate_sof_elk_output(manifest, parsed_dir)
 
@@ -195,7 +200,7 @@ def test_validate_sof_elk_output_ignores_parsed_pam_auth_failure_enrichment_miss
         parsed_dir / "syslog.jsonl",
         [_parsed_cisco_asa_event(), _parsed_syslog_pam_auth_failure_event(parsed=True)],
     )
-    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", _parsed_httpd_events())
 
     events_by_type = validate_sof_elk_output(manifest, parsed_dir)
 
@@ -226,7 +231,7 @@ def test_validate_sof_elk_output_keeps_unparsed_pam_auth_failure_tag_fatal(
         parsed_dir / "syslog.jsonl",
         [_parsed_cisco_asa_event(), _parsed_syslog_pam_auth_failure_event(parsed=False)],
     )
-    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", _parsed_httpd_events())
 
     with pytest.raises(SofElkParserError, match="_grokparsefail_6016-02"):
         validate_sof_elk_output(manifest, parsed_dir)
@@ -237,6 +242,7 @@ def _all_validators() -> tuple[str, ...]:
         SOF_ELK_ZEEK_VALIDATOR,
         SOF_ELK_CISCO_ASA_VALIDATOR,
         SOF_ELK_WEB_ACCESS_VALIDATOR,
+        SOF_ELK_PROXY_ACCESS_VALIDATOR,
         SOF_ELK_SYSLOG_VALIDATOR,
     )
 
@@ -259,6 +265,12 @@ def _combined_data_dir(fixtures_dir: Path, tmp_path: Path) -> Path:
     (data_dir / "web-01" / "web_access.log").write_text(
         '198.51.100.25 - - [15/Jun/2026:14:23:05 +0000] "GET /index.html HTTP/1.1" '
         '200 512 "-" "Mozilla/5.0"\n',
+        encoding="utf-8",
+    )
+    (data_dir / "proxy-01").mkdir()
+    (data_dir / "proxy-01" / "proxy_access.log").write_text(
+        "10.0.10.50 - EXAMPLE\\alice [15/Jun/2026:14:23:05 +0000] "
+        '"CONNECT example.com:443 HTTP/1.1" 200 512 "-" "Mozilla/5.0"\n',
         encoding="utf-8",
     )
     (data_dir / "linux-01" / "2026").mkdir(parents=True)
@@ -377,6 +389,26 @@ def _parsed_web_access_event() -> dict[str, object]:
         "http": {"request": {"method": "GET"}, "response": {"status_code": 200}},
         "url": {"path": "/index.html"},
     }
+
+
+def _parsed_proxy_access_event() -> dict[str, object]:
+    return {
+        "tags": ["filebeat", "process_archive", "parse_done"],
+        "labels": {"type": "httpdlog"},
+        "log": {"file": {"path": "/logstash/httpd/proxy-01/proxy_access.log"}},
+        "event": {
+            "original": (
+                "10.0.10.50 - EXAMPLE\\alice [15/Jun/2026:14:23:05 +0000] "
+                '"CONNECT example.com:443 HTTP/1.1" 200 512 "-" "Mozilla/5.0"'
+            )
+        },
+        "source": {"ip": "10.0.10.50"},
+        "http": {"request": {"method": "CONNECT"}, "response": {"status_code": 200}},
+    }
+
+
+def _parsed_httpd_events() -> list[dict[str, object]]:
+    return [_parsed_web_access_event(), _parsed_proxy_access_event()]
 
 
 def _parsed_syslog_event(*, failed: bool) -> dict[str, object]:

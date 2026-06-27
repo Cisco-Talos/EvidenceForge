@@ -76,8 +76,8 @@ class TestProxyParserRegistration:
         host_dir = tmp_path / "proxy01.example.org"
         host_dir.mkdir()
         (host_dir / "proxy_access.log").write_text(
-            "2024-07-15 10:00:00 10.0.0.1 - GET http://example.com/ 200 "
-            '1024 128 42 "Mozilla/5.0" example.com text/html MISS "-"\n'
+            "10.0.0.1 - - [15/Jul/2024:10:00:00 +0000] "
+            '"GET http://example.com/ HTTP/1.1" 200 1024 "-" "Mozilla/5.0"\n'
         )
 
         discovered = discover_log_files(tmp_path)
@@ -115,18 +115,38 @@ class TestProxyParserRegistration:
     def test_proxy_access_dash_fields_are_omitted(self):
         parser = get_parser("proxy_access")
         record = parser._parse_line(
-            "2024-07-15 10:00:00 10.0.0.1 - CONNECT example.com:443 HTTP/1.1 200 "
-            "0 0 0 example.com - - - NONE",
+            "10.0.0.1 - - [15/Jul/2024:10:00:00 +0000] "
+            '"CONNECT example.com:443 HTTP/1.1" 200 - "-" "-"',
             1,
         )
 
         assert record.parse_errors == []
         assert "username" not in record.fields
         assert "user_agent" not in record.fields
-        assert "content_type" not in record.fields
-        assert record.fields["cache_result"] == "NONE"
+        assert "referrer" not in record.fields
+        assert "bytes_sent" not in record.fields
+        assert record.fields["host"] == "example.com"
 
-    def test_proxy_access_parser_reads_all_w3c_columns(self):
+    def test_proxy_access_parser_reads_combined_columns(self):
+        parser = get_parser("proxy_access")
+        record = parser._parse_line(
+            "10.0.0.1 - jsmith [15/Jul/2024:10:00:00 +0000] "
+            '"GET http://example.com/download?q=1 HTTP/1.1" 200 1024 '
+            '"https://intranet.example.com/" "Mozilla/5.0 (Windows NT 10.0)"',
+            1,
+        )
+
+        assert record.parse_errors == []
+        assert record.fields["username"] == "jsmith"
+        assert record.fields["protocol"] == "HTTP/1.1"
+        assert record.fields["url"] == "http://example.com/download?q=1"
+        assert record.fields["path"] == "http://example.com/download?q=1"
+        assert record.fields["host"] == "example.com"
+        assert record.fields["sc_bytes"] == 1024
+        assert record.fields["user_agent"] == "Mozilla/5.0 (Windows NT 10.0)"
+        assert record.fields["referrer"] == "https://intranet.example.com/"
+
+    def test_proxy_access_parser_keeps_legacy_w3c_fallback(self):
         parser = get_parser("proxy_access")
         record = parser._parse_line(
             "2024-07-15 10:00:00 10.0.0.1 jsmith GET http://example.com/ HTTP/1.1 "

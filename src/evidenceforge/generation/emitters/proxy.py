@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""HTTP/HTTPS forward proxy access log emitter (W3C Extended format)."""
+"""HTTP/HTTPS forward proxy access log emitter."""
 
 import json
 import random
@@ -29,6 +29,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.rng import _stable_seed
@@ -39,14 +40,37 @@ from evidenceforge.utils.rng import _stable_seed
 _CONNECT_TUNNEL_TIMEOUT_S = 240  # about 4 minutes
 
 
-def _w3c_extended_field(value: Any) -> str:
-    """Return a value safe for a W3C Extended whitespace-delimited field."""
-    if value is None or value == "":
+def _combined_log_value(value: Any) -> str:
+    """Return text safe for one Apache/Nginx combined-log physical line."""
+    if value is None:
+        return ""
+    return escape_log_control_chars(str(value))
+
+
+def _combined_log_token(value: Any) -> str:
+    """Return a combined-log token safe inside the quoted request field."""
+    text = _combined_log_value(value)
+    if not text:
         return "-"
-    text = str(value)
-    if text == "-":
+    return text.replace("\\", "\\\\").replace('"', r"\"")
+
+
+def _sof_elk_combined_log_username(value: Any) -> str:
+    """Return a SOF-ELK-compatible combined-log auth token."""
+    text = _combined_log_value(value)
+    if not text or text == "-":
+        return ""
+    account = text.rsplit("\\", maxsplit=1)[-1]
+    if account.endswith("$"):
+        return account[:-1]
+    return account
+
+
+def _combined_log_quoted(value: Any) -> str:
+    """Return a value safe for an Apache/Nginx combined quoted field."""
+    if value is None or value == "" or value == "-":
         return "-"
-    return "+".join(text.split())
+    return _combined_log_value(value).replace("\\", "\\\\").replace('"', r"\"")
 
 
 def _is_https_request(px: Any, net: Any) -> bool:
@@ -173,7 +197,7 @@ def _proxy_url_category(event_data: dict[str, Any]) -> str:
 
 
 class ProxyEmitter(HostMultiplexEmitter):
-    """Emitter for forward proxy access logs (W3C Extended Log Format).
+    """Emitter for forward proxy access logs.
 
     Per-host FQDN directory routing: each proxy server gets its own access log.
 
@@ -190,7 +214,7 @@ class ProxyEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _sort_key(line: str) -> tuple[datetime, str]:
-        """Extract W3C date/time prefix for chronological flush sorting."""
+        """Extract proxy access timestamps for chronological flush sorting."""
         if line.startswith("{"):
             try:
                 timestamp = json.loads(line).get("timestamp", "")
@@ -198,6 +222,15 @@ class ProxyEmitter(HostMultiplexEmitter):
             except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
                 return (datetime.max, line)
             return (parsed, line)
+
+        start = line.find("[")
+        end = line.find("]", start + 1)
+        if start != -1 and end != -1:
+            try:
+                ts = datetime.strptime(line[start + 1 : end], "%d/%b/%Y:%H:%M:%S %z")
+            except ValueError:
+                return (datetime.max, line)
+            return (ts, line)
 
         parts = line.split(maxsplit=2)
         if len(parts) < 2 or parts[0].startswith("#"):
@@ -215,7 +248,7 @@ class ProxyEmitter(HostMultiplexEmitter):
         self._active_tunnels: dict[tuple[str, str, str, int], datetime] = {}
 
     def _get_writer(self, host_fqdn: str) -> Any:
-        """Return a host writer, suppressing W3C headers for Splunk JSON output."""
+        """Return a host writer, suppressing text headers for Splunk JSON output."""
         if self.output_target != OutputTarget.SPLUNK:
             return super()._get_writer(host_fqdn)
         header_template = self.format_def.output.header_template
@@ -230,7 +263,7 @@ class ProxyEmitter(HostMultiplexEmitter):
         return event.event_type in self._supported_types and event.proxy is not None
 
     def emit(self, event: SecurityEvent) -> None:
-        """Render ProxyContext to W3C Extended format.
+        """Render ProxyContext to the configured proxy access format.
 
         For HTTPS (port 443), emits CONNECT entry only for the first request
         to a (proxy_fqdn, client_ip, host, dst_port) tuple within the tunnel timeout window.
@@ -306,27 +339,25 @@ class ProxyEmitter(HostMultiplexEmitter):
         self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
-        """Render proxy access log entry in W3C Extended format."""
+        """Render proxy access log entry."""
         if self.output_target == OutputTarget.SPLUNK:
             return self._render_splunk_json_event(event_data)
 
         context = {
             "timestamp": event_data.get("timestamp"),
-            "client_ip": _w3c_extended_field(event_data.get("client_ip")),
-            "username": _w3c_extended_field(event_data.get("username")),
-            "method": _w3c_extended_field(event_data.get("method")),
-            "url": _w3c_extended_field(event_data.get("url")),
-            "protocol": _w3c_extended_field(event_data.get("protocol")),
+            "client_ip": _combined_log_value(event_data.get("client_ip")),
+            "username": (
+                _sof_elk_combined_log_username(event_data.get("username"))
+                if self.output_target == OutputTarget.SOF_ELK
+                else _combined_log_value(event_data.get("username"))
+            ),
+            "method": _combined_log_token(event_data.get("method")),
+            "url": _combined_log_token(event_data.get("url")),
+            "protocol": _combined_log_token(event_data.get("protocol")),
             "status_code": event_data.get("status_code"),
             "sc_bytes": event_data.get("sc_bytes"),
-            "cs_bytes": event_data.get("cs_bytes"),
-            "time_taken": event_data.get("time_taken"),
-            "user_agent": _w3c_extended_field(event_data.get("user_agent")),
-            "host": _w3c_extended_field(event_data.get("host")),
-            "content_type": _w3c_extended_field(event_data.get("content_type")),
-            "cache_result": _w3c_extended_field(event_data.get("cache_result")),
-            "referrer": _w3c_extended_field(event_data.get("referrer")),
-            "proxy_action": _w3c_extended_field(event_data.get("proxy_action")),
+            "user_agent": _combined_log_quoted(event_data.get("user_agent")),
+            "referrer": _combined_log_quoted(event_data.get("referrer")),
         }
         rendered = self._template.render(**context)
         return rendered.strip()
