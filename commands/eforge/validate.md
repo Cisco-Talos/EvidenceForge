@@ -33,6 +33,14 @@ Exit codes:
 
 **If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR, OS/format mismatches, missing logon events before process execution, causal expansion redundancy, or `proxy_access` requested without any system using `roles: [forward_proxy]` — see below).
 
+Network identity warnings are advisory unless they describe an actual conflict.
+Custom hostnames in storyline/red-herring/domain-aware fields should normally be
+declared under `environment.network_identities`; undeclared custom domains warn
+and resolve through the deterministic fallback, while duplicate identity IDs,
+duplicate hosts, malformed host/IP values, and declared host/IP mismatches are
+errors or warnings with field paths. Raw IP-only events are allowed without a
+network identity.
+
 **Causal expansion redundancy warnings:** The validator detects when storyline events manually specify prerequisites that the causal expansion engine auto-generates (e.g., a DNS query alongside a TCP connection, or Kerberos events alongside a logon). These are warnings, not errors. The fix is to remove the redundant manual events UNLESS they are part of the attack narrative itself (e.g., DNS tunneling, golden ticket forging).
 
 **If validation passes with info-level notes:** Info-level issues (shown with ℹ) are informational observations, not problems. For example, consecutive storyline events that don't share an obvious pivot indicator. Mention them briefly but don't suggest fixes unless the user asks.
@@ -118,5 +126,8 @@ if the environment lacks a host of the required OS/role and one cannot be trivia
 ### Known optional fields
 The following optional fields are valid and should not be flagged as unknown:
 - `time_window.warmup` — warm-up duration for state pre-population (default "8h", minimum "1h")
+- `environment.network_identities` — scenario-local host/IP ownership registry
+- `baseline_activity.traffic_affinities` — authored benign baseline traffic rules
+- `baseline_activity.traffic_suppression` — scoped down-ranking/removal of default baseline traffic
 
 For these, advise the user to use `/eforge scenario` to rework the relevant section, and be specific about what needs to change.

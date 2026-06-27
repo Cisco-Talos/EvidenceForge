@@ -108,6 +108,13 @@ The output target never changes the directory path. `--target default|sof-elk` c
 
 **Warm-up phase:** Generation begins with a warm-up period (default 8 hours, minimum 1 hour, configurable via `time_window.warmup`). During warm-up, the engine runs baseline generation to pre-populate DNS cache, process trees, active sessions, and other internal state — but warm-up events are **not** written to output files. This ensures the first minutes of output look like a running system rather than a cold start. Progress output distinguishes the warm-up phase from real generation.
 
+Scenario-local `environment.network_identities` are applied in memory during
+generation before package DNS, so authored host/IP ownership is shared by
+baseline affinities, storyline events, DNS, HTTP, TLS/SNI, proxy, Zeek, firewall,
+and endpoint flow rendering. `baseline_activity.traffic_affinities` produce
+baseline traffic only; they should not appear as storyline or red-herring leads
+in the generated ground truth.
+
 Generation writes log files to a `data/` subdirectory alongside the scenario file:
 
 ```

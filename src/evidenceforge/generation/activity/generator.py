@@ -11028,18 +11028,28 @@ class ActivityGenerator:
             and not preserve_explicit_proxy_dst_ip
             and not (service == "dns" and proto in ("udp", "tcp") and dst_port == 53)
         ):
-            from evidenceforge.generation.activity.dns_registry import (
-                get_domain_ips,
-                resolve_domain_ip,
-            )
+            from evidenceforge.generation.activity.dns_registry import get_domain_ips
 
-            domain_ips = get_domain_ips(hostname)
-            if domain_ips and dst_ip not in domain_ips:
-                src_host = source_system.hostname if source_system else src_ip
-                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
-            elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
-                src_host = source_system.hostname if source_system else src_ip
-                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            src_host = source_system.hostname if source_system else src_ip
+            resolver = getattr(self, "_network_resolver", None)
+            resolved = resolver.resolve_host(hostname, src_host=src_host) if resolver else None
+            if (
+                resolved is not None
+                and resolved.source == "scenario_identity"
+                and resolved.ip
+                and dst_ip != resolved.ip
+            ):
+                dst_ip = resolved.ip
+            elif resolved is not None and resolved.source == "stable_fallback":
+                pass
+            else:
+                from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+                domain_ips = get_domain_ips(hostname)
+                if domain_ips and dst_ip not in domain_ips:
+                    dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+                elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
+                    dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         hostname_is_external = (
@@ -11056,10 +11066,15 @@ class ActivityGenerator:
             and hostname_is_external
             and dst_ip in dns_server_ips
         ):
-            from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-
             src_host = source_system.hostname if source_system else src_ip
-            dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            resolver = getattr(self, "_network_resolver", None)
+            resolved = resolver.resolve_host(hostname, src_host=src_host) if resolver else None
+            if resolved is not None and resolved.ip:
+                dst_ip = resolved.ip
+            else:
+                from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         # Infer common payload service from destination port before proxy
         # routing and DNS expansion. Some callers provide only port/protocol or

@@ -1105,6 +1105,19 @@ def _extract_sc_create_service_start_type(command_line: str) -> tuple[str, str] 
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
 
+    def _resolve_scenario_network_host(self, host: str, *, src_host: str = "") -> str | None:
+        """Resolve a scenario-authored host through network identities first."""
+
+        if not host or _IPV4_LITERAL_RE.fullmatch(host):
+            return host if _IPV4_LITERAL_RE.fullmatch(host or "") else None
+        resolver = getattr(self, "network_resolver", None)
+        if resolver is not None:
+            resolved = resolver.resolve_host(host, src_host=src_host)
+            return resolved.ip
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+        return resolve_domain_ip(host, src_host=src_host)
+
     def _ensure_account_sid_tracking(self) -> None:
         """Initialize the account SID tracking dict if not already present."""
         if not hasattr(self, "_created_account_sids"):
@@ -2808,9 +2821,10 @@ class StorylineMixin:
                             dst_ip = authored_dst_ip
                             preserve_url_dst_ip = True
                     if dst_ip is None:
-                        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-
-                        dst_ip = resolve_domain_ip(hostname, src_host=system.hostname)
+                        dst_ip = self._resolve_scenario_network_host(
+                            hostname,
+                            src_host=system.hostname,
+                        )
                     service = "ssl" if dst_port == 443 else "http"
                     network_time = self._clamp_after_storyline_process_source_create(
                         system=system,
@@ -2873,11 +2887,10 @@ class StorylineMixin:
                             if ad_domain:
                                 target_hostname = f"{target_hostname}.{ad_domain}"
                     elif not looks_internal:
-                        from evidenceforge.generation.activity.dns_registry import (
-                            resolve_domain_ip,
+                        target_ip = self._resolve_scenario_network_host(
+                            target_hostname,
+                            src_host=system.hostname,
                         )
-
-                        target_ip = resolve_domain_ip(target_hostname, src_host=system.hostname)
                 if target_ip is not None:
                     target_system = self._system_for_ip(target_ip)
                     failed_private_attempt = unresolved_single_label_fallback or (
@@ -3124,6 +3137,13 @@ class StorylineMixin:
             source_ip = spec.source_ip or system.ip
             dst_ip = spec.dst_ip
             effective_dst_ip = dst_ip
+            if spec.hostname and not effective_dst_ip:
+                resolved_dst_ip = self._resolve_scenario_network_host(
+                    spec.hostname,
+                    src_host=system.hostname,
+                )
+                if resolved_dst_ip:
+                    effective_dst_ip = resolved_dst_ip
             if (
                 not _is_private_ip(source_ip)
                 and hasattr(self, "dispatcher")
@@ -3787,6 +3807,14 @@ class StorylineMixin:
                 duration_sec = (end_dt - start).total_seconds()
 
             beacon_src_ip = spec.source_ip or system.ip
+            beacon_dst_ip = spec.dst_ip
+            if spec.hostname and not beacon_dst_ip:
+                resolved_beacon_ip = self._resolve_scenario_network_host(
+                    spec.hostname,
+                    src_host=system.hostname,
+                )
+                if resolved_beacon_ip:
+                    beacon_dst_ip = resolved_beacon_ip
 
             # Deny mode: firewall context
             fw_ctx = None
@@ -3796,7 +3824,7 @@ class StorylineMixin:
 
                 deny_conn_state = self._get_firewall_deny_conn_state()
                 src_iface = self._resolve_firewall_interface(beacon_src_ip)
-                dst_iface = self._resolve_firewall_interface(spec.dst_ip)
+                dst_iface = self._resolve_firewall_interface(beacon_dst_ip)
                 fw_ctx = FirewallContext(
                     action="deny",
                     msg_id=106023,
@@ -3992,7 +4020,7 @@ class StorylineMixin:
                         )
                         self.activity_generator.generate_connection(
                             src_ip=beacon_src_ip,
-                            dst_ip=spec.dst_ip,
+                            dst_ip=beacon_dst_ip,
                             time=tick_time,
                             dst_port=spec.dst_port,
                             proto=spec.protocol,
@@ -4016,7 +4044,7 @@ class StorylineMixin:
                     else:
                         self.activity_generator.generate_connection(
                             src_ip=beacon_src_ip,
-                            dst_ip=spec.dst_ip,
+                            dst_ip=beacon_dst_ip,
                             time=tick_time,
                             dst_port=spec.dst_port,
                             proto=spec.protocol,
@@ -4028,7 +4056,7 @@ class StorylineMixin:
                     # Allow DNS only on the first tick; cache handles the rest
                     self.activity_generator.generate_connection(
                         src_ip=beacon_src_ip,
-                        dst_ip=spec.dst_ip,
+                        dst_ip=beacon_dst_ip,
                         time=tick_time,
                         dst_port=spec.dst_port,
                         proto=spec.protocol,
@@ -4050,7 +4078,7 @@ class StorylineMixin:
                     )
                 attempt_count += 1
 
-            malicious_event["dst_ip"] = spec.dst_ip
+            malicious_event["dst_ip"] = beacon_dst_ip
             malicious_event["dst_port"] = spec.dst_port
             malicious_event["interval"] = spec.interval
             malicious_event["action"] = spec.action
@@ -4084,6 +4112,18 @@ class StorylineMixin:
                 answers = [spec.answer] if isinstance(spec.answer, str) else list(spec.answer)
                 ttl_val = float(spec.ttl) if spec.ttl is not None else float(rng.randint(60, 3600))
                 ttls = [ttl_val] * len(answers)
+            elif spec.rcode == "NOERROR" and spec.qtype in {"A", "AAAA"}:
+                resolver = getattr(self, "network_resolver", None)
+                if resolver is not None:
+                    resolved_query = resolver.resolve_host(spec.query, src_host=system.hostname)
+                    if resolved_query.ip:
+                        answers = [resolved_query.ip]
+                        ttl_val = (
+                            float(spec.ttl)
+                            if spec.ttl is not None
+                            else float(rng.randint(60, 3600))
+                        )
+                        ttls = [ttl_val]
 
             # Resolve DNS server IP before choosing source-native DNS RTT so
             # local resolvers do not get impossible multi-second timings.
@@ -5081,6 +5121,13 @@ class StorylineMixin:
         scan_host = spec.hostname or spec.dst_ip
         service = "http" if spec.dst_port == 80 else "ssl"
         scan_dst_ip = spec.dst_ip
+        if spec.hostname and not scan_dst_ip:
+            resolved_scan_ip = self._resolve_scenario_network_host(
+                spec.hostname,
+                src_host=system.hostname,
+            )
+            if resolved_scan_ip:
+                scan_dst_ip = resolved_scan_ip
         if (
             not _is_private_ip(scan_src_ip)
             and hasattr(self, "dispatcher")

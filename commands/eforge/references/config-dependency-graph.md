@@ -12,6 +12,11 @@ Users can customize configs without modifying the package by placing partial YAM
 
 When adding new entries via the config skill, they go in the overlay directory (not the package files) unless the user is a developer editing the source directly.
 
+Scenario YAML can also declare `environment.network_identities` for
+scenario-local host/IP ownership. Use that for one-off lab, partner, attacker,
+or public-service identities that should travel with a scenario. Use config
+overlays for reusable libraries shared by many scenarios.
+
 ## Table of Contents
 
 1. [Dependency Matrix](#dependency-matrix)

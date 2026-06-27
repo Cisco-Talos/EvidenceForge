@@ -95,6 +95,17 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls browser/proxy session depth — how many pages and subresources each browsing session produces. Plaintext HTTP sessions may render multiple `http.log` rows on one Zeek UID with increasing `trans_depth`, and large download-scale responses produce matching `files.log` metadata. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
 
+**Scenario network identities and traffic affinities** — When a scenario needs a
+specific benign partner, vendor, SaaS, C2, public service, or authored hostname,
+declare it in `environment.network_identities` with its hostname(s), IP(s), and
+tags. Use `baseline_activity.traffic_affinities` to create benign population
+traffic to those identities for volumetric/timing hunts, and
+`traffic_suppression` to down-rank default baseline destinations. Do not add
+one-off lab domains to `.eforge/config/activity/dns_registry.yaml`; reserve the
+config registry for reusable domain libraries. For web affinities, prefer
+route-owned profiles where each path declares its valid methods, statuses, body
+sizes, and content type instead of independent random method/status pools.
+
 **Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how many top-level visitor actions web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). Human page views automatically fan out into required page assets (JS, CSS, images, fonts, same-origin API calls) without consuming additional `web` budget. If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
 
 **Observation profile** — Default to `observation_profile: complete`. This preserves training-friendly perfect source coverage and correlation. Only choose another named profile such as `enterprise_standard` or `messy_collection` when the user explicitly wants source-native gaps, ingestion delays, or blind-review realism; do not invent per-source rates in scenario YAML.
