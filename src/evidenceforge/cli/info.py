@@ -104,16 +104,49 @@ def _collect_application_ids() -> list[str]:
 
 
 def _collect_system_roles() -> list[str]:
-    """Collect all system role names from traffic profiles.
+    """Collect author-facing system role names from role-aware config.
 
-    Uses the same loader the generation engine uses to guarantee consistency.
+    Roles can affect generation through multiple paths: traffic profiles,
+    host activity multipliers, topology inference, proxy routing, and inbound
+    web visitor profiles. This inventory is used by skills and authors, so it
+    reports scenario-usable role names rather than only one config file.
     """
+    from evidenceforge.generation.activity.host_activity_profiles import (
+        load_host_activity_profiles,
+    )
     from evidenceforge.generation.activity.traffic_profiles import (
         load_traffic_profiles,
     )
+    from evidenceforge.generation.activity.web_session_profiles import (
+        load_web_session_profiles,
+    )
+    from evidenceforge.generation.world_model import known_topology_roles
 
-    data = load_traffic_profiles()
-    return sorted(data.get("role_traffic", {}).keys())
+    pseudo_roles = {"_any", "_any_server", "_default", "_external"}
+    roles: set[str] = set()
+
+    traffic_data = load_traffic_profiles()
+    role_traffic = traffic_data.get("role_traffic", {})
+    if isinstance(role_traffic, dict):
+        roles.update(str(role) for role in role_traffic)
+
+    activity_data = load_host_activity_profiles()
+    role_profiles = activity_data.get("role_profiles", {})
+    if isinstance(role_profiles, dict):
+        roles.update(str(role) for role in role_profiles)
+
+    web_session_data = load_web_session_profiles()
+    visitor_classes = web_session_data.get("visitor_classes", {})
+    if isinstance(visitor_classes, dict):
+        for profile in visitor_classes.values():
+            if not isinstance(profile, dict):
+                continue
+            source_roles = profile.get("source_role_any", [])
+            if isinstance(source_roles, list):
+                roles.update(str(role) for role in source_roles)
+
+    roles.update(known_topology_roles())
+    return sorted(role for role in roles if role and role not in pseudo_roles)
 
 
 def _collect_web_scan_presets() -> list[str]:
@@ -290,7 +323,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "paths.formats": "Format definitions directory",
     "paths.personas": "Persona definitions directory",
     "personas": "Built-in persona names (package + overlay)",
-    "system_roles": "System role names from traffic profiles",
+    "system_roles": "Author-facing system role names from role-aware config",
     "version": "EvidenceForge version",
     "web_scan_presets": "Available web scan preset names (nikto, dirb, etc.)",
 }
