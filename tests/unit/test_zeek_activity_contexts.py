@@ -1666,7 +1666,7 @@ class TestSslContextPopulation:
         assert conn_events[0].timestamp >= base_time
         assert conn_events[1].timestamp >= base_time
 
-    def test_ssh_session_returns_empty_uid_when_network_not_visible(self, activity_gen):
+    def test_ssh_session_keeps_canonical_uid_when_network_not_visible(self, activity_gen):
         gen, events = activity_gen
         visibility = MagicMock()
         visibility.is_connection_visible.return_value = False
@@ -1688,7 +1688,7 @@ class TestSslContextPopulation:
             source_ip="10.0.10.50",
         )
 
-        assert uid == ""
+        assert uid
         assert any(event.event_type == "ssh_session" for event in events)
         visibility.is_connection_visible.assert_any_call("10.0.10.50", "10.0.20.10")
 

@@ -201,18 +201,24 @@ After reviewing output, you can suggest:
 | Format | Description | Generated For |
 |--------|-------------|---------------|
 | windows | Windows Event Logs — default target XML, SOF-ELK target Snare syslog. Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
-| zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
+| zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via `type: network` sensors |
 | ecar | Simulated EDR telemetry using the eCAR record format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
 | syslog | Linux syslog — default target RFC5424 flat per-host, SOF-ELK target RFC3164/BSD per-host/year | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
-| cisco_asa | Cisco ASA firewall syslog — default target flat per-sensor, SOF-ELK target per-sensor/year | Firewall sensors |
+| cisco_asa | Cisco ASA firewall syslog — default target flat per-firewall, SOF-ELK target per-firewall/year | Firewall entries (`type: firewall`) |
 | web_access | Apache/Nginx combined access logs | Web servers |
 | proxy_access | HTTP forward proxy access logs (W3C Extended) | Forward proxy systems |
 
 When `nat_rules` are configured on the firewall sensor, `cisco_asa.log`
 also includes 305011/305012 NAT translation records alongside the normal
 Built/Teardown connection records.
+
+`environment.network.sensors` is optional for host-only, web-only, or
+proxy-only output. If `output.logs` requests `zeek`, concrete `zeek_*`,
+`snort_alert`, or `cisco_asa`, the scenario must define a matching
+`type: network`, `type: ids`, or `type: firewall` entry. `proxy_access` is
+generated from systems with `roles: [forward_proxy]`, not from network sensors.
 
 Use the `/eforge:references:evidence-formats` skill for detailed field documentation, output paths, and known limitations for each format.
 

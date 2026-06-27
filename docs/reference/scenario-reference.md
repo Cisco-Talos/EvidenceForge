@@ -219,9 +219,26 @@ network:
 
 Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
 
-### Network Sensors
+### Network Sensors And Firewalls
 
-Sensors define monitoring infrastructure. Each sensor type produces different log formats:
+`environment.network.sensors` is optional. Declare segments and `public_cidrs`
+without sensors when topology context is useful but the lab only emits host,
+web, or `proxy_access` logs. With no sensors, EvidenceForge still models the
+activity, but Zeek, IDS, firewall, and Cisco ASA sensor-backed logs are not
+generated. Validation warns when a network topology has no sensors.
+
+Proxy-only labs do not need placeholder Zeek sensors:
+
+```yaml
+network:
+  segments:
+    - {name: services, cidr: "10.0.0.0/24", exposure: internal, systems: [proxy01]}
+    - {name: corporate_lan, cidr: "10.0.1.0/24", exposure: internal, systems: [ws01]}
+  # sensors may be omitted when output.logs only requests host/proxy formats
+```
+
+Add sensors when output logs need packet/flow, IDS, or firewall evidence. Each
+sensor type produces different log formats:
 
 ```yaml
 network:
@@ -239,7 +256,10 @@ network:
 
 #### Firewall Sensors
 
-Firewall sensors produce Cisco ASA syslog records for permitted and denied connections. They require explicit policy rules to determine what traffic is allowed vs denied.
+Firewall entries use `type: firewall` under `network.sensors` for compatibility.
+They model an active firewall control point, not only a passive sensor: policy,
+NAT, deny baseline, threat detection, and Cisco ASA logging all live here.
+Validation warns when a network topology has no firewall entry. Requesting `cisco_asa` without a firewall entry whose `log_formats` include `cisco_asa` is an error.
 
 ```yaml
     - type: firewall
@@ -283,7 +303,7 @@ The `public_cidrs` field on `NetworkConfig` declares the org's public IP address
 network:
   public_cidrs: ["45.83.220.0/28"]  # Optional — auto-derived from VIPs if omitted
   segments: [...]
-  sensors: [...]
+  sensors: [...]                     # Optional unless sensor-backed logs are requested
 ```
 
 **Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `45.83.220.10` and `45.83.220.14` produce `["45.83.220.0/24"]`.
@@ -1118,6 +1138,12 @@ syslog, with `eforge generate --target default|sof-elk`; do not encode a parser
 target in scenario YAML.
 
 `proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
+
+`zeek` and concrete `zeek_*` outputs require a `type: network` sensor whose
+`log_formats` include the requested Zeek format or the `zeek` group.
+`snort_alert` requires a `type: ids` sensor with `snort_alert`. `cisco_asa`
+requires a `type: firewall` sensor with `cisco_asa`. `proxy_access` is produced
+by forward-proxy systems, not by network sensors.
 
 #### Format Filtering
 

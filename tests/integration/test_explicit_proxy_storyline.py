@@ -101,16 +101,6 @@ class TestStorylineBeaconExplicitProxy:
                             systems=["proxy01"],
                         ),
                     ],
-                    sensors=[
-                        NetworkSensor(
-                            type="network",
-                            name="tap01",
-                            monitoring_segments=["services", "corporate_lan"],
-                            direction="bidirectional",
-                            placement="tap",
-                            log_formats=["zeek"],
-                        )
-                    ],
                 ),
             ),
             time_window=TimeWindow(start=datetime(2024, 10, 14, 4, 0, tzinfo=UTC), duration="1h"),
@@ -162,6 +152,7 @@ class TestStorylineBeaconExplicitProxy:
             "Mozilla/5.0+(Windows+NT+6.1;+Trident/7.0;+rv:11.0)+like+Gecko" in line
             for line in beacon_lines
         )
+        assert not list(tmp_path.rglob("conn.json"))
 
     def test_allowed_https_beacon_preserves_user_agent_on_connect(self, tmp_path):
         """HTTPS storyline beacons should write the specified UA to proxy CONNECT rows."""

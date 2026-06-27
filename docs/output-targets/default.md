@@ -15,7 +15,7 @@ Splunk-specific JSON records.
 | Windows Security | `<host>/windows_event_security.xml` | Rooted XML document with `<Events>...</Events>`. |
 | Windows Sysmon | `<host>/windows_event_sysmon.xml` | Rooted XML document with `<Events>...</Events>`. |
 | Linux syslog | `<host>/syslog.log` | RFC5424 with full timestamp year. |
-| Cisco ASA | `<firewall>/cisco_asa.log` | Native ASA syslog payload in a flat firewall-sensor file. |
+| Cisco ASA | `<firewall>/cisco_asa.log` | Native ASA syslog payload from a firewall entry. |
 | Zeek | `<sensor>/<log>.json` | NDJSON, emitted only for configured Zeek sensors. |
 | Web access | `<web-host>/web_access.log` | Apache/Nginx combined log format. |
 | Proxy access | `<proxy-host>/proxy_access.log` | W3C Extended-style forward proxy log. |

@@ -220,6 +220,7 @@ class ScenarioValidator:
         self._validate_network_segments()
         self._validate_network_sensors()
         self._validate_output_formats()
+        self._validate_sensor_backed_outputs()
         self._validate_proxy_output_topology()
         # Eval-informed checks
         self._validate_format_os_compatibility()
@@ -880,6 +881,110 @@ class ScenarioValidator:
                         )
                     )
 
+    def _validate_sensor_backed_outputs(self) -> None:
+        """Validate sensor-backed outputs against configured sensors/firewalls."""
+        network = self.scenario.environment.network
+
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
+
+        sensors = network.sensors if network else []
+        expanded_output_formats = self._get_expanded_formats()
+        zeek_formats = FORMAT_GROUPS["zeek"]
+
+        if network and not sensors:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.network.sensors",
+                    message=(
+                        "Network topology is configured without sensors; Zeek, IDS, "
+                        "firewall, and Cisco ASA sensor-backed logs will not be generated"
+                    ),
+                    suggestion=(
+                        "Add network/IDS/firewall sensors when output.logs requests Zeek, "
+                        "snort_alert, or cisco_asa. Proxy-only labs do not need a "
+                        "placeholder Zeek sensor."
+                    ),
+                )
+            )
+
+        firewall_sensors = [sensor for sensor in sensors if sensor.type == "firewall"]
+        if network and not firewall_sensors:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.network.sensors",
+                    message=(
+                        "Network topology has no firewall sensor; firewall policy, NAT, "
+                        "deny baseline, and Cisco ASA evidence will not be modeled"
+                    ),
+                    suggestion=(
+                        "Add a sensor entry with type: firewall and log_formats: [cisco_asa] "
+                        "when the lab should include firewall control or ASA logs."
+                    ),
+                )
+            )
+
+        sensor_format_sets = [(sensor, expand_formats(sensor.log_formats)) for sensor in sensors]
+
+        for fmt in sorted(expanded_output_formats & zeek_formats):
+            if not any(
+                sensor.type == "network" and fmt in formats
+                for sensor, formats in sensor_format_sets
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path="output.logs",
+                        message=(
+                            f"Output format '{fmt}' requires a network sensor whose "
+                            f"log_formats include '{fmt}' or 'zeek'"
+                        ),
+                        suggestion=(
+                            "Add an environment.network.sensors entry with type: network "
+                            f"and log_formats including '{fmt}' or 'zeek'."
+                        ),
+                    )
+                )
+
+        if "snort_alert" in expanded_output_formats and not any(
+            sensor.type == "ids" and "snort_alert" in formats
+            for sensor, formats in sensor_format_sets
+        ):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="output.logs",
+                    message=(
+                        "Output format 'snort_alert' requires an IDS sensor whose "
+                        "log_formats include 'snort_alert'"
+                    ),
+                    suggestion=(
+                        "Add an environment.network.sensors entry with type: ids and "
+                        "log_formats: [snort_alert]."
+                    ),
+                )
+            )
+
+        if "cisco_asa" in expanded_output_formats and not any(
+            sensor.type == "firewall" and "cisco_asa" in formats
+            for sensor, formats in sensor_format_sets
+        ):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="output.logs",
+                    message=(
+                        "Output format 'cisco_asa' requires a firewall sensor whose "
+                        "log_formats include 'cisco_asa'"
+                    ),
+                    suggestion=(
+                        "Add an environment.network.sensors entry with type: firewall "
+                        "and log_formats: [cisco_asa]."
+                    ),
+                )
+            )
+
     def _validate_output_formats(self) -> None:
         """Validate output.logs format names."""
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
@@ -1043,6 +1148,8 @@ class ScenarioValidator:
     def _validate_segment_sensor_coverage(self) -> None:
         """Check that network segments with systems have sensor coverage."""
         if not self.scenario.environment.network:
+            return
+        if not self.scenario.environment.network.sensors:
             return
 
         monitored_segments: set[str] = set()

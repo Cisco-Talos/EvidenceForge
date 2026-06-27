@@ -300,7 +300,12 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 **SOF-ELK target file:** `<fw-hostname>/<year>/cisco_asa.log`
 **Format:** Cisco ASA syslog (RFC 3164 BSD syslog with ASA message IDs)
 
-Cisco ASA firewall logs for permitted and denied connections. Produced by firewall-type network sensors with `cisco_asa` in their `log_formats`. Each permitted connection generates a Built + Teardown pair; denied connections generate a single Deny record.
+Cisco ASA firewall logs for permitted and denied connections. Produced by
+`environment.network.sensors` entries with `type: firewall` and `cisco_asa` in
+their `log_formats`. These entries model active firewall control points
+(policy, NAT, deny baseline, threat detection, and logging), even though they
+currently live in the `sensors` list for compatibility. Requesting `cisco_asa`
+without a matching firewall entry is a validation error.
 
 | Message ID | Severity | Protocol | Description |
 |------------|----------|----------|-------------|
@@ -363,7 +368,17 @@ client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" stat
 **File:** `<proxy-hostname.domain>/proxy_access.log`
 **Format:** W3C Extended Log Format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
+Forward proxy access logs for systems with the `forward_proxy` role. This is a
+host/proxy log, not a network sensor log, so proxy-only labs do not need
+placeholder Zeek sensors. Outbound HTTP/HTTPS traffic is routed through the
+proxy system. In `environment.proxy.mode: transparent`, network sensors can
+still show direct-looking client-to-origin traffic when matching sensors are
+configured. In `mode: explicit`, the generator emits client-to-proxy and
+proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg
+its topology can observe. If the proxy denies a request, the transaction stops
+at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted.
+HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy
+routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
 The proxy log uses a W3C Extended-style `#Fields` header:
 

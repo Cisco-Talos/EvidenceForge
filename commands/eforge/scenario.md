@@ -264,15 +264,16 @@ environment:
         cidr: "10.0.1.0/24"
         description: "Corporate workstation network"
         systems: [WS-DEV-01]     # Must reference existing hostnames
-    sensors:
+    sensors:                       # Optional unless output.logs requests Zeek/IDS/ASA
       - type: network             # network | ids | firewall
         name: core-tap
         monitoring_segments: [corporate_lan]
         direction: bidirectional  # bidirectional | inbound | outbound
         placement: span           # span mirrors segment traffic | tap observes uplink/boundary traffic
         log_formats: [zeek]
-      # Firewall sensors (type: firewall) add: interfaces, default_action,
-      # deny_ratio, policy rules, nat_rules, threat_detection_rate.
+      # Firewall entries (type: firewall) model active firewall control points
+      # and add: interfaces, default_action, deny_ratio, policy rules,
+      # nat_rules, threat_detection_rate.
       # See /eforge:references:scenario-reference for the full firewall schema.
 
 personas:                         # Define inline or reference pre-built from personas/
@@ -549,7 +550,11 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 - Show business hours converted to UTC
 
 **Network sensors:**
+- If the scenario declares topology but no sensors, say so plainly:
+  "No Zeek/IDS/firewall sensors are configured; proxy and host logs still render."
 - Describe what each sensor can see in straightforward terms (e.g., "Monitors all traffic between subnets via SPAN port on the core switch")
+- Describe `type: firewall` entries as active firewall control points for policy,
+  NAT, deny baseline, and ASA logging.
 - Do NOT editorialize about gaps or blind spots — just describe what each sensor covers
 
 **Sysmon configuration (when windows format is included):**
@@ -608,12 +613,12 @@ Before finalizing the scenario, verify that every storyline event is **discovera
    - If a system's OS doesn't match any enabled format, the event will produce no host-level traces
 
 2. **Network sensor coverage** — If the storyline event involves a network connection (lateral movement, C2 communication, exfiltration, scanning):
-   - At least one network sensor must monitor the segment where the source or destination system resides
+   - If the exercise expects Zeek, IDS, or ASA evidence, at least one matching sensor/firewall must monitor the segment where the source or destination system resides
    - Check `network.sensors[].monitoring_segments` against the segments containing the storyline systems
    - A TAP sensor does not see same-segment traffic. For multi-segment TAPs, internal cross-segment traffic is visible only when both endpoint segments are monitored; SPAN sensors can mirror traffic where either endpoint is monitored.
-   - If no network sensors cover the relevant segments, add one or warn the user about the visibility gap
+   - If no network sensors cover the relevant segments, add one or warn the user about the sensor-log visibility gap. Do not add placeholder Zeek sensors for proxy-only labs that only request `proxy_access`.
 
-3. **Format enablement** — Verify the formats listed in each sensor's `log_formats` are also listed in `output.logs`. A sensor configured to generate `snort_alert` won't produce output if `snort_alert` isn't in the output logs list.
+3. **Format enablement** — Verify the formats listed in each sensor's `log_formats` are also listed in `output.logs`. A sensor configured to generate `snort_alert` won't produce output if `snort_alert` isn't in the output logs list. Conversely, `zeek`, `snort_alert`, and `cisco_asa` in `output.logs` require matching `network`, `ids`, or `firewall` entries.
 
 **If you find coverage gaps:**
 - Flag the specific storyline event(s) that may not be discoverable

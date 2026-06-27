@@ -202,13 +202,19 @@ future action bundles should use it when one activity produces dependent
 
 ### Network Visibility Modeling
 
-EvidenceForge models where network sensors are placed and what traffic they can observe:
+EvidenceForge models where network sensors and firewall observation/control
+points are placed and what traffic they can observe:
 
 - **SPAN ports** see all traffic in their monitored segments (including intra-segment)
 - **TAP sensors** only see traffic crossing segment boundaries
 - **Direction** controls whether a sensor sees inbound, outbound, or both
 
-When a network connection event is dispatched, the NetworkVisibilityEngine determines which sensors can observe it based on the source/destination IPs and sensor placement. Only sensors with visibility produce log entries for that connection.
+When a network connection event is dispatched, the NetworkVisibilityEngine
+determines which sensors can observe it based on the source/destination IPs and
+sensor placement. Only sensors with visibility produce Zeek, IDS, or firewall
+log entries for that connection. A topology may omit sensors entirely; canonical
+connection activity, endpoint evidence, proxy logs, and application logs still
+model the activity, but no sensor-backed network logs are written.
 
 **Network Address Translation:** When firewall sensors have `nat_rules`, the dispatcher computes NAT translations for permitted cross-boundary connections. The `NatContext` on `SecurityEvent` carries mapped IPs. The ASA emitter renders both real and mapped addresses (305011/305012 + parenthesized IPs in Built messages). Zeek emitters swap IPs for post-NAT sensors via `_nat_swaps_by_sensor`, so inside sensors see real IPs while outside sensors see translated IPs.
 
@@ -609,7 +615,7 @@ Scenario YAML and `--formats` stay canonical. `OUTPUT_TARGET.txt` records the
 selected target beside `GROUND_TRUTH.md`; missing markers are treated as
 legacy/default during evaluation.
 
-**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/cisco_asa.log` for the default target or `<sensor_hostname>/<year>/cisco_asa.log` for the SOF-ELK® target. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
+**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/cisco_asa.log` for the default target or `<sensor_hostname>/<year>/cisco_asa.log` for the SOF-ELK® target. Cisco ASA still uses `network.sensors[type=firewall]` for compatibility, but those entries model active firewall control points: policy, NAT, deny baseline, threat detection, and logging.
 
 **Browser and proxy path modeling:** `BrowserSessionActionBundle` owns browser-like page sessions for outbound persona traffic and inbound human visitor traffic: request grouping, transaction depth, subresource timing, referrers, static-asset cache suppression, response MIME/status metadata, and generated HTTP contexts. Each planned request still enters `ActivityGenerator.generate_connection()`, preserving the same canonical connection, DNS, TLS, Zeek HTTP/files, web-access, and proxy behavior as a direct single request. Source-native web semantics are resolved in the browser/proxy planning layer before rendering: public browser-like domains default to plaintext HTTP redirects instead of success pages, internal and non-browser service endpoints keep compatible plaintext/User-Agent behavior, browser referrers follow no-referrer-when-downgrade semantics, and installer/download paths carry binary MIME and body-size semantics. `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode routes each logical client→origin request through `ProxyTransactionActionBundle`, which dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions. Cache hits likewise stop at client/proxy evidence. Allowed cache misses plan the client proxy-request visibility window and proxy→origin egress through the temporal constraint graph so origin-side evidence cannot appear before the client-side proxy request would be source-visible. Proxy access rows include an `x-proxy-action` cue such as `tunnel-setup`, `ssl-inspect`, `forward`, or `deny` so decrypted HTTPS rows are distinguishable from raw CONNECT tunnel rows.
 
@@ -701,7 +707,7 @@ Scenario (root)
 │   ├── groups: list[Group] (name, members, permissions)
 │   └── network: NetworkConfig (optional)
 │       ├── segments: list[NetworkSegment] (name, CIDR, systems)
-│       └── sensors: list[NetworkSensor] (type, placement, direction, formats)
+│       └── sensors: list[NetworkSensor] (optional; network, ids, firewall)
 ├── personas: list[Persona] (activities, work_hours, risk_profile)
 ├── time_window: TimeWindow (start, end/duration)
 ├── baseline_activity: BaselineActivity (intensity, variation)

@@ -23,6 +23,7 @@
 """Unit tests for scenario validation."""
 
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -1210,7 +1211,7 @@ class TestScenarioValidator:
 class TestNetworkValidation:
     """Tests for network topology validation."""
 
-    def _make_scenario_with_network(self, network_config):
+    def _make_scenario_with_network(self, network_config, output_logs=None):
         """Helper to create a scenario with network config."""
         return Scenario(
             version="1.0",
@@ -1231,7 +1232,10 @@ class TestNetworkValidation:
             baseline_activity=BaselineActivity(
                 description="Test", intensity="medium", variation="low"
             ),
-            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            output=OutputSpec(
+                logs=output_logs or [{"format": "windows"}],
+                destination="./output",
+            ),
         )
 
     def test_valid_network_config(self):
@@ -1259,12 +1263,205 @@ class TestNetworkValidation:
                         monitoring_segments=["workstations", "servers"],
                         log_formats=["zeek"],
                     ),
+                    NetworkSensor(
+                        type="firewall",
+                        name="fw",
+                        monitoring_segments=["workstations", "servers"],
+                        log_formats=["cisco_asa"],
+                    ),
                 ],
             )
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
         assert len(issues) == 0
+
+    def test_network_sensors_omitted_warns_not_error(self):
+        """A topology-only network block may omit sensors."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                ],
+            )
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert not any(issue.severity == "error" for issue in issues)
+        messages = [issue.message for issue in issues]
+        assert any("configured without sensors" in message for message in messages)
+        assert any("no firewall sensor" in message for message in messages)
+        assert not any(
+            "Segment 'workstations' has systems but no sensor" in message for message in messages
+        )
+
+    def test_network_sensors_empty_warns_not_error(self):
+        """An explicit empty sensor list is valid but warns."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                ],
+                sensors=[],
+            )
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert not any(issue.severity == "error" for issue in issues)
+        assert any("configured without sensors" in issue.message for issue in issues)
+
+    def test_zeek_output_without_matching_sensor_errors(self):
+        """Zeek output requires a network sensor that emits the requested format."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                ],
+                sensors=[],
+            ),
+            output_logs=[{"format": "zeek_conn"}],
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error"
+            and "zeek_conn" in issue.message
+            and "requires a network sensor" in issue.message
+            for issue in issues
+        )
+
+    def test_partial_zeek_sensor_coverage_errors_precisely(self):
+        """A narrowed Zeek sensor does not satisfy a different concrete Zeek output."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                ],
+                sensors=[
+                    NetworkSensor(
+                        type="network",
+                        name="sensor",
+                        monitoring_segments=["workstations"],
+                        log_formats=["zeek_conn"],
+                    )
+                ],
+            ),
+            output_logs=[{"format": "zeek_dns"}],
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error"
+            and "zeek_dns" in issue.message
+            and "requires a network sensor" in issue.message
+            for issue in issues
+        )
+
+    def test_snort_output_without_ids_sensor_errors(self):
+        """snort_alert output requires an IDS sensor."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                ],
+                sensors=[
+                    NetworkSensor(
+                        type="network",
+                        name="sensor",
+                        monitoring_segments=["workstations"],
+                        log_formats=["snort_alert"],
+                    )
+                ],
+            ),
+            output_logs=[{"format": "snort_alert"}],
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error"
+            and "snort_alert" in issue.message
+            and "requires an IDS sensor" in issue.message
+            for issue in issues
+        )
+
+    def test_cisco_asa_output_without_firewall_sensor_errors(self):
+        """cisco_asa output requires a firewall sensor."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                ],
+                sensors=[
+                    NetworkSensor(
+                        type="network",
+                        name="sensor",
+                        monitoring_segments=["workstations"],
+                        log_formats=["cisco_asa"],
+                    )
+                ],
+            ),
+            output_logs=[{"format": "cisco_asa"}],
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error"
+            and "cisco_asa" in issue.message
+            and "requires a firewall sensor" in issue.message
+            for issue in issues
+        )
+
+    def test_sensor_backed_output_without_network_config_errors(self):
+        """Sensor-backed output requires sensors even when network config is omitted."""
+        scenario = self._make_scenario_with_network(
+            None,
+            output_logs=[{"format": "zeek_conn"}],
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error"
+            and "zeek_conn" in issue.message
+            and "requires a network sensor" in issue.message
+            for issue in issues
+        )
 
     def test_segment_references_undefined_system(self):
         """Segment referencing undefined system should error."""
@@ -1335,7 +1532,9 @@ class TestNetworkValidation:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        warnings = [i for i in issues if i.severity == "warning"]
+        warnings = [
+            i for i in issues if i.severity == "warning" and "not in segment CIDR" in i.message
+        ]
         assert len(warnings) == 1
         assert "10.10.10.1" in warnings[0].message
         assert "192.168.1.0/24" in warnings[0].message
@@ -1346,6 +1545,33 @@ class TestNetworkValidation:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
         assert len(issues) == 0
+
+
+class TestNetworkSensorDocumentation:
+    """Cheap grep gates for optional network sensor author guidance."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+
+    def _read(self, relative_path: str) -> str:
+        return (self.repo_root / relative_path).read_text(encoding="utf-8")
+
+    def test_docs_and_skills_document_optional_sensors_and_proxy_logs(self):
+        scenario_ref = self._read("docs/reference/scenario-reference.md")
+        skill_ref = self._read("commands/eforge/references/scenario-reference.md")
+        scenario_skill = self._read("commands/eforge/scenario.md")
+        validate_skill = self._read("commands/eforge/validate.md")
+
+        for text in (scenario_ref, skill_ref):
+            assert "environment.network.sensors` is optional" in text
+            assert "Proxy-only labs do not need placeholder Zeek sensors" in text
+            assert "`proxy_access` is produced" in text
+            assert "not by network sensors" in text
+            assert "Requesting `cisco_asa` without a firewall" in text
+
+        assert "sensors:                       # Optional" in scenario_skill
+        assert "proxy-only labs that only request `proxy_access`" in scenario_skill
+        assert "topology declared without sensors" in validate_skill
+        assert "does not need a placeholder Zeek sensor" in validate_skill
 
 
 class TestNetworkSegmentExternalRatio:
@@ -1603,6 +1829,61 @@ class TestProxyOutputTopology:
             i for i in issues if i.field_path == "output.logs" and "forward_proxy" in i.message
         ]
         assert len(warnings) == 0
+
+    def test_proxy_access_with_topology_and_no_sensors_is_warnings_only(self):
+        """Proxy-only labs may declare topology without placeholder Zeek sensors."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                        services=["squid"],
+                    ),
+                    System(
+                        hostname="WS-01",
+                        ip="10.0.1.10",
+                        os="Windows 11",
+                        type="workstation",
+                    ),
+                ],
+                network=NetworkConfig(
+                    segments=[
+                        NetworkSegment(
+                            name="services",
+                            cidr="10.0.0.0/24",
+                            systems=["PROXY-01"],
+                            exposure="internal",
+                        ),
+                        NetworkSegment(
+                            name="workstations",
+                            cidr="10.0.1.0/24",
+                            systems=["WS-01"],
+                            exposure="internal",
+                        ),
+                    ],
+                ),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert not any(issue.severity == "error" for issue in issues)
+        assert any("configured without sensors" in issue.message for issue in issues)
+        assert any("no firewall sensor" in issue.message for issue in issues)
 
     def test_proxy_access_without_proxy_config_warns_transparent_default(self):
         """proxy_access with no environment.proxy warns that transparent is the default."""

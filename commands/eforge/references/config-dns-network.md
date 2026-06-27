@@ -164,6 +164,11 @@ persona_traffic:
 | `dns_tags` | list[string] | no | `[background, <os>]` | Tags for domain selection when `role: _external`. Falls back to `[background, <source_os>]` if omitted. |
 | `description` | string | no | — | Human-readable note (ignored by engine) |
 
+These profiles create canonical network activity. Zeek, IDS, and Cisco ASA rows
+render only when the scenario requests those outputs and defines matching
+`environment.network.sensors` entries. Host, proxy, and endpoint evidence can
+still render without network sensors.
+
 ### Special Role Values
 
 | Value | Meaning |
@@ -433,7 +438,7 @@ dns_tunnel_rtt:
 
 ## tls_issuers.yaml
 
-TLS certificate issuer configurations for realistic Zeek x509/SSL log generation. Standalone — no cross-file dependencies.
+TLS certificate issuer configurations for realistic Zeek x509/SSL log generation. Standalone — no cross-file dependencies. These settings affect Zeek output only when matching Zeek sensors/output are configured.
 `domain_ca_overrides` maps well-known domains to their expected issuing CA so SNI, x509 subject, and issuer stay plausible.
 
 ### Structure
@@ -451,7 +456,7 @@ issuers:
 
 ## tls_realism.yaml
 
-TLS SAN, OCSP, certificate-chain, and destination-profile realism settings. Used by the generation engine when building Zeek `ssl.log`, `x509.log`, and `ocsp.log`, and when selecting auto-generated external TLS SNI/certificate identities.
+TLS SAN, OCSP, certificate-chain, and destination-profile realism settings. Used by the generation engine when building Zeek `ssl.log`, `x509.log`, and `ocsp.log`, and when selecting auto-generated external TLS SNI/certificate identities. Zeek rows are written only when the scenario requests Zeek output and has matching network sensors.
 
 **Location:** `src/evidenceforge/config/activity/tls_realism.yaml`  
 **Overlay:** `.eforge/config/activity/tls_realism.yaml`
