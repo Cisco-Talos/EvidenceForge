@@ -41,6 +41,7 @@ class DnsLookupRequest:
     time: datetime
     hostname: str | None = None
     force_address: bool = False
+    bypass_cache: bool = False
     source: str = "activity_generator"
 
     @property
@@ -50,7 +51,7 @@ class DnsLookupRequest:
         seed = _stable_seed(
             "action_bundle:dns_lookup:"
             f"{self.src_ip}:{self.dst_ip}:{self.time.isoformat()}:"
-            f"{self.hostname or ''}:{self.force_address}:{self.source}"
+            f"{self.hostname or ''}:{self.force_address}:{self.bypass_cache}:{self.source}"
         )
         return f"dns-lookup-{seed:016x}"
 

@@ -2255,6 +2255,48 @@ _TCP_MSS_BYTES = 1460
 _TCP_MSS_VALUES = (1200, 1320, 1360, 1448, 1460)
 _TCP_MSS_WEIGHTS = (2, 4, 10, 22, 62)
 _TCP_ACK_FLOOR_PAYLOAD_BYTES = 64 * 1024
+_CLIENT_FIRST_TCP_PAYLOAD_SERVICES = frozenset(
+    {
+        "dce_rpc",
+        "dns",
+        "http",
+        "https",
+        "kerberos",
+        "ldap",
+        "ldaps",
+        "mssql",
+        "mysql",
+        "postgresql",
+        "rdp",
+        "smb",
+        "ssl",
+        "tds",
+        "winrm",
+    }
+)
+_CLIENT_FIRST_TCP_PAYLOAD_PORTS = frozenset(
+    {
+        53,
+        80,
+        88,
+        135,
+        389,
+        443,
+        445,
+        464,
+        636,
+        1433,
+        3268,
+        3269,
+        3306,
+        3389,
+        5432,
+        5985,
+        5986,
+        8080,
+        8443,
+    }
+)
 
 
 def _tcp_effective_mss_bytes(rng: random.Random) -> int:
@@ -2335,6 +2377,74 @@ def _tcp_payload_bytes_consistent_with_history(
     return normalized_orig, normalized_resp
 
 
+def _tcp_service_requires_client_payload_first(service: str | None, dst_port: int) -> bool:
+    """Return whether responder payload requires prior originator payload."""
+    normalized_service = (service or "").strip().lower()
+    return (
+        normalized_service in _CLIENT_FIRST_TCP_PAYLOAD_SERVICES
+        or dst_port in _CLIENT_FIRST_TCP_PAYLOAD_PORTS
+    )
+
+
+def _insert_originator_payload_before_responder_payload(history: str) -> str:
+    """Add a Zeek originator data marker before the first responder data marker."""
+    if "D" in history or "d" not in history:
+        return history
+    resp_index = history.index("d")
+    if resp_index > 0 and history[resp_index - 1] == "A":
+        return f"{history[:resp_index]}Da{history[resp_index:]}"
+    return f"{history[:resp_index]}D{history[resp_index:]}"
+
+
+def _client_first_originator_payload_floor(
+    service: str | None,
+    dst_port: int,
+    rng: random.Random,
+) -> int:
+    """Return a plausible minimum request/client-hello payload for client-first TCP."""
+    normalized_service = (service or "").strip().lower()
+    if normalized_service in {"ssl", "https"} or dst_port in {443, 8443}:
+        return rng.randint(180, 900)
+    if normalized_service == "http" or dst_port in {80, 8080}:
+        return rng.randint(120, 620)
+    if normalized_service in {"smb", "ldap", "ldaps", "kerberos", "dce_rpc", "rdp", "winrm"}:
+        return rng.randint(72, 420)
+    if normalized_service in {"mssql", "mysql", "postgresql", "tds"} or dst_port in {
+        1433,
+        3306,
+        5432,
+    }:
+        return rng.randint(64, 360)
+    if normalized_service == "dns" or dst_port == 53:
+        return rng.randint(40, 220)
+    return rng.randint(72, 480)
+
+
+def _enforce_client_first_tcp_payload_order(net: NetworkContext, rng: random.Random) -> bool:
+    """Ensure client-first TCP responses have visible originator application payload."""
+    if (
+        net.protocol != "tcp"
+        or net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}
+        or not _tcp_service_requires_client_payload_first(net.service, net.dst_port)
+        or (net.resp_bytes or 0) <= 0
+        or "d" not in (net.history or "")
+    ):
+        return False
+
+    changed = False
+    history = net.history or ""
+    normalized_history = _insert_originator_payload_before_responder_payload(history)
+    if normalized_history != history:
+        net.history = normalized_history
+        changed = True
+
+    if (net.orig_bytes or 0) <= 0:
+        net.orig_bytes = _client_first_originator_payload_floor(net.service, net.dst_port, rng)
+        changed = True
+
+    return changed
+
+
 def _align_tcp_network_payload_with_history(
     net: NetworkContext,
     rng: random.Random,
@@ -2342,12 +2452,13 @@ def _align_tcp_network_payload_with_history(
     """Align TCP payload, packet, and IP-byte fields with Zeek history markers."""
     if net.protocol != "tcp":
         return False
+    changed = _enforce_client_first_tcp_payload_order(net, rng)
     orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
         net.orig_bytes,
         net.resp_bytes,
         net.history,
     )
-    if orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
+    if not changed and orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
         return False
 
     net.orig_bytes = orig_bytes
@@ -3813,7 +3924,7 @@ class ActivityGenerator:
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
-        self._dns_cache: dict[tuple[str, str, str], float] = {}
+        self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
         ] = {}
@@ -5233,7 +5344,7 @@ class ActivityGenerator:
         elif os_category == "linux" and (
             service_name in ("http", "ssl", "https") or dst_port in (80, 443, 8080, 8443)
         ):
-            candidates = ["bash", "curl", "wget", "apache2", "httpd", "nginx", "python3"]
+            candidates = ["curl", "wget", "firefox", "apache2", "httpd", "nginx", "python3"]
         elif os_category == "windows" and (
             service_name in ("http", "ssl", "https") or dst_port in (80, 443, 8080, 8443)
         ):
@@ -5449,6 +5560,8 @@ class ActivityGenerator:
                 content_type=response_mime,
                 domain_tags=domain_tags,
             )
+        if explicit_mode and dst_port == 443:
+            proxy_cacheable = False
 
         cache_roll = rng.random()
         if http is not None:
@@ -7254,7 +7367,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -8082,6 +8195,7 @@ class ActivityGenerator:
             and source_ip != system.ip
         )
         linux_ssh_source_port = None
+        linux_ssh_responder_pid: int | None = None
         if remote_linux_source and source_ip is not None:
             linux_ssh_source_port = self._allocate_ephemeral_port(
                 source_ip,
@@ -8090,6 +8204,13 @@ class ActivityGenerator:
                 "tcp",
                 time,
                 self._os_for_ip(source_ip),
+            )
+            linux_ssh_responder_pid = self.ensure_linux_ssh_responder_process(
+                target_system=system,
+                time=time - timedelta(milliseconds=250),
+                source_ip=source_ip,
+                source_port=linux_ssh_source_port,
+                target_user=effective_username if known_account else None,
             )
 
         event = SecurityEvent(
@@ -8139,7 +8260,8 @@ class ActivityGenerator:
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
-                    pid=self.state_manager.allocate_transient_linux_pid(
+                    pid=linux_ssh_responder_pid
+                    or self.state_manager.allocate_transient_linux_pid(
                         system.hostname, time, os_category=_get_os_category(system.os)
                     ),
                     facility=10,
@@ -8170,6 +8292,7 @@ class ActivityGenerator:
                 time=time,
                 source_ip=source_ip,
                 source_port=linux_ssh_source_port,
+                responding_pid=linux_ssh_responder_pid,
                 rng=rng,
             )
 
@@ -8380,6 +8503,7 @@ class ActivityGenerator:
         time: datetime,
         source_ip: str,
         source_port: int,
+        responding_pid: int | None,
         rng: random.Random,
     ) -> None:
         """Emit source-matched Zeek SSH evidence for a failed Linux sshd logon."""
@@ -8396,6 +8520,7 @@ class ActivityGenerator:
             resp_bytes=rng.randint(240, 2600),
             src_port=source_port,
             conn_state=rng.choices(["SF", "RSTR"], weights=[78, 22], k=1)[0],
+            responding_pid=responding_pid or -1,
         )
 
     def _maybe_emit_failed_logon_network_connection(
@@ -10008,6 +10133,66 @@ class ActivityGenerator:
         self._remember_ssh_responder_pid(source_ip, source_port, target_system.ip, sshd_pid)
         return sshd_pid
 
+    def _emit_generic_ssh_preauth_failure_syslog(
+        self,
+        *,
+        target_system: System,
+        target_host: HostContext | None,
+        time: datetime,
+        source_ip: str,
+        source_port: int,
+        sshd_pid: int,
+        duration: float | None,
+    ) -> None:
+        """Emit source-native sshd auth companions for generic preauth transport."""
+        if target_host is None or not source_ip or source_ip == "-" or source_port <= 0:
+            return
+
+        seed = _stable_seed(
+            "generic_ssh_preauth_failure:"
+            f"{target_system.hostname}:{source_ip}:{source_port}:{target_system.ip}:"
+            f"{sshd_pid}:{time.isoformat()}"
+        )
+        connection_delta_ms = 45 + (seed % 90)
+        invalid_delta_ms = connection_delta_ms + 40 + ((seed >> 8) % 180)
+        failed_delta_ms = invalid_delta_ms + 120 + ((seed >> 16) % 600)
+        close_delta_ms = max(
+            failed_delta_ms + 40 + ((seed >> 24) % 180),
+            int((duration or 0.0) * 1000) + 20,
+        )
+        rows = [
+            (
+                connection_delta_ms,
+                6,
+                f"Connection from {source_ip} port {source_port} on {target_system.ip} port 22",
+            ),
+            (
+                invalid_delta_ms,
+                5,
+                f"Invalid user unknown from {source_ip} port {source_port}",
+            ),
+            (
+                failed_delta_ms,
+                4,
+                f"Failed password for invalid user unknown from {source_ip} port {source_port} ssh2",
+            ),
+            (
+                close_delta_ms,
+                6,
+                f"Connection closed by invalid user unknown {source_ip} port {source_port} [preauth]",
+            ),
+        ]
+        for delta_ms, severity, message in rows:
+            self.generate_syslog_event(
+                target_system,
+                time + timedelta(milliseconds=delta_ms),
+                "sshd",
+                message,
+                pid=sshd_pid,
+                facility=10,
+                severity=severity,
+            )
+
     def ensure_linux_ssh_client_process(
         self,
         *,
@@ -10979,7 +11164,23 @@ class ActivityGenerator:
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         # Only internal hosts generate DNS lookups — external source IPs (e.g.,
         # attacker IPs in storylines) don't query the victim's internal resolver.
-        if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
+        force_visible_prereq_dns = (
+            source_system is not None
+            and "forward_proxy" in (source_system.roles or [])
+            and hostname_is_external
+            and proto == "tcp"
+            and dst_port in (80, 443)
+            and _is_private_ip(src_ip)
+        )
+        if force_visible_prereq_dns:
+            self._emit_dns_lookup(
+                src_ip,
+                dst_ip,
+                time,
+                hostname=hostname,
+                force_address=True,
+            )
+        elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
             self._expand_and_emit(
                 "connection",
                 time,
@@ -11240,7 +11441,7 @@ class ActivityGenerator:
             and hostname
         ):
             ad_domain = getattr(self, "_ad_domain", "corp.local")
-            dns_cache_key = (src_ip, hostname, "A")
+            dns_cache_key = (src_ip, dst_ip, hostname, "A")
             ts_epoch = time.timestamp()
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
             last_query = self._dns_cache.get(dns_cache_key, 0)
@@ -11763,6 +11964,7 @@ class ActivityGenerator:
         target_has_ssh = target_system is not None and "ssh" in {
             str(service_name).lower() for service_name in (target_system.services or [])
         }
+        generic_ssh_preauth_pid: int | None = None
         if (
             target_system is not None
             and dst_host_ctx is not None
@@ -11790,6 +11992,7 @@ class ActivityGenerator:
                     source_ip=src_ip,
                     source_port=src_port,
                 )
+                generic_ssh_preauth_pid = responding_pid
             else:
                 self._remember_ssh_responder_pid(src_ip, src_port, target_system.ip, responding_pid)
 
@@ -12639,6 +12842,16 @@ class ActivityGenerator:
             )
             self._last_connection_effective_time = event.timestamp
         self.dispatcher.dispatch(event)
+        if generic_ssh_preauth_pid is not None and target_system is not None:
+            self._emit_generic_ssh_preauth_failure_syslog(
+                target_system=target_system,
+                target_host=dst_host_ctx,
+                time=event.timestamp,
+                source_ip=src_ip,
+                source_port=src_port,
+                sshd_pid=generic_ssh_preauth_pid,
+                duration=event.network.duration,
+            )
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # Emit 5156 (WFP connection) on Windows source hosts when process ownership is known.
@@ -12911,6 +13124,71 @@ class ActivityGenerator:
         session.process_tree_root = session_sshd_pid
         return bash_pid
 
+    def _ensure_linux_local_session_shell_parent(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        logon_time: datetime,
+        bash_time: datetime,
+        root_parent_pid: int,
+        shell_seed: int,
+    ) -> tuple[int, datetime]:
+        """Create a visible local-session parent chain before a login shell."""
+
+        system_type = (getattr(target_system, "type", "") or "").lower()
+        workstation_like = system_type in {
+            "workstation",
+            "laptop",
+        } or target_system.hostname.upper().startswith(("WS-", "LT-"))
+        user_systemd_time = max(
+            logon_time + timedelta(milliseconds=90),
+            bash_time - timedelta(milliseconds=900 + (shell_seed % 320)),
+        )
+        if user_systemd_time >= bash_time:
+            user_systemd_time = logon_time + timedelta(milliseconds=90)
+
+        user_systemd_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=user_systemd_time,
+            logon_id=logon_id,
+            process_name="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --user",
+            parent_pid=root_parent_pid,
+            suppress_command_file_effect=True,
+        )
+        user_systemd_proc = self.state_manager.get_process(target_system.hostname, user_systemd_pid)
+        if user_systemd_proc is not None:
+            user_systemd_time = ensure_utc(user_systemd_proc.start_time)
+
+        if workstation_like:
+            parent_image = "/usr/libexec/gnome-terminal-server"
+            parent_command = "/usr/libexec/gnome-terminal-server"
+        else:
+            parent_image = "/bin/login"
+            parent_command = f"login -- {user.username}"
+
+        terminal_time = max(
+            user_systemd_time + timedelta(milliseconds=120),
+            bash_time - timedelta(milliseconds=260 + (shell_seed % 170)),
+        )
+        terminal_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=terminal_time,
+            logon_id=logon_id,
+            process_name=parent_image,
+            command_line=parent_command,
+            parent_pid=user_systemd_pid,
+            suppress_command_file_effect=True,
+        )
+        terminal_proc = self.state_manager.get_process(target_system.hostname, terminal_pid)
+        if terminal_proc is not None:
+            terminal_time = ensure_utc(terminal_proc.start_time)
+        return terminal_pid, terminal_time
+
     def ensure_linux_session_shell(
         self,
         user: User,
@@ -12982,6 +13260,18 @@ class ActivityGenerator:
         latest_bash_time = activity_time - readiness_gap
         if bash_time > latest_bash_time and latest_bash_time > logon_time:
             bash_time = latest_bash_time
+
+        parent_pid, parent_time = self._ensure_linux_local_session_shell_parent(
+            user=user,
+            target_system=target_system,
+            logon_id=logon_id,
+            logon_time=logon_time,
+            bash_time=bash_time,
+            root_parent_pid=parent_pid,
+            shell_seed=shell_seed,
+        )
+        if parent_time >= bash_time:
+            bash_time = parent_time + timedelta(milliseconds=120)
 
         bash_pid = self.generate_process(
             user=user,
@@ -13757,6 +14047,7 @@ class ActivityGenerator:
         syslog_message: str | None = None,
         *,
         emit_linux_syslog: bool = True,
+        concurrency_group_id: str = "",
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -13772,6 +14063,8 @@ class ActivityGenerator:
             username: System account name (SYSTEM, root, etc.)
             syslog_message: Custom syslog message (overrides auto-generated message)
             emit_linux_syslog: Whether to attach a Linux syslog record to this process event.
+            concurrency_group_id: Optional source-local process group for related
+                foreground children such as cron shell/workload pairs.
 
         Returns:
             PID of the new process
@@ -13890,6 +14183,7 @@ class ActivityGenerator:
                     command_line=command_line,
                     parent_pid=parent_pid,
                 ),
+                concurrency_group_id=concurrency_group_id,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
@@ -13939,6 +14233,8 @@ class ActivityGenerator:
         parent_pid: int = 0,
         username: str = "root",
         syslog_message: str | None = None,
+        *,
+        concurrency_group_id: str = "",
     ) -> None:
         """Terminate a system process, emitting eCAR PROCESS/TERMINATE + optional syslog.
 
@@ -14005,6 +14301,7 @@ class ActivityGenerator:
                 username=username,
                 logon_id=process_logon_id,
                 start_time=running_proc.start_time if running_proc is not None else None,
+                concurrency_group_id=concurrency_group_id,
             ),
             edr=EdrContext(object_id=proc_obj_id),
         )
@@ -14100,6 +14397,7 @@ class ActivityGenerator:
         time: datetime,
         hostname: str | None = None,
         force_address: bool = False,
+        bypass_cache: bool = False,
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -14113,6 +14411,7 @@ class ActivityGenerator:
             time: Timestamp of the DNS query (should precede TCP connection)
             hostname: Explicit domain name to use (bypasses REVERSE_DNS lookup)
             force_address: Force an A/AAAA lookup for connection prerequisites.
+            bypass_cache: Emit a lookup even when the generator cache has a valid entry.
         """
         request = DnsLookupRequest(
             src_ip=src_ip,
@@ -14120,6 +14419,7 @@ class ActivityGenerator:
             time=time,
             hostname=hostname,
             force_address=force_address,
+            bypass_cache=bypass_cache,
         )
         DnsLookupActionBundle(executor=self, request=request).execute()
 
@@ -14146,15 +14446,14 @@ class ActivityGenerator:
                 hostname = _generate_random_hostname(rng, dst_ip)
         hostname = self._dns_canonical_internal_hostname(hostname) or hostname
 
-        # DNS caching: skip re-emission if this (src, hostname) was queried recently.
-        # Real clients cache DNS responses (TTL typically 60-3600s), so not every
-        # connection is preceded by a DNS query.
+        # DNS caching: skip re-emission if this source/resolver/hostname tuple
+        # was queried recently. Real clients cache DNS responses (TTL typically
+        # 60-3600s), so not every connection is preceded by a DNS query.
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         if not hasattr(self, "_dns_cache_last_prune"):
             self._dns_cache_last_prune = 0.0
 
-        cache_key = (src_ip, hostname, "ADDR")
         ts_epoch = time.timestamp()
 
         # Keep the cache bounded: drop entries older than the max TTL horizon,
@@ -14177,11 +14476,6 @@ class ActivityGenerator:
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         is_internal = _dns_is_internal_name(hostname, ad_domain)
         authoritative_ttl = _dns_base_ttl(hostname, is_internal)
-
-        last_query = self._dns_cache.get(cache_key, 0)
-        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
-        if last_query and ts_epoch - last_query < cache_ttl:
-            return  # Cache hit — skip DNS emission
 
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies use a sticky configured resolver policy instead of rotating
@@ -14208,6 +14502,12 @@ class ActivityGenerator:
         else:
             dns_server_ip = _get_rng().choice(dns_ips)
 
+        cache_key = (src_ip, dns_server_ip, hostname, "ADDR")
+        last_query = self._dns_cache.get(cache_key, 0)
+        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
+        if not request.bypass_cache and last_query and ts_epoch - last_query < cache_ttl:
+            return  # Cache hit — skip DNS emission
+
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
@@ -14221,7 +14521,7 @@ class ActivityGenerator:
         # Phase 6.3: 0.2% chance of SERVFAIL (transient failures).
         # Known internal names are served by authoritative internal DNS and
         # should not randomly fail unless a scenario explicitly models DNS trouble.
-        if not is_internal and rng.random() < 0.002:
+        if not force_address and not is_internal and rng.random() < 0.002:
             dns_ctx = DnsContext(
                 query=hostname,
                 trans_id=rng.randint(1, 65535),

@@ -102,6 +102,8 @@ _DB_PORTS = {
     "postgresql": 5432,
 }
 
+_SHELL_EXES = {"bash", "sh", "zsh"}
+
 
 def _normalize_role_name(role: str) -> str:
     key = role.strip().lower().replace("-", "_").replace(" ", "_")
@@ -904,6 +906,11 @@ class WorldPlanner:
         compatible_exes = get_service_to_exes().get(service, [])
         if not compatible_exes:
             return -1
+        compatible_exes = [
+            exe for exe in compatible_exes if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES
+        ]
+        if not compatible_exes:
+            return -1
 
         destination_tags: set[str] = set()
         exe_tag_index: dict[str, set[str]] = {}
@@ -940,6 +947,8 @@ class WorldPlanner:
             if proc.logon_id and proc.logon_id != session.logon_id:
                 continue
             exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if exe in _SHELL_EXES:
+                continue
             if exe in compatible_exes:
                 score = _destination_score(exe)
                 if score > 0 and (best_existing is None or (score, -idx) > best_existing[:2]):

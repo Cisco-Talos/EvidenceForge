@@ -475,6 +475,11 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     assert process_calls[1].kwargs["command_line"] == "debian-sa1 1 1"
     assert process_calls[1].kwargs["parent_pid"] == 41200
     assert process_calls[1].kwargs["emit_linux_syslog"] is False
+    assert process_calls[0].kwargs["concurrency_group_id"].startswith("cron:")
+    assert (
+        process_calls[1].kwargs["concurrency_group_id"]
+        == process_calls[0].kwargs["concurrency_group_id"]
+    )
     syslog_call = engine.activity_generator.generate_syslog_event.call_args
     assert syslog_call.kwargs["app_name"] == "CRON"
     assert syslog_call.kwargs["pid"] == 41200
@@ -483,11 +488,14 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     )
     term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
     assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
+    assert {call.kwargs["concurrency_group_id"] for call in term_calls} == {
+        process_calls[0].kwargs["concurrency_group_id"]
+    }
     assert term_calls[0].kwargs["time"] >= ts + timedelta(seconds=1)
 
 
-def test_cron_schedule_honors_configured_slot_jitter(linux_system):
-    """Cron jobs may carry configured source-observation jitter."""
+def test_cron_schedule_ignores_configured_slot_jitter(linux_system):
+    """Cron jobs stay minute-aligned even if legacy config carries slot jitter."""
     engine = type("FakeEngine", (object,), {})()
     engine._emit_scheduled_event = Mock()
     engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
@@ -520,8 +528,8 @@ def test_cron_schedule_honors_configured_slot_jitter(linux_system):
 
     fire_times = [call.args[2] for call in engine._emit_scheduled_event.call_args_list]
     assert len(fire_times) == 2
-    assert any(fire_time.second > 0 for fire_time in fire_times)
-    assert all(0 <= fire_time.second <= 45 for fire_time in fire_times)
+    assert all(fire_time.second == 0 for fire_time in fire_times)
+    assert all(fire_time.microsecond == 0 for fire_time in fire_times)
 
 
 def test_cron_schedule_without_slot_jitter_stays_minute_aligned(linux_system):

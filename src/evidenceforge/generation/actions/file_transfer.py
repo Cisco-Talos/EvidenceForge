@@ -58,6 +58,8 @@ _HTTP_HASH_ANALYZER_MIME_TYPES = {
     "application/vnd.ms-cab-compressed",
     "application/x-dosexec",
     "application/x-gzip",
+    "application/x-ms-patch",
+    "application/x-msi",
     "application/x-msdownload",
     "application/zip",
 }

@@ -2590,8 +2590,8 @@ class TestChronologicalOutput:
         assert child["pid"] > shell["pid"]
         assert child["ppid"] == shell["pid"]
 
-    def test_linux_pid_morphology_rebases_non_main_thread_ids(self):
-        """Linux eCAR PID rewrites should preserve TID offsets, not collapse to pid."""
+    def test_linux_pid_morphology_keeps_process_create_tid_as_main_thread(self):
+        """Linux eCAR PROCESS/CREATE PID rewrites should keep TID as the main thread."""
         lines = [
             json.dumps(
                 {
@@ -2626,8 +2626,66 @@ class TestChronologicalOutput:
 
         child = next(row for row in normalized if row.get("objectID") == "child")
         assert child["pid"] > 500
-        assert child["tid"] == child["pid"] + 5
-        assert child["tid"] != child["pid"]
+        assert child["tid"] == child["pid"]
+
+    def test_linux_pid_morphology_preserves_cron_group_canonical_pids(self):
+        """Cron-correlated eCAR rows keep PIDs shared with CRON syslog."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "other",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/usr/bin/bash"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "cron-shell",
+                    "actorID": "cron-daemon",
+                    "pid": 450,
+                    "tid": 450,
+                    "ppid": 200,
+                    "_concurrency_group_id": "cron:WEB-EXT-01:debian-sa1:1710766860000",
+                    "properties": {"image_path": "/bin/sh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "cron-workload",
+                    "actorID": "cron-shell",
+                    "pid": 451,
+                    "tid": 451,
+                    "ppid": 450,
+                    "_concurrency_group_id": "cron:WEB-EXT-01:debian-sa1:1710766860000",
+                    "properties": {"image_path": "/usr/lib/sysstat/debian-sa1"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        shell = next(row for row in normalized if row.get("objectID") == "cron-shell")
+        workload = next(row for row in normalized if row.get("objectID") == "cron-workload")
+        assert shell["pid"] == 450
+        assert shell["tid"] == 450
+        assert workload["pid"] == 451
+        assert workload["tid"] == 451
+        assert workload["ppid"] == 450
 
     def test_linux_pid_morphology_preserves_process_open_actor_pid(self):
         """PROCESS/OPEN top-level pid should track actorID (source), not objectID target."""
@@ -2919,6 +2977,48 @@ class TestPpidOnlyOnProcess:
 
 
 class TestPropertiesAreStrings:
+    def test_icmp_flow_omits_transport_ports(self, emitter, ts):
+        """ICMP FLOW rows should expose type/code instead of fake port zeroes."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="SRC-01",
+                ip="10.0.0.1",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            dst_host=HostContext(
+                hostname="DST-01",
+                ip="10.0.0.2",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=0,
+                dst_ip="10.0.0.2",
+                dst_port=0,
+                protocol="icmp",
+                conn_state="SF",
+            ),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        assert emitter.emit_event.call_count == 2
+        for call in emitter.emit_event.call_args_list:
+            record = json.loads(emitter._render_event(call.args[0]))
+            props = record["properties"]
+            assert props["protocol"] == "icmp"
+            assert "src_port" not in props
+            assert "dst_port" not in props
+            assert props["icmp_type"] == "8"
+            assert props["icmp_code"] == "0"
+
     def test_ports_are_strings(self, emitter, ts):
         """src_port and dst_port in properties must be strings."""
         rendered = emitter._render_event(

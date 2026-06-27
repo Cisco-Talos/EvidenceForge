@@ -168,7 +168,7 @@ class EventDispatcher:
             format_name: self.observation_policy.decide(format_name, event)
             for format_name, _emitter in matching_emitters
         }
-        self._enforce_source_observation_contracts(decisions)
+        self._enforce_source_observation_contracts(event, decisions)
         observed_formats = {
             format_name
             for format_name, decision in decisions.items()
@@ -195,12 +195,41 @@ class EventDispatcher:
 
     def _enforce_source_observation_contracts(
         self,
+        event: SecurityEvent,
         decisions: dict[str, ObservationDecision],
     ) -> None:
         """Preserve source-local parent rows when child observations survive."""
         self._promote_zeek_parent(decisions, "zeek_conn", _ZEEK_CONN_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_files", _ZEEK_FILES_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
+        self._preserve_zeek_tls_certificate_companions(event, decisions)
+
+    @staticmethod
+    def _preserve_zeek_tls_certificate_companions(
+        event: SecurityEvent,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Keep TLS certificate files/x509/ssl rows source-local coherent."""
+        if event.ssl is None or (event.x509 is None and not event.x509_chain):
+            return
+        certificate_formats = ("zeek_files", "zeek_x509")
+        anchor = next(
+            (
+                decisions[format_name]
+                for format_name in certificate_formats
+                if format_name in decisions and decisions[format_name].status != "dropped"
+            ),
+            None,
+        )
+        if anchor is None:
+            return
+        for format_name in ("zeek_ssl", *certificate_formats):
+            decision = decisions.get(format_name)
+            if decision is not None and decision.status == "dropped":
+                decisions[format_name] = ObservationDecision(
+                    status=anchor.status,
+                    delay=anchor.delay,
+                )
 
     @staticmethod
     def _promote_zeek_parent(

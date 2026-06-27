@@ -2272,9 +2272,7 @@ class BaselineMixin:
                         continue
                     configured_jitter = sched.get("slot_jitter_seconds")
                     jitter_seconds = (
-                        max(0.0, float(configured_jitter or 0.0))
-                        if sched_type == "cron"
-                        else max(30.0, float(configured_jitter or 30.0))
+                        0.0 if sched_type == "cron" else max(30.0, float(configured_jitter or 30.0))
                     )
                     ts = current_hour + timedelta(
                         minutes=fm,
@@ -2379,6 +2377,9 @@ class BaselineMixin:
                 return
 
             cron_parent_pid = sys_pids.get("cron", 0)
+            cron_group_id = (
+                f"cron:{system.hostname}:{service}:{cron_user}:{int(ts.timestamp() * 1000)}"
+            )
             shell_pid = self.activity_generator.generate_system_process(
                 system=system,
                 time=ts,
@@ -2387,6 +2388,7 @@ class BaselineMixin:
                 parent_pid=cron_parent_pid,
                 username=cron_user,
                 emit_linux_syslog=False,
+                concurrency_group_id=cron_group_id,
             )
             self.activity_generator.generate_syslog_event(
                 system=system,
@@ -2409,6 +2411,7 @@ class BaselineMixin:
                     parent_pid=shell_pid,
                     username=cron_user,
                     emit_linux_syslog=False,
+                    concurrency_group_id=cron_group_id,
                 )
                 workload_end = workload_ts + timedelta(seconds=rng.uniform(*lifetime))
                 self.activity_generator.generate_system_process_termination(
@@ -2418,6 +2421,7 @@ class BaselineMixin:
                     process_name=workload_path,
                     parent_pid=shell_pid,
                     username=cron_user,
+                    concurrency_group_id=cron_group_id,
                 )
                 shell_end = workload_end + timedelta(milliseconds=rng.randint(20, 220))
             else:
@@ -2430,6 +2434,7 @@ class BaselineMixin:
                     process_name="/bin/sh",
                     parent_pid=cron_parent_pid,
                     username=cron_user,
+                    concurrency_group_id=cron_group_id,
                 )
 
     def _emit_anacron_lifecycle(

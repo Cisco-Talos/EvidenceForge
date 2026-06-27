@@ -59,6 +59,8 @@ _PROXY_HTTP_FILE_TRANSFER_MIME_TYPES = frozenset(
         "application/vnd.debian.binary-package",
         "application/vnd.ms-cab-compressed",
         "application/x-gzip",
+        "application/x-ms-patch",
+        "application/x-msi",
         "application/x-msdownload",
         "application/zip",
     }
@@ -204,6 +206,7 @@ class ProxyTransactionExecutor(Protocol):
         *,
         hostname: str | None = None,
         force_address: bool = False,
+        bypass_cache: bool = False,
     ) -> None:
         """Emit correlated DNS evidence."""
         ...
@@ -335,7 +338,11 @@ class ProxyTransactionActionBundle:
         client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
         client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
         will_emit_egress = proxy_context.status_code < 400 and proxy_context.cache_result != "HIT"
-        egress_delay = self._egress_delay(dst_ip) if will_emit_egress else timedelta(0)
+        egress_delay = (
+            self._egress_delay(dst_ip, proxy_context=proxy_context)
+            if will_emit_egress
+            else timedelta(0)
+        )
         client_pid, client_process_image = self._resolve_client_process(proxy_context, proxy_sys)
 
         if src_port is None:
@@ -625,7 +632,7 @@ class ProxyTransactionActionBundle:
             [proxy_context.content_type] if proxy_context.content_type else []
         )
 
-    def _egress_delay(self, dst_ip: str) -> timedelta:
+    def _egress_delay(self, dst_ip: str, *, proxy_context: ProxyContext) -> timedelta:
         """Return the deterministic delay between client proxy request and egress."""
 
         request = self.request
@@ -636,13 +643,20 @@ class ProxyTransactionActionBundle:
             default_position="after",
             default_class="causal_prerequisite",
         )
-        return timedelta(
-            milliseconds=random.Random(
-                _stable_seed(
-                    f"proxy_egress_delay:{request.src_ip}:{dst_ip}:{request.time.timestamp()}"
-                )
-            ).randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
+        rng = random.Random(
+            _stable_seed(
+                "proxy_egress_delay:"
+                f"{request.src_ip}:{dst_ip}:{request.dst_port}:{proxy_context.host}:"
+                f"{request.time.timestamp()}:{proxy_context.cache_result}"
+            )
         )
+        base_ms = rng.randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
+        if proxy_context.cache_result in {"MISS", "REVALIDATED", "NONE"}:
+            dns_component_ms = rng.randint(150, 2400)
+            tcp_tls_component_ms = rng.randint(80, 2600 if request.dst_port == 443 else 900)
+            retry_component_ms = rng.choice([0, 0, 0, 0, rng.randint(1200, 8500)])
+            base_ms += dns_component_ms + tcp_tls_component_ms + retry_component_ms
+        return timedelta(milliseconds=base_ms)
 
     def _resolve_client_process(
         self,

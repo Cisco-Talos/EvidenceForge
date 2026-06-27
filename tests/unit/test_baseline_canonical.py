@@ -1229,16 +1229,19 @@ class TestSyslogContext:
             for call in mock_emitters["zeek_conn"].emit.call_args_list
             if call.args[0].event_type == "connection" and call.args[0].network is not None
         ]
-
-        assert any(
-            event.network.src_ip == source_ip
+        matching_ssh_events = [
+            event
+            for event in zeek_events
+            if event.network.src_ip == source_ip
             and event.network.src_port == ssh_source_port
             and event.network.dst_ip == linux.ip
             and event.network.dst_port == 22
             and event.network.service == "ssh"
             and abs((event.timestamp - syslog_event.timestamp).total_seconds()) <= 1.0
-            for event in zeek_events
-        )
+        ]
+
+        assert matching_ssh_events
+        assert syslog_event.syslog.pid == matching_ssh_events[0].network.responding_pid
 
     def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
         self, activity_gen, state_manager, mock_emitters, timestamp

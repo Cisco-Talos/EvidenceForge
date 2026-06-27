@@ -960,6 +960,259 @@ class TestWindowsEventEmitter:
         assert wfp["TimeCreated"] == create_time + expected_delta
         emitter._cleanup_spool_unlocked()
 
+    def test_network_logon_shifted_after_matching_wfp_transport(self, format_def, temp_output):
+        """Type-3 Security 4624 should render after same-tuple inbound 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = logon_time + timedelta(milliseconds=450)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "::ffff:10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+            },
+        ]
+
+        emitter._shift_network_logons_after_transport()
+
+        expected_delta = sample_timing_delta(
+            "windows.network_logon_after_transport",
+            seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
+        )
+        logon = next(event for event in emitter._event_dicts if event["EventID"] == 4624)
+        assert logon["TimeCreated"] == wfp_time + expected_delta
+
+    def test_rdp_logon_shifted_after_matching_wfp_transport(self, format_def, temp_output):
+        """Type-10 Security 4624 should render after same-tuple inbound 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = logon_time + timedelta(milliseconds=380)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "WS-TEST-01.corp.local",
+                "LogonType": 10,
+                "IpAddress": "::ffff:10.10.1.35",
+                "IpPort": "53256",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WS-TEST-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "53256",
+                "DestAddress": "10.10.1.37",
+                "DestPort": "3389",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+
+        emitter._shift_network_logons_after_transport()
+
+        expected_delta = sample_timing_delta(
+            "windows.network_logon_after_transport",
+            seed_parts=("WS-TEST-01.corp.local", "10.10.1.35", "53256", wfp_time),
+        )
+        logon = next(event for event in emitter._event_dicts if event["EventID"] == 4624)
+        assert logon["TimeCreated"] == wfp_time + expected_delta
+
+    def test_special_privileges_shifted_after_final_logon_timestamp(self, format_def, temp_output):
+        """4672 should follow its matching 4624 after logon transport repair."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = logon_time + timedelta(milliseconds=450)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4672,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SubjectLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+
+        emitter._shift_network_logons_after_transport()
+        emitter._shift_special_privileges_after_logons()
+
+        transport_delta = sample_timing_delta(
+            "windows.network_logon_after_transport",
+            seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
+        )
+        expected_logon_time = wfp_time + transport_delta
+        expected_privilege_delta = sample_timing_delta(
+            "windows.special_privilege_after_logon",
+            seed_parts=("FILE-SRV-01.corp.local", "0xf63a33e", expected_logon_time),
+        )
+        logon = next(event for event in emitter._event_dicts if event["EventID"] == 4624)
+        privilege = next(event for event in emitter._event_dicts if event["EventID"] == 4672)
+        assert logon["TimeCreated"] == expected_logon_time
+        assert privilege["TimeCreated"] == expected_logon_time + expected_privilege_delta
+
+    def test_reused_source_port_far_transport_does_not_shift_logon(self, format_def, temp_output):
+        """Remote logon repair should not pair unrelated later source-port reuse."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": logon_time + timedelta(minutes=15),
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+
+        emitter._shift_network_logons_after_transport()
+
+        logon = next(event for event in emitter._event_dicts if event["EventID"] == 4624)
+        assert logon["TimeCreated"] == logon_time
+
+    def test_spooled_network_logon_shifted_after_matching_wfp_transport(
+        self, format_def, temp_output
+    ):
+        """Spooled type-3 Security 4624 fixups should account for later 5156."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = logon_time + timedelta(milliseconds=450)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_network_logons_after_transport_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "windows.network_logon_after_transport",
+            seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
+        )
+        logon = next(event for event in events if event["EventID"] == 4624)
+        assert logon["TimeCreated"] == wfp_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
+    def test_spooled_special_privileges_shifted_after_final_logon_timestamp(
+        self, format_def, temp_output
+    ):
+        """Spooled 4672 fixups should follow matching 4624 transport repairs."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        wfp_time = logon_time + timedelta(milliseconds=450)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4672,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SubjectLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_network_logons_after_transport_unlocked()
+        emitter._shift_spooled_special_privileges_after_logons_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        transport_delta = sample_timing_delta(
+            "windows.network_logon_after_transport",
+            seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
+        )
+        expected_logon_time = wfp_time + transport_delta
+        expected_privilege_delta = sample_timing_delta(
+            "windows.special_privilege_after_logon",
+            seed_parts=("FILE-SRV-01.corp.local", "0xf63a33e", expected_logon_time),
+        )
+        logon = next(event for event in events if event["EventID"] == 4624)
+        privilege = next(event for event in events if event["EventID"] == 4672)
+        assert logon["TimeCreated"] == expected_logon_time
+        assert privilege["TimeCreated"] == expected_logon_time + expected_privilege_delta
+        emitter._cleanup_spool_unlocked()
+
     def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
         """Security 4688 should not visibly create a child before its parent 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -1945,11 +2198,46 @@ class TestWindowsEventEmitter:
         assert "<Version>1</Version>" in content
         assert "<Task>12810</Task>" in content
         assert '<Data Name="Direction">%%14593</Data>' in content  # Outbound
+        assert '<Data Name="LayerName">%%14611</Data>' in content
+        assert '<Data Name="LayerRTID">48</Data>' in content
         assert (
             '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\lsass.exe</Data>'
             in content
         )
         assert '<Data Name="Protocol">6</Data>' in content
+
+    def test_emit_wfp_inbound_connection_normalizes_layer_fields(self, format_def, temp_output):
+        """Hand-built inbound 5156 rows should not inherit outbound WFP layer defaults."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 5156,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 56,
+            "ProcessID": 684,
+            "Application": r"\device\harddiskvolume1\windows\system32\lsass.exe",
+            "Direction": "%%14592",
+            "SourceAddress": "10.0.0.50",
+            "SourcePort": 49263,
+            "DestAddress": "10.0.0.10",
+            "DestPort": 88,
+            "Protocol": 6,
+            "FilterRTID": 0,
+            "RemoteUserID": "S-1-0-0",
+            "RemoteMachineID": "S-1-0-0",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="Direction">%%14592</Data>' in content
+        assert '<Data Name="LayerName">%%14610</Data>' in content
+        assert '<Data Name="LayerRTID">44</Data>' in content
 
     def test_wfp_connection_resolves_application_from_state_manager(self, format_def, temp_output):
         """WFP 5156 uses canonical process state when the event lacks ProcessContext."""
@@ -2139,6 +2427,8 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Data Name="Direction">%%14592</Data>' in content
+        assert '<Data Name="LayerName">%%14610</Data>' in content
+        assert '<Data Name="LayerRTID">44</Data>' in content
         assert '<Data Name="ProcessID">684</Data>' in content
         assert '<Data Name="DestAddress">10.0.0.10</Data>' in content
 

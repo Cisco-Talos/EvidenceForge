@@ -837,6 +837,142 @@ def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
     assert (terminate.timestamp - session_time).total_seconds() < 10
 
 
+def test_connection_owner_process_does_not_reuse_linux_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+    state_manager: StateManager,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Linux web connections should be owned by a client process, not the login shell."""
+    user = User(
+        username="linux.dev",
+        full_name="Linux Dev",
+        email="linux.dev@corp.local",
+        persona="developer",
+        primary_system="LINUX-WS",
+    )
+    system = System(
+        hostname="LINUX-WS",
+        ip="10.10.10.60",
+        os="Ubuntu 24.04",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    scenario.environment.users.append(user)
+    scenario.environment.systems.append(system)
+    world_model = WorldModel(scenario, "meridianhcs.local")
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip=system.ip,
+        session_kind="interactive",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    systemd_pid = state_manager.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image="/usr/lib/systemd/systemd",
+        command_line="/usr/lib/systemd/systemd",
+        username="root",
+        integrity_level="System",
+    )
+    shell_pid = state_manager.create_process(
+        system=system.hostname,
+        parent_pid=systemd_pid,
+        image="/bin/bash",
+        command_line="-bash",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+    activity_generator._record_user_process(system, user, shell_pid, "/bin/bash")
+    monkeypatch.setattr(
+        "evidenceforge.generation.world_model.get_service_to_exes",
+        lambda: {"ssl": ["bash", "curl"]},
+    )
+
+    pid = planner.ensure_connection_process(
+        user=user,
+        system=system,
+        session=session,
+        time=session_time + timedelta(minutes=5),
+        service="ssl",
+        rng=random.Random(3),
+    )
+
+    proc = state_manager.get_process(system.hostname, pid)
+    assert proc is not None
+    assert pid != shell_pid
+    assert proc.image == "/usr/bin/curl"
+
+
+def test_generic_linux_web_pid_inference_skips_shell(
+    activity_generator: ActivityGenerator,
+    systems: dict[str, System],
+) -> None:
+    """Fallback endpoint FLOW attribution should use a client process, not bash."""
+    system = systems["DB-01"]
+    activity_generator._system_pids = {
+        system.hostname: {
+            "bash": 1200,
+            "curl": 1208,
+        }
+    }
+
+    pid = activity_generator._infer_connection_pid(system, "ssl", 443, "tcp")
+
+    assert pid == 1208
+
+
+def test_linux_local_session_shell_has_visible_terminal_parent(
+    activity_generator: ActivityGenerator,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Local Linux login shells should not render as direct PID 1 children."""
+    system = systems["DB-01"]
+    user = users["alice.admin"]
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    activity_time = session_time + timedelta(minutes=3)
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip=system.ip,
+        session_kind="interactive",
+    )
+
+    shell_pid = activity_generator.ensure_linux_session_shell(
+        user=user,
+        target_system=system,
+        logon_id=logon_id,
+        logon_time=session_time,
+        activity_time=activity_time,
+    )
+
+    assert shell_pid is not None
+    shell_proc = state_manager.get_process(system.hostname, shell_pid)
+    assert shell_proc is not None
+    assert shell_proc.parent_pid != 1
+    parent_proc = state_manager.get_process(system.hostname, shell_proc.parent_pid)
+    assert parent_proc is not None
+    assert parent_proc.image in {"/bin/login", "/usr/libexec/gnome-terminal-server"}
+
+
 def test_find_user_session_handles_mixed_timezone_start_times(
     planner: WorldPlanner,
     state_manager: StateManager,

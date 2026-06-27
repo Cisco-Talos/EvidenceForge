@@ -1216,6 +1216,80 @@ or follow-up batch is needed.
   syslog/bash texture, proxy/browser semantics, Zeek HTTP reuse, and Windows
   process/session timing.
 
+- Loop 295 fixed the Linux cron/sysstat source-identity family. Cron schedules
+  now ignore legacy slot jitter while keeping per-host minute offsets; cron
+  shell/workload process create and terminate events share a canonical
+  concurrency group; eCAR observation preserves cron groups that correlate with
+  visible CRON syslog; Linux eCAR PID morphology preserves canonical PIDs for
+  those cron-correlated rows; and PROCESS/CREATE TID normalization keeps
+  `tid == pid`. Focused regression tests passed, generation completed, and the
+  automated eval passed at 97.03278661249382 over 79007 records. The hard probe
+  `scenarios/iteration-test/blind-test/loop-295/hard_probe_linux_cron_ecar_identity.json`
+  found 0 cron nonzero-second rows, 0 syslog/eCAR shell PID mismatches, and 0
+  Linux PROCESS/CREATE TID mismatches across 65 cron sysstat rows. The full
+  blind panel plus deliberation is saved under
+  `scenarios/iteration-test/blind-test/loop-295/`; initial synthetic-confidence
+  scores were Threat Hunter 32, Detection Engineer 34, Network Forensics 68,
+  and Host/EDR 56. Deliberation prioritized proxy-origin DNS causality as the
+  next P0: multiple proxy-origin TLS handshakes precede first visible proxy DNS
+  for the same SNI/IP despite short later TTLs, with overly tight CONNECT-to-TLS
+  timing as the sibling texture issue.
+
+- Loop 296 fixed proxy-origin DNS causality and CONNECT-to-origin timing texture.
+  The proxy transaction bundle now emits uncached forced proxy-side DNS
+  prerequisites before origin egress, and forward-proxy-origin external HTTP/TLS
+  connections force visible DNS even when callers suppress client-side DNS.
+  Automated eval passed at 96.69940951837162 over 95401 records. The hard probe
+  `scenarios/iteration-test/blind-test/loop-296/hard_probe_proxy_dns_causality.json`
+  found 0 origin TLS rows without prior proxy DNS evidence across 1118 origin TLS
+  rows, and CONNECT-to-origin TLS p50/p90 gaps of 5.25s/10.43s. Blind initial
+  synthetic-confidence scores were Threat Hunter 43, Detection Engineer 48,
+  Network Forensics 43, and Host/EDR 68; deliberation average was 51.0. The next
+  target selected was Linux eCAR FLOW ownership and local shell parentage.
+
+- Loop 297 fixed Linux eCAR FLOW shell ownership and local shell parentage. Generic
+  Linux HTTP/HTTPS endpoint PID inference no longer chooses `/bin/bash`; world
+  planner connection-owner selection filters shells; Linux local session shells
+  now get user-session/terminal/login parents; and HTTP process-network mapping
+  was added to data-driven config. Automated eval passed at 96.63103924384974
+  over 102592 records. The hard probe
+  `scenarios/iteration-test/blind-test/loop-297/hard_probe_linux_ecar_flow_shell_parentage.json`
+  showed bash-owned FLOW rows dropped from 50 to 1 explicit reverse-shell payload
+  and local `-bash` direct PID1/systemd parentage dropped to 0. Blind initial
+  synthetic-confidence scores were Threat Hunter 34, Detection Engineer 29,
+  Network Forensics 67, and Host/EDR 64; deliberation average was 61.5. A
+  follow-up probe
+  `scenarios/iteration-test/blind-test/loop-297/hard_probe_zeek_client_first_rstr_byte_direction.json`
+  confirmed the next P0: 42 client-first TCP `RSTR`/`ShAdr` rows with
+  `orig_bytes=0`, `resp_bytes>0`, and `missed_bytes=0` across SMB, LDAP, HTTP,
+  TLS, PostgreSQL, MySQL, and TDS. The next loop should fix this at the canonical
+  network/protocol layer before tackling SSH/RDP eCAR transport/auth timing.
+  Final local verification passed with `uv run ruff check .`,
+  `uv run ruff format --check .`, `uv run eforge validate-config`, and
+  `uv run pytest --no-cov -q` (`4553 passed, 19 skipped`).
+
+- Loops 298-307 continued the dev-branch assessment loop and archived all
+  artifacts under `scenarios/iteration-test/blind-test/loop-298/` through
+  `loop-307/`. Loop 298 fixed client-first TCP byte/history ordering for Zeek
+  reset rows; loop 299 fixed explicit proxy CONNECT origin companions; loop 300
+  fixed DNS resolver/proxy cache texture; loop 301 fixed inbound
+  transport-before-auth timing; loop 302 fixed MSI HTTP/file MIME and Zeek PE
+  fanout; loop 303 fixed Zeek TLS/X.509 companion observation; loop 304 fixed
+  Windows Security 5156 WFP direction/layer semantics; loop 305 fixed Windows
+  4672-after-4624 same-LogonID ordering; loop 306 fixed successful SSH
+  auth/session atomicity; loop 307 fixed eCAR ICMP FLOW properties by omitting
+  fake transport ports and rendering `icmp_type`/`icmp_code`. Automated eval
+  stayed in the 96.20-97.41 range and loop 307 ended at 97.08506388397319 over
+  79015 records.
+
+- Loop 307 final panel findings selected the next highest-impact families:
+  repeated SSH failed-auth syslog ordering contradictions (`Failed password`
+  before same-tuple `Connection from` plus username flips), repeated RDP
+  Security 4624/4625 auth-before-eCAR-FLOW ordering, lower-volume Zeek DNS/HTTP
+  /TLS companion gaps, and FILE-SRV `net view` duplicate `cmd.exe` wrapper
+  texture. The loop-307 ICMP target verified clean: 238/238 ICMP eCAR FLOW rows
+  omitted `src_port`/`dst_port` and included `icmp_type=8`/`icmp_code=0`.
+
 ## How to Continue
 
 1. Start from the current `dev` state and read `TODO.md` for durable priorities.

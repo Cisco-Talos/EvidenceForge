@@ -98,6 +98,7 @@ _SERVICE_PRINCIPAL_NAMES = {
     "sshd",
     "www-data",
 }
+_PORT_BEARING_PROTOCOLS = {"tcp", "udp", "sctp"}
 
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
@@ -119,6 +120,29 @@ def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
         return _ECAR_FAILURE_REASON_BY_SUBSTATUS[substatus]
     reason = str(getattr(auth, "failure_reason", "") or "")
     return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
+
+
+def _ecar_flow_endpoint_properties(
+    net: NetworkContext,
+    *,
+    dst_ip: str | None = None,
+    direction: str,
+) -> dict[str, Any]:
+    """Return source-native FLOW endpoint properties for eCAR rendering."""
+    protocol = (net.protocol or "").lower()
+    properties: dict[str, Any] = {
+        "src_ip": net.src_ip,
+        "dst_ip": dst_ip or net.dst_ip,
+        "protocol": net.protocol,
+        "direction": direction,
+    }
+    if protocol in _PORT_BEARING_PROTOCOLS:
+        properties["src_port"] = net.src_port
+        properties["dst_port"] = net.dst_port
+    elif protocol == "icmp":
+        properties["icmp_type"] = 8
+        properties["icmp_code"] = 0
+    return properties
 
 
 def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
@@ -326,10 +350,12 @@ class EcarEmitter(HostMultiplexEmitter):
         if pid <= 0:
             return -1
         if os_category == "linux":
+            if salt == "process_create":
+                return pid
             seed = _stable_seed(
                 f"ecar_linux_tid:{hostname}:{pid}:{salt}:{int(timestamp.timestamp()) // 30}"
             )
-            if salt in {"process_create", "process_terminate"} and seed % 100 < 55:
+            if salt == "process_terminate" and seed % 100 < 55:
                 return pid
             return pid + 1 + (seed % 997)
         bucket_ms = int(timestamp.timestamp() * 1000)
@@ -461,9 +487,12 @@ class EcarEmitter(HostMultiplexEmitter):
         if (
             event.event_type == "logon"
             and lifecycle == "login"
-            and getattr(auth, "logon_type", None) == 10
+            and getattr(auth, "logon_type", None) in {3, 10}
         ):
-            return self._remote_session_timestamp_after_flow(event, host, timestamp, dst_port=3389)
+            dst_port = 3389 if getattr(auth, "logon_type", None) == 10 else 445
+            return self._remote_session_timestamp_after_flow(
+                event, host, timestamp, dst_port=dst_port
+            )
         return timestamp
 
     def _remote_session_timestamp_after_flow(
@@ -702,14 +731,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 "hostname": event.src_host.hostname,
                 "object": "FLOW",
                 "action": "CONNECT",
-                "direction": "OUTBOUND",
                 "pid": rendered_pid,
-                "src_ip": net.src_ip,
-                "src_port": net.src_port,
-                "dst_ip": net.dst_ip,
-                "dst_port": net.dst_port,
-                "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.src_host),
+                **_ecar_flow_endpoint_properties(net, direction="OUTBOUND"),
             }
             if self._flow_connection_failed(net):
                 event_data["outcome"] = "failure"
@@ -765,14 +789,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 "hostname": event.dst_host.hostname,
                 "object": "FLOW",
                 "action": "CONNECT",
-                "direction": "INBOUND",
                 "pid": inbound_pid,
-                "src_ip": net.src_ip,
-                "src_port": net.src_port,
-                "dst_ip": dst_ip,
-                "dst_port": net.dst_port,
-                "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.dst_host),
+                **_ecar_flow_endpoint_properties(net, dst_ip=dst_ip, direction="INBOUND"),
             }
             if self._flow_connection_failed(net):
                 event_data["outcome"] = "failure"
@@ -817,7 +836,7 @@ class EcarEmitter(HostMultiplexEmitter):
                         getattr(event.dst_host, "os_category", ""),
                     ),
                 )
-                if net.protocol == "tcp" and net.dst_port in {22, 3389}:
+                if net.protocol == "tcp":
                     self._remote_inbound_flow_times[
                         (
                             event.dst_host.hostname,
@@ -1414,6 +1433,11 @@ class EcarEmitter(HostMultiplexEmitter):
         image_path = str(props.get("image_path") or "")
         return image_path.startswith("/")
 
+    @staticmethod
+    def _preserves_canonical_linux_pid(record: dict[str, Any]) -> bool:
+        """Return whether the PID is shared with another source and must not be remapped."""
+        return str(record.get("_concurrency_group_id") or "").startswith("cron:")
+
     @classmethod
     def _normalize_linux_pid_morphology(cls, lines: list[str]) -> list[str]:
         """Keep Linux eCAR process PIDs increasing in source timestamp order."""
@@ -1431,6 +1455,7 @@ class EcarEmitter(HostMultiplexEmitter):
             and record.get("object") == "PROCESS"
             and record.get("action") == "CREATE"
             and cls._looks_like_linux_process(record)
+            and not cls._preserves_canonical_linux_pid(record)
             and cls._ecar_int(record.get("pid")) > 0
         ]
         create_indexes.sort(
@@ -1487,7 +1512,9 @@ class EcarEmitter(HostMultiplexEmitter):
             old_pid = cls._ecar_int(record.get("pid"))
             old_tid = cls._ecar_int(record.get("tid"))
             record["pid"] = new_pid
-            if old_tid == old_pid:
+            if record.get("object") == "PROCESS" and record.get("action") == "CREATE":
+                record["tid"] = new_pid
+            elif old_tid == old_pid:
                 record["tid"] = new_pid
             elif old_tid > old_pid:
                 record["tid"] = new_pid + min(old_tid - old_pid, 5000)
@@ -1514,12 +1541,13 @@ class EcarEmitter(HostMultiplexEmitter):
             if record is None:
                 normalized.append(line)
                 continue
-            rewrite_pid_field(record)
-            if record.get("object") == "PROCESS":
-                rewrite_parent_field(record)
-            rewrite_property_pid(record, "target_pid", "target_process_uuid")
-            rewrite_property_pid(record, "target_pid", "target_process_object_id")
-            rewrite_property_pid(record, "source_pid", "source_process_object_id")
+            if not cls._preserves_canonical_linux_pid(record):
+                rewrite_pid_field(record)
+                if record.get("object") == "PROCESS":
+                    rewrite_parent_field(record)
+                rewrite_property_pid(record, "target_pid", "target_process_uuid")
+                rewrite_property_pid(record, "target_pid", "target_process_object_id")
+                rewrite_property_pid(record, "source_pid", "source_process_object_id")
             normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
@@ -1968,7 +1996,21 @@ class EcarEmitter(HostMultiplexEmitter):
                 and record.get("action") == "TERMINATE"
             ):
                 record["timestamp_ms"] = cls._ecar_int(record.get("timestamp_ms"), 0) + shift_ms
+            normalized.append(json.dumps(record, separators=(",", ":")))
+        return cls._strip_internal_fields(normalized)
+
+    @classmethod
+    def _strip_internal_fields(cls, lines: list[str]) -> list[str]:
+        """Remove eCAR-only normalization helpers before final writer flush."""
+        normalized: list[str] = []
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                normalized.append(line)
+                continue
             record.pop("_concurrency_group_id", None)
+            record.pop("_canonical_ms", None)
             normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
@@ -2254,6 +2296,7 @@ class EcarEmitter(HostMultiplexEmitter):
                         writer.buffer,
                         self._output_end_time,
                     )
+                    writer.buffer = self._strip_internal_fields(writer.buffer)
         super().flush(force=force)
 
     # Property keys that belong in the eCAR properties map.
@@ -2267,6 +2310,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "dst_ip",
         "dst_port",
         "protocol",
+        "icmp_type",
+        "icmp_code",
         "direction",
         "md5",
         "sha256",

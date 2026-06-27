@@ -379,6 +379,34 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     assert dependent_time > process_time
 
 
+def test_ecar_type3_login_timestamp_follows_matching_inbound_flow(tmp_path: Path) -> None:
+    """eCAR type-3 USER_SESSION rows should not visibly precede same-tuple FLOW rows."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    base = _base_time()
+    host = _host_context()
+    flow_time = base + timedelta(milliseconds=750)
+    emitter._remote_inbound_flow_times[(host.hostname, "10.0.0.30", 50123, host.ip, 445)] = (
+        flow_time
+    )
+    event = SecurityEvent(
+        timestamp=base,
+        event_type="logon",
+        dst_host=host,
+        auth=AuthContext(
+            username="alice",
+            logon_id="0xabc",
+            logon_type=3,
+            source_ip="10.0.0.30",
+            source_port=50123,
+        ),
+    )
+
+    session_time = emitter._session_timestamp(event, host, "login")
+
+    assert session_time > flow_time
+    assert session_time <= flow_time + timedelta(milliseconds=100)
+
+
 def test_ecar_dependent_timestamp_for_long_running_process_uses_event_time(
     tmp_path: Path,
 ) -> None:

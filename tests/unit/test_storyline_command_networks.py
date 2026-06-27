@@ -1199,6 +1199,24 @@ class TestFileTransferActionBundles:
         assert first.pe.has_cert_table == second.pe.has_cert_table
         assert later.pe.has_cert_table == first.pe.has_cert_table
 
+    def test_http_msi_file_transfer_does_not_emit_pe_metadata(self):
+        """MSI installer downloads should keep file evidence without PE analyzer rows."""
+        request = HttpResponseFileTransferRequest(
+            host="dl.duosecurity.com",
+            uri="/DuoDeviceHealth-latest.msi",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msi"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+
+        assert result.file_transfer.mime_type == "application/x-msi"
+        assert result.file_transfer.sha1
+        assert result.pe is None
+
     def test_http_file_transfer_bundle_tolerates_malformed_absolute_uri(self):
         """Malformed absolute-form URIs should fall back to raw URI identity."""
         request = HttpResponseFileTransferRequest(

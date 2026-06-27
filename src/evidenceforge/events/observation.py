@@ -161,6 +161,8 @@ class ObservationPolicy:
     ) -> float:
         if self._preserve_ssh_session_lifecycle(source, event):
             return 0.0
+        if self._preserve_ecar_cron_process_lifecycle(source, event):
+            return 0.0
         host = self._host_key_for_event(event)
         return self._effective_missingness_for_host(source, host, settings, format_name=format_name)
 
@@ -269,6 +271,8 @@ class ObservationPolicy:
                 f"{event.storyline_cluster_id}:{event.process.username}:"
                 f"{event.process.pid}:{image}"
             )
+        if source == "ecar" and event.process and event.process.concurrency_group_id:
+            return f"process-group:{event.process.concurrency_group_id}"
         if source == "syslog" and event.syslog and event.syslog.app_name == "sshd":
             pid = event.syslog.pid if event.syslog.pid not in (None, "") else ""
             if pid:
@@ -316,18 +320,35 @@ class ObservationPolicy:
             return True
         if source == "ecar" and group.startswith("storyline-process:"):
             return True
+        if source == "ecar" and group.startswith("process-group:"):
+            return True
         if source == "zeek" and (group.startswith("uid:") or group.startswith("dns:")):
             return True
         return False
 
     @staticmethod
     def _preserve_ssh_session_lifecycle(source: str, event: SecurityEvent) -> bool:
-        """Preserve SSH PAM lifecycle rows that correlate with endpoint session rows."""
+        """Preserve SSH auth lifecycle rows that correlate with endpoint session rows."""
         if source != "syslog" or event.syslog is None:
             return False
         if event.syslog.app_name != "sshd":
             return False
-        return "pam_unix(sshd:session): session " in event.syslog.message
+        message = event.syslog.message
+        return (
+            message.startswith("Connection from ")
+            or message.startswith("Accepted ")
+            or message.startswith("Invalid user ")
+            or message.startswith("Failed password ")
+            or message.startswith("Connection closed by ")
+            or "pam_unix(sshd:session): session " in message
+        )
+
+    @staticmethod
+    def _preserve_ecar_cron_process_lifecycle(source: str, event: SecurityEvent) -> bool:
+        """Preserve eCAR cron process rows that are correlated with visible CRON syslog."""
+        if source != "ecar" or event.process is None:
+            return False
+        return event.process.concurrency_group_id.startswith("cron:")
 
     def _host_key_for_event(self, event: SecurityEvent) -> str:
         host = event.dst_host or event.src_host

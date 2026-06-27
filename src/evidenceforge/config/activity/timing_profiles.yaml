@@ -76,6 +76,16 @@ relationships:
     position: after
     min_ms: 3
     max_ms: 35
+  windows.network_logon_after_transport:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 140
+  windows.special_privilege_after_logon:
+    class: source_latency
+    position: after
+    min_ms: 2
+    max_ms: 45
   source.sysmon_network_connection:
     class: source_latency
     position: after
