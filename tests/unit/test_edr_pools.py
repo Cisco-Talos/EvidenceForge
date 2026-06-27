@@ -195,17 +195,68 @@ class TestFilePaths:
         paths = get_file_paths("linux")
         assert all("/" in p for p in paths), "Linux paths should use forward slashes"
 
-    def test_windows_prefetch_templates_use_hex_suffix(self):
+    def test_windows_prefetch_templates_are_not_generic_ambient_paths(self):
         paths = get_file_paths("windows")
         prefetch_paths = [
             path for path in paths if r"\windows\prefetch" in path.lower().replace("/", "\\")
         ]
 
-        assert prefetch_paths, "No Windows Prefetch templates in EDR path pool"
-        for template in prefetch_paths:
-            assert "{hex}" in template
-            path = materialize_edr_template(template, random.Random(7), user="alice")
-            assert re.search(r"-[0-9A-F]{8}\.pf$", path), path
+        assert prefetch_paths == []
+
+    def test_process_prefetch_side_effect_uses_owning_executable_name(self):
+        profile = {
+            "file_side_effect_profiles": [
+                {
+                    "name": "windows_prefetch_execution",
+                    "executables": ["cmd.exe", "powershell.exe"],
+                    "actions": ["modify"],
+                    "probability": 1.0,
+                    "paths_windows": [r"C:\Windows\Prefetch\{process_prefetch_name}-{hex}.pf"],
+                }
+            ],
+        }
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value=profile,
+        ):
+            cmd_effect = select_file_side_effect(
+                process_name=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                os_category="windows",
+                rng=random.Random(7),
+                user="alice",
+            )
+            powershell_effect = select_file_side_effect(
+                process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                command_line="powershell.exe -NoProfile Get-Process",
+                os_category="windows",
+                rng=random.Random(11),
+                user="alice",
+            )
+
+        assert cmd_effect is not None
+        assert powershell_effect is not None
+        assert cmd_effect[0] == "modify"
+        assert powershell_effect[0] == "modify"
+        assert re.search(r"\\Prefetch\\CMD\.EXE-[0-9A-F]{8}\.pf$", cmd_effect[1])
+        assert re.search(
+            r"\\Prefetch\\POWERSHELL\.EXE-[0-9A-F]{8}\.pf$",
+            powershell_effect[1],
+        )
+
+    def test_ambient_file_churn_filters_windows_prefetch_templates(self):
+        effect = select_ambient_file_churn_effect(
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs",
+            os_category="windows",
+            rng=random.Random(3),
+            user="SYSTEM",
+            path_templates=[r"C:\Windows\Prefetch\SVCHOST.EXE-{hex}.pf"],
+            actions=["modify"],
+            weights=[1],
+        )
+
+        assert effect is None
 
     def test_linux_generic_paths_avoid_action_incompatible_sources(self):
         paths = get_file_paths("linux")
@@ -322,7 +373,7 @@ class TestFilePaths:
         effects = {
             select_ambient_file_churn_effect(
                 "/usr/sbin/sshd",
-                "/usr/sbin/sshd -D [listener]",
+                "/usr/sbin/sshd -D",
                 "linux",
                 random.Random(seed),
                 "root",

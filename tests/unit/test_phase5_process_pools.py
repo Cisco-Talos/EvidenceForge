@@ -36,6 +36,7 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity.system_processes import (
     _resolve_host_placeholders,
+    get_scheduled_task_entries,
     load_system_processes,
     pick_scheduled_task,
     pick_system_service_process,
@@ -203,6 +204,30 @@ class TestProcessPoolSize:
 
         assert workstation_update_exes.isdisjoint(dc_picks)
         assert workstation_update_exes.intersection(ws_picks)
+
+    def test_maintenance_utilities_are_workstation_scoped_and_capped(self):
+        """Noisy maintenance utilities should not repeat broadly on servers/DCs."""
+        dc_host = SimpleNamespace(os="Windows Server 2022", type="domain_controller")
+        server_host = SimpleNamespace(os="Windows Server 2022", type="server")
+        ws_host = SimpleNamespace(os="Windows 11 Enterprise", type="workstation")
+        noisy_exes = {"cleanmgr.exe", "compattelrunner.exe"}
+
+        dc_entries = get_scheduled_task_entries(dc_host)
+        server_entries = get_scheduled_task_entries(server_host)
+        ws_entries = get_scheduled_task_entries(ws_host)
+
+        assert noisy_exes.isdisjoint(
+            {entry["image"].rsplit("\\", 1)[-1].lower() for entry in dc_entries}
+        )
+        assert noisy_exes.isdisjoint(
+            {entry["image"].rsplit("\\", 1)[-1].lower() for entry in server_entries}
+        )
+        for exe in noisy_exes:
+            entry = next(
+                item for item in ws_entries if item["image"].rsplit("\\", 1)[-1].lower() == exe
+            )
+            assert entry["max_per_host_window"] == 1
+            assert entry["cooldown_hours"] >= 24
 
 
 class TestBaselinePatterns:

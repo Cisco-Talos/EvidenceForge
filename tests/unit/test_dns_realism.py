@@ -482,6 +482,133 @@ class TestHostnameConsistency:
         assert len(dns_events) == 2
         assert [event.dns.answers for event in dns_events] == [expected_answers, expected_answers]
 
+    def test_forced_address_prerequisite_dns_does_not_servfail(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Connection-prerequisite DNS should not fail and then allow TCP anyway."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        state_manager.set_current_time(timestamp)
+        delegate_rng = random.Random(7)
+
+        class AlwaysFailureRollRng:
+            def random(self) -> float:
+                return 0.0
+
+            def randint(self, start: int, stop: int) -> int:
+                return delegate_rng.randint(start, stop)
+
+            def uniform(self, start: float, stop: float) -> float:
+                return delegate_rng.uniform(start, stop)
+
+            def choice(self, values):
+                return delegate_rng.choice(values)
+
+            def choices(self, *args, **kwargs):
+                return delegate_rng.choices(*args, **kwargs)
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: AlwaysFailureRollRng())
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+            bypass_cache=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert address_events
+        assert address_events[0].dns.rcode == "NOERROR"
+        assert "93.184.216.34" in address_events[0].dns.answers
+
+    def test_forward_proxy_origin_connections_use_resolver_cache(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Proxy-origin TLS should emit DNS once, then honor positive-cache TTL."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        hostname = "updates.example.net"
+
+        for offset in (0, 30):
+            activity_gen.generate_connection(
+                src_ip=proxy.ip,
+                dst_ip="93.184.216.34",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                emit_dns=False,
+                hostname=hostname,
+                conn_state="SF",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=1000,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp < timestamp
+
+    def test_proxy_forced_address_lookups_suppress_repeats_inside_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Forced proxy-origin prerequisites should not emit per-connection A repeats."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        hostname = "packages.microsoft.com"
+
+        for offset in (0, 0.2, 30):
+            activity_gen._emit_dns_lookup(
+                src_ip=proxy.ip,
+                dst_ip="13.107.246.52",
+                time=timestamp + timedelta(seconds=offset),
+                hostname=hostname,
+                force_address=True,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].network.src_ip == proxy.ip
+        assert address_events[0].network.dst_ip == "10.0.0.10"
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""

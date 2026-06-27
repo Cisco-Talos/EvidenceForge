@@ -76,6 +76,16 @@ relationships:
     position: after
     min_ms: 3
     max_ms: 35
+  windows.network_logon_after_transport:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 140
+  windows.special_privilege_after_logon:
+    class: source_latency
+    position: after
+    min_ms: 2
+    max_ms: 45
   source.sysmon_network_connection:
     class: source_latency
     position: after
@@ -236,6 +246,58 @@ relationships:
     position: after
     min_ms: 120
     max_ms: 1500
+
+endpoint_clock:
+  # Host-resident endpoint sources share the host clock. Windows Security,
+  # Sysmon, and eCAR on Windows use the Windows host profile; Linux syslog,
+  # bash history, and eCAR on Linux use the Linux host profile. Network,
+  # proxy, firewall, and IDS sensors keep their independent appliance clocks.
+  profiles:
+    complete:
+      windows:
+        host_offset_ms:
+          min: 0
+          max: 0
+        host_drift_ppm:
+          min: 0
+          max: 0
+      linux:
+        host_offset_ms:
+          min: 0
+          max: 0
+        host_drift_ppm:
+          min: 0
+          max: 0
+    enterprise_standard:
+      windows:
+        host_offset_ms:
+          min: -1250
+          max: 1800
+        host_drift_ppm:
+          min: -8
+          max: 8
+      linux:
+        host_offset_ms:
+          min: -900
+          max: 1500
+        host_drift_ppm:
+          min: -8
+          max: 8
+    messy_collection:
+      windows:
+        host_offset_ms:
+          min: -5500
+          max: 7800
+        host_drift_ppm:
+          min: -35
+          max: 35
+      linux:
+        host_offset_ms:
+          min: -4200
+          max: 6200
+        host_drift_ppm:
+          min: -30
+          max: 30
 
 network_sensor_observation:
   # Default assumes distributed security infrastructure where core, DMZ, and

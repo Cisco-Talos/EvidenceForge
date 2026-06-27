@@ -57,7 +57,7 @@ from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.zeek_files import _bounded_file_transfer_observation
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _stable_seed, _thread_local
+from evidenceforge.utils.rng import _thread_local
 
 
 def _reset_thread_rng() -> None:
@@ -772,7 +772,7 @@ class TestSslContextPopulation:
                 system=target.hostname,
                 parent_pid=0,
                 image="/usr/sbin/sshd",
-                command_line="sshd: [accepted]",
+                command_line="sshd: admin [priv]",
                 username="admin",
                 integrity_level="Medium",
             )
@@ -1218,6 +1218,85 @@ class TestSslContextPopulation:
         )
         assert egress.http.user_agent == "Windows-Device-Management/10.0"
 
+    def test_explicit_proxy_https_cacheable_request_still_emits_origin_leg(
+        self, activity_gen, monkeypatch
+    ):
+        """A successful CONNECT tunnel with bytes must not terminalize as a cache HIT."""
+
+        class ZeroRollRandom(random.Random):
+            def random(self) -> float:
+                return 0.0
+
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: ZeroRollRandom(7))
+        monkeypatch.setattr(
+            generator_module,
+            "_proxy_request_allows_cache_hit",
+            lambda **_kwargs: True,
+        )
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="40.126.28.19",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=620,
+            resp_bytes=120_000,
+            conn_state="SF",
+            source_system=source,
+            hostname="graph.microsoft.com",
+            http=HttpContext(
+                method="GET",
+                host="graph.microsoft.com",
+                uri="/v1.0/me",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=0,
+                response_body_len=120_000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/json"],
+            ),
+        )
+
+        client = next(
+            event
+            for event in events
+            if event.proxy is not None
+            and event.network is not None
+            and event.network.src_ip == source.ip
+            and event.network.dst_ip == proxy.ip
+        )
+        egress = next(
+            event
+            for event in events
+            if event.network is not None
+            and event.network.src_ip == proxy.ip
+            and event.network.dst_port == 443
+        )
+
+        assert client.proxy.cache_result == "MISS"
+        assert client.http is not None
+        assert client.http.method == "CONNECT"
+        assert egress.network.conn_state == "SF"
+        assert egress.http is not None
+        assert egress.http.host == "graph.microsoft.com"
+        assert egress.network.resp_bytes >= 120_000
+
     def test_proxy_transaction_request_has_stable_action_anchor(self):
         proxy = System(
             hostname="PROXY-01",
@@ -1395,17 +1474,13 @@ class TestSslContextPopulation:
             and event.network.src_ip == proxy.ip
             and event.network.dst_ip == egress_ip
         )
-        delay_window = generator_module.get_timing_window(
-            "network.proxy_upstream_after_client",
-            default_min_ms=950,
-            default_max_ms=1800,
-            default_position="after",
-            default_class="causal_prerequisite",
-        )
-        egress_delay = timedelta(
-            milliseconds=random.Random(
-                _stable_seed(f"proxy_egress_delay:{source.ip}:{egress_ip}:{base_time.timestamp()}")
-            ).randint(delay_window.min_ms, delay_window.max_ms)
+        dns = next(
+            event
+            for event in events
+            if event.dns
+            and event.network
+            and event.network.src_ip == proxy.ip
+            and event.dns.query == "www.google.com"
         )
         request_window = generator_module.get_timing_window(
             "source.zeek_http_request",
@@ -1414,10 +1489,11 @@ class TestSslContextPopulation:
             default_position="after",
             default_class="same_observation",
         )
-        required_gap = egress_delay + timedelta(milliseconds=request_window.max_ms + 1)
+        required_gap = timedelta(milliseconds=request_window.max_ms + 1)
 
         assert client.timestamp < base_time
         assert egress.timestamp >= base_time + required_gap
+        assert dns.timestamp < egress.timestamp
 
     def test_explicit_proxy_download_keeps_file_identity_and_order(self, activity_gen):
         """Proxy client and origin legs should preserve object identity and file timing."""
@@ -1544,12 +1620,13 @@ class TestSslContextPopulation:
             assert event.network is not None
             assert event.http.uri.endswith(".msi")
             assert event.http.response_body_len >= 5_000_000
-            assert event.http.resp_mime_types == ["application/x-msdownload"]
+            assert event.http.resp_mime_types == ["application/x-msi"]
             assert event.http.resp_fuids
             assert event.file_transfer is not None
-            assert event.file_transfer.mime_type == "application/x-msdownload"
+            assert event.file_transfer.mime_type == "application/x-msi"
             assert event.file_transfer.total_bytes == event.http.response_body_len
             assert event.network.resp_bytes >= event.http.response_body_len
+            assert event.pe is None
 
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""
@@ -1669,7 +1746,7 @@ class TestSslContextPopulation:
             for event in events
             if event.event_type == "system_process_create"
             and event.process is not None
-            and event.process.command_line == "sshd: [accepted]"
+            and event.process.command_line == "sshd: admin [priv]"
         ]
         assert transport_events
         assert transport_event.network.responding_pid == transport_events[0].process.pid
@@ -1771,10 +1848,58 @@ class TestSslContextPopulation:
             for event in events
             if event.event_type == "system_process_create"
             and event.process is not None
-            and event.process.command_line == "sshd: [accepted]"
+            and event.process.command_line == "sshd: unknown [priv]"
         ]
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid
+
+    def test_generic_ssh_connection_emits_preauth_failure_syslog(self, activity_gen):
+        """Generic port-22 responder children should have source-native auth companions."""
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=8.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        syslog_events = [
+            event
+            for event in events
+            if event.event_type == "syslog"
+            and event.syslog is not None
+            and event.syslog.app_name == "sshd"
+        ]
+        messages = [event.syslog.message for event in syslog_events]
+        assert "Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22" in messages
+        assert "Invalid user unknown from 10.0.10.50 port 51111" in messages
+        assert (
+            "Failed password for invalid user unknown from 10.0.10.50 port 51111 ssh2" in messages
+        )
+        assert (
+            "Connection closed by invalid user unknown 10.0.10.50 port 51111 [preauth]" in messages
+        )
+        assert {event.syslog.pid for event in syslog_events} == {conn_event.network.responding_pid}
+        assert all(conn_event.timestamp < event.timestamp for event in syslog_events)
 
     def test_port_22_connection_without_service_sets_destination_side_transport_pid(
         self, activity_gen
@@ -1810,7 +1935,7 @@ class TestSslContextPopulation:
             for event in events
             if event.event_type == "system_process_create"
             and event.process is not None
-            and event.process.command_line == "sshd: [accepted]"
+            and event.process.command_line == "sshd: unknown [priv]"
         ]
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid
@@ -1912,12 +2037,25 @@ class TestSslContextPopulation:
         ssh_transport = [event for event in events if event.event_type == "connection"][-1]
         assert ssh_transport.network.src_port != first_conn.network.src_port
         assert ssh_transport.network.responding_pid != first_conn.network.responding_pid
-        syslog_pids = {
+        session_syslog_pids = {
             event.syslog.pid
             for event in events
-            if event.syslog is not None and event.syslog.app_name == "sshd"
+            if event.syslog is not None
+            and event.syslog.app_name == "sshd"
+            and (
+                event.syslog.message.startswith("Accepted ")
+                or event.syslog.message.startswith("pam_unix(sshd:session)")
+            )
         }
-        assert syslog_pids == {ssh_transport.network.responding_pid}
+        preauth_syslog_pids = {
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None
+            and event.syslog.app_name == "sshd"
+            and "invalid user unknown" in event.syslog.message
+        }
+        assert session_syslog_pids == {ssh_transport.network.responding_pid}
+        assert preauth_syslog_pids == {first_conn.network.responding_pid}
 
     def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
         gen, events = activity_gen
@@ -1977,11 +2115,17 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None and event.syslog.app_name == "sshd"
         ]
-        assert syslog_pids == [
-            first_conn.network.responding_pid,
-            first_conn.network.responding_pid,
-            first_conn.network.responding_pid,
+        assert syslog_pids
+        assert set(syslog_pids) == {first_conn.network.responding_pid}
+        messages = [
+            event.syslog.message
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
         ]
+        assert "Accepted publickey for admin from 10.0.10.50 port 51111 ssh2" in messages
+        assert (
+            "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)" in messages
+        )
 
     def test_reserved_ssh_source_port_blocks_generic_tuple_reuse(
         self,
@@ -2922,6 +3066,59 @@ class TestHttpContextPopulation:
         assert event.network.resp_bytes == 0
         assert event.network.resp_pkts == 0
         assert event.network.resp_ip_bytes == 0
+
+    def test_client_first_reset_response_keeps_originator_payload(self, activity_gen, monkeypatch):
+        """SMB responder payload must not appear before any originator application payload."""
+        gen, events = activity_gen
+        monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
+        monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", [1])
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=1.0,
+            orig_bytes=0,
+            resp_bytes=1600,
+        )
+
+        net = events[-1].network
+        assert net.conn_state == "RSTR"
+        assert net.resp_bytes > 0
+        assert net.orig_bytes > 0
+        assert "D" in net.history
+        assert net.history.index("D") < net.history.index("d")
+
+    def test_client_first_payload_order_uses_port_when_service_unknown(
+        self, activity_gen, monkeypatch
+    ):
+        """Port-only database flows should follow the same client-before-server invariant."""
+        gen, events = activity_gen
+        monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
+        monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", [1])
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=1433,
+            proto="tcp",
+            service="",
+            duration=1.0,
+            orig_bytes=0,
+            resp_bytes=900,
+        )
+
+        net = events[-1].network
+        assert net.conn_state == "RSTR"
+        assert net.service == ""
+        assert net.resp_bytes > 0
+        assert net.orig_bytes > 0
+        assert "D" in net.history
+        assert net.history.index("D") < net.history.index("d")
 
     def test_empty_service_suppresses_port_based_tls_inference(self, activity_gen):
         gen, events = activity_gen

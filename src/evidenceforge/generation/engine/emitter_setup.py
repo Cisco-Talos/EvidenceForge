@@ -62,6 +62,7 @@ from evidenceforge.generation.emitters import (
     ZeekWeirdEmitter,
     ZeekX509Emitter,
 )
+from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
@@ -375,49 +376,23 @@ class EmitterSetupMixin:
                 "system": system,
             }
 
-    def _build_sid_registry(self) -> dict[str, str]:
-        """Build a SID registry mapping usernames to Windows SIDs.
-
-        Generates a domain base SID (S-1-5-21-{3 sub-authorities}) and assigns
-        each user a unique RID starting at 1001. Well-known SIDs are included
-        for system accounts.
-
-        Returns:
-            Dict mapping username to full SID string
-        """
-        rng = random.Random(_stable_seed(self.scenario.name))
-        base_sid = (
-            f"S-1-5-21-{rng.randint(1000000000, 3999999999)}"
-            f"-{rng.randint(1000000000, 3999999999)}"
-            f"-{rng.randint(1000000000, 3999999999)}"
+    def _build_identity_directory(self) -> IdentityDirectory:
+        """Build the central identity directory for this scenario."""
+        directory = IdentityDirectory.from_scenario(self.scenario)
+        self._identity_directory = directory
+        logger.info(
+            "Built identity directory: %d Windows SID entries, %d Linux account entries",
+            len(directory.sid_registry),
+            len(directory.linux_accounts),
         )
+        return directory
 
-        registry: dict[str, str] = {
-            "SYSTEM": "S-1-5-18",
-            "LOCAL SERVICE": "S-1-5-19",
-            "NETWORK SERVICE": "S-1-5-20",
-            "Administrator": f"{base_sid}-500",
-            "Guest": f"{base_sid}-501",
-            "krbtgt": f"{base_sid}-502",
-        }
-
-        # Single domain-wide monotonic RID counter (mirrors real AD RID Master FSMO).
-        # Objects are allocated sequentially: users → machines → service accounts.
-        rid = 1001
-        for user in self.scenario.environment.users:
-            registry[user.username] = f"{base_sid}-{rid}"
-            rid += 1
-        for system in self.scenario.environment.systems:
-            machine_name = f"{system.hostname}$"
-            registry[machine_name] = f"{base_sid}-{rid}"
-            rid += 1
-        for svc in self.scenario.environment.service_accounts:
-            if svc not in registry:
-                registry[svc] = f"{base_sid}-{rid}"
-                rid += 1
-
-        logger.info(f"Built SID registry: {len(registry)} entries (domain: {base_sid})")
-        return registry
+    def _build_sid_registry(self) -> dict[str, str]:
+        """Return the compatibility Windows SID registry view."""
+        directory = getattr(self, "_identity_directory", None)
+        if directory is None:
+            directory = self._build_identity_directory()
+        return dict(directory.sid_registry)
 
     def _resolve_ad_domain(self) -> str:
         """Resolve Active Directory domain FQDN from scenario.
@@ -808,7 +783,7 @@ class EmitterSetupMixin:
         logind_path = "/usr/lib/systemd/systemd-logind"
         pids["logind"] = _c(pids["systemd"], logind_path, logind_path, "root")
 
-        pids["sshd"] = _c(pids["systemd"], "/usr/sbin/sshd", "/usr/sbin/sshd -D [listener]", "root")
+        pids["sshd"] = _c(pids["systemd"], "/usr/sbin/sshd", "/usr/sbin/sshd -D", "root")
 
         roles = {role.lower() for role in (system.roles or [])}
         service_defaults = getattr(self, "_system_service_defaults", {})

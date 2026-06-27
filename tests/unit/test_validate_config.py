@@ -203,19 +203,37 @@ class TestValidateConfig:
                     "skip_probability": 0.05,
                 },
                 "registry_noise": {
+                    "static_inventory_values": {
+                        "suppress_in_ambient_noise": True,
+                        "key_substrings": ["\\CurrentVersion\\Uninstall\\"],
+                        "value_names": ["DisplayName"],
+                    },
                     "dhcp_interface_values": {
                         "value_names": ["DhcpIPAddress"],
                         "require_dhcp_state": True,
                         "emit_on_lease_events": True,
                         "suppress_system_types": ["server", "domain_controller"],
                         "suppress_roles": ["domain_controller"],
-                    }
+                    },
                 },
                 "ecar_flow_identity": {
                     "user_process_probability": 0.88,
                     "service_process_probability": 0.48,
                     "root_process_probability": 0.42,
                     "inbound_listener_probability": 0.36,
+                },
+                "ecar_file_churn": {
+                    "enabled": True,
+                    "windows": {
+                        "count_min": 3,
+                        "count_max": 8,
+                        "action_weights": {"read": 1, "modify": 0, "create": 0},
+                    },
+                    "linux": {
+                        "count_min": 2,
+                        "count_max": 6,
+                        "action_weights": {"read": 1, "modify": 0, "create": 0},
+                    },
                 },
             }
 
@@ -227,6 +245,69 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "endpoint_noise.yaml"
             and "count_min must be <= count_max" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_empty_static_inventory_registry_policy(self, monkeypatch):
+        from evidenceforge.generation.activity import endpoint_noise
+
+        def load_invalid_endpoint_noise():
+            return {
+                "windows_scheduled_processes": {
+                    "count_min": 2,
+                    "count_max": 5,
+                    "trigger_window_start_seconds": 90,
+                    "trigger_window_end_seconds": 3510,
+                    "slot_spacing_seconds": 300,
+                    "host_phase_window_seconds": 900,
+                    "jitter_seconds_min": 20,
+                    "jitter_seconds_max": 120,
+                    "skip_probability": 0.05,
+                },
+                "registry_noise": {
+                    "static_inventory_values": {
+                        "suppress_in_ambient_noise": True,
+                        "key_substrings": ["\\CurrentVersion\\Uninstall\\"],
+                        "value_names": [],
+                    },
+                    "dhcp_interface_values": {
+                        "value_names": ["DhcpIPAddress"],
+                        "require_dhcp_state": True,
+                        "emit_on_lease_events": True,
+                        "suppress_system_types": ["server", "domain_controller"],
+                        "suppress_roles": ["domain_controller"],
+                    },
+                },
+                "ecar_flow_identity": {
+                    "user_process_probability": 0.88,
+                    "service_process_probability": 0.48,
+                    "root_process_probability": 0.42,
+                    "inbound_listener_probability": 0.36,
+                },
+                "ecar_file_churn": {
+                    "enabled": True,
+                    "windows": {
+                        "count_min": 3,
+                        "count_max": 8,
+                        "action_weights": {"read": 1, "modify": 0, "create": 0},
+                    },
+                    "linux": {
+                        "count_min": 2,
+                        "count_max": 6,
+                        "action_weights": {"read": 1, "modify": 0, "create": 0},
+                    },
+                },
+            }
+
+        monkeypatch.setattr(endpoint_noise, "load_endpoint_noise", load_invalid_endpoint_noise)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "endpoint_noise.yaml"
+            and "static_inventory_values" in issue.message
+            and "entries must not be empty" in issue.message
             for issue in result.issues
         )
 
@@ -247,13 +328,18 @@ class TestValidateConfig:
                     "skip_probability": 0.05,
                 },
                 "registry_noise": {
+                    "static_inventory_values": {
+                        "suppress_in_ambient_noise": True,
+                        "key_substrings": ["\\CurrentVersion\\Uninstall\\"],
+                        "value_names": ["DisplayName"],
+                    },
                     "dhcp_interface_values": {
                         "value_names": ["DhcpIPAddress"],
                         "require_dhcp_state": True,
                         "emit_on_lease_events": True,
                         "suppress_system_types": ["server", "domain_controller"],
                         "suppress_roles": ["domain_controller"],
-                    }
+                    },
                 },
                 "ecar_flow_identity": {
                     "user_process_probability": 0.88,
@@ -1008,6 +1094,65 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "timing_profiles.yaml"
             and 'Relationship "network.dns_before_tcp" max_ms must be greater than or equal to min_ms'
+            in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_endpoint_clock_range(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        def load_invalid_timing_profiles():
+            return {
+                "relationships": {
+                    "network.dns_before_tcp": {
+                        "class": "causal_prerequisite",
+                        "position": "before",
+                        "min_ms": 20,
+                        "max_ms": 1500,
+                    }
+                },
+                "endpoint_clock": {
+                    "profiles": {
+                        "complete": {
+                            "windows": {
+                                "host_offset_ms": {"min": 10, "max": 0},
+                                "host_drift_ppm": {"min": 0, "max": 0},
+                            },
+                            "linux": {
+                                "host_offset_ms": {"min": 0, "max": 0},
+                                "host_drift_ppm": {"min": 0, "max": 0},
+                            },
+                        }
+                    }
+                },
+                "windows_event_time": {
+                    "collision_spacing": {
+                        "near_zero_until": 25,
+                        "near_gap_min_us": 50,
+                        "near_gap_max_us": 500,
+                        "large_gap_min_ms": 1000,
+                        "large_gap_max_ms": 4000,
+                    }
+                },
+                "network_sensor_observation": {
+                    "default_profile": "well_synced",
+                    "profiles": {
+                        "well_synced": {
+                            "clock_skew_us": {"min": -4000, "max": 4000},
+                            "path_delay_us": {"min": 250, "max": 8000},
+                        }
+                    },
+                },
+            }
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "endpoint_clock.profiles.complete.windows.host_offset_ms.max must be >= min"
             in issue.message
             for issue in result.issues
         )

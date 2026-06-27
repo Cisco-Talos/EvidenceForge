@@ -26,6 +26,10 @@ _CANARY_RE = re.compile(r"EFORGE_TEST-CANARY-[A-Za-z0-9]{12}")
 _DNS_CANARY_RE = re.compile(r"eforge-test-canary-[a-z0-9]{12}")
 _ANY_CANARY_RE = re.compile(r"EFORGE_TEST-CANARY-[A-Za-z0-9]{12}|eforge-test-canary-[a-z0-9]{12}")
 _HOST_RE = re.compile(r"(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?//([^/?#\\\s\"'>}]+)")
+_SSH_PREAUTH_RE = re.compile(
+    r"(?:Connection from|Invalid user unknown|Failed password for invalid user unknown|"
+    r"Connection closed by invalid user unknown)"
+)
 
 
 def _load_scenario(path: Path = _SCENARIO) -> Scenario:
@@ -159,12 +163,11 @@ def test_clean_twin_shares_a_byte_identical_baseline(generated, tmp_path_factory
         total += max(len(plines), len(clines))
         for line in plines - clines:
             differing += 1
-            # Every differing line must be injection-related: a canary-bearing readable line
-            # (uppercase token on most surfaces, or the DNS-encoded lowercase form in zeek
-            # dns.log), or an ephemeral-port network tuple in zeek conn.log (inherently noisy
-            # and not a readable triage surface, so it is allowed to differ).
+            # Every differing line must be injection-related, an ephemeral-port network tuple,
+            # or a source-native SSH preauth companion generated from that network tuple.
             is_conn = Path(fname).name in ("conn.json", "conn.log", "zeek_conn.json")
-            assert _ANY_CANARY_RE.search(line) or is_conn, (
+            is_ssh_preauth = Path(fname).name == "syslog.log" and _SSH_PREAUTH_RE.search(line)
+            assert _ANY_CANARY_RE.search(line) or is_conn or is_ssh_preauth, (
                 f"non-injection baseline line differs in {fname}: {line[:80]!r}"
             )
     assert shared / total > 0.99, f"baseline only {shared}/{total} identical — twin is not matched"

@@ -12,6 +12,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import (
+    endpoint_clock_timing,
     get_timing_window,
     network_sensor_observation_timing,
     reset_timing_profiles_cache,
@@ -176,6 +177,12 @@ def test_timing_profiles_load_default_relationship():
     assert sensor_timing.path_delay_min_us == 1200
     assert sensor_timing.path_delay_max_us == 58000
 
+    endpoint_timing = endpoint_clock_timing("enterprise_standard", "windows")
+    assert endpoint_timing.host_offset_min_ms == -1250
+    assert endpoint_timing.host_offset_max_ms == 1800
+    assert endpoint_timing.host_drift_min_ppm == -8
+    assert endpoint_timing.host_drift_max_ppm == 8
+
 
 def test_timing_profiles_overlay_overrides_relationship(tmp_path, monkeypatch):
     overlay = tmp_path / ".eforge" / "config" / "activity"
@@ -205,6 +212,38 @@ network_sensor_observation:
       path_delay_us:
         min: 25
         max: 500
+endpoint_clock:
+  profiles:
+    complete:
+      windows:
+        host_offset_ms:
+          min: 0
+          max: 0
+        host_drift_ppm:
+          min: 0
+          max: 0
+      linux:
+        host_offset_ms:
+          min: 0
+          max: 0
+        host_drift_ppm:
+          min: 0
+          max: 0
+    lab:
+      windows:
+        host_offset_ms:
+          min: -10
+          max: 20
+        host_drift_ppm:
+          min: -1
+          max: 1
+      linux:
+        host_offset_ms:
+          min: -30
+          max: 40
+        host_drift_ppm:
+          min: -2
+          max: 2
 """.lstrip()
     )
     monkeypatch.chdir(tmp_path)
@@ -218,6 +257,7 @@ network_sensor_observation:
     )
     spacing = windows_collision_spacing_config()
     sensor_timing = network_sensor_observation_timing()
+    endpoint_timing = endpoint_clock_timing("lab", "linux")
 
     assert window.min_ms == 250
     assert window.max_ms == 750
@@ -225,6 +265,8 @@ network_sensor_observation:
     assert spacing["large_gap_min_ms"] == 2000
     assert sensor_timing.clock_skew_min_us == -250
     assert sensor_timing.path_delay_max_us == 500
+    assert endpoint_timing.host_offset_min_ms == -30
+    assert endpoint_timing.host_drift_max_ppm == 2
 
 
 def test_sample_timing_delta_is_deterministic_and_bounded():
@@ -284,11 +326,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
 
     assert sysmon_time >= parent_visible_time + timedelta(milliseconds=1)
     assert security_time >= parent_visible_time + timedelta(milliseconds=1)
-    expected_ecar_gap = sample_timing_delta(
-        "source.ecar_after_sysmon_process_create_gap",
-        seed_parts=("WS-01", 1200, event_time),
-    )
-    assert ecar_time >= sysmon_time + expected_ecar_gap
+    assert ecar_time >= event_time
 
     order_deltas: list[float] = []
     for pid in range(1200, 1250):

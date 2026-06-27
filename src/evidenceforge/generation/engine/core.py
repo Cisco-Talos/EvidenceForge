@@ -270,8 +270,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             systems=self.scenario.environment.systems,
         )
 
-        # Phase 5.1: Generate domain SID and per-user SID registry
-        sid_registry = self._build_sid_registry()
+        # Resolve logical people and platform accounts once, then expose the
+        # legacy SID registry view for older Windows callers during migration.
+        identity_directory = self._build_identity_directory()
+        sid_registry = identity_directory.sid_registry
 
         # Phase 5.5: Generate per-user timing and behavioral offsets
         rng = random.Random(_stable_seed(self.scenario.name + "_offsets"))
@@ -303,6 +305,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             event_record_counter=self.event_record_counter,
             network_visibility=visibility_engine,
             sid_registry=sid_registry,
+            identity_directory=identity_directory,
+            source_timing_profile=self.scenario.observation_profile,
             dispatcher=self.dispatcher,
         )
         # Live-callback OOB host(s) for adversarial_payload (off by default).

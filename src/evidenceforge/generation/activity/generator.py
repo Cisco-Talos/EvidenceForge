@@ -169,6 +169,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
 )
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
@@ -2254,6 +2255,48 @@ _TCP_MSS_BYTES = 1460
 _TCP_MSS_VALUES = (1200, 1320, 1360, 1448, 1460)
 _TCP_MSS_WEIGHTS = (2, 4, 10, 22, 62)
 _TCP_ACK_FLOOR_PAYLOAD_BYTES = 64 * 1024
+_CLIENT_FIRST_TCP_PAYLOAD_SERVICES = frozenset(
+    {
+        "dce_rpc",
+        "dns",
+        "http",
+        "https",
+        "kerberos",
+        "ldap",
+        "ldaps",
+        "mssql",
+        "mysql",
+        "postgresql",
+        "rdp",
+        "smb",
+        "ssl",
+        "tds",
+        "winrm",
+    }
+)
+_CLIENT_FIRST_TCP_PAYLOAD_PORTS = frozenset(
+    {
+        53,
+        80,
+        88,
+        135,
+        389,
+        443,
+        445,
+        464,
+        636,
+        1433,
+        3268,
+        3269,
+        3306,
+        3389,
+        5432,
+        5985,
+        5986,
+        8080,
+        8443,
+    }
+)
 
 
 def _tcp_effective_mss_bytes(rng: random.Random) -> int:
@@ -2334,6 +2377,74 @@ def _tcp_payload_bytes_consistent_with_history(
     return normalized_orig, normalized_resp
 
 
+def _tcp_service_requires_client_payload_first(service: str | None, dst_port: int) -> bool:
+    """Return whether responder payload requires prior originator payload."""
+    normalized_service = (service or "").strip().lower()
+    return (
+        normalized_service in _CLIENT_FIRST_TCP_PAYLOAD_SERVICES
+        or dst_port in _CLIENT_FIRST_TCP_PAYLOAD_PORTS
+    )
+
+
+def _insert_originator_payload_before_responder_payload(history: str) -> str:
+    """Add a Zeek originator data marker before the first responder data marker."""
+    if "D" in history or "d" not in history:
+        return history
+    resp_index = history.index("d")
+    if resp_index > 0 and history[resp_index - 1] == "A":
+        return f"{history[:resp_index]}Da{history[resp_index:]}"
+    return f"{history[:resp_index]}D{history[resp_index:]}"
+
+
+def _client_first_originator_payload_floor(
+    service: str | None,
+    dst_port: int,
+    rng: random.Random,
+) -> int:
+    """Return a plausible minimum request/client-hello payload for client-first TCP."""
+    normalized_service = (service or "").strip().lower()
+    if normalized_service in {"ssl", "https"} or dst_port in {443, 8443}:
+        return rng.randint(180, 900)
+    if normalized_service == "http" or dst_port in {80, 8080}:
+        return rng.randint(120, 620)
+    if normalized_service in {"smb", "ldap", "ldaps", "kerberos", "dce_rpc", "rdp", "winrm"}:
+        return rng.randint(72, 420)
+    if normalized_service in {"mssql", "mysql", "postgresql", "tds"} or dst_port in {
+        1433,
+        3306,
+        5432,
+    }:
+        return rng.randint(64, 360)
+    if normalized_service == "dns" or dst_port == 53:
+        return rng.randint(40, 220)
+    return rng.randint(72, 480)
+
+
+def _enforce_client_first_tcp_payload_order(net: NetworkContext, rng: random.Random) -> bool:
+    """Ensure client-first TCP responses have visible originator application payload."""
+    if (
+        net.protocol != "tcp"
+        or net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}
+        or not _tcp_service_requires_client_payload_first(net.service, net.dst_port)
+        or (net.resp_bytes or 0) <= 0
+        or "d" not in (net.history or "")
+    ):
+        return False
+
+    changed = False
+    history = net.history or ""
+    normalized_history = _insert_originator_payload_before_responder_payload(history)
+    if normalized_history != history:
+        net.history = normalized_history
+        changed = True
+
+    if (net.orig_bytes or 0) <= 0:
+        net.orig_bytes = _client_first_originator_payload_floor(net.service, net.dst_port, rng)
+        changed = True
+
+    return changed
+
+
 def _align_tcp_network_payload_with_history(
     net: NetworkContext,
     rng: random.Random,
@@ -2341,12 +2452,13 @@ def _align_tcp_network_payload_with_history(
     """Align TCP payload, packet, and IP-byte fields with Zeek history markers."""
     if net.protocol != "tcp":
         return False
+    changed = _enforce_client_first_tcp_payload_order(net, rng)
     orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
         net.orig_bytes,
         net.resp_bytes,
         net.history,
     )
-    if orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
+    if not changed and orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
         return False
 
     net.orig_bytes = orig_bytes
@@ -2862,18 +2974,7 @@ def _dns_hostname_allows_mx(hostname: str) -> bool:
 
 def _linux_uid_for_user(username: str) -> int:
     """Return a stable plausible Linux UID for a login username."""
-    if username == "root":
-        return 0
-    well_known = {
-        "ubuntu": 1000,
-        "ec2-user": 1000,
-        "admin": 1001,
-        "ansible": 998,
-        "deploy": 1002,
-    }
-    if username in well_known:
-        return well_known[username]
-    return 2000 + (_stable_seed(f"linux_uid_{username}") % 5000)
+    return default_linux_uid_for_user(username)
 
 
 def _icmp_echo_payload_size(rng: random.Random, requested: int | None) -> int:
@@ -3766,6 +3867,8 @@ class ActivityGenerator:
         event_record_counter: int = 10000,
         network_visibility=None,
         sid_registry: dict[str, str] | None = None,
+        identity_directory: IdentityDirectory | None = None,
+        source_timing_profile: str = "complete",
         dispatcher: EventDispatcher | None = None,
         causal_engine: CausalExpansionEngine | None = None,
     ):
@@ -3777,6 +3880,8 @@ class ActivityGenerator:
             event_record_counter: Starting EventRecordID
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
+            identity_directory: Optional logical/platform account directory
+            source_timing_profile: Named endpoint clock/source timing profile
             dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
             causal_engine: Optional CausalExpansionEngine for auto-generating
                 prerequisite events (DNS before connections, Kerberos before
@@ -3793,6 +3898,7 @@ class ActivityGenerator:
         self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
+        self.identity_directory = identity_directory
 
         # IP→System lookup for HostContext resolution on connection events
         self._ip_to_system: dict[str, Any] = {}
@@ -3818,7 +3924,7 @@ class ActivityGenerator:
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
-        self._dns_cache: dict[tuple[str, str, str], float] = {}
+        self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
         ] = {}
@@ -3853,7 +3959,7 @@ class ActivityGenerator:
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int], datetime] = {}
         self._process_source_terminate_times: dict[tuple[str, int], datetime] = {}
-        self._source_timing_planner = SourceTimingPlanner()
+        self._source_timing_planner = SourceTimingPlanner(clock_profile_name=source_timing_profile)
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -4296,6 +4402,70 @@ class ActivityGenerator:
         if target_system is None:
             return None
         return target_system.ip, normalized
+
+    def _process_network_target_supports_service(
+        self,
+        target_system: Any | None,
+        service: str,
+        dst_port: int,
+    ) -> bool:
+        """Return whether a process-network side effect can succeed on a target."""
+        if target_system is None:
+            return False
+
+        services = {
+            str(value).lower().replace(" ", "-").replace("_", "-")
+            for value in (getattr(target_system, "services", []) or [])
+        }
+        roles = {
+            str(value).lower().replace(" ", "-").replace("_", "-")
+            for value in (getattr(target_system, "roles", []) or [])
+        }
+        os_category = _get_os_category(str(getattr(target_system, "os", "") or ""))
+        system_type = str(getattr(target_system, "type", "") or "").lower()
+
+        if service == "smb" or dst_port == 445:
+            if services & {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}:
+                return True
+            return os_category == "windows"
+        if service == "rdp" or dst_port == 3389:
+            if services & {"rdp", "termservice", "terminal-services", "xrdp"}:
+                return True
+            return os_category == "windows" and system_type in {"server", "domain_controller"}
+        if service == "ssh" or dst_port == 22:
+            return os_category == "linux" or bool(services & {"ssh", "sshd", "openssh"})
+        if service in {"http", "ssl"} or dst_port in {80, 443, 8080, 8443}:
+            if services & {
+                "http",
+                "https",
+                "apache",
+                "apache2",
+                "nginx",
+                "httpd",
+                "iis",
+                "gunicorn",
+                "tomcat",
+                "squid",
+            }:
+                return True
+            return bool(roles & {"web-server", "app-server", "forward-proxy"})
+        return True
+
+    def _process_network_target_ips(
+        self,
+        source_system: System,
+        service: str,
+        dst_port: int,
+    ) -> list[str]:
+        """Return internal target IPs compatible with a process-network service."""
+        ips: list[str] = []
+        for target in self._unique_environment_systems():
+            target_ip = str(getattr(target, "ip", "") or "")
+            if not target_ip or target_ip == source_system.ip:
+                continue
+            if self._process_network_target_supports_service(target, service, dst_port):
+                ips.append(target_ip)
+        return ips
 
     def _fallback_database_network_target(
         self,
@@ -5174,7 +5344,7 @@ class ActivityGenerator:
         elif os_category == "linux" and (
             service_name in ("http", "ssl", "https") or dst_port in (80, 443, 8080, 8443)
         ):
-            candidates = ["bash", "curl", "wget", "apache2", "httpd", "nginx", "python3"]
+            candidates = ["curl", "wget", "firefox", "apache2", "httpd", "nginx", "python3"]
         elif os_category == "windows" and (
             service_name in ("http", "ssl", "https") or dst_port in (80, 443, 8080, 8443)
         ):
@@ -5337,7 +5507,7 @@ class ActivityGenerator:
 
         apply_domain_user_agent = http is None or (
             not _is_tool_http_user_agent(http.user_agent)
-            and not is_browser_like_proxy_domain(proxy_hostname)
+            and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
         domain_user_agent = (
             pick_proxy_domain_user_agent(
@@ -5390,12 +5560,14 @@ class ActivityGenerator:
                 content_type=response_mime,
                 domain_tags=domain_tags,
             )
+        if explicit_mode and dst_port == 443:
+            proxy_cacheable = False
 
         cache_roll = rng.random()
         if http is not None:
             # When the request already carries canonical HTTP outcome data,
             # proxy rendering should not independently invent a policy denial.
-            if proxy_cacheable and http.status_code == 304:
+            if http.status_code == 304:
                 cache_result = "REVALIDATED"
             elif proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
                 cache_result = "HIT"
@@ -5524,7 +5696,8 @@ class ActivityGenerator:
     ) -> tuple[str, str] | None:
         """Map user-owned proxy User-Agents to the process that owns the socket."""
         os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
-        if os_category == "windows":
+        server_like_source = self._is_proxy_server_like_source(source_system)
+        if os_category == "windows" and not server_like_source:
             browser_hint = self._browser_http_client_process_hint(
                 user_agent=user_agent,
                 hostname=hostname,
@@ -5550,6 +5723,16 @@ class ActivityGenerator:
             )
             if package_hint is not None:
                 return package_hint
+            if server_like_source:
+                if ua.startswith("go-http-client/"):
+                    return "/usr/local/bin/service-healthcheck", (
+                        f"service-healthcheck --url {target_url}"
+                    )
+                if ua.startswith("apache-httpclient/"):
+                    return "/usr/bin/java", (
+                        f"java -jar /opt/meridian/integration-worker.jar --check-url {target_url}"
+                    )
+                return None
             if "firefox/" in ua:
                 return "/usr/bin/firefox", f"firefox --new-window {target_url}"
             if "edg/" in ua or "edge/" in ua:
@@ -5582,6 +5765,15 @@ class ActivityGenerator:
                 return "/usr/bin/pwsh", f"pwsh -NoProfile -Command Invoke-WebRequest {target_url}"
             return None
 
+        if server_like_source:
+            if ua.startswith("go-http-client/"):
+                image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
+                return image, f'"{image}" --url "{target_url}"'
+            if ua.startswith("apache-httpclient/"):
+                image = r"C:\Program Files\Eclipse Adoptium\jdk-17\bin\java.exe"
+                return image, f'"{image}" -jar C:\\ProgramData\\Meridian\\integration-worker.jar'
+            return None
+
         if ua.startswith("curl/") or " curl/" in ua:
             image = r"C:\Windows\System32\curl.exe"
             return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
@@ -5604,6 +5796,35 @@ class ActivityGenerator:
                 f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
             )
         return None
+
+    @staticmethod
+    def _is_proxy_server_like_source(source_system: System | None) -> bool:
+        """Return whether proxy client PID synthesis should avoid workstation tooling."""
+        if source_system is None:
+            return False
+        roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
+        server_roles = {
+            "app_server",
+            "database",
+            "dns_server",
+            "domain_controller",
+            "file_server",
+            "forward_proxy",
+            "log_server",
+            "mail_server",
+            "monitoring",
+            "web_server",
+        }
+        if roles & server_roles:
+            return True
+        system_type = (getattr(source_system, "type", "") or "").lower()
+        if (
+            system_type == "server"
+            and _get_os_category(source_system.os) == "linux"
+            and getattr(source_system, "assigned_user", None)
+        ):
+            return False
+        return system_type in {"server", "domain_controller"}
 
     @staticmethod
     def _linux_package_manager_proxy_client_hint(
@@ -6327,6 +6548,14 @@ class ActivityGenerator:
             source_system=source_system,
         )
         if hint is None:
+            os_category = _get_os_category(source_system.os)
+            if os_category == "windows" and self._windows_proxy_pid_should_be_replaced(running):
+                return None
+            if os_category == "linux" and self._linux_proxy_pid_should_be_replaced(
+                running,
+                expected_exe="",
+            ):
+                return None
             return candidate_image
 
         expected_image = hint[0]
@@ -7138,7 +7367,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -7241,6 +7470,7 @@ class ActivityGenerator:
         time: datetime,
         logon_type: int = 2,
         source_ip: str | None = None,
+        source_system: System | None = None,
         source_port: int | None = None,
         emit_transport_syslog: bool = True,
         emit_network_evidence: bool = True,
@@ -7270,6 +7500,7 @@ class ActivityGenerator:
             time=time,
             logon_type=logon_type,
             source_ip=source_ip,
+            source_system=source_system,
             source_port=source_port,
             emit_transport_syslog=emit_transport_syslog,
             emit_network_evidence=emit_network_evidence,
@@ -7284,6 +7515,7 @@ class ActivityGenerator:
         time = request.time
         logon_type = request.logon_type
         source_ip = request.source_ip
+        source_system = request.source_system
         source_port = request.source_port
         emit_transport_syslog = request.emit_transport_syslog
         emit_network_evidence = request.emit_network_evidence
@@ -7487,12 +7719,16 @@ class ActivityGenerator:
 
         if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
             self._emit_linux_local_logon_syslog(user, system, time, logon_id)
+            session_for_guid = self.state_manager.get_session(logon_id)
+            session_id = session_for_guid.session_id if session_for_guid is not None else 0
 
         # Phase 2: Build SecurityEvent with all contexts
         # For network logons (type 3, 10), resolve source host from source_ip
         src_host_ctx = None
         if logon_type in (3, 10) and source_ip and source_ip != "-":
-            if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+            if source_system is not None:
+                src_host_ctx = self._build_host_context(source_system)
+            elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
                 src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
@@ -7508,6 +7744,15 @@ class ActivityGenerator:
                 logon_id,
                 time.isoformat(),
             )
+        subject = self._successful_logon_subject_fields(
+            user=user,
+            system=system,
+            logon_type=logon_type,
+            time=time,
+            source_ip=auth_source_ip,
+            source_system=source_system,
+            logon_id=logon_id,
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -7526,10 +7771,10 @@ class ActivityGenerator:
                 logon_process=auth_pkg.get("LogonProcessName", ""),
                 lm_package=auth_pkg.get("LmPackageName", "-"),
                 logon_guid=auth_logon_guid,
-                subject_sid=self._get_sid("SYSTEM"),
-                subject_username="SYSTEM",
-                subject_domain="NT AUTHORITY",
-                subject_logon_id="0x3e7",
+                subject_sid=subject["sid"],
+                subject_username=subject["username"],
+                subject_domain=subject["domain"],
+                subject_logon_id=subject["logon_id"],
                 privilege_list=privilege_list,
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
@@ -7694,6 +7939,7 @@ class ActivityGenerator:
             logind_time,
         )
         self._linux_local_logind_session_ids[logon_id] = session_id
+        self.state_manager.update_session_metadata(logon_id, session_id=session_id)
         self.generate_syslog_event(
             system=system,
             time=logind_time,
@@ -7949,6 +8195,7 @@ class ActivityGenerator:
             and source_ip != system.ip
         )
         linux_ssh_source_port = None
+        linux_ssh_responder_pid: int | None = None
         if remote_linux_source and source_ip is not None:
             linux_ssh_source_port = self._allocate_ephemeral_port(
                 source_ip,
@@ -7957,6 +8204,13 @@ class ActivityGenerator:
                 "tcp",
                 time,
                 self._os_for_ip(source_ip),
+            )
+            linux_ssh_responder_pid = self.ensure_linux_ssh_responder_process(
+                target_system=system,
+                time=time - timedelta(milliseconds=250),
+                source_ip=source_ip,
+                source_port=linux_ssh_source_port,
+                target_user=effective_username if known_account else None,
             )
 
         event = SecurityEvent(
@@ -8006,7 +8260,8 @@ class ActivityGenerator:
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
-                    pid=self.state_manager.allocate_transient_linux_pid(
+                    pid=linux_ssh_responder_pid
+                    or self.state_manager.allocate_transient_linux_pid(
                         system.hostname, time, os_category=_get_os_category(system.os)
                     ),
                     facility=10,
@@ -8037,6 +8292,7 @@ class ActivityGenerator:
                 time=time,
                 source_ip=source_ip,
                 source_port=linux_ssh_source_port,
+                responding_pid=linux_ssh_responder_pid,
                 rng=rng,
             )
 
@@ -8101,6 +8357,43 @@ class ActivityGenerator:
             "domain": self._build_host_context(system).netbios_domain,
             "logon_id": logon_id or self._get_user_logon_id(username, system.hostname),
         }
+
+    def _successful_logon_subject_fields(
+        self,
+        *,
+        user: User,
+        system: System,
+        logon_type: int,
+        time: datetime,
+        source_ip: str,
+        logon_id: str,
+        source_system: System | None = None,
+    ) -> dict[str, str]:
+        """Return source-native Windows 4624 subject fields for successful logons."""
+        system_subject = self._account_subject_fields("SYSTEM", system, logon_id="0x3e7")
+        if _get_os_category(system.os) != "windows":
+            return system_subject
+
+        username = user.username
+        if username in _SYSTEM_ACCOUNT_LOGON_IDS or username.endswith("$") or logon_type == 5:
+            return system_subject
+
+        if logon_type == 7:
+            session = self.state_manager.get_session(logon_id)
+            if (
+                session is not None
+                and session.system == system.hostname
+                and session.username == username
+            ):
+                return self._account_subject_fields(username, system, logon_id=session.logon_id)
+            active = self._active_user_interactive_windows_session(user, system, time)
+            if active is not None:
+                return self._account_subject_fields(username, system, logon_id=active.logon_id)
+            return system_subject
+
+        if logon_type in {3, 10}:
+            return system_subject
+        return system_subject
 
     def _failed_logon_profile(
         self,
@@ -8210,6 +8503,7 @@ class ActivityGenerator:
         time: datetime,
         source_ip: str,
         source_port: int,
+        responding_pid: int | None,
         rng: random.Random,
     ) -> None:
         """Emit source-matched Zeek SSH evidence for a failed Linux sshd logon."""
@@ -8226,6 +8520,7 @@ class ActivityGenerator:
             resp_bytes=rng.randint(240, 2600),
             src_port=source_port,
             conn_state=rng.choices(["SF", "RSTR"], weights=[78, 22], k=1)[0],
+            responding_pid=responding_pid or -1,
         )
 
     def _maybe_emit_failed_logon_network_connection(
@@ -9550,13 +9845,10 @@ class ActivityGenerator:
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
             )
-            self._source_timing_planner.source_time_after_source(
+            self._source_timing_planner.source_time(
                 event,
                 "source.ecar_process_create",
-                after_source_key="source.sysmon_process_create",
-                gap_key="source.ecar_after_sysmon_process_create_gap",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
-                after_not_before=sysmon_not_before,
                 not_before=process_start_time,
             )
             return
@@ -9806,6 +10098,7 @@ class ActivityGenerator:
         time: datetime,
         source_ip: str,
         source_port: int,
+        target_user: str | None = None,
     ) -> int:
         """Return the destination-side sshd process that owns one SSH 5-tuple."""
         remembered = self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
@@ -9827,17 +10120,78 @@ class ActivityGenerator:
             f"{target_system.hostname}:{source_ip}:{source_port}:"
             f"{target_system.ip}:{time.isoformat()}"
         )
+        process_user = target_user or "unknown"
         sshd_pid = self.generate_system_process(
             system=target_system,
             time=time + timedelta(milliseconds=8 + (sshd_seed % 72)),
             process_name="/usr/sbin/sshd",
-            command_line="sshd: [accepted]",
+            command_line=f"sshd: {process_user} [priv]",
             parent_pid=parent_pid,
             username="root",
             emit_linux_syslog=False,
         )
         self._remember_ssh_responder_pid(source_ip, source_port, target_system.ip, sshd_pid)
         return sshd_pid
+
+    def _emit_generic_ssh_preauth_failure_syslog(
+        self,
+        *,
+        target_system: System,
+        target_host: HostContext | None,
+        time: datetime,
+        source_ip: str,
+        source_port: int,
+        sshd_pid: int,
+        duration: float | None,
+    ) -> None:
+        """Emit source-native sshd auth companions for generic preauth transport."""
+        if target_host is None or not source_ip or source_ip == "-" or source_port <= 0:
+            return
+
+        seed = _stable_seed(
+            "generic_ssh_preauth_failure:"
+            f"{target_system.hostname}:{source_ip}:{source_port}:{target_system.ip}:"
+            f"{sshd_pid}:{time.isoformat()}"
+        )
+        connection_delta_ms = 45 + (seed % 90)
+        invalid_delta_ms = connection_delta_ms + 40 + ((seed >> 8) % 180)
+        failed_delta_ms = invalid_delta_ms + 120 + ((seed >> 16) % 600)
+        close_delta_ms = max(
+            failed_delta_ms + 40 + ((seed >> 24) % 180),
+            int((duration or 0.0) * 1000) + 20,
+        )
+        rows = [
+            (
+                connection_delta_ms,
+                6,
+                f"Connection from {source_ip} port {source_port} on {target_system.ip} port 22",
+            ),
+            (
+                invalid_delta_ms,
+                5,
+                f"Invalid user unknown from {source_ip} port {source_port}",
+            ),
+            (
+                failed_delta_ms,
+                4,
+                f"Failed password for invalid user unknown from {source_ip} port {source_port} ssh2",
+            ),
+            (
+                close_delta_ms,
+                6,
+                f"Connection closed by invalid user unknown {source_ip} port {source_port} [preauth]",
+            ),
+        ]
+        for delta_ms, severity, message in rows:
+            self.generate_syslog_event(
+                target_system,
+                time + timedelta(milliseconds=delta_ms),
+                "sshd",
+                message,
+                pid=sshd_pid,
+                facility=10,
+                severity=severity,
+            )
 
     def ensure_linux_ssh_client_process(
         self,
@@ -9998,6 +10352,7 @@ class ActivityGenerator:
 
         source_ip = ""
         source_port = 0
+        target_user = None
         conn_match = re.match(
             r"^Connection from (?P<src_ip>\S+) port (?P<src_port>\d+) "
             r"on (?P<dst_ip>\S+) port 22$",
@@ -10008,13 +10363,14 @@ class ActivityGenerator:
             source_port = int(conn_match.group("src_port"))
         else:
             accepted_match = re.match(
-                r"^Accepted \S+ for (?:invalid user )?\S+ "
+                r"^Accepted \S+ for (?:invalid user )?(?P<target_user>\S+) "
                 r"from (?P<src_ip>\S+) port (?P<src_port>\d+) ",
                 message,
             )
             if accepted_match:
                 source_ip = accepted_match.group("src_ip")
                 source_port = int(accepted_match.group("src_port"))
+                target_user = accepted_match.group("target_user")
 
         if not source_ip or source_port <= 0:
             return pid
@@ -10024,6 +10380,7 @@ class ActivityGenerator:
             time=time,
             source_ip=source_ip,
             source_port=source_port,
+            target_user=target_user,
         )
         self._remember_ssh_pid_alias(system.hostname, pid, responder_pid)
         return responder_pid
@@ -10807,7 +11164,23 @@ class ActivityGenerator:
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         # Only internal hosts generate DNS lookups — external source IPs (e.g.,
         # attacker IPs in storylines) don't query the victim's internal resolver.
-        if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
+        force_visible_prereq_dns = (
+            source_system is not None
+            and "forward_proxy" in (source_system.roles or [])
+            and hostname_is_external
+            and proto == "tcp"
+            and dst_port in (80, 443)
+            and _is_private_ip(src_ip)
+        )
+        if force_visible_prereq_dns:
+            self._emit_dns_lookup(
+                src_ip,
+                dst_ip,
+                time,
+                hostname=hostname,
+                force_address=True,
+            )
+        elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
             self._expand_and_emit(
                 "connection",
                 time,
@@ -11068,7 +11441,7 @@ class ActivityGenerator:
             and hostname
         ):
             ad_domain = getattr(self, "_ad_domain", "corp.local")
-            dns_cache_key = (src_ip, hostname, "A")
+            dns_cache_key = (src_ip, dst_ip, hostname, "A")
             ts_epoch = time.timestamp()
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
             last_query = self._dns_cache.get(dns_cache_key, 0)
@@ -11591,6 +11964,7 @@ class ActivityGenerator:
         target_has_ssh = target_system is not None and "ssh" in {
             str(service_name).lower() for service_name in (target_system.services or [])
         }
+        generic_ssh_preauth_pid: int | None = None
         if (
             target_system is not None
             and dst_host_ctx is not None
@@ -11618,6 +11992,7 @@ class ActivityGenerator:
                     source_ip=src_ip,
                     source_port=src_port,
                 )
+                generic_ssh_preauth_pid = responding_pid
             else:
                 self._remember_ssh_responder_pid(src_ip, src_port, target_system.ip, responding_pid)
 
@@ -11897,7 +12272,7 @@ class ActivityGenerator:
 
                 apply_domain_user_agent = event.http is None or (
                     not _is_tool_http_user_agent(event.http.user_agent)
-                    and not is_browser_like_proxy_domain(proxy_hostname)
+                    and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
                 )
                 domain_user_agent = (
                     pick_proxy_domain_user_agent(
@@ -11931,7 +12306,7 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
                 if event.http is not None:
-                    if proxy_cacheable and event.http.status_code == 304:
+                    if event.http.status_code == 304:
                         cache_result = "REVALIDATED"
                     elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
                         cache_result = "HIT"
@@ -12108,7 +12483,9 @@ class ActivityGenerator:
                 ua = domain_user_agent
             elif http_ua_override:
                 ua = http_ua_override
-            elif not is_browser_like_proxy_domain(web_host):
+            elif self._is_proxy_server_like_source(
+                source_system
+            ) or not is_browser_like_proxy_domain(web_host, domain_tags=web_domain_tags):
                 ua = pick_proxy_user_agent(
                     rng,
                     source_system,
@@ -12465,6 +12842,16 @@ class ActivityGenerator:
             )
             self._last_connection_effective_time = event.timestamp
         self.dispatcher.dispatch(event)
+        if generic_ssh_preauth_pid is not None and target_system is not None:
+            self._emit_generic_ssh_preauth_failure_syslog(
+                target_system=target_system,
+                target_host=dst_host_ctx,
+                time=event.timestamp,
+                source_ip=src_ip,
+                source_port=src_port,
+                sshd_pid=generic_ssh_preauth_pid,
+                duration=event.network.duration,
+            )
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # Emit 5156 (WFP connection) on Windows source hosts when process ownership is known.
@@ -12737,6 +13124,71 @@ class ActivityGenerator:
         session.process_tree_root = session_sshd_pid
         return bash_pid
 
+    def _ensure_linux_local_session_shell_parent(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        logon_time: datetime,
+        bash_time: datetime,
+        root_parent_pid: int,
+        shell_seed: int,
+    ) -> tuple[int, datetime]:
+        """Create a visible local-session parent chain before a login shell."""
+
+        system_type = (getattr(target_system, "type", "") or "").lower()
+        workstation_like = system_type in {
+            "workstation",
+            "laptop",
+        } or target_system.hostname.upper().startswith(("WS-", "LT-"))
+        user_systemd_time = max(
+            logon_time + timedelta(milliseconds=90),
+            bash_time - timedelta(milliseconds=900 + (shell_seed % 320)),
+        )
+        if user_systemd_time >= bash_time:
+            user_systemd_time = logon_time + timedelta(milliseconds=90)
+
+        user_systemd_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=user_systemd_time,
+            logon_id=logon_id,
+            process_name="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --user",
+            parent_pid=root_parent_pid,
+            suppress_command_file_effect=True,
+        )
+        user_systemd_proc = self.state_manager.get_process(target_system.hostname, user_systemd_pid)
+        if user_systemd_proc is not None:
+            user_systemd_time = ensure_utc(user_systemd_proc.start_time)
+
+        if workstation_like:
+            parent_image = "/usr/libexec/gnome-terminal-server"
+            parent_command = "/usr/libexec/gnome-terminal-server"
+        else:
+            parent_image = "/bin/login"
+            parent_command = f"login -- {user.username}"
+
+        terminal_time = max(
+            user_systemd_time + timedelta(milliseconds=120),
+            bash_time - timedelta(milliseconds=260 + (shell_seed % 170)),
+        )
+        terminal_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=terminal_time,
+            logon_id=logon_id,
+            process_name=parent_image,
+            command_line=parent_command,
+            parent_pid=user_systemd_pid,
+            suppress_command_file_effect=True,
+        )
+        terminal_proc = self.state_manager.get_process(target_system.hostname, terminal_pid)
+        if terminal_proc is not None:
+            terminal_time = ensure_utc(terminal_proc.start_time)
+        return terminal_pid, terminal_time
+
     def ensure_linux_session_shell(
         self,
         user: User,
@@ -12808,6 +13260,18 @@ class ActivityGenerator:
         latest_bash_time = activity_time - readiness_gap
         if bash_time > latest_bash_time and latest_bash_time > logon_time:
             bash_time = latest_bash_time
+
+        parent_pid, parent_time = self._ensure_linux_local_session_shell_parent(
+            user=user,
+            target_system=target_system,
+            logon_id=logon_id,
+            logon_time=logon_time,
+            bash_time=bash_time,
+            root_parent_pid=parent_pid,
+            shell_seed=shell_seed,
+        )
+        if parent_time >= bash_time:
+            bash_time = parent_time + timedelta(milliseconds=120)
 
         bash_pid = self.generate_process(
             user=user,
@@ -13583,6 +14047,7 @@ class ActivityGenerator:
         syslog_message: str | None = None,
         *,
         emit_linux_syslog: bool = True,
+        concurrency_group_id: str = "",
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -13598,6 +14063,8 @@ class ActivityGenerator:
             username: System account name (SYSTEM, root, etc.)
             syslog_message: Custom syslog message (overrides auto-generated message)
             emit_linux_syslog: Whether to attach a Linux syslog record to this process event.
+            concurrency_group_id: Optional source-local process group for related
+                foreground children such as cron shell/workload pairs.
 
         Returns:
             PID of the new process
@@ -13716,6 +14183,7 @@ class ActivityGenerator:
                     command_line=command_line,
                     parent_pid=parent_pid,
                 ),
+                concurrency_group_id=concurrency_group_id,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
@@ -13765,6 +14233,8 @@ class ActivityGenerator:
         parent_pid: int = 0,
         username: str = "root",
         syslog_message: str | None = None,
+        *,
+        concurrency_group_id: str = "",
     ) -> None:
         """Terminate a system process, emitting eCAR PROCESS/TERMINATE + optional syslog.
 
@@ -13831,6 +14301,7 @@ class ActivityGenerator:
                 username=username,
                 logon_id=process_logon_id,
                 start_time=running_proc.start_time if running_proc is not None else None,
+                concurrency_group_id=concurrency_group_id,
             ),
             edr=EdrContext(object_id=proc_obj_id),
         )
@@ -13926,6 +14397,7 @@ class ActivityGenerator:
         time: datetime,
         hostname: str | None = None,
         force_address: bool = False,
+        bypass_cache: bool = False,
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -13939,6 +14411,7 @@ class ActivityGenerator:
             time: Timestamp of the DNS query (should precede TCP connection)
             hostname: Explicit domain name to use (bypasses REVERSE_DNS lookup)
             force_address: Force an A/AAAA lookup for connection prerequisites.
+            bypass_cache: Emit a lookup even when the generator cache has a valid entry.
         """
         request = DnsLookupRequest(
             src_ip=src_ip,
@@ -13946,6 +14419,7 @@ class ActivityGenerator:
             time=time,
             hostname=hostname,
             force_address=force_address,
+            bypass_cache=bypass_cache,
         )
         DnsLookupActionBundle(executor=self, request=request).execute()
 
@@ -13972,15 +14446,14 @@ class ActivityGenerator:
                 hostname = _generate_random_hostname(rng, dst_ip)
         hostname = self._dns_canonical_internal_hostname(hostname) or hostname
 
-        # DNS caching: skip re-emission if this (src, hostname) was queried recently.
-        # Real clients cache DNS responses (TTL typically 60-3600s), so not every
-        # connection is preceded by a DNS query.
+        # DNS caching: skip re-emission if this source/resolver/hostname tuple
+        # was queried recently. Real clients cache DNS responses (TTL typically
+        # 60-3600s), so not every connection is preceded by a DNS query.
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         if not hasattr(self, "_dns_cache_last_prune"):
             self._dns_cache_last_prune = 0.0
 
-        cache_key = (src_ip, hostname, "ADDR")
         ts_epoch = time.timestamp()
 
         # Keep the cache bounded: drop entries older than the max TTL horizon,
@@ -14003,11 +14476,6 @@ class ActivityGenerator:
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         is_internal = _dns_is_internal_name(hostname, ad_domain)
         authoritative_ttl = _dns_base_ttl(hostname, is_internal)
-
-        last_query = self._dns_cache.get(cache_key, 0)
-        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
-        if last_query and ts_epoch - last_query < cache_ttl:
-            return  # Cache hit — skip DNS emission
 
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies use a sticky configured resolver policy instead of rotating
@@ -14034,6 +14502,12 @@ class ActivityGenerator:
         else:
             dns_server_ip = _get_rng().choice(dns_ips)
 
+        cache_key = (src_ip, dns_server_ip, hostname, "ADDR")
+        last_query = self._dns_cache.get(cache_key, 0)
+        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
+        if not request.bypass_cache and last_query and ts_epoch - last_query < cache_ttl:
+            return  # Cache hit — skip DNS emission
+
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
@@ -14047,7 +14521,7 @@ class ActivityGenerator:
         # Phase 6.3: 0.2% chance of SERVFAIL (transient failures).
         # Known internal names are served by authoritative internal DNS and
         # should not randomly fail unless a scenario explicitly models DNS trouble.
-        if not is_internal and rng.random() < 0.002:
+        if not force_address and not is_internal and rng.random() < 0.002:
             dns_ctx = DnsContext(
                 query=hostname,
                 trans_id=rng.randint(1, 65535),
@@ -14625,6 +15099,15 @@ class ActivityGenerator:
                 if command_hostname:
                     ext_hostname = command_hostname
                     emit_dns = True
+                target_system = getattr(self, "_ip_to_system", {}).get(dst_ip)
+                if not self._process_network_target_supports_service(
+                    target_system,
+                    service,
+                    dst_port,
+                ):
+                    failure_conn_state = "S0"
+                    service = ""
+                    resp_bytes = 0
             elif command_target:
                 fallback_target = (
                     self._fallback_database_network_target(command_target, system)
@@ -14657,7 +15140,13 @@ class ActivityGenerator:
                 db_entry = rng.choice(compatible)
                 dst_ip = db_entry["ip"] if isinstance(db_entry, dict) else db_entry
             elif all_ips:
-                dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
+                compatible_ips = self._process_network_target_ips(system, service, dst_port)
+                if compatible_ips:
+                    dst_ip = rng.choice(compatible_ips)
+                elif service in {"smb", "rdp", "ssh"} or dst_port in {22, 445, 3389}:
+                    return
+                else:
+                    dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
             else:
                 return  # No internal targets available
 
@@ -17617,6 +18106,15 @@ class ActivityGenerator:
                 _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
             )
             source_thread_id = windows_id_randint(source_thread_rng, 1000, 9999)
+        from evidenceforge.generation.activity.calltrace_patterns import (
+            render_call_trace_for_source,
+        )
+
+        call_trace = render_call_trace_for_source(
+            source_image,
+            system.hostname,
+            seed_parts=(source_pid, target_pid, time.isoformat(), granted_access),
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
@@ -17644,6 +18142,7 @@ class ActivityGenerator:
                 else "NT AUTHORITY\\SYSTEM",
                 target_process_object_id=target_obj_id,
                 granted_access=granted_access,
+                call_trace=call_trace,
             ),
             edr=EdrContext(object_id=target_obj_id, actor_id=source_obj_id),
         )
@@ -19267,6 +19766,46 @@ class ActivityGenerator:
             return False
         return self._is_one_shot_shell_command(proc.image, proc.command_line)
 
+    def _windows_remote_command_owner_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        child_exe: str,
+        child_command_line: str,
+    ) -> int:
+        """Return a concrete service-family owner for a remote/admin shell."""
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        exe = child_exe.lower()
+        command = child_command_line.lower()
+        owner_keys: tuple[str, ...]
+
+        if exe == "schtasks.exe" or "schtasks" in command:
+            owner_keys = ("taskhostw", "svchost_local_system", "services")
+        elif exe in {"wmic.exe", "wmic"} or "wmic " in command:
+            owner_keys = ("wmiprvse", "svchost_dcom", "services")
+        elif exe in {"sc.exe", "sc"} or "sc.exe create" in command or " sc create" in command:
+            owner_keys = ("services", "svchost_dcom", "wmiprvse")
+        elif exe in {"wevtutil.exe", "wevtutil", "net.exe", "net1.exe", "net", "net1"}:
+            owner_keys = ("wmiprvse", "taskhostw", "services")
+        elif "powershell" in command or "winrm" in command or "invoke-command" in command:
+            owner_keys = ("wmiprvse", "svchost_dcom", "services")
+        else:
+            seed = _stable_seed(
+                f"windows_remote_owner:{system.hostname}:{exe}:{child_command_line}"
+            )
+            owner_keys = (
+                ("wmiprvse", "taskhostw", "services")
+                if seed % 2
+                else ("taskhostw", "wmiprvse", "services")
+            )
+
+        for key in owner_keys:
+            pid = sys_pids.get(key)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        return sys_pids.get("services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4)))
+
     def _ensure_windows_service_shell_parent(
         self,
         *,
@@ -19283,10 +19822,11 @@ class ActivityGenerator:
         if child_exe not in self._WINDOWS_SERVICE_SHELL_CHILDREN:
             return None
 
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        parent_pid = sys_pids.get(
-            "svchost_netsvcs",
-            sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
+        parent_pid = self._windows_remote_command_owner_pid(
+            system=system,
+            time=time,
+            child_exe=child_exe,
+            child_command_line=child_command_line,
         )
         shell_time = time - timedelta(
             milliseconds=120

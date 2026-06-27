@@ -120,6 +120,16 @@ fields:
     required: false
     description: "Protocol for network events"
 
+  - name: icmp_type
+    type: string
+    required: false
+    description: "ICMP message type for ICMP FLOW events"
+
+  - name: icmp_code
+    type: string
+    required: false
+    description: "ICMP message code for ICMP FLOW events"
+
   - name: direction
     type: string
     required: false
@@ -261,6 +271,11 @@ fields:
     type: string
     required: false
     description: "Access mask for PROCESS/OPEN events (e.g., 0x1410)"
+
+  - name: call_trace
+    type: string
+    required: false
+    description: "Source-owned call trace for PROCESS/OPEN events"
 
   # SERVICE/CREATE properties
   - name: service_name

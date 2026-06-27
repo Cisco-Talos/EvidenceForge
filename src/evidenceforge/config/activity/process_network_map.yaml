@@ -123,6 +123,12 @@ mappings:
     external: true
     dns_tags: [web, cdn]
 
+  - exe: [firefox, curl, wget]
+    service: http
+    port: 80
+    external: true
+    dns_tags: [web, cdn]
+
   # Database clients → internal DB
   - exe: [sqlcmd.exe]
     service: mssql

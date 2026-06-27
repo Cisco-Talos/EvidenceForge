@@ -242,7 +242,6 @@ schedules:
     typical_hour: 0
     jitter_minutes: 8
     slot_skip_probability: 0.08
-    slot_jitter_seconds: 45
     distro: debian
     cron_user: sysstat
     cron_commands:

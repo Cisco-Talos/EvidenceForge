@@ -50,6 +50,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] Continue current-dev realism assessment only if another loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.
+- [ ] **P1** Feed the latest post-fix Host-review priors into the next
+  assessment loop: dataset-wide uniform Sysmon collection/event-family shape,
+  tight eCAR wrapper/child timing around DC service/task execution, residual
+  service/task parentage edge cases, and regular eCAR `FLOW` actor omission.
 - [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier
   flushes to write year-partitioned syslog files, while preserving final
   sort/logind normalization at close.
@@ -67,8 +71,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 Recently completed: Codex fix-family PR review/rework, full slow-suite
 regression cleanup, architecture reset validation, output-target extraction,
-source timing planner work, and extensive realism assessment loops. Keep further
-per-loop or per-PR details in worklogs or PR descriptions.
+source timing planner work, identity-directory and endpoint host-clock realism,
+and Host/EDR reviewer-1 fixes for journald sparsity, polkit role gating, remote
+command ownership, Windows maintenance cadence/runtime, and source-aware LSASS
+call traces. Keep further per-loop or per-PR details in worklogs or PR
+descriptions.
 
 ### Correctness and Realism Backlog
 
@@ -84,9 +91,6 @@ per-loop or per-PR details in worklogs or PR descriptions.
   responders, public DNS/NTP/CDN destinations, and PTR/provider identities do
   not reuse the same IPs in contradictory ways; keep User-Agent/persona behavior
   stable per external source.
-- [ ] **P2** Reduce dataset-wide Sysmon Event 1 before Security 4688 timestamp
-  bias by varying source timing per host/channel without breaking process
-  correlation.
 - [ ] **P1** Model Windows Security and Sysmon `EventRecordID` gaps against
   plausible hidden event volume while preserving near-adjacent native pairings
   such as Security `4624`/`4672` and tightly coupled Sysmon process events.
@@ -98,23 +102,6 @@ per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Improve public PTR, TLS, and provider realism so public reverse DNS
   is sparse/provider-style rather than forward-hostname-derived, and
   SNI/certificate issuer/provider relationships remain plausible.
-- [ ] **P1** Route Windows remote-admin command execution through concrete
-  execution owners instead of direct `services.exe` parentage; model realistic
-  chains such as PsExec service wrapper → `cmd.exe`, WMI provider, PowerShell
-  remoting, or temporary service binaries with matching lifecycle evidence and
-  source-visible binary staging when a service path first appears in-window.
-- [ ] **P1** Model executable-specific Windows utility runtimes and lifecycle
-  cadence so short-lived maintenance tools such as `usoclient.exe`,
-  `MpCmdRun.exe -SignatureUpdate`, `cleanmgr.exe`, `CompatTelRunner.exe`, and
-  `gpupdate.exe /force` do not run for hours or repeat uniformly across many
-  hosts.
-- [ ] **P1** Reduce high-frequency Linux `systemd-journald` runtime-size filler;
-  gate those messages around startup, rotation, vacuum, or explicit journal
-  pressure instead of emitting them as dense background texture.
-- [ ] **P2** Make Sysmon Event ID 10 LSASS access call traces source-image-aware
-  so module stacks are plausible for the accessing process and are not reused
-  across incompatible sources such as `csrss.exe`, `services.exe`, and
-  `svchost.exe`.
 - [ ] **P2** Widen ordinary SMB file-transfer filename, path, and size
   distributions; add organically recurring documents and fewer semantically
   assembled one-off business filenames.
@@ -125,9 +112,9 @@ per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P2** Add perimeter TLS imperfection for public-facing services,
   including missing SNI, IP-literal/default scanner SNI, malformed handshakes,
   failed handshakes, and reset outcomes tied to scanner/client families.
-- [ ] **P3** De-rate uniform Windows maintenance and endpoint startup palettes,
-  especially repeated `cleanmgr.exe`, `gpupdate.exe`, and clustered VPN/ZTNA
-  tray launches on DC/server roles.
+- [ ] **P3** Continue de-rating uniform Windows endpoint startup palettes,
+  especially repeated `gpupdate.exe` and clustered VPN/ZTNA tray launches on
+  DC/server roles.
 - [ ] **P2** Add session-aware RDP baseline texture so repeated remote desktop
   activity reconnects, replaces, or reuses sessions instead of stacking many
   concurrent client launches to DC/file-server roles.
@@ -187,9 +174,6 @@ per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P2** Diversify LDAP discovery command texture by tool, filter, user,
   host role, and result/failure pattern so repeated `ldapsearch` reconnaissance
   does not appear as one procedural command pool across many hosts.
-- [ ] **P3** Gate desktop/GUI Linux artifacts such as Polkit auth-agent startup
-  by host role and active desktop session so server roles do not emit
-  workstation-style GUI background churn.
 - [ ] **P3** Validate SSH `Accepted publickey` syslog formatting against native
   OpenSSH variants and include key type/fingerprint details when configured.
 - [ ] **P3** Validate Windows Security Event ID 1102 rendering against real

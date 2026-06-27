@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.generation.activity.timing_profiles import (
+    endpoint_clock_timing,
     get_timing_window,
     network_sensor_observation_timing,
     sample_timing_delta,
@@ -34,11 +35,15 @@ class SourceTimingPlan:
     """Planned source-native timestamps for one canonical event."""
 
     canonical_timestamp: datetime
+    clock_profile_name: str = "complete"
     source_times: dict[str, datetime] = field(default_factory=dict)
 
 
 class SourceTimingPlanner:
     """Plan source-native observation times with deterministic constraints."""
+
+    def __init__(self, clock_profile_name: str = "complete") -> None:
+        self.clock_profile_name = clock_profile_name or "complete"
 
     def plan_event(self, event: SecurityEvent) -> SecurityEvent:
         """Return ``event`` with an attached source timing plan."""
@@ -66,7 +71,7 @@ class SourceTimingPlanner:
         cache_key = self._cache_key(source_key, effective_seed)
         preferred_time = plan.source_times.get(cache_key)
         if preferred_time is None:
-            preferred_time = self._sample_source_time(event.timestamp, source_key, effective_seed)
+            preferred_time = self._sample_source_time(event, source_key, effective_seed)
         constrained_time = self._apply_constraints(
             preferred_time,
             not_before=not_before,
@@ -210,12 +215,17 @@ class SourceTimingPlanner:
     def _ensure_plan(self, event: SecurityEvent) -> SourceTimingPlan:
         """Attach and return a mutable source timing plan for ``event``."""
         if event.source_timing is None:
-            event.source_timing = SourceTimingPlan(canonical_timestamp=event.timestamp)
+            event.source_timing = SourceTimingPlan(
+                canonical_timestamp=event.timestamp,
+                clock_profile_name=self.clock_profile_name,
+            )
+        elif not event.source_timing.clock_profile_name:
+            event.source_timing.clock_profile_name = self.clock_profile_name
         return event.source_timing
 
     def _sample_source_time(
         self,
-        canonical_time: datetime,
+        event: SecurityEvent,
         source_key: str,
         seed_parts: tuple[Any, ...],
     ) -> datetime:
@@ -233,9 +243,12 @@ class SourceTimingPlanner:
             and source_key != "source.zeek_conn_start"
             else timedelta(0)
         )
+        canonical_time = event.timestamp
         if window.position == "before":
-            return canonical_time - delta - micro_noise
-        return canonical_time + delta + micro_noise
+            source_time = canonical_time - delta - micro_noise
+        else:
+            source_time = canonical_time + delta + micro_noise
+        return source_time + self._endpoint_clock_adjustment(event, source_key, seed_parts)
 
     def _preferred_source_time(
         self,
@@ -250,7 +263,66 @@ class SourceTimingPlanner:
         preferred_time = plan.source_times.get(cache_key)
         if preferred_time is not None:
             return preferred_time
-        return self._sample_source_time(event.timestamp, source_key, seed_parts)
+        return self._sample_source_time(event, source_key, seed_parts)
+
+    def _endpoint_clock_adjustment(
+        self,
+        event: SecurityEvent,
+        source_key: str,
+        seed_parts: tuple[Any, ...],
+    ) -> timedelta:
+        """Return shared host-clock adjustment for host-resident endpoint sources."""
+        scope = self._endpoint_clock_scope(event, source_key)
+        if scope is None:
+            return timedelta(0)
+        host_key, os_category = scope
+        plan = self._ensure_plan(event)
+        timing = endpoint_clock_timing(plan.clock_profile_name, os_category)
+        offset_ms = self._bounded_int(
+            "endpoint-clock-offset",
+            timing.host_offset_min_ms,
+            timing.host_offset_max_ms,
+            (plan.clock_profile_name, os_category, host_key),
+        )
+        drift_ppm = self._bounded_int(
+            "endpoint-clock-drift",
+            timing.host_drift_min_ppm,
+            timing.host_drift_max_ppm,
+            (plan.clock_profile_name, os_category, host_key),
+        )
+        seconds_since_midnight = (
+            event.timestamp.hour * 3600
+            + event.timestamp.minute * 60
+            + event.timestamp.second
+            + event.timestamp.microsecond / 1_000_000
+        )
+        drift_us = round(seconds_since_midnight * drift_ppm)
+        return timedelta(milliseconds=offset_ms, microseconds=drift_us)
+
+    @staticmethod
+    def _endpoint_clock_scope(
+        event: SecurityEvent,
+        source_key: str,
+    ) -> tuple[str, str] | None:
+        """Return ``(host, os_category)`` for endpoint sources, else ``None``."""
+        if source_key.startswith(("source.zeek_", "network.")):
+            return None
+        if source_key.startswith(("source.windows_", "source.sysmon_")):
+            host = event.src_host or event.dst_host
+            hostname = getattr(host, "hostname", "") or ""
+            return (hostname, "windows") if hostname else None
+        if source_key.startswith("source.ecar_"):
+            host = event.src_host or event.dst_host
+            hostname = getattr(host, "hostname", "") or ""
+            os_category = getattr(host, "os_category", "") or ""
+            if os_category not in {"windows", "linux"}:
+                return None
+            return (hostname, os_category) if hostname else None
+        if source_key.startswith(("source.syslog_", "source.bash_history_")):
+            host = event.src_host or event.dst_host
+            hostname = getattr(host, "hostname", "") or ""
+            return (hostname, "linux") if hostname else None
+        return None
 
     @staticmethod
     def _source_micro_noise(
@@ -290,6 +362,14 @@ class SourceTimingPlanner:
     @staticmethod
     def _bounded_us(prefix: str, minimum: int, maximum: int, parts: tuple[Any, ...]) -> int:
         """Return a deterministic integer in the inclusive microsecond range."""
+        if maximum <= minimum:
+            return minimum
+        seed = _stable_seed(prefix + ":" + ":".join(str(part) for part in parts))
+        return minimum + (seed % (maximum - minimum + 1))
+
+    @staticmethod
+    def _bounded_int(prefix: str, minimum: int, maximum: int, parts: tuple[Any, ...]) -> int:
+        """Return a deterministic integer in the inclusive range."""
         if maximum <= minimum:
             return minimum
         seed = _stable_seed(prefix + ":" + ":".join(str(part) for part in parts))

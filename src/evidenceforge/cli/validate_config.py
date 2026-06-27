@@ -488,6 +488,7 @@ def validate_config() -> ValidationResult:
         },
         "activity/calltrace_patterns.yaml": {
             "list_fields": {"patterns": None},
+            "dict_fields": {"source_families"},
         },
         "activity/edr_pools.yaml": {
             "list_fields": {"file_side_effect_profiles": None, "installed_software_products": None},
@@ -529,7 +530,12 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"low", "medium", "high"},
         },
         "activity/timing_profiles.yaml": {
-            "dict_fields": {"relationships", "windows_event_time", "network_sensor_observation"},
+            "dict_fields": {
+                "relationships",
+                "endpoint_clock",
+                "windows_event_time",
+                "network_sensor_observation",
+            },
         },
     }
 
@@ -727,6 +733,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.observation_profiles import load_observation_profiles
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
+    from evidenceforge.generation.activity.calltrace_patterns import load_calltrace_config
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
         load_create_remote_thread_config,
         load_create_remote_thread_patterns,
@@ -767,6 +774,7 @@ def validate_config() -> ValidationResult:
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
     process_access_data = load_process_access_patterns()
+    calltrace_config = load_calltrace_config()
     auth_noise_data = load_auth_noise_config()
     create_remote_thread_data = load_create_remote_thread_patterns()
     create_remote_thread_config = load_create_remote_thread_config()
@@ -1251,6 +1259,100 @@ def validate_config() -> ValidationResult:
                         f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
                     )
                 )
+
+    endpoint_clock = timing_profiles_data.get("endpoint_clock", {})
+    if not isinstance(endpoint_clock, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "endpoint_clock must be a mapping")
+        )
+    else:
+        profiles = endpoint_clock.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "endpoint_clock.profiles must be a non-empty mapping",
+                )
+            )
+        elif "complete" not in profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    'endpoint_clock.profiles must include "complete"',
+                )
+            )
+        if isinstance(profiles, dict):
+            for profile_name, profile_data in profiles.items():
+                if not isinstance(profile_data, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f'Endpoint clock profile "{profile_name}" must be a mapping',
+                        )
+                    )
+                    continue
+                for os_name in ("windows", "linux"):
+                    os_profile = profile_data.get(os_name)
+                    if not isinstance(os_profile, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"endpoint_clock.profiles.{profile_name}.{os_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    for field_name, minimum, maximum in (
+                        ("host_offset_ms", -300_000, 300_000),
+                        ("host_drift_ppm", -500, 500),
+                    ):
+                        bounds = os_profile.get(field_name)
+                        if not isinstance(bounds, dict):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name} must be a mapping",
+                                )
+                            )
+                            continue
+                        min_value = bounds.get("min")
+                        max_value = bounds.get("max")
+                        if not isinstance(min_value, int) or min_value < minimum:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.min must be an integer >= {minimum}",
+                                )
+                            )
+                        if not isinstance(max_value, int) or max_value > maximum:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.max must be an integer <= {maximum}",
+                                )
+                            )
+                        if (
+                            isinstance(min_value, int)
+                            and isinstance(max_value, int)
+                            and max_value < min_value
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.max must be >= min",
+                                )
+                            )
     spacing = timing_profiles_data.get("windows_event_time", {}).get("collision_spacing", {})
     if not isinstance(spacing, dict):
         result.issues.append(
@@ -2250,6 +2352,8 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         AuthNoiseConfig,
+        CallTracePatternEntry,
+        CallTraceSourceFamilyEntry,
         ConnectionEntry,
         CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
@@ -2343,6 +2447,44 @@ def validate_config() -> ValidationResult:
         _SCHEMA_CHECKS.append(
             (process_access_data, ProcessAccessPatternEntry, "process_access_patterns.yaml")
         )
+    if isinstance(calltrace_config, dict):
+        calltrace_patterns = calltrace_config.get("patterns", [])
+        calltrace_families = calltrace_config.get("source_families", {})
+        if isinstance(calltrace_patterns, list):
+            _SCHEMA_CHECKS.append(
+                (calltrace_patterns, CallTracePatternEntry, "calltrace_patterns.yaml patterns")
+            )
+        if isinstance(calltrace_families, dict):
+            family_entries = [
+                family for family in calltrace_families.values() if isinstance(family, dict)
+            ]
+            _SCHEMA_CHECKS.append(
+                (
+                    family_entries,
+                    CallTraceSourceFamilyEntry,
+                    "calltrace_patterns.yaml source_families",
+                )
+            )
+            pattern_ids = {
+                str(pattern.get("id"))
+                for pattern in calltrace_patterns
+                if isinstance(pattern, dict) and pattern.get("id")
+            }
+            for family_name, family_config in calltrace_families.items():
+                if not isinstance(family_config, dict):
+                    continue
+                for pattern_id in family_config.get("pattern_ids", []):
+                    if str(pattern_id) not in pattern_ids:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "calltrace_patterns.yaml",
+                                (
+                                    f'Source family "{family_name}" references unknown '
+                                    f'pattern_id "{pattern_id}"'
+                                ),
+                            )
+                        )
     if isinstance(create_remote_thread_data, list):
         _SCHEMA_CHECKS.append(
             (

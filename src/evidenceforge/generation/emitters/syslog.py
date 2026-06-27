@@ -49,6 +49,7 @@ from evidenceforge.generation.emitters.syslog_family import (
     syslog_route_source,
     syslog_route_year,
 )
+from evidenceforge.generation.identity import default_linux_uid_for_user
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.rng import _stable_seed
 
@@ -107,34 +108,12 @@ def _format_rfc5424_timestamp(value: Any) -> str:
 
 def _fallback_linux_uid(user: str) -> int:
     """Return a source-native fallback UID for a syslog-only PAM backfill."""
-    if user == "root":
-        return 0
-    well_known = {
-        "ubuntu": 1000,
-        "ec2-user": 1000,
-        "admin": 1001,
-        "ansible": 998,
-        "deploy": 1002,
-    }
-    if user in well_known:
-        return well_known[user]
-    return 2000 + (_stable_seed(f"linux_uid:{user}") % 5000)
+    return default_linux_uid_for_user(user)
 
 
 def _fallback_linux_uid_for_host(host_key: str, user: str) -> int:
     """Return a stable UID for a syslog-only PAM row on one host."""
-    if user == "root":
-        return 0
-    well_known = {
-        "ubuntu": 1000,
-        "ec2-user": 1000,
-        "admin": 1001,
-        "ansible": 998,
-        "deploy": 1002,
-    }
-    if user in well_known:
-        return well_known[user]
-    return 2000 + (_stable_seed(f"linux_uid:{host_key}:{user}") % 5000)
+    return default_linux_uid_for_user(user, host=host_key)
 
 
 def _linux_uid_collision_repaired(lines: list[str], host_key: str) -> list[str]:

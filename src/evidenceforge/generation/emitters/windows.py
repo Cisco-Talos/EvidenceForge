@@ -95,6 +95,11 @@ _WFP_FILTER_BUCKET_OFFSETS = {
     "outbound_default": 20,
     "inbound_default": 21,
 }
+_WFP_OUTBOUND_LAYER_NAME = "%%14611"
+_WFP_OUTBOUND_LAYER_RTID = 48
+_WFP_INBOUND_LAYER_NAME = "%%14610"
+_WFP_INBOUND_LAYER_RTID = 44
+_LOCAL_SERVICE_LOGON_IDS = {"0x3e7", "0x3e4", "0x3e5", "-", "0x0"}
 
 
 def _record_dropped_unlock(
@@ -121,6 +126,64 @@ def _has_nearby_dropped_unlock(
     earliest_unlock_ts = normalized_ts - timedelta(seconds=2)
     unlock_index = bisect_left(unlock_times, earliest_unlock_ts)
     return unlock_index < len(unlock_times) and unlock_times[unlock_index] <= normalized_ts
+
+
+_WINDOWS_AUTH_TRANSPORT_NEAR_WINDOW = timedelta(seconds=5)
+
+
+def _windows_auth_transport_tuple(event: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Return ``(computer, source_ip, source_port)`` for remote auth/transport rows."""
+
+    computer = str(event.get("Computer") or "")
+    if not computer:
+        return None
+    event_id = event.get("EventID")
+    if event_id == 4624 and str(event.get("LogonType") or "") in {"3", "10"}:
+        source_ip = str(event.get("IpAddress") or "").removeprefix("::ffff:")
+        source_port = str(event.get("IpPort") or "")
+    elif event_id == 5156:
+        source_ip = str(event.get("SourceAddress") or "").removeprefix("::ffff:")
+        source_port = str(event.get("SourcePort") or "")
+    else:
+        return None
+    if not source_ip or source_ip in {"-", "::1", "127.0.0.1"}:
+        return None
+    if not source_port or source_port in {"-", "0"}:
+        return None
+    return (computer, source_ip, source_port)
+
+
+def _windows_logon_session_key(
+    event: dict[str, Any],
+    logon_id_field: str,
+) -> tuple[str, str] | None:
+    """Return a comparable ``(computer, logon_id)`` key for rendered Security rows."""
+    computer = str(event.get("Computer") or "")
+    logon_id = str(event.get(logon_id_field) or "")
+    normalized_logon_id = logon_id.lower()
+    if not computer or not logon_id or normalized_logon_id in _LOCAL_SERVICE_LOGON_IDS:
+        return None
+    return (computer, normalized_logon_id)
+
+
+def _nearest_auth_transport_time(
+    transport_times: dict[tuple[str, str, str], list[datetime]],
+    key: tuple[str, str, str],
+    auth_time: datetime,
+) -> datetime | None:
+    """Return the nearest same-tuple transport observation for a remote auth row."""
+
+    candidates = transport_times.get(key)
+    if not candidates:
+        return None
+    near_candidates = [
+        transport_time
+        for transport_time in candidates
+        if abs(transport_time - auth_time) <= _WINDOWS_AUTH_TRANSPORT_NEAR_WINDOW
+    ]
+    if not near_candidates:
+        return None
+    return min(near_candidates, key=lambda transport_time: abs(transport_time - auth_time))
 
 
 def _windows_path_basename(path: str) -> str:
@@ -277,6 +340,22 @@ def _windows_endpoint_port(address: str | None, port: int | str | None) -> int |
     if not address or address == "-":
         return "-"
     return port if port not in (None, "") else 0
+
+
+def _wfp_layer_fields(direction: Any) -> tuple[str, int]:
+    """Return Windows Security 5156 layer fields compatible with WFP direction."""
+    if str(direction or "") == "%%14592":
+        return (_WFP_INBOUND_LAYER_NAME, _WFP_INBOUND_LAYER_RTID)
+    return (_WFP_OUTBOUND_LAYER_NAME, _WFP_OUTBOUND_LAYER_RTID)
+
+
+def _normalize_wfp_layer_fields(event_data: dict[str, Any]) -> None:
+    """Align 5156 layer metadata with inbound/outbound WFP semantics."""
+    if event_data.get("EventID") != 5156:
+        return
+    layer_name, layer_rtid = _wfp_layer_fields(event_data.get("Direction"))
+    event_data["LayerName"] = layer_name
+    event_data["LayerRTID"] = layer_rtid
 
 
 def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
@@ -807,14 +886,10 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
         process_seed = (host.hostname, proc.pid, process_start_time)
-        render_time = _SOURCE_TIMING.source_time_after_source(
+        render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
-            after_source_key="source.sysmon_process_create",
-            gap_key="source.windows_security_after_sysmon_process_create_gap",
             seed_parts=process_seed,
-            after_seed_parts=process_seed,
-            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -886,14 +961,10 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
         process_seed = (host.hostname, proc.pid, process_start_time)
-        render_time = _SOURCE_TIMING.source_time_after_source(
+        render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
-            after_source_key="source.sysmon_process_create",
-            gap_key="source.windows_security_after_sysmon_process_create_gap",
             seed_parts=process_seed,
-            after_seed_parts=process_seed,
-            after_not_before=process_start_time,
             not_before=process_start_time,
         )
 
@@ -1175,6 +1246,8 @@ class WindowsEventEmitter(LogEmitter):
             not_before=event.timestamp,
         )
 
+        direction = "%%14593" if is_outbound else "%%14592"
+        layer_name, layer_rtid = _wfp_layer_fields(direction)
         event_data = {
             "EventID": 5156,
             "TimeCreated": render_time,
@@ -1185,15 +1258,15 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(50, 200),
             "ProcessID": pid,
             "Application": self._to_device_path(image),
-            "Direction": "%%14593" if is_outbound else "%%14592",
+            "Direction": direction,
             "SourceAddress": net.src_ip,
             "SourcePort": net.src_port,
             "DestAddress": net.dst_ip,
             "DestPort": net.dst_port,
             "Protocol": net.ip_proto,
             "FilterRTID": self._wfp_filter_rtid(host, net, image, is_outbound),
-            "LayerName": "%%14611",
-            "LayerRTID": 48,
+            "LayerName": layer_name,
+            "LayerRTID": layer_rtid,
             "RemoteUserID": "S-1-0-0",
             "RemoteMachineID": "S-1-0-0",
         }
@@ -1591,6 +1664,7 @@ class WindowsEventEmitter(LogEmitter):
         event_data = self._normalize_execution_ids(event_data)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
+        _normalize_wfp_layer_fields(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         if self.threaded:
@@ -1931,6 +2005,73 @@ class WindowsEventEmitter(LogEmitter):
                     updates.clear()
         self._update_spooled_events_unlocked(updates)
 
+    def _shift_spooled_network_logons_after_transport_unlocked(self) -> None:
+        """Keep remote 4624 rows after visible same-tuple WFP 5156 rows."""
+
+        transport_times: dict[tuple[str, str, str], list[datetime]] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 5156:
+                continue
+            if str(event.get("Protocol") or "6") != "6":
+                continue
+            if str(event.get("Direction") or "%%14592") != "%%14592":
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_auth_transport_tuple(event)
+            if isinstance(ts, datetime) and key is not None:
+                transport_times.setdefault(key, []).append(ts)
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4624 or str(event.get("LogonType") or "") not in {"3", "10"}:
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_auth_transport_tuple(event)
+            transport_time = (
+                _nearest_auth_transport_time(transport_times, key, ts)
+                if key is not None and isinstance(ts, datetime)
+                else None
+            )
+            if isinstance(ts, datetime) and transport_time is not None and ts <= transport_time:
+                event["TimeCreated"] = transport_time + sample_timing_delta(
+                    "windows.network_logon_after_transport",
+                    seed_parts=(*key, transport_time),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
+    def _shift_spooled_special_privileges_after_logons_unlocked(self) -> None:
+        """Keep spooled 4672 rows after the final same-session 4624 timestamp."""
+        logon_times: dict[tuple[str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4624:
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_logon_session_key(event, "TargetLogonId")
+            if isinstance(ts, datetime) and key is not None:
+                logon_times[key] = max(ts, logon_times.get(key, ts))
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4672:
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_logon_session_key(event, "SubjectLogonId")
+            logon_time = logon_times.get(key) if key is not None else None
+            if isinstance(ts, datetime) and logon_time is not None and ts <= logon_time:
+                event["TimeCreated"] = logon_time + sample_timing_delta(
+                    "windows.special_privilege_after_logon",
+                    seed_parts=(*key, logon_time),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
     def _shift_spooled_logoffs_after_dependents_unlocked(self) -> None:
         """Prevent spooled 4634 records from preceding same-session dependents."""
         latest_dependent: dict[tuple[str, str], datetime] = {}
@@ -2159,6 +2300,8 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
             self._shift_spooled_process_dependents_after_create_unlocked()
+            self._shift_spooled_network_logons_after_transport_unlocked()
+            self._shift_spooled_special_privileges_after_logons_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
@@ -2168,6 +2311,8 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
             self._shift_process_dependents_after_create()
+            self._shift_network_logons_after_transport()
+            self._shift_special_privileges_after_logons()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
@@ -2348,6 +2493,61 @@ class WindowsEventEmitter(LogEmitter):
             logon_time = logon_times.get(key)
             if logon_time is not None and ts <= logon_time:
                 event["TimeCreated"] = logon_time + timedelta(milliseconds=1)
+
+    def _shift_network_logons_after_transport(self) -> None:
+        """Keep remote 4624 rows after visible same-tuple WFP 5156 rows."""
+
+        transport_times: dict[tuple[str, str, str], list[datetime]] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 5156:
+                continue
+            if str(event.get("Protocol") or "6") != "6":
+                continue
+            if str(event.get("Direction") or "%%14592") != "%%14592":
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_auth_transport_tuple(event)
+            if isinstance(ts, datetime) and key is not None:
+                transport_times.setdefault(key, []).append(ts)
+
+        for event in self._event_dicts:
+            if event.get("EventID") != 4624 or str(event.get("LogonType") or "") not in {"3", "10"}:
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_auth_transport_tuple(event)
+            transport_time = (
+                _nearest_auth_transport_time(transport_times, key, ts)
+                if key is not None and isinstance(ts, datetime)
+                else None
+            )
+            if isinstance(ts, datetime) and transport_time is not None and ts <= transport_time:
+                event["TimeCreated"] = transport_time + sample_timing_delta(
+                    "windows.network_logon_after_transport",
+                    seed_parts=(*key, transport_time),
+                )
+
+    def _shift_special_privileges_after_logons(self) -> None:
+        """Keep 4672 special-privilege rows after the same-session 4624 row."""
+        logon_times: dict[tuple[str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 4624:
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_logon_session_key(event, "TargetLogonId")
+            if isinstance(ts, datetime) and key is not None:
+                logon_times[key] = max(ts, logon_times.get(key, ts))
+
+        for event in self._event_dicts:
+            if event.get("EventID") != 4672:
+                continue
+            ts = event.get("TimeCreated")
+            key = _windows_logon_session_key(event, "SubjectLogonId")
+            logon_time = logon_times.get(key) if key is not None else None
+            if isinstance(ts, datetime) and logon_time is not None and ts <= logon_time:
+                event["TimeCreated"] = logon_time + sample_timing_delta(
+                    "windows.special_privilege_after_logon",
+                    seed_parts=(*key, logon_time),
+                )
 
     @staticmethod
     def _detect_process_parent_cycles(

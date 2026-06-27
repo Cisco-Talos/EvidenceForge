@@ -386,6 +386,24 @@ def _userassist_binary_details(rng: random.Random) -> str:
     return " ".join(f"{rng.getrandbits(8):02X}" for _ in range(byte_count))
 
 
+def _process_prefetch_name(process_name: str) -> str:
+    """Return the source-native executable stem used in Windows Prefetch filenames."""
+    cleaned = process_name.strip().strip("\"'")
+    basename = cleaned.replace("/", "\\").rsplit("\\", 1)[-1].strip()
+    if not basename:
+        return "PROCESS.EXE"
+    basename = re.sub(r"[^A-Za-z0-9_.-]", "_", basename)
+    if "." not in basename:
+        basename = f"{basename}.EXE"
+    return basename.upper()
+
+
+def _is_windows_prefetch_template(template: str) -> bool:
+    """Return whether a file template points at the Windows Prefetch directory."""
+    normalized = template.replace("/", "\\").lower()
+    return "\\windows\\prefetch\\" in normalized
+
+
 def _runmru_value_name(rng: random.Random) -> str:
     """Return a plausible RunMRU value slot."""
     return chr(ord("a") + rng.randint(0, 15))
@@ -408,6 +426,7 @@ def materialize_edr_template(
     host_ip: str = "",
     host_key: str = "",
     host_os: str = "",
+    process_name: str = "",
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -427,6 +446,7 @@ def materialize_edr_template(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "process_prefetch_name": _process_prefetch_name(process_name),
         "os_build": _windows_component_build(host_os, host_key),
         "installed_product_guid": _installed_product_guid(host_key, installed_product["name"]),
         "installed_product_name": installed_product["name"],
@@ -476,6 +496,7 @@ def materialize_edr_template_group(
     host_key: str = "",
     host_ip: str = "",
     host_os: str = "",
+    process_name: str = "",
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -495,6 +516,7 @@ def materialize_edr_template_group(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "process_prefetch_name": _process_prefetch_name(process_name),
         "os_build": _windows_component_build(host_os, host_key),
         "installed_product_guid": _installed_product_guid(host_key, installed_product["name"]),
         "installed_product_name": installed_product["name"],
@@ -588,7 +610,12 @@ def select_file_side_effect(
             )
         ):
             return None
-        path = materialize_edr_template(str(rng.choice(path_templates)), rng, user=user)
+        path = materialize_edr_template(
+            str(rng.choice(path_templates)),
+            rng,
+            user=user,
+            process_name=process_name,
+        )
         if (
             exe in {"bash", "sh"}
             and user.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}
@@ -597,7 +624,12 @@ def select_file_side_effect(
             non_history_paths = _exclude_paths(path_templates, ("/.bash_history",))
             if not non_history_paths:
                 return None
-            path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
+            path = materialize_edr_template(
+                str(rng.choice(non_history_paths)),
+                rng,
+                user=user,
+                process_name=process_name,
+            )
         if os_category == "windows" and _is_windows_powershell_history_path(path):
             if not _allows_psreadline_history(exe, command_line, user):
                 non_history_paths = _exclude_paths(
@@ -606,7 +638,12 @@ def select_file_side_effect(
                 )
                 if not non_history_paths:
                     return None
-                path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
+                path = materialize_edr_template(
+                    str(rng.choice(non_history_paths)),
+                    rng,
+                    user=user,
+                    process_name=process_name,
+                )
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
         return action, path
@@ -632,6 +669,10 @@ def select_ambient_file_churn_effect(
         return select_file_side_effect(process_name, command_line, os_category, rng, user=user)
 
     candidates = file_path_templates_for_user(path_templates, os_category, user)
+    if os_category == "windows":
+        candidates = [
+            candidate for candidate in candidates if not _is_windows_prefetch_template(candidate)
+        ]
     if not candidates:
         return None
 

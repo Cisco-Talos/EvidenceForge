@@ -276,6 +276,21 @@ class TestReferrerChains:
             f"Expected some sessions with search referrer, got {search_ref_count}/50"
         )
 
+    def test_auth_landing_pages_do_not_use_search_engine_referrers(self):
+        """Auth flow entry pages should look direct or app-initiated, not search-landed."""
+        for host in (
+            "accounts.google.com",
+            "api-17.duosecurity.com",
+            "identity.getpostman.com",
+            "login.microsoftonline.com",
+            "login.salesforce.com",
+        ):
+            for seed in range(60):
+                requests = generate_browsing_session(random.Random(seed), host, ["saas"])
+                if requests:
+                    assert "google.com/search" not in requests[0].referrer
+                    assert "bing.com/search" not in requests[0].referrer
+
     def test_some_sessions_start_deep(self):
         """~30% of sessions should land on a non-root page."""
         deep_start_count = 0
@@ -394,6 +409,13 @@ class TestTagAndGenericFallback:
         rng = random.Random(42)
         requests = generate_browsing_session(rng, "ocsp.pki.goog", ["background"])
         assert requests == []
+
+    def test_cdn_and_api_registry_targets_produce_no_browsing_session(self):
+        rng = random.Random(42)
+
+        assert generate_browsing_session(rng, "a.slack-edge.com", ["cdn"]) == []
+        assert generate_browsing_session(rng, "content.dropboxapi.com", ["storage", "cdn"]) == []
+        assert generate_browsing_session(rng, "graph.microsoft.com", ["dev", "outlook"]) == []
 
     def test_inbound_web_server_can_use_generic_public_hostname(self):
         rng = random.Random(42)

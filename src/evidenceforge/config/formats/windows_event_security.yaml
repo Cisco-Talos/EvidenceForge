@@ -1476,8 +1476,8 @@ output:
         <Data Name="DestPort">{{ DestPort }}</Data>
         <Data Name="Protocol">{{ Protocol }}</Data>
         <Data Name="FilterRTID">{{ FilterRTID | default(0) }}</Data>
-        <Data Name="LayerName">{{ LayerName | default('%%14611') }}</Data>
-        <Data Name="LayerRTID">{{ LayerRTID | default(48) }}</Data>
+        <Data Name="LayerName">{{ LayerName | default('%%14610' if Direction == '%%14592' else '%%14611') }}</Data>
+        <Data Name="LayerRTID">{{ LayerRTID | default(44 if Direction == '%%14592' else 48) }}</Data>
         <Data Name="RemoteUserID">{{ RemoteUserID | default('S-1-0-0') }}</Data>
         <Data Name="RemoteMachineID">{{ RemoteMachineID | default('S-1-0-0') }}</Data>
         {% endif %}

@@ -35,7 +35,7 @@ from evidenceforge.events import (
     RawLogEntry,
     SecurityEvent,
 )
-from evidenceforge.events.contexts import SyslogContext
+from evidenceforge.events.contexts import SslContext, SyslogContext, X509Context
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
 from evidenceforge.events.observation import (
     SOURCE_FAMILIES,
@@ -406,6 +406,87 @@ class TestObservationProfiles:
         assert files.emit.call_args.args[0]._observed_formats == {"zeek_files", "zeek_x509"}
         assert x509.emit.call_args.args[0]._observed_formats == {"zeek_files", "zeek_x509"}
 
+    def test_zeek_tls_certificate_files_promote_x509_and_ssl_companions(self, monkeypatch):
+        """Visible TLS certificate files require x509 rows and an ssl.log owner."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {
+                            "zeek_ssl": 1.0,
+                            "zeek_files": 0.0,
+                            "zeek_x509": 1.0,
+                        },
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        ssl = _make_mock_emitter("zeek_ssl", handles=True)
+        files = _make_mock_emitter("zeek_files", handles=True)
+        x509 = _make_mock_emitter("zeek_x509", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_ssl": ssl, "zeek_files": files, "zeek_x509": x509},
+            observation_policy=ObservationPolicy("zeek_tls_certificate_companion_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="203.0.113.10",
+                dst_port=443,
+                protocol="tcp",
+                conn_state="SF",
+                zeek_uid="Ctlscompanion01",
+            ),
+            ssl=SslContext(
+                version="TLSv12",
+                cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                cert_chain_fuids=["Ftlscompanion01"],
+            ),
+            x509=X509Context(
+                fuid="Ftlscompanion01",
+                fingerprint="a" * 40,
+                certificate_serial="01",
+                certificate_subject="CN=www.example.test",
+                certificate_issuer="CN=Example CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        ssl.emit.assert_called_once()
+        files.emit.assert_called_once()
+        x509.emit.assert_called_once()
+        assert ssl.emit.call_args.args[0]._observed_formats == {
+            "zeek_ssl",
+            "zeek_files",
+            "zeek_x509",
+        }
+        assert files.emit.call_args.args[0]._observed_formats == {
+            "zeek_ssl",
+            "zeek_files",
+            "zeek_x509",
+        }
+        assert x509.emit.call_args.args[0]._observed_formats == {
+            "zeek_ssl",
+            "zeek_files",
+            "zeek_x509",
+        }
+
     def test_zeek_format_missingness_keeps_delay_coherent_when_visible(self, monkeypatch):
         """Format-specific drop policy must not split same-UID source delay."""
         monkeypatch.setattr(
@@ -591,6 +672,104 @@ class TestObservationProfiles:
                 == policy.decide(format_name, terminate).delay
             )
 
+    def test_ecar_process_group_observation_delay_is_coherent(self, monkeypatch):
+        """Related eCAR process-create children should share one source-local decision."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_process_group_delay_test")
+        host = HostContext(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        group_id = "cron:APP-INT-01:debian-sa1:1710763200000"
+        shell = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="system_process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=838396,
+                parent_pid=36175,
+                image="/bin/sh",
+                command_line="/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+                username="sysstat",
+                concurrency_group_id=group_id,
+            ),
+        )
+        workload = SecurityEvent(
+            timestamp=_make_ts() + timedelta(milliseconds=120),
+            event_type="system_process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=838421,
+                parent_pid=838396,
+                image="/usr/lib/sysstat/debian-sa1",
+                command_line="debian-sa1 1 1",
+                username="sysstat",
+                concurrency_group_id=group_id,
+            ),
+        )
+
+        assert policy.decide("ecar", shell).delay == policy.decide("ecar", workload).delay
+
+    def test_ecar_cron_process_group_preserves_visibility(self, monkeypatch):
+        """Cron eCAR process groups should not lose rows independently of CRON syslog."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 1.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_cron_preserve_test")
+        host = HostContext(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="system_process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=838396,
+                parent_pid=36175,
+                image="/bin/sh",
+                command_line="/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+                username="sysstat",
+                concurrency_group_id="cron:APP-INT-01:debian-sa1:1710763200000",
+            ),
+        )
+
+        assert policy.decide("ecar", event).status == "visible"
+
     def test_session_observation_delay_is_coherent_per_source(self, monkeypatch):
         """Logon/logoff rows for one source session should share source-local delay."""
         monkeypatch.setattr(
@@ -742,8 +921,19 @@ class TestObservationProfiles:
         assert delay == policy.decide("syslog", accepted).delay
         assert connection.timestamp + delay < accepted.timestamp + delay
 
-    def test_syslog_ssh_pam_lifecycle_rows_are_not_dropped(self, monkeypatch):
-        """PAM SSH open/close rows should not orphan visible endpoint session lifecycle."""
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Connection from 10.0.1.10 port 52713 on 10.0.3.10 port 22",
+            "Accepted publickey for admin from 10.0.1.10 port 52713 ssh2",
+            "Invalid user unknown from 10.0.1.10 port 52713",
+            "Failed password for invalid user unknown from 10.0.1.10 port 52713 ssh2",
+            "Connection closed by invalid user unknown 10.0.1.10 port 52713 [preauth]",
+            "pam_unix(sshd:session): session closed for user admin",
+        ],
+    )
+    def test_syslog_ssh_lifecycle_rows_are_not_dropped(self, monkeypatch, message):
+        """SSH auth/session rows should not orphan visible endpoint session lifecycle."""
         monkeypatch.setattr(
             "evidenceforge.events.observation.get_observation_profile",
             lambda _name: {
@@ -775,7 +965,7 @@ class TestObservationProfiles:
             syslog=SyslogContext(
                 app_name="sshd",
                 pid=5158,
-                message="pam_unix(sshd:session): session closed for user admin",
+                message=message,
             ),
         )
 

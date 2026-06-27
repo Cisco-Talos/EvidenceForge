@@ -1187,6 +1187,24 @@ tags:
     content_type: "text/html"
     methods: ["GET"]
 
+  cdn:
+    referrer_policy: none
+    paths:
+      - "/assets/{hex16}/main.js"
+      - "/assets/{hex16}/main.css"
+      - "/static/{hex16}/bundle.js"
+      - "/static/{hex16}/logo.png"
+      - "/fonts/{hex16}.woff2"
+      - "/favicon.ico"
+    content_types:
+      - "application/javascript"
+      - "text/css"
+      - "application/javascript"
+      - "image/png"
+      - "font/woff2"
+      - "image/x-icon"
+    methods: ["GET"]
+
   git:
     paths:
       - "/"

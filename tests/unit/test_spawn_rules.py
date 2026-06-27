@@ -1118,7 +1118,66 @@ class TestDualSessionParentSelection:
         assert parent_proc is not None
         assert parent_proc.image == r"C:\Windows\System32\cmd.exe"
         assert parent_proc.command_line == rf"C:\Windows\System32\cmd.exe /c {command_line}"
-        assert parent_proc.parent_pid == pids["svchost_netsvcs"]
+        assert parent_proc.parent_pid == pids["wmiprvse"]
+
+    @pytest.mark.parametrize(
+        ("process_name", "command_line", "expected_parent_key"),
+        [
+            (
+                r"C:\Windows\System32\net.exe",
+                "net user svc_mhsync MhsSvc!2024 /add /domain",
+                "wmiprvse",
+            ),
+            (
+                r"C:\Windows\System32\sc.exe",
+                "sc.exe create DeviceSyncSvc binPath= C:\\ProgramData\\sync.exe",
+                "services",
+            ),
+            (
+                r"C:\Windows\System32\schtasks.exe",
+                r'schtasks.exe /Create /TN "\Ops\Sync" /TR "C:\ProgramData\sync.exe"',
+                "taskhostw",
+            ),
+            (
+                r"C:\Windows\System32\wevtutil.exe",
+                "wevtutil cl Security",
+                "wmiprvse",
+            ),
+        ],
+    )
+    def test_system_admin_utility_owner_depends_on_remote_execution_family(
+        self,
+        state_manager,
+        mock_emitters,
+        win_system,
+        process_name,
+        command_line,
+        expected_parent_key,
+    ):
+        """Remote/service admin shells should not all collapse to one svchost parent."""
+        system_user = User(
+            username="SYSTEM",
+            full_name="SYSTEM",
+            email="system@example.com",
+            enabled=True,
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            system_user,
+            datetime(2024, 3, 18, 12, 15, 0, tzinfo=UTC),
+            "0x3e7",
+            process_name,
+            command_line,
+        )
+        parent_proc = state_manager.get_process(win_system.hostname, parent_pid)
+
+        assert parent_proc is not None
+        assert parent_proc.image == r"C:\Windows\System32\cmd.exe"
+        assert parent_proc.command_line == rf"C:\Windows\System32\cmd.exe /c {command_line}"
+        assert parent_proc.parent_pid == pids[expected_parent_key]
+        assert parent_proc.parent_pid != pids["svchost_netsvcs"]
 
     def test_interactive_logon_still_gets_explorer_when_network_exists(
         self, state_manager, mock_emitters, win_system, user

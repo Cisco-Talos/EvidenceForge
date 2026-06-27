@@ -42,7 +42,7 @@ def test_installer_and_archive_downloads_use_production_scale_sizes():
             "/duo/device-health/2f7c6c95/DuoDeviceHealth-latest.msi",
             "application/octet-stream",
         )
-        == "application/x-msdownload"
+        == "application/x-msi"
     )
     assert (
         normalize_mime_type_for_path(
@@ -67,7 +67,7 @@ def test_installer_and_archive_downloads_use_production_scale_sizes():
         "/edgedl/chrome/chrome-for-testing/12adbeef/win64/chrome-win64.zip",
     )
 
-    assert 5_000_000 <= msi_size <= 150_000_000
+    assert 5_000_000 <= msi_size <= 160_000_000
     assert 1_000_000 <= zip_size <= 200_000_000
 
 

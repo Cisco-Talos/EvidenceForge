@@ -29,6 +29,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.engine.baseline import (
+    _baseline_success_port_for_target,
+    _baseline_success_target_for_guarded_port,
+)
 from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
@@ -65,6 +69,153 @@ def _make_scenario(systems):
 
 class TestRDPBaselineNoise:
     """Verify that baseline generates RDP admin connections to Windows servers."""
+
+    def test_generic_successful_rdp_remaps_from_linux_without_xrdp(self):
+        """Generic baseline noise should not imply successful RDP to Linux-only services."""
+        app_server = System(
+            hostname="APP-01",
+            ip="10.10.20.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn", "systemd-resolved"],
+            roles=["app_server"],
+        )
+
+        effective = _baseline_success_port_for_target(
+            app_server,
+            3389,
+            None,
+            random.Random(7),
+        )
+
+        assert effective is not None
+        assert effective[0] != 3389
+        assert effective[1] in {"ssh", "http", "ssl"}
+
+    def test_generic_successful_rdp_allows_explicit_xrdp_service(self):
+        """Linux RDP is plausible only when visible receiver service inventory says so."""
+        xrdp_server = System(
+            hostname="JUMP-01",
+            ip="10.10.20.31",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "xrdp"],
+            roles=["jump_host"],
+        )
+
+        assert _baseline_success_port_for_target(
+            xrdp_server,
+            3389,
+            "rdp",
+            random.Random(7),
+        ) == (3389, "rdp")
+
+    def test_generic_successful_smb_requires_windows_or_samba(self):
+        """Generic baseline noise should not imply SMB to Linux hosts without Samba."""
+        app_server = System(
+            hostname="APP-01",
+            ip="10.10.20.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+            roles=["app_server"],
+        )
+        samba_server = System(
+            hostname="FS-LNX-01",
+            ip="10.10.20.32",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "samba"],
+            roles=["file_server"],
+        )
+        windows_server = System(
+            hostname="FILE-01",
+            ip="10.10.20.20",
+            os="Windows Server 2019",
+            type="server",
+            services=["smb", "dns-client"],
+            roles=["file_server"],
+        )
+
+        remapped = _baseline_success_port_for_target(app_server, 445, "smb", random.Random(9))
+
+        assert remapped is not None
+        assert remapped[0] != 445
+        assert _baseline_success_port_for_target(
+            samba_server,
+            445,
+            "smb",
+            random.Random(9),
+        ) == (445, "smb")
+        assert _baseline_success_port_for_target(
+            windows_server,
+            445,
+            "smb",
+            random.Random(9),
+        ) == (445, "smb")
+
+    def test_guarded_profile_smb_retargets_from_linux_app_to_file_server(self):
+        """Profile SMB traffic should keep SMB semantics but choose an SMB-capable receiver."""
+        workstation = System(
+            hostname="WKS-01",
+            ip="10.10.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        app_server = System(
+            hostname="APP-01",
+            ip="10.10.20.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+            roles=["app_server"],
+        )
+        file_server = System(
+            hostname="FILE-01",
+            ip="10.10.20.20",
+            os="Windows Server 2019",
+            type="server",
+            services=["smb"],
+            roles=["file_server"],
+        )
+
+        effective_target = _baseline_success_target_for_guarded_port(
+            [workstation, app_server, file_server],
+            workstation,
+            app_server,
+            445,
+            random.Random(9),
+        )
+
+        assert effective_target == file_server
+
+    def test_guarded_profile_smb_skips_without_compatible_receiver(self):
+        """Profile SMB should not invent a success target when no receiver exposes SMB."""
+        workstation = System(
+            hostname="WKS-01",
+            ip="10.10.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        app_server = System(
+            hostname="APP-01",
+            ip="10.10.20.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+            roles=["app_server"],
+        )
+
+        assert (
+            _baseline_success_target_for_guarded_port(
+                [workstation, app_server],
+                workstation,
+                app_server,
+                445,
+                random.Random(9),
+            )
+            is None
+        )
 
     def test_rdp_connections_generated_for_windows_servers(self):
         """Windows servers should receive baseline RDP admin connections."""
