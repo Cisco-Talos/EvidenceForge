@@ -39,6 +39,19 @@ from evidenceforge.models import Scenario
 
 logger = logging.getLogger(__name__)
 
+
+def _is_ip_literal(value: str | None) -> bool:
+    """Return whether value is an IP literal without importing generation modules."""
+
+    if not value:
+        return False
+    try:
+        ipaddress.ip_address(value.strip("[]"))
+    except ValueError:
+        return False
+    return True
+
+
 # Well-known OS built-in accounts that are always valid as storyline actors
 # without needing to be defined in the environment users list.
 BUILTIN_ACCOUNTS = {
@@ -176,6 +189,19 @@ class ScenarioValidator:
             else set()
         )
         self.service_accounts = set(self.scenario.environment.service_accounts)
+        self.network_identity_ids = {
+            identity.id for identity in self.scenario.environment.network_identities
+        }
+        self.network_identity_hosts = {
+            host.lower().rstrip(".")
+            for identity in self.scenario.environment.network_identities
+            for host in identity.hosts
+        }
+        self.network_identity_host_ips = {
+            host.lower().rstrip("."): set(identity.ips)
+            for identity in self.scenario.environment.network_identities
+            for host in identity.hosts
+        }
 
     def validate(self) -> list[ValidationIssue]:
         """Run all validation checks and return issues found.
@@ -215,6 +241,8 @@ class ScenarioValidator:
         self._validate_process_network_pairing()
         self._validate_firewall_config()
         self._validate_observation_profile()
+        self._validate_network_identities()
+        self._validate_traffic_affinities()
         self._sort_issues()
         return self.issues
 
@@ -241,6 +269,206 @@ class ScenarioValidator:
                     suggestion=(
                         "Use one of the configured observation profiles: "
                         f"{', '.join(sorted(available))}"
+                    ),
+                )
+            )
+
+    def _validate_network_identities(self) -> None:
+        """Validate scenario-local network identity consistency and public host coverage."""
+
+        ip_to_ids: dict[str, list[str]] = {}
+        for identity in self.scenario.environment.network_identities:
+            for ip in identity.ips:
+                ip_to_ids.setdefault(ip, []).append(identity.id)
+        for ip, ids in ip_to_ids.items():
+            if len(ids) > 1:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path="environment.network_identities",
+                        message=(
+                            f"Network identity IP {ip} is shared by multiple identities: "
+                            f"{', '.join(ids)}"
+                        ),
+                        suggestion=(
+                            "Keep shared IPs only when modeling CDN, virtual hosting, or NAT."
+                        ),
+                    )
+                )
+
+        for idx, system in enumerate(self.scenario.environment.systems):
+            for host_idx, host in enumerate(system.public_hostnames):
+                normalized = host.lower().rstrip(".")
+                if normalized not in self.network_identity_hosts:
+                    self._warn_if_unregistered_domain(
+                        host,
+                        f"environment.systems.{idx}.public_hostnames.{host_idx}",
+                    )
+
+    def _validate_traffic_affinities(self) -> None:
+        """Validate traffic affinity references and domain registration hints."""
+
+        for idx, affinity in enumerate(self.scenario.baseline_activity.traffic_affinities):
+            base = f"baseline_activity.traffic_affinities.{idx}"
+            self._validate_affinity_audience(affinity.audience, f"{base}.audience")
+            endpoint = affinity.target if affinity.direction == "inbound" else affinity.destination
+            if endpoint is not None:
+                self._validate_traffic_endpoint(endpoint, f"{base}.endpoint")
+
+        for idx, suppression in enumerate(self.scenario.baseline_activity.traffic_suppression):
+            base = f"baseline_activity.traffic_suppression.{idx}"
+            self._validate_affinity_audience(suppression.audience, f"{base}.audience")
+            for identity in suppression.identities:
+                if identity not in self.network_identity_ids:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"{base}.identities",
+                            message=f"Traffic suppression references unknown identity '{identity}'",
+                            suggestion=(
+                                "Declare the identity under environment.network_identities "
+                                "or remove the reference."
+                            ),
+                        )
+                    )
+
+        self._validate_storyline_network_identity_usage()
+
+    def _validate_affinity_audience(self, audience, field_path: str) -> None:
+        for username in audience.users:
+            if username not in self.usernames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{field_path}.users",
+                        message=f"Audience references unknown user '{username}'",
+                    )
+                )
+        for persona in audience.personas:
+            if persona not in self.persona_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{field_path}.personas",
+                        message=f"Audience references unknown persona '{persona}'",
+                    )
+                )
+        for group in audience.groups:
+            if group not in self.group_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{field_path}.groups",
+                        message=f"Audience references unknown group '{group}'",
+                    )
+                )
+        for system in audience.systems:
+            if system not in self.hostnames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{field_path}.systems",
+                        message=f"Audience references unknown system '{system}'",
+                    )
+                )
+
+    def _validate_traffic_endpoint(self, endpoint, field_path: str) -> None:
+        if endpoint.identity and endpoint.identity not in self.network_identity_ids:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=f"{field_path}.identity",
+                    message=f"Endpoint references unknown identity '{endpoint.identity}'",
+                    suggestion="Declare it under environment.network_identities.",
+                )
+            )
+        if endpoint.system and endpoint.system not in self.hostnames:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=f"{field_path}.system",
+                    message=f"Endpoint references unknown system '{endpoint.system}'",
+                )
+            )
+        if endpoint.host:
+            self._warn_if_unregistered_domain(endpoint.host, f"{field_path}.host")
+            self._warn_on_declared_host_ip_mismatch(endpoint.host, endpoint.ip, field_path)
+
+    def _validate_storyline_network_identity_usage(self) -> None:
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            for event_idx, event in enumerate(events):
+                for spec_idx, spec in enumerate(event.events):
+                    field_base = f"{section_name}.{event_idx}.events.{spec_idx}"
+                    hostname = getattr(spec, "hostname", None)
+                    dst_ip = getattr(spec, "dst_ip", None)
+                    if hostname:
+                        if not dst_ip:
+                            self._warn_if_unregistered_domain(hostname, f"{field_base}.hostname")
+                        self._warn_on_declared_host_ip_mismatch(hostname, dst_ip, field_base)
+                    if getattr(spec, "type", "") == "dns_query":
+                        query = getattr(spec, "query", "")
+                        answer = getattr(spec, "answer", None)
+                        if query and not answer and not query.endswith(".arpa"):
+                            self._warn_if_unregistered_domain(query, f"{field_base}.query")
+                    if getattr(spec, "type", "") == "dns_tunnel":
+                        base_domain = getattr(spec, "base_domain", "")
+                        if base_domain:
+                            self._warn_if_unregistered_domain(
+                                base_domain,
+                                f"{field_base}.base_domain",
+                            )
+
+    def _warn_if_unregistered_domain(self, host: str, field_path: str) -> None:
+        """Warn when host is not scenario-declared and not in package DNS."""
+
+        if not host or _is_ip_literal(host):
+            return
+        normalized = host.lower().rstrip(".")
+        if normalized in self.network_identity_hosts:
+            return
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        if get_domain_ips(host):
+            return
+        self.issues.append(
+            ValidationIssue(
+                severity="warning",
+                field_path=field_path,
+                message=(
+                    f"Domain '{host}' is not declared in environment.network_identities "
+                    "or package DNS; generation will use a deterministic synthetic IP."
+                ),
+                suggestion=(
+                    "Declare scenario-specific domains under environment.network_identities "
+                    "to pin host/IP ownership."
+                ),
+            )
+        )
+
+    def _warn_on_declared_host_ip_mismatch(
+        self,
+        host: str | None,
+        ip: str | None,
+        field_path: str,
+    ) -> None:
+        if not host or not ip:
+            return
+        declared_ips = self.network_identity_host_ips.get(host.lower().rstrip("."))
+        if declared_ips and ip not in declared_ips:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path=field_path,
+                    message=(
+                        f"Host '{host}' is declared with IP(s) {sorted(declared_ips)}, "
+                        f"but this event uses {ip}."
+                    ),
+                    suggestion=(
+                        "Use the declared IP, update environment.network_identities, "
+                        "or omit the hostname for raw IP-only activity."
                     ),
                 )
             )

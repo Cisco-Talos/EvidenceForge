@@ -360,6 +360,280 @@ class Persona(BaseModel):
         return self
 
 
+class NetworkIdentity(BaseModel):
+    """Scenario-local network identity for authored host/IP ownership."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    hosts: list[str] = Field(default_factory=list)
+    ips: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    dns: bool = True
+
+    @field_validator("hosts")
+    @classmethod
+    def validate_hosts(cls, v: list[str]) -> list[str]:
+        return [_validate_hostname(host, "network_identities.hosts") for host in v]
+
+    @field_validator("ips")
+    @classmethod
+    def validate_ips(cls, v: list[str]) -> list[str]:
+        for value in v:
+            try:
+                ipaddress.ip_address(value)
+            except ValueError as exc:
+                raise ValueError(f"network identity IP is invalid: {value!r}") from exc
+        return v
+
+    @model_validator(mode="after")
+    def require_host_or_ip(self) -> "NetworkIdentity":
+        if not self.hosts and not self.ips:
+            raise ValueError("network identity must define at least one host or IP")
+        return self
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TrafficAudience(BaseModel):
+    """Audience selector for scenario-local baseline traffic shaping."""
+
+    users: list[str] = Field(default_factory=list)
+    personas: list[str] = Field(default_factory=list)
+    groups: list[str] = Field(default_factory=list)
+    systems: list[str] = Field(default_factory=list)
+    external_client_classes: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TrafficEndpoint(BaseModel):
+    """Destination or target endpoint for a traffic affinity."""
+
+    identity: str | None = None
+    system: str | None = None
+    host: str | None = None
+    ip: str | None = None
+    port: int = Field(default=443, ge=1, le=65535)
+    proto: Literal["tcp", "udp", "icmp"] = "tcp"
+    service: str | None = None
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, v: str | None) -> str | None:
+        if v is not None:
+            return _validate_hostname(v, "traffic endpoint host")
+        return v
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                ipaddress.ip_address(v)
+            except ValueError as exc:
+                raise ValueError(f"traffic endpoint IP is invalid: {v!r}") from exc
+        return v
+
+    @model_validator(mode="after")
+    def require_identity_host_or_ip(self) -> "TrafficEndpoint":
+        if not self.identity and not self.system and not self.host and not self.ip:
+            raise ValueError("traffic endpoint must define identity, system, host, or ip")
+        return self
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WeightedHttpMethodProfile(BaseModel):
+    """HTTP behavior owned by one route/method combination."""
+
+    statuses: dict[str, float] = Field(default_factory=lambda: {"200": 1.0})
+    request_body_bytes: list[int] | None = None
+    response_body_bytes: list[int] | None = None
+    content_type: str = "text/html"
+
+    @field_validator("statuses")
+    @classmethod
+    def validate_statuses(cls, v: dict[str, float]) -> dict[str, float]:
+        if not v:
+            raise ValueError("statuses must not be empty")
+        total = 0.0
+        for status, weight in v.items():
+            try:
+                status_int = int(status)
+            except ValueError as exc:
+                raise ValueError(f"HTTP status must be numeric, got {status!r}") from exc
+            if status_int < 100 or status_int > 599:
+                raise ValueError(f"HTTP status must be between 100 and 599, got {status!r}")
+            if weight <= 0:
+                raise ValueError(f"HTTP status weight must be > 0 for {status!r}")
+            total += weight
+        if total <= 0:
+            raise ValueError("statuses must include at least one positive weight")
+        return v
+
+    @field_validator("request_body_bytes", "response_body_bytes")
+    @classmethod
+    def validate_byte_range(cls, v: list[int] | None, info: ValidationInfo) -> list[int] | None:
+        if v is None:
+            return v
+        if len(v) != 2:
+            raise ValueError(f"{info.field_name} must contain exactly two integers")
+        if not all(isinstance(item, int) for item in v):
+            raise ValueError(f"{info.field_name} values must be integers")
+        if v[0] < 0 or v[1] < 0 or v[0] > v[1]:
+            raise ValueError(f"{info.field_name} must be a non-negative [lo, hi] range")
+        return v
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WebRouteProfile(BaseModel):
+    """Route-owned HTTP behavior for baseline web affinities."""
+
+    path: str
+    weight: float = Field(default=1.0, gt=0)
+    methods: dict[str, WeightedHttpMethodProfile]
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v: str) -> str:
+        if not v.startswith("/") or any(char.isspace() for char in v):
+            raise ValueError("route path must start with '/' and contain no whitespace")
+        return v
+
+    @field_validator("methods")
+    @classmethod
+    def validate_methods(
+        cls,
+        v: dict[str, WeightedHttpMethodProfile],
+    ) -> dict[str, WeightedHttpMethodProfile]:
+        if not v:
+            raise ValueError("route methods must not be empty")
+        safe = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+        normalized: dict[str, WeightedHttpMethodProfile] = {}
+        for method, profile in v.items():
+            method_upper = method.upper()
+            if safe.fullmatch(method_upper) is None:
+                raise ValueError(f"invalid HTTP method token: {method!r}")
+            normalized[method_upper] = profile
+        return normalized
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WebRequestProfile(BaseModel):
+    """Route-aware HTTP request profile for a baseline web affinity."""
+
+    routes: list[WebRouteProfile] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ConnectionProfile(BaseModel):
+    """Generic connection behavior for non-HTTP baseline affinities."""
+
+    durations: list[float] | None = None
+    orig_bytes: list[int] | None = None
+    resp_bytes: list[int] | None = None
+    conn_states: dict[str, float] = Field(default_factory=lambda: {"SF": 1.0})
+
+    @field_validator("durations")
+    @classmethod
+    def validate_duration_range(cls, v: list[float] | None) -> list[float] | None:
+        if v is None:
+            return v
+        if len(v) != 2 or v[0] < 0 or v[1] < v[0]:
+            raise ValueError("durations must be a non-negative [lo, hi] range")
+        return v
+
+    @field_validator("orig_bytes", "resp_bytes")
+    @classmethod
+    def validate_byte_ranges(cls, v: list[int] | None, info: ValidationInfo) -> list[int] | None:
+        if v is None:
+            return v
+        if len(v) != 2:
+            raise ValueError(f"{info.field_name} must contain exactly two integers")
+        if v[0] < 0 or v[1] < v[0]:
+            raise ValueError(f"{info.field_name} must be a non-negative [lo, hi] range")
+        return v
+
+    @field_validator("conn_states")
+    @classmethod
+    def validate_conn_states(cls, v: dict[str, float]) -> dict[str, float]:
+        if not v:
+            raise ValueError("conn_states must not be empty")
+        for state, weight in v.items():
+            if not state:
+                raise ValueError("conn_state keys must not be empty")
+            if weight <= 0:
+                raise ValueError(f"conn_state weight must be > 0 for {state!r}")
+        return v
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TrafficAffinity(BaseModel):
+    """Scenario-owned benign baseline traffic shape."""
+
+    name: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    kind: Literal["web", "connection"]
+    direction: Literal["outbound", "inbound", "internal"]
+    destination: TrafficEndpoint | None = None
+    target: TrafficEndpoint | None = None
+    audience: TrafficAudience = Field(default_factory=TrafficAudience)
+    weight: float = Field(default=1.0, gt=0)
+    participation: float = Field(default=1.0, ge=0.0, le=1.0)
+    per_client_sessions: list[int] = Field(default_factory=lambda: [1, 3])
+    cadence: Literal["diffuse", "business_hours", "periodic"] | None = None
+    request_profile: WebRequestProfile | None = None
+    connection_profile: ConnectionProfile | None = None
+    seed: int | None = None
+
+    @field_validator("per_client_sessions")
+    @classmethod
+    def validate_session_range(cls, v: list[int]) -> list[int]:
+        if len(v) != 2:
+            raise ValueError("per_client_sessions must contain exactly two integers")
+        if v[0] < 0 or v[1] < v[0]:
+            raise ValueError("per_client_sessions must be a non-negative [lo, hi] range")
+        return v
+
+    @model_validator(mode="after")
+    def validate_direction_endpoint(self) -> "TrafficAffinity":
+        if self.direction == "inbound":
+            if self.target is None:
+                raise ValueError("inbound traffic affinities require target")
+        elif self.destination is None:
+            raise ValueError(f"{self.direction} traffic affinities require destination")
+        if self.kind == "web" and self.connection_profile is not None:
+            raise ValueError("web traffic affinities use request_profile, not connection_profile")
+        if self.kind == "connection" and self.request_profile is not None:
+            raise ValueError(
+                "connection traffic affinities use connection_profile, not request_profile"
+            )
+        return self
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TrafficSuppression(BaseModel):
+    """Scoped down-ranking/removal of default baseline traffic."""
+
+    direction: Literal["outbound", "inbound", "internal"] | None = None
+    kind: Literal["web", "connection"] | None = None
+    identities: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    audience: TrafficAudience = Field(default_factory=TrafficAudience)
+    factor: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("domains")
+    @classmethod
+    def validate_domains(cls, v: list[str]) -> list[str]:
+        return [_validate_hostname(domain, "traffic_suppression.domains") for domain in v]
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class BaselineActivity(BaseModel):
     """Baseline activity configuration.
 
@@ -393,6 +667,14 @@ class BaselineActivity(BaseModel):
             "ntp, smb_interval, kerberos, ldap, persona_connections. "
             "Values: int (fixed rate), [lo, hi] range, or preset name (low|medium|high)."
         ),
+    )
+    traffic_affinities: list[TrafficAffinity] = Field(
+        default_factory=list,
+        description="Scenario-owned benign traffic shaping rules for baseline generation.",
+    )
+    traffic_suppression: list[TrafficSuppression] = Field(
+        default_factory=list,
+        description="Scoped down-ranking or removal of default baseline traffic.",
     )
 
     @field_validator("traffic_rates")
@@ -804,7 +1086,8 @@ class DnsQueryEventSpec(_EventSpecBase):
 
     @model_validator(mode="after")
     def answer_required_for_noerror(self) -> "DnsQueryEventSpec":
-        """Answer is required when rcode is NOERROR."""
+        """Require answer for successful queries."""
+
         if self.rcode == "NOERROR" and self.answer is None:
             raise ValueError("answer is required when rcode is NOERROR")
         return self
@@ -1513,6 +1796,13 @@ class Environment(BaseModel):
     )
     users: list[User]
     systems: list[System]
+    network_identities: list[NetworkIdentity] = Field(
+        default_factory=list,
+        description=(
+            "Scenario-local host/IP identities used by DNS, HTTP, TLS, proxy, "
+            "network evidence, and baseline traffic affinities."
+        ),
+    )
     service_accounts: list[str] = Field(
         default_factory=list,
         description="Service/system account names valid as storyline actors (e.g., svc_backup, apache)",
@@ -1551,6 +1841,29 @@ class Environment(BaseModel):
         """Ensure at least one system is defined."""
         if not v:
             raise ValueError("Environment must have at least one system")
+        return v
+
+    @field_validator("network_identities")
+    @classmethod
+    def validate_network_identities_unique(
+        cls,
+        v: list[NetworkIdentity],
+    ) -> list[NetworkIdentity]:
+        ids: set[str] = set()
+        host_to_identity: dict[str, str] = {}
+        for identity in v:
+            if identity.id in ids:
+                raise ValueError(f"duplicate network identity id: {identity.id!r}")
+            ids.add(identity.id)
+            for host in identity.hosts:
+                normalized = host.lower().rstrip(".")
+                existing = host_to_identity.get(normalized)
+                if existing is not None:
+                    raise ValueError(
+                        f"network identity host {host!r} is used by both "
+                        f"{existing!r} and {identity.id!r}"
+                    )
+                host_to_identity[normalized] = identity.id
         return v
 
     @model_validator(mode="after")

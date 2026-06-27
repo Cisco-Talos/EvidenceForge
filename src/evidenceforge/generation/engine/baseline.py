@@ -2558,6 +2558,7 @@ class BaselineMixin:
                 )
 
         self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
+        self._generate_traffic_affinities(current_hour, local_dt, planned_logoffs)
         self._generate_stale_account_noise(current_hour)
         self._generate_baseline_failed_logons(current_hour)
         self._generate_lateral_movement_noise(current_hour)
@@ -2581,6 +2582,421 @@ class BaselineMixin:
 
         if flush_emitters:
             self._barrier_flush_all_emitters()
+
+    def _generate_traffic_affinities(
+        self,
+        current_hour: datetime,
+        local_dt: datetime,
+        planned_logoffs: dict[tuple[str, str], float] | None,
+    ) -> None:
+        """Generate scenario-authored benign traffic affinities for this hour."""
+
+        affinities = getattr(self.scenario.baseline_activity, "traffic_affinities", [])
+        if not affinities:
+            return
+
+        for affinity in affinities:
+            if affinity.direction == "inbound":
+                self._generate_inbound_traffic_affinity(affinity, current_hour, local_dt)
+            else:
+                self._generate_user_traffic_affinity(
+                    affinity,
+                    current_hour,
+                    local_dt,
+                    planned_logoffs,
+                )
+
+    def _generate_user_traffic_affinity(
+        self,
+        affinity: Any,
+        current_hour: datetime,
+        local_dt: datetime,
+        planned_logoffs: dict[tuple[str, str], float] | None,
+    ) -> None:
+        """Generate outbound/internal affinity traffic from eligible interactive users."""
+
+        if not self._affinity_cadence_allows_hour(affinity, local_dt):
+            return
+        endpoint = affinity.destination
+        if endpoint is None:
+            return
+        rng = random.Random(
+            _stable_seed(f"traffic_affinity:{self.scenario.name}:{affinity.name}:{current_hour}")
+        )
+        for user in self.scenario.environment.users:
+            if not user.enabled or not self._affinity_audience_matches_user(affinity, user):
+                continue
+            system = self._affinity_user_system(user)
+            if system is None:
+                continue
+            sessions = [
+                session
+                for session in self.state_manager.get_sessions_on_system(system.hostname)
+                if session.username == user.username and session.logon_type in (2, 10, 11)
+            ]
+            if not sessions:
+                continue
+            participant_rng = random.Random(
+                _stable_seed(
+                    f"traffic_affinity_participation:{affinity.name}:{user.username}:"
+                    f"{current_hour.date().isoformat()}"
+                )
+            )
+            if participant_rng.random() > affinity.participation:
+                continue
+            hourly_count = self._affinity_hourly_count(affinity, user.username, current_hour)
+            if hourly_count <= 0:
+                continue
+            session = sessions[0]
+            max_offset = 3599.0
+            if planned_logoffs:
+                max_offset = planned_logoffs.get((system.hostname, session.logon_id), max_offset)
+            for _ in range(hourly_count):
+                offset = min(max_offset, rng.uniform(0, 3599))
+                if offset < 0:
+                    continue
+                event_time = current_hour + timedelta(seconds=offset)
+                self._emit_affinity_event(
+                    affinity=affinity,
+                    endpoint=endpoint,
+                    src_ip=system.ip,
+                    source_system=system,
+                    user_obj=user,
+                    session=session,
+                    event_time=event_time,
+                    rng=rng,
+                )
+
+    def _generate_inbound_traffic_affinity(
+        self,
+        affinity: Any,
+        current_hour: datetime,
+        local_dt: datetime,
+    ) -> None:
+        """Generate inbound affinity traffic to a scenario-owned target."""
+
+        if not self._affinity_cadence_allows_hour(affinity, local_dt):
+            return
+        endpoint = affinity.target
+        if endpoint is None:
+            return
+        target_system = self._affinity_target_system(endpoint)
+        if target_system is None:
+            return
+        rng = random.Random(
+            _stable_seed(
+                f"traffic_affinity_inbound:{self.scenario.name}:{affinity.name}:{current_hour}"
+            )
+        )
+        lo, hi = affinity.per_client_sessions
+        count = rng.randint(lo, hi)
+        for _ in range(count):
+            event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            src_ip = self._generate_external_web_client_ip(rng)
+            self._emit_affinity_event(
+                affinity=affinity,
+                endpoint=endpoint,
+                src_ip=src_ip,
+                source_system=None,
+                user_obj=None,
+                session=None,
+                event_time=event_time,
+                rng=rng,
+                target_system=target_system,
+            )
+
+    def _emit_affinity_event(
+        self,
+        *,
+        affinity: Any,
+        endpoint: Any,
+        src_ip: str,
+        source_system: Any | None,
+        user_obj: Any | None,
+        session: Any | None,
+        event_time: datetime,
+        rng: random.Random,
+        target_system: Any | None = None,
+    ) -> None:
+        """Emit one affinity occurrence through canonical generation paths."""
+
+        resolved = self._resolve_affinity_endpoint(endpoint, source_system, target_system)
+        if resolved["ip"] is None:
+            return
+        self.state_manager.set_current_time(event_time)
+        port = int(endpoint.port)
+        proto = endpoint.proto
+        service = endpoint.service or ("ssl" if port == 443 else "http" if port == 80 else None)
+        if affinity.kind == "web":
+            os_cat = _get_os_category(source_system.os) if source_system is not None else "windows"
+            pid = -1
+            if user_obj is not None and source_system is not None and session is not None:
+                try:
+                    pid = self.world_planner.ensure_connection_process(
+                        user=user_obj,
+                        system=source_system,
+                        session=session,
+                        time=event_time,
+                        service=service or "ssl",
+                        rng=rng,
+                        destination_hostname=resolved["host"],
+                    )
+                except (AttributeError, ValueError):
+                    pid = -1
+            BrowserSessionActionBundle(
+                request=BrowserSessionRequest(
+                    src_ip=src_ip,
+                    dst_ip=resolved["ip"],
+                    time=event_time,
+                    hostname=resolved["host"] or resolved["ip"],
+                    dst_port=port,
+                    proto=proto,
+                    service=service,
+                    source_system=source_system,
+                    pid=pid,
+                    domain_tags=tuple(resolved["tags"]),
+                    source_os=os_cat,
+                    browsing_intensity="normal",
+                    require_browser_like_domain=False,
+                    transfer_variant_key=f"{src_ip}:{resolved['host'] or resolved['ip']}",
+                    route_profile=affinity.request_profile,
+                    user_agent=self._affinity_user_agent(os_cat, rng),
+                    same_host_only=True,
+                    source="baseline_traffic_affinity",
+                ),
+                executor=self.activity_generator,
+                rng=rng,
+            ).execute()
+            return
+
+        profile = affinity.connection_profile
+        duration = self._affinity_range_sample(rng, getattr(profile, "durations", None), 0.1, 10.0)
+        orig_bytes = int(
+            self._affinity_range_sample(rng, getattr(profile, "orig_bytes", None), 200, 8000)
+        )
+        resp_bytes = int(
+            self._affinity_range_sample(rng, getattr(profile, "resp_bytes", None), 500, 80000)
+        )
+        conn_states = getattr(profile, "conn_states", {"SF": 1.0})
+        conn_state = rng.choices(
+            list(conn_states),
+            weights=[float(weight) for weight in conn_states.values()],
+            k=1,
+        )[0]
+        self.activity_generator.generate_connection(
+            src_ip=src_ip,
+            dst_ip=resolved["ip"],
+            time=event_time,
+            dst_port=port,
+            proto=proto,
+            service=service,
+            duration=duration,
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
+            conn_state=conn_state,
+            emit_dns=bool(resolved["host"]),
+            source_system=source_system,
+            hostname=resolved["host"] or "",
+            preserve_dst_ip=False,
+        )
+
+    def _resolve_affinity_endpoint(
+        self,
+        endpoint: Any,
+        source_system: Any | None,
+        target_system: Any | None = None,
+    ) -> dict[str, Any]:
+        resolver = getattr(self, "network_resolver", None)
+        src_host = getattr(source_system, "hostname", "") if source_system is not None else ""
+        if endpoint.identity and resolver is not None:
+            resolved = resolver.resolve_identity(
+                endpoint.identity, src_host=src_host, host=endpoint.host
+            )
+            return {"host": resolved.host, "ip": resolved.ip or endpoint.ip, "tags": resolved.tags}
+        if endpoint.system:
+            target_system = self._find_system(endpoint.system)
+        host = endpoint.host
+        ip = endpoint.ip
+        if target_system is not None:
+            host = host or (
+                target_system.public_hostnames[0]
+                if getattr(target_system, "public_hostnames", None)
+                else target_system.hostname
+            )
+            ip = ip or target_system.ip
+        if host and not ip and resolver is not None:
+            resolved = resolver.resolve_host(host, src_host=src_host)
+            ip = resolved.ip
+            tags = resolved.tags
+        else:
+            tags = resolver.tags_for_host(host) if resolver is not None else ()
+        return {"host": host, "ip": ip, "tags": tags}
+
+    def _affinity_target_system(self, endpoint: Any) -> Any | None:
+        if getattr(endpoint, "system", None):
+            return self._find_system(endpoint.system)
+        if getattr(endpoint, "ip", None):
+            return getattr(self.activity_generator, "_ip_to_system", {}).get(endpoint.ip)
+        if getattr(endpoint, "identity", None):
+            identity = self.network_resolver.identity(endpoint.identity)
+            for ip in getattr(identity, "ips", []) if identity is not None else []:
+                system = getattr(self.activity_generator, "_ip_to_system", {}).get(ip)
+                if system is not None:
+                    return system
+        return None
+
+    def _affinity_user_system(self, user: User) -> System | None:
+        if user.primary_system:
+            return self._find_system(user.primary_system)
+        return next(
+            (
+                system
+                for system in self.scenario.environment.systems
+                if system.assigned_user == user.username
+            ),
+            None,
+        )
+
+    def _affinity_audience_matches_user(self, affinity: Any, user: User) -> bool:
+        audience = affinity.audience
+        if audience.users and user.username not in audience.users:
+            return False
+        if audience.personas and (user.persona or "") not in audience.personas:
+            return False
+        if audience.groups and not (set(user.groups) & set(audience.groups)):
+            return False
+        system = self._affinity_user_system(user)
+        if audience.systems and (system is None or system.hostname not in audience.systems):
+            return False
+        return True
+
+    def _baseline_destination_allowed_by_suppression(
+        self,
+        *,
+        domain: str | None,
+        requested_tags: tuple[str, ...],
+        source_user: User | None,
+        source_host: str,
+        kind: str,
+        direction: str,
+        rng: random.Random,
+    ) -> bool:
+        suppressions = self.scenario.baseline_activity.traffic_suppression
+        if not suppressions or not domain:
+            return True
+
+        normalized_domain = domain.lower().rstrip(".")
+        domain_tags = set(requested_tags)
+        identity_id = ""
+        resolver = getattr(self, "network_resolver", None)
+        if resolver is not None:
+            identity = resolver.identity_for_host(normalized_domain)
+            if identity is not None:
+                identity_id = identity.id
+                domain_tags.update(identity.tags)
+        if not domain_tags:
+            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+
+            domain_tags.update(get_domain_tags(normalized_domain))
+
+        source_system = self._find_system(source_host) if source_host else None
+        for suppression in suppressions:
+            if suppression.kind is not None and suppression.kind != kind:
+                continue
+            if suppression.direction is not None and suppression.direction != direction:
+                continue
+            if not self._traffic_audience_matches(suppression.audience, source_user, source_system):
+                continue
+            has_selector = bool(suppression.identities or suppression.domains or suppression.tags)
+            matches_selector = not has_selector
+            if suppression.identities and identity_id in suppression.identities:
+                matches_selector = True
+            if suppression.domains and normalized_domain in {
+                value.lower().rstrip(".") for value in suppression.domains
+            }:
+                matches_selector = True
+            if suppression.tags and domain_tags.intersection(suppression.tags):
+                matches_selector = True
+            if not matches_selector:
+                continue
+            if suppression.factor <= 0:
+                return False
+            if suppression.factor < 1.0 and rng.random() > suppression.factor:
+                return False
+        return True
+
+    def _traffic_audience_matches(
+        self,
+        audience: Any,
+        user: User | None,
+        system: System | None,
+    ) -> bool:
+        if audience.users:
+            if user is None or user.username not in audience.users:
+                return False
+        if audience.personas:
+            if user is None or (user.persona or "") not in audience.personas:
+                return False
+        if audience.groups:
+            if user is None or not (set(user.groups) & set(audience.groups)):
+                return False
+        if audience.systems and (system is None or system.hostname not in audience.systems):
+            return False
+        return True
+
+    def _affinity_cadence_allows_hour(self, affinity: Any, local_dt: datetime) -> bool:
+        cadence = affinity.cadence or (
+            "business_hours" if affinity.direction != "inbound" else "diffuse"
+        )
+        if cadence == "business_hours":
+            return local_dt.weekday() <= 4 and 7 <= local_dt.hour <= 19
+        if cadence == "periodic":
+            return local_dt.hour % 2 == 0
+        return True
+
+    def _affinity_hourly_count(self, affinity: Any, client_key: str, current_hour: datetime) -> int:
+        lo, hi = affinity.per_client_sessions
+        if hi <= 0:
+            return 0
+        rng = random.Random(
+            _stable_seed(
+                f"traffic_affinity_count:{affinity.name}:{client_key}:{current_hour.isoformat()}:"
+                f"{affinity.seed if affinity.seed is not None else ''}"
+            )
+        )
+        # Convert scenario-level count intent into sparse hourly activity.
+        daily_count = rng.randint(lo, hi)
+        hourly_probability = min(0.85, max(0.02, daily_count / 16))
+        if rng.random() > hourly_probability:
+            return 0
+        return 1 + (1 if rng.random() < min(0.35, affinity.weight) else 0)
+
+    def _affinity_range_sample(
+        self,
+        rng: random.Random,
+        value_range: Any,
+        default_lo: float,
+        default_hi: float,
+    ) -> float:
+        if value_range and len(value_range) == 2:
+            return rng.uniform(float(value_range[0]), float(value_range[1]))
+        return rng.uniform(default_lo, default_hi)
+
+    def _affinity_user_agent(self, os_cat: str, rng: random.Random) -> str:
+        if os_cat == "linux":
+            return rng.choice(
+                [
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                ]
+            )
+        return rng.choice(
+            [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+            ]
+        )
 
     def _generate_baseline(self) -> None:
         """Generate baseline activity for all enabled users.
@@ -4762,6 +5178,7 @@ class BaselineMixin:
         src_host: str = "",
         service: str = "",
         source_system_type: str | None = None,
+        source_user: User | None = None,
     ) -> tuple[str | None, str | None]:
         """Resolve a role name to (ip, hostname), excluding a specific IP.
 
@@ -4789,25 +5206,36 @@ class BaselineMixin:
                 tags = self._SERVICE_DNS_DEFAULTS[service]
             else:
                 tags = ("background", os_cat)
-            if service == "ssl":
-                from evidenceforge.generation.activity.tls_realism import pick_tls_destination
+            for _ in range(8):
+                if service == "ssl":
+                    from evidenceforge.generation.activity.tls_realism import pick_tls_destination
 
-                domain, ip = pick_tls_destination(
-                    rng,
-                    src_host=src_host,
-                    source_os=os_cat,
-                    system_type=source_system_type,
-                    purpose_tags=tuple(tags),
-                )
-            else:
-                domain, ip = pick_domain_and_ip(
-                    rng,
-                    *tags,
-                    src_host=src_host,
-                    include_os=os_cat,
-                    source_system_type=source_system_type,
-                )
-            return ip, domain
+                    domain, ip = pick_tls_destination(
+                        rng,
+                        src_host=src_host,
+                        source_os=os_cat,
+                        system_type=source_system_type,
+                        purpose_tags=tuple(tags),
+                    )
+                else:
+                    domain, ip = pick_domain_and_ip(
+                        rng,
+                        *tags,
+                        src_host=src_host,
+                        include_os=os_cat,
+                        source_system_type=source_system_type,
+                    )
+                if self._baseline_destination_allowed_by_suppression(
+                    domain=domain,
+                    requested_tags=tuple(tags),
+                    source_user=source_user,
+                    source_host=src_host,
+                    kind="web" if service in {"http", "ssl"} else "connection",
+                    direction="outbound",
+                    rng=rng,
+                ):
+                    return ip, domain
+            return None, None
 
         if hasattr(self, "world_model"):
             src_system = next(
@@ -5666,6 +6094,7 @@ class BaselineMixin:
                     src_host=system.hostname,
                     service=conn.get("service", ""),
                     source_system_type=getattr(system, "type", None),
+                    source_user=user_obj,
                 )
                 if not dst_ip:
                     continue

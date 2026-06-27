@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -64,6 +65,7 @@ class BrowserSessionRequest:
     require_browser_like_domain: bool = True
     transfer_variant_key: str | None = None
     user_agent: str | None = None
+    route_profile: Any | None = None
     same_host_only: bool = False
     page_load_budget: int | None = None
     request_body_floor: int = 0
@@ -84,7 +86,8 @@ class BrowserSessionRequest:
             f"{self.hostname}:{self.proto}:{self.service or ''}:"
             f"{self.pid}:{self.source_os}:{self.browsing_intensity}:"
             f"{self.require_browser_like_domain}:{self.transfer_variant_key or ''}:"
-            f"{self.user_agent or ''}:{self.same_host_only}:{self.page_load_budget or ''}:"
+            f"{self.user_agent or ''}:{bool(self.route_profile)}:"
+            f"{self.same_host_only}:{self.page_load_budget or ''}:"
             f"{self.request_body_floor}:{self.time.isoformat()}:{self.source}:"
             f"{','.join(self.domain_tags)}"
         )
@@ -138,16 +141,19 @@ class BrowserSessionActionBundle:
         """Expand and dispatch browser-session evidence with summary counts."""
 
         request = self.request
-        session_requests = browsing_session.generate_browsing_session(
-            rng=self.rng,
-            hostname=request.hostname,
-            domain_tags=list(request.domain_tags),
-            source_os=request.source_os,
-            browsing_intensity=request.browsing_intensity,
-            port=request.dst_port,
-            require_browser_like_domain=request.require_browser_like_domain,
-            transfer_variant_key=request.transfer_variant_key,
-        )
+        if request.route_profile is not None:
+            session_requests = self._generate_route_profile_session()
+        else:
+            session_requests = browsing_session.generate_browsing_session(
+                rng=self.rng,
+                hostname=request.hostname,
+                domain_tags=list(request.domain_tags),
+                source_os=request.source_os,
+                browsing_intensity=request.browsing_intensity,
+                port=request.dst_port,
+                require_browser_like_domain=request.require_browser_like_domain,
+                transfer_variant_key=request.transfer_variant_key,
+            )
         visible_requests, page_load_count = self._visible_requests(session_requests)
         if not visible_requests:
             return BrowserSessionResult()
@@ -182,6 +188,107 @@ class BrowserSessionActionBundle:
             request_count=request_count,
             page_load_count=page_load_count,
         )
+
+    def _generate_route_profile_session(self) -> list[browsing_session.BrowsingRequest]:
+        """Generate route-owned HTTP requests for an authored web affinity."""
+
+        routes = list(getattr(self.request.route_profile, "routes", []) or [])
+        if not routes:
+            return browsing_session.generate_browsing_session(
+                rng=self.rng,
+                hostname=self.request.hostname,
+                domain_tags=list(self.request.domain_tags),
+                source_os=self.request.source_os,
+                browsing_intensity=self.request.browsing_intensity,
+                port=self.request.dst_port,
+                require_browser_like_domain=self.request.require_browser_like_domain,
+                transfer_variant_key=self.request.transfer_variant_key,
+            )
+
+        page_bounds = {
+            "light": (1, 1),
+            "normal": (1, 2),
+            "heavy": (2, 4),
+        }.get(self.request.browsing_intensity, (1, 2))
+        request_count = self.rng.randint(*page_bounds)
+        route_weights = [float(getattr(route, "weight", 1.0)) for route in routes]
+        requests: list[browsing_session.BrowsingRequest] = []
+        elapsed_ms = 0
+        referrer = ""
+        for index in range(request_count):
+            route = self.rng.choices(routes, weights=route_weights, k=1)[0]
+            method_profiles = getattr(route, "methods", {}) or {}
+            method_names = list(method_profiles)
+            method = self.rng.choice(method_names) if method_names else "GET"
+            profile = method_profiles.get(method)
+            status_weights = getattr(profile, "statuses", {"200": 1.0}) if profile else {"200": 1.0}
+            status = int(
+                self.rng.choices(
+                    list(status_weights),
+                    weights=[float(weight) for weight in status_weights.values()],
+                    k=1,
+                )[0]
+            )
+            path = self._render_route_path(str(getattr(route, "path", "/")))
+            content_type = (
+                str(getattr(profile, "content_type", "text/html")) if profile else "text/html"
+            )
+            req_range = getattr(profile, "request_body_bytes", None) if profile else None
+            resp_range = getattr(profile, "response_body_bytes", None) if profile else None
+            request_body_len = (
+                self.rng.randint(int(req_range[0]), int(req_range[1]))
+                if req_range
+                else (self.rng.randint(100, 4000) if method not in {"GET", "HEAD"} else 0)
+            )
+            response_body_len = (
+                self.rng.randint(int(resp_range[0]), int(resp_range[1]))
+                if resp_range
+                else browsing_session._response_size_for_status_code(  # noqa: SLF001
+                    self.rng,
+                    self.request.hostname,
+                    path,
+                    content_type,
+                    status,
+                    transfer_variant_key=self.request.transfer_variant_key,
+                )
+            )
+            elapsed_ms += self.rng.randint(250, 2400) if index else 0
+            requests.append(
+                browsing_session.BrowsingRequest(
+                    time_offset_ms=elapsed_ms,
+                    hostname=self.request.hostname,
+                    path=path,
+                    method=method,
+                    content_type=content_type,
+                    referrer=referrer,
+                    trans_depth=index + 1,
+                    is_page_load=True,
+                    response_body_len=response_body_len,
+                    request_body_len=request_body_len,
+                    status_code=status,
+                )
+            )
+            referrer = browsing_session._make_referrer(  # noqa: SLF001
+                self.request.hostname,
+                path,
+                self.request.dst_port,
+            )
+        return requests
+
+    def _render_route_path(self, path: str) -> str:
+        """Render common route placeholders with deterministic per-session values."""
+
+        def _replace(match: re.Match[str]) -> str:
+            token = match.group(1)
+            if token in {"id", "n"}:
+                return str(self.rng.randint(1, 9999))
+            if token == "hex8":
+                return f"{self.rng.getrandbits(32):08x}"
+            if token == "hex16":
+                return f"{self.rng.getrandbits(64):016x}"
+            return token
+
+        return re.sub(r"\{([A-Za-z0-9_]+)\}", _replace, path)
 
     def _visible_requests(
         self,
@@ -312,12 +419,17 @@ class BrowserSessionActionBundle:
             if self.request.source_system is not None
             else None
         )
+        resolver = getattr(self.executor, "_network_resolver", None)
         if app_specific_tags:
             return pick_domain_and_ip(
                 self.rng,
                 self.rng.choice(app_specific_tags),
                 src_host=source_host,
             )
+        if resolver is not None:
+            resolved = resolver.resolve_host(req.hostname, src_host=source_host or "")
+            if resolved.ip:
+                return req.hostname, resolved.ip
         return req.hostname, resolve_domain_ip(req.hostname, src_host=source_host)
 
     def _connection_duration(

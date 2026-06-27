@@ -6,6 +6,10 @@
 
 Schema documentation for the network-related config files. User customizations go in the project-local overlay at `.eforge/config/activity/` — partial files that merge with package defaults. See `config-dependency-graph.md` for details.
 
+For a domain/IP that belongs only to one portable scenario, prefer
+`environment.network_identities` in the scenario YAML. Use `dns_registry.yaml`
+overlays for reusable domain libraries that should influence many scenarios.
+
 ## Table of Contents
 
 1. [dns_registry.yaml](#dns_registryyaml)
@@ -22,7 +26,10 @@ Schema documentation for the network-related config files. User customizations g
 
 ## dns_registry.yaml
 
-Single source of truth for all domain-to-IP mappings. The loader builds `FORWARD_DNS`, `REVERSE_DNS`, and tag-based lookup tables from this data.
+Reusable source of truth for package/project domain-to-IP mappings. The loader
+builds `FORWARD_DNS`, `REVERSE_DNS`, and tag-based lookup tables from this data.
+Scenario-local `environment.network_identities` are applied as an in-memory
+overlay before this registry during generation.
 
 ### Structure
 

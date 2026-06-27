@@ -392,6 +392,14 @@ sizes.
 
 **Session depth:** Persona HTTP traffic and inbound `web_server` human visitors generate multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, fonts, and same-origin API calls, producing realistic request clusters in proxy and web access logs. Persona browsing depth is controlled by `browsing_intensity`; inbound web visitor classes, tool/API requests, and User-Agent pools are controlled by `web_session_profiles.yaml`.
 
+**Scenario traffic affinities:** `baseline_activity.traffic_affinities` can add
+benign population traffic to authored network identities. Web affinities render
+through the same browser/proxy/Zeek/web-access paths as ordinary browsing, and
+route profiles keep methods, statuses, body sizes, and content types tied to
+specific paths. Generic connection affinities render through canonical
+connection generation, so Zeek conn, eCAR FLOW, firewall/NAT, DNS, and TLS
+companions appear according to normal visibility rules.
+
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
 - Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled

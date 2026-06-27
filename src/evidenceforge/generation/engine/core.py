@@ -41,6 +41,7 @@ from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
+from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
@@ -109,6 +110,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.end_time: datetime | None = None
         self.malicious_events: list[dict] = []  # Track for GROUND_TRUTH.md
         self.red_herring_events: list[dict] = []  # Track for Red Herrings section
+        self.network_resolver = ScenarioNetworkResolver.from_scenario(scenario)
 
         # Event counter for record IDs
         self.event_record_counter = 10000
@@ -309,6 +311,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             source_timing_profile=self.scenario.observation_profile,
             dispatcher=self.dispatcher,
         )
+        self.activity_generator._network_resolver = self.network_resolver
         # Live-callback OOB host(s) for adversarial_payload (off by default).
         self.activity_generator._oob_hosts = self.oob_hosts
         # Build IP->System lookup for HostContext resolution on connection events

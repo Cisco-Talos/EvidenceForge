@@ -333,7 +333,12 @@ class ProxyTransactionActionBundle:
             and not proxy_context.host.endswith(".local")
             and not request.preserve_explicit_proxy_dst_ip
         ):
-            dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
+            resolver = getattr(executor, "_network_resolver", None)
+            if resolver is not None:
+                resolved = resolver.resolve_host(proxy_context.host, src_host=proxy_sys.hostname)
+                dst_ip = resolved.ip or dst_ip
+            else:
+                dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
 
         client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
         client_resp_bytes = max(0, proxy_context.sc_bytes or 0)

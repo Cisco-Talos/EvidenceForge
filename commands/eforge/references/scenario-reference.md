@@ -97,6 +97,29 @@ systems:
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
 
+### Network Identities
+
+Use `environment.network_identities` for portable scenario-specific domains and
+IP ownership. These identities are an in-memory scenario overlay used before the
+package DNS registry; they do not edit `.eforge/config/activity/dns_registry.yaml`.
+
+```yaml
+environment:
+  network_identities:
+    - id: partner_portal
+      hosts: [partner.example.com]
+      ips: ["203.0.113.60"]
+      tags: [web, partner]
+      dns: true
+```
+
+Identity references are authoritative for scenario-authored traffic. Domain fields
+resolve through `network_identities`, then package DNS, then a deterministic
+synthetic fallback with a validation warning. IP-only activity remains IP-only
+unless the event also supplies a hostname or identity. Conflicting identity
+definitions are validation errors; event-level host/IP mismatches against a
+declared identity are warnings.
+
 ### Proxy Deployment
 
 ```yaml
@@ -414,6 +437,55 @@ baseline_activity:
 ```
 
 Intensity mapping: low=5, medium=15, high=40 events/user/hour.
+
+### Baseline Traffic Affinities
+
+Use `baseline_activity.traffic_affinities` to shape benign population traffic for
+volumetric and timing hunts without adding storyline or red-herring leads.
+
+```yaml
+baseline_activity:
+  traffic_affinities:
+    - name: partner-portal-normal
+      kind: web                   # web | connection
+      direction: outbound         # outbound | inbound | internal
+      destination:
+        identity: partner_portal
+        port: 443
+        service: ssl
+      audience:
+        groups: [science, programs]
+      participation: 0.85
+      per_client_sessions: [2, 12]
+      cadence: business_hours     # diffuse | business_hours | periodic
+      request_profile:
+        routes:
+          - path: "/portal"
+            weight: 30
+            methods:
+              GET:
+                statuses: {"200": 0.94, "302": 0.04, "503": 0.02}
+                response_body_bytes: [12000, 90000]
+                content_type: text/html
+          - path: "/api/projects/{id}/comment"
+            weight: 3
+            methods:
+              POST:
+                statuses: {"200": 0.90, "400": 0.06, "401": 0.04}
+                request_body_bytes: [100, 3000]
+                response_body_bytes: [200, 2000]
+                content_type: application/json
+```
+
+Web request profiles are route-based: each route owns its valid methods, status
+distribution, body-size ranges, and content type. Do not model paths, methods,
+and status codes as independent random lists; that produces unrealistic
+combinations such as POST requests for static resources.
+
+For non-HTTP hunts, use `kind: connection` with `connection_profile` byte,
+duration, and `conn_state` ranges. Use `traffic_suppression` to down-rank or
+remove matching default baseline traffic for a scoped audience; suppression never
+affects explicit storyline or red-herring events.
 
 ## Observation Profile
 
