@@ -54,6 +54,28 @@ environment:
       os: "Windows 11"
       type: workstation
 
+  network:
+    segments:
+      - name: workstations
+        cidr: 10.0.0.0/16
+        exposure: internal
+        systems: [WS-DEV-01, WS-DEV-02, WS-EXEC-01]
+    sensors:
+      - type: network
+        name: core-zeek
+        hostname: zeek01
+        monitoring_segments: [workstations]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+      - type: firewall
+        name: edge-fw
+        hostname: fw01
+        monitoring_segments: [workstations]
+        direction: bidirectional
+        placement: tap
+        log_formats: [cisco_asa]
+
 time_window:
   start: "2024-01-15T09:00:00Z"
   duration: "2h"

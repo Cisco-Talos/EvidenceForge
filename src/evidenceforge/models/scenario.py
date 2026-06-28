@@ -1683,11 +1683,12 @@ class NetworkConfig(BaseModel):
 
     Attributes:
         segments: List of network segments
-        sensors: List of network sensors
+        sensors: Optional list of network sensors, IDS sensors, and firewall
+                 observation/control points. Topology may be declared without sensors.
     """
 
     segments: list[NetworkSegment]
-    sensors: list[NetworkSensor]
+    sensors: list[NetworkSensor] = Field(default_factory=list)
     public_cidrs: list[str] = Field(
         default_factory=list,
         description="Public address blocks allocated to the org (e.g., ['45.83.220.0/28']). "
@@ -1712,14 +1713,6 @@ class NetworkConfig(BaseModel):
         """Ensure at least one segment is defined."""
         if not v:
             raise ValueError("Network config must have at least one segment")
-        return v
-
-    @field_validator("sensors")
-    @classmethod
-    def validate_sensors_not_empty(cls, v: list[NetworkSensor]) -> list[NetworkSensor]:
-        """Ensure at least one sensor is defined."""
-        if not v:
-            raise ValueError("Network config must have at least one sensor")
         return v
 
 

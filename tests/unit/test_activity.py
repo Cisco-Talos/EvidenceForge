@@ -124,8 +124,9 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
 )
+from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import System, User
+from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
 from evidenceforge.utils.rng import reset_thread_rng
 
 
@@ -7119,6 +7120,69 @@ class TestActivityGenerator:
         assert "web_server" in event.dst_host.roles
         assert event.http is not None
         assert event.http.uri == "/ehr/admin/upload.php"
+
+    def test_generate_connection_with_topology_but_no_sensors_still_dispatches(
+        self,
+        state_manager,
+    ):
+        """Topology without sensors should not suppress canonical connection activity."""
+        captured = []
+        visibility = NetworkVisibilityEngine(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=[],
+                        exposure="internal",
+                    ),
+                    NetworkSegment(
+                        name="servers",
+                        cidr="10.10.20.0/24",
+                        systems=[],
+                        exposure="internal",
+                    ),
+                ],
+            ),
+            [],
+        )
+
+        class _Dispatcher:
+            visibility_engine = visibility
+
+            @staticmethod
+            def dispatch(event):
+                captured.append(event)
+
+            @staticmethod
+            def record_filtered_network_observation():
+                raise AssertionError("connection generation should not pre-filter by sensors")
+
+        generator = ActivityGenerator(
+            state_manager,
+            {},
+            dispatcher=_Dispatcher(),
+            network_visibility=visibility,
+        )
+        timestamp = datetime(2024, 3, 18, 13, 20, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        uid = generator.generate_connection(
+            src_ip="10.10.10.5",
+            dst_ip="10.10.20.10",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+        )
+
+        assert uid
+        assert captured
+        assert captured[-1].network.src_ip == "10.10.10.5"
+        assert captured[-1].network.dst_ip == "10.10.20.10"
 
     def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters

@@ -96,6 +96,7 @@ Supported through SOF-ELK today:
 - Zeek: every Zeek log type EvidenceForge can emit
 - Cisco ASA firewall logs generated with `--target sof-elk`
 - Web access logs
+- Proxy access logs
 - Linux syslog generated with `--target sof-elk`
 - Windows Security and Sysmon Snare/RFC3164 logs generated with `--target sof-elk`
 
@@ -111,7 +112,6 @@ Not yet supported:
 - Native Windows/Sysmon XML files from the `default` target
 - Default-target Linux syslog and Cisco ASA layouts
 - Any dataset missing `OUTPUT_TARGET.txt` or marked with `default`
-- Proxy logs in the SOF-ELK backend
 - Snort fast alert and bash history in the Splunk backend v1
 - eCAR in the SOF-ELK backend, which has no stable third-party standard parser target
 - Elasticsearch output behavior

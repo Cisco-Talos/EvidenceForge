@@ -32,6 +32,7 @@ import pytest
 from evidenceforge.external_parsers.sof_elk_sources import (
     CISCO_ASA_SPEC,
     EVENTS_OUTPUT_FILENAME,
+    PROXY_ACCESS_SPEC,
     SYSLOG_SPEC,
     WEB_ACCESS_SPEC,
     WINDOWS_SECURITY_SNARE_SPEC,
@@ -99,6 +100,24 @@ def test_stage_source_logs_preserves_web_access_subdirectories(tmp_path: Path) -
     assert manifest.expected_counts == {"web_access": 1}
     assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
         Path("httpd/web-01.example.test/web_access.log")
+    }
+
+
+def test_stage_source_logs_preserves_proxy_access_subdirectories(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_dir = source_root / "proxy-01.example.test"
+    source_dir.mkdir(parents=True)
+    (source_dir / "proxy_access.log").write_text(
+        "10.0.10.50 - EXAMPLE\\alice [15/Jun/2026:14:23:05 +0000] "
+        '"CONNECT example.com:443 HTTP/1.1" 200 512 "-" "Mozilla/5.0"\n',
+        encoding="utf-8",
+    )
+
+    manifest = stage_source_logs(source_root, tmp_path / "stage", PROXY_ACCESS_SPEC)
+
+    assert manifest.expected_counts == {"proxy_access": 1}
+    assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
+        Path("httpd/proxy-01.example.test/proxy_access.log")
     }
 
 
@@ -247,6 +266,27 @@ def test_validate_source_parsed_output_accepts_web_access_parse(tmp_path: Path) 
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
     event = _parsed_web_access_event()
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_grokparsefail_8110-01")
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    events = validate_source_parsed_output(manifest, parsed_dir)
+
+    assert len(events) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_source_parsed_output_accepts_proxy_access_parse(tmp_path: Path) -> None:
+    manifest = _manifest(
+        tmp_path,
+        PROXY_ACCESS_SPEC,
+        Path("httpd/proxy-01/proxy_access.log"),
+        "proxy_access.log",
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_proxy_access_event()
     tags = event["tags"]
     assert isinstance(tags, list)
     tags.append("_grokparsefail_8110-01")
@@ -511,6 +551,26 @@ def _parsed_web_access_event() -> dict[str, object]:
             "response": {"status_code": 200},
         },
         "url": {"path": "/index.html"},
+        "user_agent": {"original": "Mozilla/5.0"},
+    }
+
+
+def _parsed_proxy_access_event() -> dict[str, object]:
+    return {
+        "tags": ["filebeat", "process_archive", "parse_done"],
+        "labels": {"type": "httpdlog"},
+        "log": {"file": {"path": "/logstash/httpd/proxy-01/proxy_access.log"}},
+        "event": {
+            "original": (
+                "10.0.10.50 - EXAMPLE\\alice [15/Jun/2026:14:23:05 +0000] "
+                '"CONNECT example.com:443 HTTP/1.1" 200 512 "-" "Mozilla/5.0"'
+            )
+        },
+        "source": {"ip": "10.0.10.50"},
+        "http": {
+            "request": {"method": "CONNECT"},
+            "response": {"status_code": 200},
+        },
         "user_agent": {"original": "Mozilla/5.0"},
     }
 

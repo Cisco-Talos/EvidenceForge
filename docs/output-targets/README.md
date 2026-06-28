@@ -50,7 +50,8 @@ families when no corresponding source exists:
 
 - No Zeek sensors means no Zeek logs.
 - No IDS sensors means no Snort/Suricata alert logs.
-- No firewall sensors means no Cisco ASA logs.
+- No firewall entries (`network.sensors[type=firewall]`) means no Cisco ASA logs,
+  NAT, firewall policy, or firewall deny baseline.
 - No `web_server` hosts means no web access logs.
 - No `forward_proxy` hosts means no proxy access logs.
 - Host logs are scoped to concrete host directories.

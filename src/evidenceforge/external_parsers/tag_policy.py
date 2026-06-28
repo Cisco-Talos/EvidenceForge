@@ -33,6 +33,7 @@ from typing import Any
 SOF_ELK_ZEEK_VALIDATOR = "sof-elk-zeek"
 SOF_ELK_CISCO_ASA_VALIDATOR = "sof-elk-cisco-asa"
 SOF_ELK_WEB_ACCESS_VALIDATOR = "sof-elk-web-access"
+SOF_ELK_PROXY_ACCESS_VALIDATOR = "sof-elk-proxy-access"
 SOF_ELK_SYSLOG_VALIDATOR = "sof-elk-syslog"
 SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR = "sof-elk-windows-security-snare"
 SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR = "sof-elk-windows-sysmon-snare"
@@ -186,6 +187,17 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
     ParserTagRule(
         validator=SOF_ELK_WEB_ACCESS_VALIDATOR,
         log_type="web_access",
+        tag="_grokparsefail_8110-01",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/8110-postprocess-httpd.conf",
+        reason=(
+            "Optional page/not-page URL path classification after the HTTP access "
+            "record has already been parsed."
+        ),
+    ),
+    ParserTagRule(
+        validator=SOF_ELK_PROXY_ACCESS_VALIDATOR,
+        log_type="proxy_access",
         tag="_grokparsefail_8110-01",
         disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
         source="SOF-ELK configfiles/8110-postprocess-httpd.conf",

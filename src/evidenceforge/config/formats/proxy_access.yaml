@@ -1,4 +1,4 @@
-# proxy_access format definition — HTTP/HTTPS forward proxy access log (W3C Extended Log Format)
+# proxy_access format definition — HTTP/HTTPS forward proxy access log
 #
 # Category: host
 # Standalone: yes (no cross-file dependencies)
@@ -8,7 +8,7 @@
 
 name: proxy_access
 version: "1.0"
-description: "HTTP/HTTPS forward proxy access log (W3C Extended Log Format)"
+description: "HTTP/HTTPS forward proxy access log (Apache/Nginx combined format)"
 category: host
 
 fields:
@@ -99,9 +99,5 @@ output:
   format: text
   file_extension: ".log"
   encoding: utf-8
-  header_template: |
-    #Software: Meridian Secure Web Gateway
-    #Version: 7.4
-    #Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result x-proxy-action
   template: |
-    {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }} {{ client_ip }} {{ username if username else '-' }} {{ method }} {{ url }} {{ protocol if protocol else '-' }} {{ status_code }} {{ sc_bytes if sc_bytes else 0 }} {{ cs_bytes if cs_bytes else 0 }} {{ time_taken if time_taken else 0 }} {{ host }} {{ user_agent if user_agent else '-' }} {{ referrer if referrer else '-' }} {{ content_type if content_type else '-' }} {{ cache_result if cache_result else '-' }} {{ proxy_action if proxy_action else '-' }}
+    {{ client_ip }} - {{ username if username else '-' }} [{{ timestamp.strftime('%d/%b/%Y:%H:%M:%S %z') }}] "{{ method }} {{ url }} {{ protocol if protocol else '-' }}" {{ status_code }} {{ sc_bytes if sc_bytes else '-' }} "{{ referrer if referrer else '-' }}" "{{ user_agent if user_agent else '-' }}"

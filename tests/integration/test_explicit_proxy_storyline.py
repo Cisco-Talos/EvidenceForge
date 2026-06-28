@@ -101,16 +101,6 @@ class TestStorylineBeaconExplicitProxy:
                             systems=["proxy01"],
                         ),
                     ],
-                    sensors=[
-                        NetworkSensor(
-                            type="network",
-                            name="tap01",
-                            monitoring_segments=["services", "corporate_lan"],
-                            direction="bidirectional",
-                            placement="tap",
-                            log_formats=["zeek"],
-                        )
-                    ],
                 ),
             ),
             time_window=TimeWindow(start=datetime(2024, 10, 14, 4, 0, tzinfo=UTC), duration="1h"),
@@ -156,12 +146,14 @@ class TestStorylineBeaconExplicitProxy:
         assert len(beacon_lines) == 3
         assert all("192.168.2.10" in line for line in beacon_lines)
         assert all(
-            " GET http://dynsync-update.net/jquery-3.3.1.min.js " in line for line in beacon_lines
-        )
-        assert all(
-            "Mozilla/5.0+(Windows+NT+6.1;+Trident/7.0;+rv:11.0)+like+Gecko" in line
+            '"GET http://dynsync-update.net/jquery-3.3.1.min.js HTTP/1.1"' in line
             for line in beacon_lines
         )
+        assert all(
+            "Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko" in line
+            for line in beacon_lines
+        )
+        assert not list(tmp_path.rglob("conn.json"))
 
     def test_allowed_https_beacon_preserves_user_agent_on_connect(self, tmp_path):
         """HTTPS storyline beacons should write the specified UA to proxy CONNECT rows."""
@@ -263,14 +255,14 @@ class TestStorylineBeaconExplicitProxy:
             line for line in _read_proxy_lines(tmp_path) if "dynsync-update.net" in line
         ]
         connect_lines = [
-            line for line in beacon_lines if " CONNECT dynsync-update.net:443 " in line
+            line for line in beacon_lines if '"CONNECT dynsync-update.net:443 HTTP/1.1"' in line
         ]
         inspected_lines = [
-            line for line in beacon_lines if " GET https://dynsync-update.net/ " in line
+            line for line in beacon_lines if '"GET https://dynsync-update.net/ HTTP/1.1"' in line
         ]
         assert len(connect_lines) == 3
         assert len(inspected_lines) == 3
-        assert all(custom_ua.replace(" ", "+") in line for line in beacon_lines)
+        assert all(custom_ua in line for line in beacon_lines)
 
     @pytest.mark.slow
     def test_explicit_proxy_fixture_includes_zeek_proxy_and_firewall_visibility(self, tmp_path):
@@ -435,12 +427,12 @@ class TestStorylineBeaconExplicitProxy:
 
         allowed_proxy_lines = [line for line in proxy_lines if allowed_host in line]
         denied_proxy_lines = [line for line in proxy_lines if denied_host in line]
-        assert any(" CONNECT " in line and " 200 " in line for line in allowed_proxy_lines)
+        assert any('"CONNECT ' in line and " 200 " in line for line in allowed_proxy_lines)
         assert any(
-            f" GET https://{allowed_host}/v1/checkin HTTP/1.1 200 " in line
+            f'"GET https://{allowed_host}/v1/checkin HTTP/1.1" 200 ' in line
             for line in allowed_proxy_lines
         )
-        assert any(" CONNECT " in line and " 403 " in line for line in denied_proxy_lines)
+        assert any('"CONNECT ' in line and " 403 " in line for line in denied_proxy_lines)
 
         assert any(
             record["id.orig_h"] == "10.0.10.10"

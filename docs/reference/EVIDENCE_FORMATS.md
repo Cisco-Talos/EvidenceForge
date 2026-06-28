@@ -312,7 +312,12 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 **Splunk target file:** `<fw-hostname>/cisco_asa.log`
 **Format:** Cisco ASA syslog (RFC 3164 BSD syslog with ASA message IDs)
 
-Cisco ASA firewall logs for permitted and denied connections. Produced by firewall-type network sensors with `cisco_asa` in their `log_formats`. Each permitted connection generates a Built + Teardown pair; denied connections generate a single Deny record.
+Cisco ASA firewall logs for permitted and denied connections. Produced by
+`environment.network.sensors` entries with `type: firewall` and `cisco_asa` in
+their `log_formats`. These entries model active firewall control points
+(policy, NAT, deny baseline, threat detection, and logging), even though they
+currently live in the `sensors` list for compatibility. Requesting `cisco_asa`
+without a matching firewall entry is a validation error.
 
 | Message ID | Severity | Protocol | Description |
 |------------|----------|----------|-------------|
@@ -373,23 +378,43 @@ client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" stat
 ## HTTP Proxy Log
 
 **File:** `<proxy-hostname.domain>/proxy_access.log`
-**Format:** W3C Extended Log Format
+**Format:** Apache/Nginx combined log format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
+Forward proxy access logs for systems with the `forward_proxy` role. This is a
+host/proxy log, not a network sensor log, so proxy-only labs do not need
+placeholder Zeek sensors. Outbound HTTP/HTTPS traffic is routed through the
+proxy system. In `environment.proxy.mode: transparent`, network sensors can
+still show direct-looking client-to-origin traffic when matching sensors are
+configured. In `mode: explicit`, the generator emits client-to-proxy and
+proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg
+its topology can observe. If the proxy denies a request, the transaction stops
+at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted.
+HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy
+routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
-The proxy log uses a W3C Extended-style `#Fields` header:
+The proxy log uses the same Apache/Nginx combined syntax as `web_access.log`,
+with proxy request targets in the quoted request field:
 
 ```text
-#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result x-proxy-action
+client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD request-target HTTP/version" status bytes "Referer" "User-Agent"
 ```
 
-Fields are whitespace-delimited; values with spaces, such as User-Agent strings, are rendered with `+` separators. Missing values are `-`.
+For forwarded HTTP/HTTPS requests, `request-target` is the absolute URL known
+to the proxy, such as `https://host/path`. For CONNECT tunnel setup rows,
+`request-target` is the authority form, such as `host:443`. Missing values are
+`-`.
 
-**Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
+**Username field:** Default combined text output preserves the full username
+value. The SOF-ELK target strips the domain prefix from identities such as
+`DOMAIN\user` and the trailing `$` from machine accounts such as `DOMAIN\HOST$`
+so SOF-ELK's HTTPD parser can ingest the row. Splunk JSON proxy output also
+preserves the full username value.
 
-**Proxy action field:** The `x-proxy-action` field disambiguates source-native proxy behavior: `tunnel-setup` for CONNECT setup rows, `ssl-inspect` for decrypted HTTPS request rows, `forward` for ordinary forwarded HTTP, and `deny`/`auth-required`/`gateway-error` for proxy-side terminal failures.
+**Referrer field:** The combined format output includes the standard quoted
+`Referer` field, linking subresource requests back to the page that triggered
+them.
 
-**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
+**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as combined-format request rows such as `"GET https://host/path HTTP/1.1"`.
 
 **Status and byte semantics:** For explicit proxy mode, client-side Zeek HTTP records describe the client-to-proxy exchange. Plain HTTP denials therefore show the proxy's status code and proxy response size, not the origin's status/body. For intercepted HTTPS, the CONNECT setup status is tracked separately from the inspected request status, so a successful tunnel setup can coexist with a denied inspected GET.
 

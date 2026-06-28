@@ -31,7 +31,14 @@ Exit codes:
 
 **If validation passes:** Tell the user the scenario is valid. Summarize what's in it (users, systems, personas, storyline events, network topology) based on the validator output.
 
-**If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR, OS/format mismatches, missing logon events before process execution, causal expansion redundancy, or `proxy_access` requested without any system using `roles: [forward_proxy]` — see below).
+**If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR, OS/format mismatches, missing logon events before process execution, causal expansion redundancy, topology declared without sensors, no firewall configured, or `proxy_access` requested without any system using `roles: [forward_proxy]` — see below).
+
+Topology-only `environment.network` blocks are valid. If no sensors are
+configured, Zeek/IDS/firewall sensor-backed logs are not generated, but
+canonical activity, endpoint logs, web logs, and proxy logs can still render.
+Requesting `zeek`, concrete `zeek_*`, `snort_alert`, or `cisco_asa` without a
+matching sensor/firewall is an error. `proxy_access` comes from
+`forward_proxy` systems and does not need a placeholder Zeek sensor.
 
 Network identity warnings are advisory unless they describe an actual conflict.
 Custom hostnames in storyline/red-herring/domain-aware fields should normally be

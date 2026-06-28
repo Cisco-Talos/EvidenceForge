@@ -73,6 +73,24 @@ class TestNoNetworkConfig:
         engine = NetworkVisibilityEngine(None, [])
         assert engine.get_observing_sensors("10.0.0.1", "8.8.8.8") == []
 
+    def test_topology_with_no_sensors_has_no_sensor_formats(self):
+        """Topology-only configs should not imply Zeek or other sensor output."""
+        config = NetworkConfig(
+            segments=[
+                NetworkSegment(
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01"],
+                    exposure="internal",
+                )
+            ]
+        )
+        engine = NetworkVisibilityEngine(config, _make_systems())
+
+        assert engine.is_connection_visible("10.10.10.1", "8.8.8.8") is False
+        assert engine.get_observing_sensors("10.10.10.1", "8.8.8.8") == []
+        assert engine.get_log_formats_for_connection("10.10.10.1", "8.8.8.8") == set()
+
 
 class TestBidirectionalSensor:
     """Tests for bidirectional sensor monitoring."""

@@ -59,6 +59,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
 )
 from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_PROXY_ACCESS_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
@@ -140,6 +141,26 @@ WEB_ACCESS_SPEC = SofElkSourceSpec(
     required_tags=("parse_done",),
 )
 
+PROXY_ACCESS_SPEC = SofElkSourceSpec(
+    validator=SOF_ELK_PROXY_ACCESS_VALIDATOR,
+    display_name="SOF-ELK Proxy Access",
+    format_name="proxy_access",
+    logtype="proxy",
+    subtype="access",
+    source_names=("proxy_access.log",),
+    staged_directory="httpd",
+    staged_name="proxy_access.log",
+    filebeat_input="httpdlog.yml",
+    filter_files=WEB_ACCESS_SPEC.filter_files,
+    output_label_type="httpdlog",
+    required_paths=(
+        "source.ip",
+        "http.request.method",
+        "http.response.status_code",
+    ),
+    required_tags=("parse_done",),
+)
+
 SYSLOG_SPEC = SofElkSourceSpec(
     validator=SOF_ELK_SYSLOG_VALIDATOR,
     display_name="SOF-ELK Syslog",
@@ -216,6 +237,7 @@ WINDOWS_SYSMON_SNARE_SPEC = SofElkSourceSpec(
 SOF_ELK_SOURCE_SPECS: tuple[SofElkSourceSpec, ...] = (
     CISCO_ASA_SPEC,
     WEB_ACCESS_SPEC,
+    PROXY_ACCESS_SPEC,
     SYSLOG_SPEC,
     WINDOWS_SECURITY_SNARE_SPEC,
     WINDOWS_SYSMON_SNARE_SPEC,

@@ -31,6 +31,7 @@ app config and optional caller-supplied apps for CIM checks.
 | Zeek `reporter` | `sof-elk-zeek` | Supplemental EvidenceForge input | JSON preprocess and Zeek postprocess filters | JSON ingestion and count validation. |
 | Cisco ASA `cisco_asa.log` | `sof-elk-cisco-asa` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6018-cisco_asa.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated under `<sensor>/<year>/cisco_asa.log`, staged under `/logstash/syslog/<year>/<sensor>/cisco_asa.log`, and requires `got_cisco` plus `parse_done`. |
 | Web access `web_access.log` | `sof-elk-web-access` | `httpdlog.yml` | `1000-preprocess-all.conf`, `6100-httpd.conf`, `8060-postprocess-useragent.conf`, `8110-postprocess-httpd.conf`, `8999-postprocess-all.conf` | Optional page classification miss `_grokparsefail_8110-01` is ignored. |
+| Proxy access `proxy_access.log` | `sof-elk-proxy-access` | `httpdlog.yml` | `1000-preprocess-all.conf`, `6100-httpd.conf`, `8060-postprocess-useragent.conf`, `8110-postprocess-httpd.conf`, `8999-postprocess-all.conf` | Combined proxy access rows are staged under `/logstash/httpd/<host>/proxy_access.log`; count, fatal tags, source IP, method, and status are validated. |
 | Linux `syslog.log` | `sof-elk-syslog` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6012-dhcpd.conf`, `6013-bindquery.conf`, `6015-sshd.conf`, `6016-pam.conf`, `6017-iptables.conf`, `8100-postprocess-syslog.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated RFC3164 files live under `<host>/<year>/syslog.log`, and staged year is validated against parsed `@timestamp`. |
 | Windows Security `windows_event_security_snare.log` | `sof-elk-windows-security-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated under `<host>/<year>/windows_event_security_snare.log`, staged under `/logstash/syslog/<year>/<host>/...`, and requires `snare_log`, `parse_done`, and normalized `winlog.*` fields. |
 | Sysmon `windows_event_sysmon_snare.log` | `sof-elk-windows-sysmon-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; validates `winlog.event_id`, provider, channel, computer, and staged source year. |
@@ -44,7 +45,6 @@ app config and optional caller-supplied apps for CIM checks.
 | Linux syslog (`default` target) | NONE | Default output is flat RFC5424; SOF-ELK validation expects `--target sof-elk` RFC3164 year-partitioned syslog. |
 | Cisco ASA (`default` target) | NONE | Default output is flat per-sensor ASA syslog; SOF-ELK validation expects `--target sof-elk` year-partitioned ASA syslog. |
 | Snort/IDS alert logs | NONE | Detected as unsupported so they are not silently skipped. |
-| Proxy access logs | NONE | Detected as unsupported so they are not silently skipped. |
 | eCAR JSON | NONE | Officially unsupported for external-parser validation because there is no stable third-party standard parser target. |
 | Bash history | NONE | Officially unsupported for external-parser validation because command history text is not a parser-normalized log family. |
 
@@ -64,6 +64,8 @@ app config and optional caller-supplied apps for CIM checks.
 | Cisco ASA syslog (`splunk` target) | `cisco:asa` | Keeps native ASA `%ASA-...` syslog payload in a flat sensor file. |
 | Web access (`splunk` target) | `apache:access:json` | Target-specific Apache TA JSON access records so the supplied Apache TA can parse and tag the events for CIM Web validation. |
 | Proxy access (`splunk` target) | `apache:access:json` | Target-specific Apache TA JSON proxy records; generated EvidenceForge eventtype/tag config marks `proxy_access.log` as CIM `Web.Proxy` and maps proxy category/action fields. |
+| Web access (`sof-elk` target) | SOF-ELK HTTPD pipeline | Apache/Nginx combined access records staged under the SOF-ELK `httpd` input path. |
+| Proxy access (`sof-elk` target) | SOF-ELK HTTPD pipeline | Apache/Nginx combined proxy records with absolute URLs and CONNECT authorities staged under the SOF-ELK `httpd` input path. |
 | eCAR JSON | `evidenceforge:ecar:json` | JSON line breaking and count validation. |
 
 ## Splunk Unsupported

@@ -675,7 +675,7 @@ class TestSpillageAccuracy:
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
         assert ep.score >= 85
 
-    def test_http_spill_skipped_when_path_not_observable(self, tmp_path):
+    def test_http_spill_renders_web_access_when_network_sensor_does_not_observe(self, tmp_path):
         # If no sensor observes the actor->web-server path, generate_connection is
         # filtered and nothing lands; ground truth must NOT label it (no phantom).
         scenario = {
@@ -762,12 +762,11 @@ class TestSpillageAccuracy:
             ],
         }
         out = _generate(scenario, tmp_path / "out")
-        # No http spillage record is written (both filtered out) — no phantom label…
+        # Web access is application/server evidence, so it still renders even when
+        # no network sensor observes the path.
         http_recs = [r for r in _spill_records_or_empty(out) if r["surface"].startswith("http")]
-        assert http_recs and all(rec["emitted"] is False for rec in http_recs)
-        assert all("rendered_value" not in rec for rec in http_recs)
-        # …and the credential is genuinely absent from every data file.
-        assert "EvidenceForgeFake" not in _all_data_text(out)
+        assert http_recs and all(rec["emitted"] is True for rec in http_recs)
+        assert all(rec["rendered_value"] in _all_data_text(out) for rec in http_recs)
 
     def test_jsonl_time_matches_emitted_bash_line(self, tmp_path):
         scenario = _linux_scenario(

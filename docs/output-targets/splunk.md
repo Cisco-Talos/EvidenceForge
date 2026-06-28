@@ -18,7 +18,7 @@ needs a different shape.
 | Windows Security | `<host>/windows_event_security.xml`, one complete `<Event>...</Event>` per physical line. |
 | Windows Sysmon | `<host>/windows_event_sysmon.xml`, one complete `<Event>...</Event>` per physical line. |
 | Linux syslog | `<host>/syslog.log` as RFC5424 with full timestamp year. |
-| Cisco ASA | `<firewall>/cisco_asa.log`, native ASA syslog content in a flat firewall-sensor file. |
+| Cisco ASA | `<firewall>/cisco_asa.log`, native ASA syslog content from a firewall entry. |
 | Zeek | Unchanged NDJSON under concrete sensor directories. |
 | Web access | Target-specific JSON records for the Apache TA `apache:access:json` sourcetype. |
 | Proxy access | Target-specific JSON records for `apache:access:json`, plus EvidenceForge-generated proxy eventtype/tag config for CIM `Web.Proxy`. |

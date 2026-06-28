@@ -15,10 +15,10 @@ Splunk-specific JSON records.
 | Windows Security | `<host>/windows_event_security.xml` | Rooted XML document with `<Events>...</Events>`. |
 | Windows Sysmon | `<host>/windows_event_sysmon.xml` | Rooted XML document with `<Events>...</Events>`. |
 | Linux syslog | `<host>/syslog.log` | RFC5424 with full timestamp year. |
-| Cisco ASA | `<firewall>/cisco_asa.log` | Native ASA syslog payload in a flat firewall-sensor file. |
+| Cisco ASA | `<firewall>/cisco_asa.log` | Native ASA syslog payload from a firewall entry. |
 | Zeek | `<sensor>/<log>.json` | NDJSON, emitted only for configured Zeek sensors. |
 | Web access | `<web-host>/web_access.log` | Apache/Nginx combined log format. |
-| Proxy access | `<proxy-host>/proxy_access.log` | W3C Extended-style forward proxy log. |
+| Proxy access | `<proxy-host>/proxy_access.log` | Apache/Nginx combined forward proxy log. |
 | eCAR | `<host>/ecar.json` | Custom simulated EDR NDJSON. |
 | Snort/Suricata | `<ids-sensor>/snort_alert.log` | Fast alert style, emitted only for configured IDS sensors. |
 | Bash history | `<host>/bash_history/<user>.bash_history` | Command history text files. |
@@ -45,10 +45,9 @@ Non-obvious gotchas:
   that expects one event per physical line should use `--target splunk` instead.
 - Default Linux syslog and Cisco ASA logs are not year-partitioned. SOF-ELK
   validation expects `--target sof-elk` for those families.
-- Default web access is combined text. The Splunk target uses JSON for Apache
-  TA compatibility.
-- Default proxy access is W3C Extended text. The Splunk target uses JSON plus
-  generated EvidenceForge proxy eventtype/tag config.
+- Default web and proxy access logs are combined text. The Splunk target uses
+  JSON for Apache TA compatibility, plus generated EvidenceForge proxy
+  eventtype/tag config.
 
 ## Validation Status
 
