@@ -224,7 +224,11 @@ Use the `/eforge:references:evidence-formats` skill for detailed field documenta
 
 ## Performance Expectations
 
-- Small scenarios (5 users, 4 hours): a few seconds
-- Medium scenarios (100 users, 8 hours): ~14 seconds
+- Runtime scales with emitted evidence volume, selected formats, scenario length, warm-up
+  length, host count, and traffic rates. Web/proxy-heavy scenarios can emit many dependent
+  requests per top-level action.
+- For long scenarios, scope `output.logs` or use `--formats` to generate only the sources
+  needed for the exercise.
 - The engine uses parallel threaded emitters — one thread per log format
-- Memory stays under 500MB even for large datasets
+- If a run slows down progressively by hour, capture the scenario and generated format mix;
+  that usually points to a generator hot path rather than normal output-volume scaling.

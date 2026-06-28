@@ -6232,6 +6232,121 @@ class TestActivityGenerator:
 
         assert allocated == 45653
 
+    def test_recent_connection_tuple_cache_prunes_stale_entries(self, activity_gen):
+        """Tuple reservations older than the reuse window should be removed by event time."""
+        old_time = datetime(2024, 3, 17, 12, 0, tzinfo=UTC)
+        current_time = old_time + timedelta(hours=25)
+        old_key = ("10.10.4.10", 42430, "10.10.2.10", 389, "tcp")
+
+        activity_gen._remember_connection_tuple(*old_key, time=old_time)
+        assert old_key in activity_gen._recent_connection_tuples
+
+        activity_gen._remember_connection_tuple(
+            "10.10.4.10",
+            42431,
+            "10.10.2.10",
+            389,
+            "tcp",
+            current_time,
+        )
+
+        assert old_key not in activity_gen._recent_connection_tuples
+
+    def test_recent_connection_tuple_cache_preserves_recent_entries(self, activity_gen):
+        """Tuple reservations inside the reuse window should still block reuse."""
+        seen_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        check_time = seen_time + timedelta(hours=23, minutes=59)
+        activity_gen._remember_connection_tuple(
+            "10.10.4.10",
+            42430,
+            "10.10.2.10",
+            389,
+            "tcp",
+            seen_time,
+        )
+
+        assert activity_gen._connection_tuple_recently_used(
+            "10.10.4.10",
+            42430,
+            "10.10.2.10",
+            389,
+            "tcp",
+            check_time,
+        )
+
+    def test_recent_connection_tuple_cache_preserves_future_entries(self, activity_gen):
+        """Future tuple reservations should still protect non-monotonic generation order."""
+        check_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        future_time = check_time + timedelta(hours=2)
+        activity_gen._remember_connection_tuple(
+            "10.10.4.10",
+            45652,
+            "10.10.2.10",
+            389,
+            "tcp",
+            future_time,
+        )
+
+        assert activity_gen._connection_tuple_recently_used(
+            "10.10.4.10",
+            45652,
+            "10.10.2.10",
+            389,
+            "tcp",
+            check_time,
+        )
+
+    def test_recent_connection_tuple_cache_ignores_stale_heap_entries(self, activity_gen):
+        """Old heap records must not delete newer reservations for the same tuple."""
+        first_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        second_time = first_time + timedelta(hours=1)
+        prune_time = first_time + timedelta(hours=25)
+        key = ("10.10.4.10", 42430, "10.10.2.10", 389, "tcp")
+
+        activity_gen._remember_connection_tuple(*key, time=first_time)
+        activity_gen._remember_connection_tuple(*key, time=second_time)
+        activity_gen._prune_recent_connection_tuples(prune_time.timestamp())
+
+        assert activity_gen._recent_connection_tuples[key] == second_time.timestamp()
+
+    def test_recent_connection_tuple_cache_prunes_many_old_entries(self, activity_gen):
+        """Large stale tuple sets should shrink to the active event-time window."""
+        old_time = datetime(2024, 3, 17, 12, 0, tzinfo=UTC)
+        current_time = old_time + timedelta(hours=25)
+        for src_port in range(20_000, 22_000):
+            activity_gen._remember_connection_tuple(
+                "10.10.4.10",
+                src_port,
+                "10.10.2.10",
+                389,
+                "tcp",
+                old_time,
+            )
+
+        activity_gen._remember_connection_tuple(
+            "10.10.4.10",
+            42430,
+            "10.10.2.10",
+            389,
+            "tcp",
+            current_time,
+        )
+
+        assert len(activity_gen._recent_connection_tuples) == 1
+        assert len(activity_gen._recent_connection_tuple_heap) == 1
+
+    def test_recent_connection_tuple_cache_prunes_directly_seeded_entries(self, activity_gen):
+        """Compatibility fixture seeds should still follow event-time pruning."""
+        old_time = datetime(2024, 3, 17, 12, 0, tzinfo=UTC)
+        current_time = old_time + timedelta(hours=25)
+        old_key = ("10.10.4.10", 42430, "10.10.2.10", 389, "tcp")
+        activity_gen._recent_connection_tuples[old_key] = old_time.timestamp()
+
+        activity_gen._prune_recent_connection_tuples(current_time.timestamp())
+
+        assert activity_gen._recent_connection_tuples == {}
+        assert activity_gen._recent_connection_tuple_heap == []
+
     def test_generate_connection_does_not_infer_dns_for_non_resolver_port_53(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
