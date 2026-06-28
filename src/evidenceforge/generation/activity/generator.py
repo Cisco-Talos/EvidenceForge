@@ -27,6 +27,7 @@ activity events (logon, logoff, process creation, network connections) and
 coordinates them across multiple log formats for consistency.
 """
 
+import heapq
 import ipaddress
 import itertools
 import logging
@@ -236,6 +237,7 @@ class _HttpPersistentConnection:
 
 
 _HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
+_RECENT_CONNECTION_REUSE_WINDOW_SECONDS = 86_400.0
 
 
 _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
@@ -3918,6 +3920,7 @@ class ActivityGenerator:
             tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._recent_connection_tuple_heap: list[tuple[float, tuple[str, int, str, int, str]]] = []
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
@@ -4871,19 +4874,46 @@ class ActivityGenerator:
         if proto == "icmp":
             return
         ts_epoch = time.timestamp()
+        self._prune_recent_connection_tuples(ts_epoch)
         active_until = ts_epoch + max(0.0, duration or 0.0)
-        if len(self._recent_connection_tuples) > 100_000:
-            cutoff = ts_epoch - 86_400
-            self._recent_connection_tuples = {
-                key: seen_at
-                for key, seen_at in self._recent_connection_tuples.items()
-                if seen_at >= cutoff
-            }
         for key in self._connection_tuple_key_variants(src_ip, src_port, dst_ip, dst_port, proto):
-            self._recent_connection_tuples[key] = max(
-                active_until,
-                self._recent_connection_tuples.get(key, ts_epoch),
+            previous_seen_at = self._recent_connection_tuples.get(key)
+            seen_at = max(
+                active_until, previous_seen_at if previous_seen_at is not None else ts_epoch
             )
+            if previous_seen_at == seen_at:
+                continue
+            self._recent_connection_tuples[key] = seen_at
+            heapq.heappush(self._recent_connection_tuple_heap, (seen_at, key))
+
+    def _prune_recent_connection_tuples(
+        self,
+        ts_epoch: float,
+        *,
+        reuse_window: float = _RECENT_CONNECTION_REUSE_WINDOW_SECONDS,
+    ) -> None:
+        """Remove tuple reservations older than the event-time reuse window."""
+        if self._recent_connection_tuples and not self._recent_connection_tuple_heap:
+            self._recent_connection_tuple_heap = [
+                (seen_at, key) for key, seen_at in self._recent_connection_tuples.items()
+            ]
+            heapq.heapify(self._recent_connection_tuple_heap)
+        cutoff = ts_epoch - reuse_window
+        while self._recent_connection_tuple_heap:
+            seen_at, key = self._recent_connection_tuple_heap[0]
+            if seen_at >= cutoff:
+                break
+            heapq.heappop(self._recent_connection_tuple_heap)
+            if self._recent_connection_tuples.get(key) == seen_at:
+                del self._recent_connection_tuples[key]
+        if (
+            len(self._recent_connection_tuple_heap) > 100_000
+            and len(self._recent_connection_tuple_heap) > len(self._recent_connection_tuples) * 4
+        ):
+            self._recent_connection_tuple_heap = [
+                (seen_at, key) for key, seen_at in self._recent_connection_tuples.items()
+            ]
+            heapq.heapify(self._recent_connection_tuple_heap)
 
     @staticmethod
     def _connection_tuple_key_variants(
@@ -4892,15 +4922,20 @@ class ActivityGenerator:
         dst_ip: str,
         dst_port: int,
         proto: str,
-    ) -> set[tuple[str, int, str, int, str]]:
+    ) -> tuple[tuple[str, int, str, int, str], ...]:
         """Return raw and IPv4-mapped-normalized tuple keys for reuse checks."""
-        src_values = {src_ip, src_ip.removeprefix("::ffff:")}
-        dst_values = {dst_ip, dst_ip.removeprefix("::ffff:")}
-        return {
-            (candidate_src, src_port, candidate_dst, dst_port, proto)
-            for candidate_src in src_values
-            for candidate_dst in dst_values
-        }
+        src_values = (src_ip, src_ip.removeprefix("::ffff:"))
+        dst_values = (dst_ip, dst_ip.removeprefix("::ffff:"))
+        variants: list[tuple[str, int, str, int, str]] = []
+        seen: set[tuple[str, int, str, int, str]] = set()
+        for candidate_src in src_values:
+            for candidate_dst in dst_values:
+                key = (candidate_src, src_port, candidate_dst, dst_port, proto)
+                if key in seen:
+                    continue
+                variants.append(key)
+                seen.add(key)
+        return tuple(variants)
 
     def _connection_tuple_recently_used(
         self,
@@ -4911,10 +4946,11 @@ class ActivityGenerator:
         proto: str,
         time: datetime,
         *,
-        reuse_window: float = 86_400.0,
+        reuse_window: float = _RECENT_CONNECTION_REUSE_WINDOW_SECONDS,
     ) -> bool:
         """Return whether a source port would visibly repeat a recent endpoint tuple."""
         ts_epoch = time.timestamp()
+        self._prune_recent_connection_tuples(ts_epoch, reuse_window=reuse_window)
         for key in self._connection_tuple_key_variants(src_ip, src_port, dst_ip, dst_port, proto):
             seen_at = self._recent_connection_tuples.get(key)
             if seen_at is not None and abs(ts_epoch - seen_at) <= reuse_window:
@@ -4954,7 +4990,7 @@ class ActivityGenerator:
     ) -> int:
         """Allocate an ephemeral port while avoiding exact 5-tuple reuse."""
         rng = _get_rng()
-        reuse_window = 86_400.0
+        reuse_window = _RECENT_CONNECTION_REUSE_WINDOW_SECONDS
         for _ in range(128):
             src_port = _ephemeral_port(rng, os_category)
             if not self._connection_tuple_recently_used(
@@ -10396,21 +10432,24 @@ class ActivityGenerator:
     ) -> int:
         """Reserve a per-source/destination SSH source port for unambiguous correlation."""
         candidate = source_port or _ephemeral_port(rng, source_os)
+        ts_epoch = time.timestamp() if time is not None else None
+        if ts_epoch is not None:
+            self._prune_recent_connection_tuples(ts_epoch)
         for _ in range(100):
             key = (source_ip, target_ip, candidate)
             recent_key = (source_ip, candidate, target_ip, 22, "tcp")
             recent_seen = self._recent_connection_tuples.get(recent_key)
             recent_is_active = (
-                time is not None
+                ts_epoch is not None
                 and recent_seen is not None
-                and time.timestamp() - recent_seen <= 86_400.0
+                and ts_epoch - recent_seen <= _RECENT_CONNECTION_REUSE_WINDOW_SECONDS
             )
             if (
                 source_port is not None
                 and key in self._ssh_source_ports
-                and time is not None
+                and ts_epoch is not None
                 and recent_seen is not None
-                and abs(time.timestamp() - recent_seen) <= 1.0
+                and abs(ts_epoch - recent_seen) <= 1.0
             ):
                 return candidate
             if key not in self._ssh_source_ports and not recent_is_active:

@@ -6,6 +6,20 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.8.1 (2026-06-28)
+
+This patch release fixes a superlinear slowdown in web/proxy-heavy generation
+while preserving byte-identical output for short equivalence runs.
+
+**Generation performance**
+
+- Replaced count-triggered full rebuilds of the recent connection 5-tuple cache
+  with event-time lazy pruning, keeping tuple reuse protection bounded to the
+  existing 24-hour reuse window (`b5b10fc6`).
+- Added generated-output equivalence helpers, regression coverage for stale and
+  future tuple cache entries, and benchmark worklog notes for the high-volume
+  SOF-ELK scenario that reproduced the slowdown (`b5b10fc6`).
+
 ## v1.8.0 (2026-06-27)
 
 This minor release adds optional network-sensor topology support and updates
