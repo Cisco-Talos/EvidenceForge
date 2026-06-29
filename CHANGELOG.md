@@ -6,6 +6,53 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.9.0 (2026-06-29)
+
+This minor release adds backward-compatible realism controls for proxy
+authentication, authored beacon behavior, and storyline event timing.
+
+**Proxy authentication realism**
+
+- Added `environment.proxy.auth_policy` with a realistic default that preserves
+  human-authenticated browsing while rendering allowlisted update, telemetry,
+  CRL, OCSP, and package-manager proxy rows as unauthenticated `-` traffic
+  instead of routine machine/service principal proxy authentication
+  (`937dd447`).
+- Added `mode: legacy` for output closest to previous proxy identity behavior
+  and opt-in low-volume non-human principal modeling for scenarios that
+  intentionally need machine or service proxy auth evidence (`937dd447`).
+
+**Beacon behavior profiles**
+
+- Added synthetic behavior-shaped beacon profiles and optional
+  `beacon.profile`/`http_sequence` authoring, including deterministic template
+  tokens for host, campaign, tick, hex, GUID, and base64url payload variation
+  while preserving existing single-URI beacon behavior when omitted
+  (`937dd447`).
+- Added configuration loading and validation coverage for
+  `beacon_profiles.yaml`, plus CLI/config documentation for profile overlays
+  and validation expectations (`937dd447`).
+
+**Storyline event spacing**
+
+- Added optional `event_spacing` for storyline and red-herring steps, covering
+  human, automated, interval, and explicit-offset timing while leaving the
+  existing human-typing cadence as the compatibility default (`937dd447`).
+- Updated scenario docs, eforge command skills, mirrored references, and
+  regression tests for default compatibility, proxy parser safety, beacon
+  sequence/token behavior, and storyline/red-herring timing parity
+  (`937dd447`).
+
+**Validation and evaluation**
+
+- Updated `eforge eval` to validate the current combined-format
+  `proxy_access.log` output as source-native proxy evidence, including
+  normalized combined-log timestamps, and to reject obsolete W3C-style proxy
+  rows instead of treating them as valid current output (`790a6c12`).
+- Added red-herring validation parity for beacon profile references so
+  `eforge validate` catches unknown profiles in both storyline and red-herring
+  event lists (`790a6c12`).
+
 ## v1.8.1 (2026-06-28)
 
 This patch release fixes a superlinear slowdown in web/proxy-heavy generation
