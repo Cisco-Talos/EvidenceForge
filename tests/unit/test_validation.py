@@ -78,6 +78,62 @@ class TestScenarioValidator:
             for issue in issues
         )
 
+    def test_unknown_beacon_profile_errors(self, scenarios_dir):
+        """Beacon profile references should be checked during scenario validation."""
+        scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+        scenario_data["storyline"] = [
+            {
+                "id": "evt-beacon",
+                "time": "+1h",
+                "actor": scenario_data["environment"]["users"][0]["username"],
+                "system": scenario_data["environment"]["systems"][0]["hostname"],
+                "activity": "Profiled beacon",
+                "events": [
+                    {
+                        "type": "beacon",
+                        "dst_ip": "198.51.100.10",
+                        "interval": "5m",
+                        "count": 2,
+                        "profile": "not_a_profile",
+                    }
+                ],
+            }
+        ]
+        scenario = Scenario(**scenario_data)
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error" and issue.field_path == "storyline.0.events.0.profile"
+            for issue in issues
+        )
+
+    def test_explicit_event_spacing_offset_count_errors(self, scenarios_dir):
+        """Explicit offsets must line up with child event count."""
+        scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+        scenario_data["storyline"] = [
+            {
+                "id": "evt-spacing",
+                "time": "+1h",
+                "actor": scenario_data["environment"]["users"][0]["username"],
+                "system": scenario_data["environment"]["systems"][0]["hostname"],
+                "activity": "Bad spacing",
+                "event_spacing": {"mode": "explicit_offsets", "offsets": ["0s"]},
+                "events": [
+                    {"type": "process", "process_name": "cmd.exe"},
+                    {"type": "connection", "dst_ip": "198.51.100.10"},
+                ],
+            }
+        ]
+        scenario = Scenario(**scenario_data)
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error" and issue.field_path == "storyline.0.event_spacing.offsets"
+            for issue in issues
+        )
+
     def test_network_sensor_accepts_individual_zeek_formats(self):
         """Sensor log_formats may narrow Zeek to concrete emitters."""
         scenario = Scenario(

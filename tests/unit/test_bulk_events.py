@@ -379,6 +379,61 @@ class TestIterPeriodicTicks:
         assert engine.activity_generator.generate_connection.call_count == 5
         assert malicious_event["attempt_count"] == 5
 
+    def test_beacon_http_sequence_cycles_per_tick(self, monkeypatch):
+        """Beacon http_sequence should vary URI templates without hand-authored events."""
+        from unittest.mock import Mock
+
+        from evidenceforge.generation.engine import storyline
+        from evidenceforge.generation.engine.storyline import StorylineMixin
+
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        expected_ticks = [start + timedelta(seconds=60 * i) for i in range(4)]
+
+        engine = object.__new__(StorylineMixin)
+        system = System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+        engine.state_manager = Mock()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {system.ip: system}
+        engine.activity_generator._proxy_routes = {}
+        engine.activity_generator._proxy_mode = "transparent"
+
+        monkeypatch.setattr(
+            storyline, "_iter_periodic_ticks", Mock(return_value=iter(expected_ticks))
+        )
+
+        spec = BeaconEventSpec(
+            dst_ip="203.0.113.10",
+            hostname="c2.example.test",
+            interval="60s",
+            count=4,
+            action="allow",
+            jitter=0.0,
+            http_sequence=[
+                {"method": "GET", "uri": "/check?k={base64url:8}", "resp_bytes": [100, 200]},
+                {"method": "POST", "uri": "/task/{hex8}", "orig_bytes": [300, 400]},
+            ],
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=start,
+            activity="C2 beacon",
+            explicit_types={"beacon"},
+        )
+
+        calls = engine.activity_generator.generate_connection.call_args_list
+        uris = [call.kwargs["http"].uri for call in calls]
+        methods = [call.kwargs["http"].method for call in calls]
+        assert methods == ["GET", "POST", "GET", "POST"]
+        assert uris[0].startswith("/check?k=")
+        assert uris[1].startswith("/task/")
+        assert uris[0] != uris[2]
+
     def test_service_backed_beacon_uses_installed_service_process(self, monkeypatch):
         """A SYSTEM beacon after service persistence should not fall back to svchost."""
         from unittest.mock import Mock

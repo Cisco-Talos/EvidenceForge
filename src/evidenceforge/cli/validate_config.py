@@ -398,6 +398,9 @@ def validate_config() -> ValidationResult:
         "activity/proxy_user_agents.yaml": {
             "dict_fields": {"domain_overrides", "workstation", "server"},
         },
+        "activity/beacon_profiles.yaml": {
+            "dict_fields": {"profiles"},
+        },
         "activity/site_maps.yaml": {
             "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
@@ -2352,6 +2355,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         AuthNoiseConfig,
+        BeaconProfilesConfig,
         CallTracePatternEntry,
         CallTraceSourceFamilyEntry,
         ConnectionEntry,
@@ -3023,6 +3027,16 @@ def validate_config() -> ValidationResult:
                     or "?"
                 )
                 result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
+
+    from evidenceforge.config.beacon_profiles import load_beacon_profiles
+
+    beacon_profiles_err = validate_entry(
+        load_beacon_profiles(),
+        BeaconProfilesConfig,
+        "beacon_profiles.yaml",
+    )
+    if beacon_profiles_err:
+        result.issues.append(Issue("ERROR", "beacon_profiles.yaml", beacon_profiles_err))
 
     # Deduplicate issues (some checks may flag the same thing multiple times)
     # --- Check: Web scan preset IDS configuration ---

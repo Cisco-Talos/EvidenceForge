@@ -16,6 +16,34 @@ class TestValidateConfig:
             + "\n".join(f"  [{i.severity}] {i.file}: {i.message}" for i in result.issues)
         )
 
+    def test_validate_config_rejects_invalid_beacon_profile(self, monkeypatch):
+        from evidenceforge.config import beacon_profiles
+
+        def load_invalid_beacon_profiles():
+            return {
+                "profiles": {
+                    "bad profile": {
+                        "http_sequence": [
+                            {
+                                "method": "GET",
+                                "uri": "not-origin-form",
+                            }
+                        ]
+                    }
+                }
+            }
+
+        monkeypatch.setattr(beacon_profiles, "load_beacon_profiles", load_invalid_beacon_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "beacon_profiles.yaml"
+            and "uri must start with '/'" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_web_scan_rate_cap(self, monkeypatch):
         from evidenceforge.config import web_scan_presets
 

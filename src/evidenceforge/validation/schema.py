@@ -586,6 +586,24 @@ class ScenarioValidator:
                     )
                 )
 
+            spacing = getattr(event, "event_spacing", None)
+            if (
+                spacing is not None
+                and spacing.mode == "explicit_offsets"
+                and len(spacing.offsets) != len(event.events)
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.event_spacing.offsets",
+                        message=(
+                            f"Storyline event '{event.id}' explicit_offsets has "
+                            f"{len(spacing.offsets)} offsets for {len(event.events)} child events"
+                        ),
+                        suggestion="Provide exactly one offset per child event",
+                    )
+                )
+
     def _validate_uniqueness(self) -> None:
         """Check for duplicate usernames, hostnames, and IPs."""
         # Check duplicate usernames
@@ -1263,6 +1281,23 @@ class ScenarioValidator:
                         suggestion="Add the system to environment.systems",
                     )
                 )
+            spacing = getattr(rh, "event_spacing", None)
+            if (
+                spacing is not None
+                and spacing.mode == "explicit_offsets"
+                and len(spacing.offsets) != len(rh.events)
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"red_herrings[{idx}].event_spacing.offsets",
+                        message=(
+                            f"Red herring '{rh.id}' explicit_offsets has "
+                            f"{len(spacing.offsets)} offsets for {len(rh.events)} child events"
+                        ),
+                        suggestion="Provide exactly one offset per child event",
+                    )
+                )
 
     def _validate_storyline_actor_work_hours(self) -> None:
         """Check that storyline actors have personas with work_hours defined."""
@@ -1535,6 +1570,26 @@ class ScenarioValidator:
                                     f"(available: {available})"
                                 ),
                                 suggestion="Check the preset name or provide explicit paths",
+                            )
+                        )
+
+                # beacon profile name cross-reference
+                if event_type == "beacon" and getattr(spec, "profile", None):
+                    from evidenceforge.config.beacon_profiles import get_profile, list_profile_names
+
+                    if get_profile(spec.profile) is None:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.profile",
+                                message=(
+                                    f"[{event.id}] beacon profile '{spec.profile}' not found "
+                                    f"(available: {list_profile_names()})"
+                                ),
+                                suggestion=(
+                                    "Check the profile name or add it to "
+                                    "activity/beacon_profiles.yaml"
+                                ),
                             )
                         )
 

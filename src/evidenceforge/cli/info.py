@@ -156,6 +156,13 @@ def _collect_web_scan_presets() -> list[str]:
     return list_preset_names()
 
 
+def _collect_beacon_profiles() -> list[str]:
+    """Collect available beacon behavior profile names."""
+    from evidenceforge.config.beacon_profiles import list_profile_names
+
+    return list_profile_names()
+
+
 def _collect_format_groups() -> dict[str, list[str]]:
     """Collect format group names and their expanded formats."""
     from evidenceforge.events.dispatcher import FORMAT_GROUPS
@@ -229,6 +236,7 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "application_ids": _collect_application_ids,
         "system_roles": _collect_system_roles,
         "web_scan_presets": _collect_web_scan_presets,
+        "beacon_profiles": _collect_beacon_profiles,
         "format_groups": _collect_format_groups,
     }
     for key, collector in inventories.items():
@@ -300,6 +308,11 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(_format_list(app_ids))
     lines.append("")
 
+    beacon_profiles = data["beacon_profiles"]
+    lines.append(f"Beacon profiles ({len(beacon_profiles)}):")
+    lines.append(_format_list(beacon_profiles))
+    lines.append("")
+
     roles = data["system_roles"]
     lines.append(f"System roles ({len(roles)}):")
     lines.append(_format_list(roles))
@@ -309,6 +322,7 @@ def format_human_readable(data: dict[str, Any]) -> str:
 
 _FIELD_DESCRIPTIONS: dict[str, str] = {
     "application_ids": "Application IDs in the catalog",
+    "beacon_profiles": "Available beacon behavior profile names",
     "config_writable": "Whether package config files are directly editable",
     "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
     "format_groups": "Format group names and their expanded formats (for --formats flag)",

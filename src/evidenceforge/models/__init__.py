@@ -40,8 +40,10 @@ from .exceptions import (
 )
 from .scenario import (
     BaselineActivity,
+    BeaconHttpSequenceEntry,
     ConnectionProfile,
     Environment,
+    EventSpacingConfig,
     Group,
     NetworkConfig,
     NetworkIdentity,
@@ -49,6 +51,7 @@ from .scenario import (
     NetworkSensor,
     OutputSpec,
     Persona,
+    ProxyAuthPolicyConfig,
     ProxyConfig,
     RedHerringEvent,
     Scenario,
@@ -87,7 +90,9 @@ __all__ = [
     "Group",
     "Persona",
     "BaselineActivity",
+    "BeaconHttpSequenceEntry",
     "ConnectionProfile",
+    "EventSpacingConfig",
     "NetworkIdentity",
     "TrafficAffinity",
     "TrafficAudience",
@@ -104,6 +109,7 @@ __all__ = [
     "NetworkSegment",
     "NetworkSensor",
     "NetworkConfig",
+    "ProxyAuthPolicyConfig",
     "ProxyConfig",
     # State models
     "GeneratorState",

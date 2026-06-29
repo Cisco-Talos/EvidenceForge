@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any, ClassVar, Literal, Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 
@@ -1298,6 +1298,88 @@ class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
     def non_empty(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("list must not be empty")
+        return v
+
+
+class BeaconProfileHttpEntry(BaseModel, extra="forbid"):
+    """One weighted HTTP request shape in a beacon profile."""
+
+    method: str = "GET"
+    uri: str
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    user_agent: str | None = None
+    referrer: str | None = None
+    response_body_len: list[int] | int | None = None
+    orig_bytes: list[int] | int | None = None
+    resp_bytes: list[int] | int | None = None
+    weight: float = Field(default=1.0, gt=0.0)
+
+    @field_validator("method")
+    @classmethod
+    def method_is_token(cls, v: str) -> str:
+        method = v.upper()
+        if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", method):
+            raise ValueError("method must be a valid HTTP token")
+        return method
+
+    @field_validator("uri")
+    @classmethod
+    def uri_is_origin_form(cls, v: str) -> str:
+        if not v.startswith("/") or any(char.isspace() for char in v):
+            raise ValueError("uri must start with '/' and contain no whitespace")
+        return v
+
+    @field_validator("response_body_len", "orig_bytes", "resp_bytes")
+    @classmethod
+    def byte_value_or_range(cls, v: list[int] | int | None, info: ValidationInfo):
+        if v is None:
+            return v
+        if isinstance(v, int):
+            if v < 0:
+                raise ValueError(f"{info.field_name} must be non-negative")
+            return v
+        if len(v) != 2:
+            raise ValueError(f"{info.field_name} range must contain exactly two integers")
+        if not all(isinstance(item, int) for item in v):
+            raise ValueError(f"{info.field_name} range values must be integers")
+        if v[0] < 0 or v[1] < v[0]:
+            raise ValueError(f"{info.field_name} range must be non-negative [lo, hi]")
+        return v
+
+
+class BeaconProfileEntry(BaseModel, extra="forbid"):
+    """Behavior-shaped synthetic beacon profile."""
+
+    description: str | None = None
+    user_agents: list[str] = Field(default_factory=list)
+    http_sequence: list[BeaconProfileHttpEntry] = Field(default_factory=list)
+    dns_resolution: Literal["cached", "each_tick"] | None = None
+    jitter: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def has_behavior(self) -> BeaconProfileEntry:
+        if not self.user_agents and not self.http_sequence and self.dns_resolution is None:
+            raise ValueError(
+                "beacon profile must define user_agents, http_sequence, or dns_resolution"
+            )
+        return self
+
+
+class BeaconProfilesConfig(BaseModel, extra="forbid"):
+    """Top-level config for beacon_profiles.yaml."""
+
+    profiles: dict[str, BeaconProfileEntry]
+
+    @field_validator("profiles")
+    @classmethod
+    def profile_names_are_simple(
+        cls, v: dict[str, BeaconProfileEntry]
+    ) -> dict[str, BeaconProfileEntry]:
+        if not v:
+            raise ValueError("profiles must not be empty")
+        invalid = [name for name in v if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", str(name))]
+        if invalid:
+            raise ValueError(f"invalid beacon profile names: {', '.join(invalid)}")
         return v
 
 
