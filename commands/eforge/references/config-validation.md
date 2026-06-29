@@ -87,6 +87,15 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 40 | observation_profiles.yaml structure | ERROR | Invalid source-family name, missing `complete` profile, invalid missingness probability, or inverted delay/host multiplier range |
 | 41 | host_activity_profiles.yaml structure | ERROR | Invalid host/persona/role rate-family name, missing core host type, malformed multiplier/bounds range, malformed firewall deny burst settings, or invalid artifact variant pools |
 | 42 | tls_realism.yaml chain metadata | ERROR | Invalid TLS subject-key profile fields or RSA/ECDSA child signature algorithm mismatch |
+| 43 | beacon_profiles.yaml structure | ERROR | Invalid profile name, empty `http_sequence`, non-origin-form URI, invalid HTTP method, malformed weight/status choices, or inverted byte/body ranges |
+
+## Scenario Validation: beacon profiles and event spacing
+
+When `eforge validate` checks a scenario:
+- `beacon.profile` must name a profile from merged `beacon_profiles.yaml`
+- `beacon.http_sequence` entries must use valid HTTP methods, origin-form URIs, and integer/range byte fields
+- `event_spacing.mode: explicit_offsets` must provide exactly one offset per child event in the parent storyline or red-herring step
+- `event_spacing.mode: interval` must include `interval`
 
 ## Scenario Validation: traffic_rates
 

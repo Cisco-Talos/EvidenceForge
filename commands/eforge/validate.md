@@ -62,6 +62,7 @@ network identity.
 - Missing storyline event `id` fields
 - Typed event field errors (extra/missing fields caught by Pydantic validation)
 - Invalid IP addresses in connection events
+- Unknown `beacon.profile` names or `event_spacing.mode: explicit_offsets` lists whose count does not match the step's `events` list
 
 Fix the issue in the scenario file, then re-run `eforge validate` to confirm.
 
@@ -134,7 +135,10 @@ if the environment lacks a host of the required OS/role and one cannot be trivia
 The following optional fields are valid and should not be flagged as unknown:
 - `time_window.warmup` — warm-up duration for state pre-population (default "8h", minimum "1h")
 - `environment.network_identities` — scenario-local host/IP ownership registry
+- `environment.proxy.auth_policy` — proxy username realism policy (`mode: realistic|legacy`, optional non-human principal probabilities)
 - `baseline_activity.traffic_affinities` — authored benign baseline traffic rules
 - `baseline_activity.traffic_suppression` — scoped down-ranking/removal of default baseline traffic
+- `storyline[].event_spacing` and `red_herrings[].event_spacing` — per-step child event spacing (`human`, `automated`, `interval`, or `explicit_offsets`)
+- `beacon.profile` and `beacon.http_sequence` — synthetic beacon behavior profile or explicit per-tick HTTP sequence
 
 For these, advise the user to use `/eforge scenario` to rework the relevant section, and be specific about what needs to change.

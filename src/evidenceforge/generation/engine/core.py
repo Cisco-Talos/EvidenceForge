@@ -438,6 +438,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator._proxy_routes = self._proxy_routes
         self.activity_generator._proxy_mode = self.scenario.environment.proxy.mode
         self.activity_generator._proxy_listener_port = self.scenario.environment.proxy.listener_port
+        self.activity_generator._proxy_auth_policy = self.scenario.environment.proxy.auth_policy
+        self.activity_generator._proxy_service_accounts = self.scenario.environment.service_accounts
         self.world_planner = WorldPlanner(
             world_model=self.world_model,
             state_manager=self.state_manager,

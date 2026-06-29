@@ -32,6 +32,9 @@ from evidenceforge.evaluation.parsers import (
     discover_log_files,
     get_parser,
 )
+from evidenceforge.evaluation.pillars.parseability import _normalize_for_validation
+from evidenceforge.formats.loader import load_format
+from evidenceforge.formats.validator import validate_event
 
 SAMPLE_DATA_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
 
@@ -140,13 +143,33 @@ class TestProxyParserRegistration:
         assert record.fields["username"] == "jsmith"
         assert record.fields["protocol"] == "HTTP/1.1"
         assert record.fields["url"] == "http://example.com/download?q=1"
-        assert record.fields["path"] == "http://example.com/download?q=1"
+        assert "path" not in record.fields
+        assert "bytes_sent" not in record.fields
         assert record.fields["host"] == "example.com"
         assert record.fields["sc_bytes"] == 1024
         assert record.fields["user_agent"] == "Mozilla/5.0 (Windows NT 10.0)"
         assert record.fields["referrer"] == "https://intranet.example.com/"
 
-    def test_proxy_access_parser_keeps_legacy_w3c_fallback(self):
+    def test_proxy_access_combined_columns_pass_format_validation(self):
+        parser = get_parser("proxy_access")
+        record = parser._parse_line(
+            "10.0.0.1 - jsmith [15/Jul/2024:10:00:00 +0000] "
+            '"GET http://example.com/download?q=1 HTTP/1.1" 200 1024 '
+            '"https://intranet.example.com/" "Mozilla/5.0 (Windows NT 10.0)"',
+            1,
+        )
+        normalized = _normalize_for_validation(
+            "proxy_access",
+            record.fields,
+            record.timestamp,
+        )
+
+        result = validate_event(load_format("proxy_access"), normalized)
+
+        assert record.parse_errors == []
+        assert result.valid, result.errors
+
+    def test_proxy_access_parser_rejects_legacy_w3c_rows(self):
         parser = get_parser("proxy_access")
         record = parser._parse_line(
             "2024-07-15 10:00:00 10.0.0.1 jsmith GET http://example.com/ HTTP/1.1 "
@@ -155,15 +178,9 @@ class TestProxyParserRegistration:
             1,
         )
 
-        assert record.parse_errors == []
-        assert record.fields["username"] == "jsmith"
-        assert record.fields["protocol"] == "HTTP/1.1"
-        assert record.fields["host"] == "example.com"
-        assert record.fields["user_agent"] == "Mozilla/5.0 (Windows NT 10.0)"
-        assert record.fields["referrer"] == "https://intranet.example.com/"
-        assert record.fields["content_type"] == "text/html"
-        assert record.fields["cache_result"] == "MISS"
-        assert record.fields["proxy_action"] == "forward"
+        assert record.fields == {}
+        assert record.timestamp is None
+        assert record.parse_errors == ["Line does not match proxy access combined log format"]
 
 
 class TestCanParseFlatPaths:

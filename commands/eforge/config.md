@@ -61,6 +61,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify spawn rules | `spawn_rules.yaml` | `application_catalog.yaml` (validate exe exists) |
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
+| Add/modify beacon behavior profiles | `beacon_profiles.yaml` | Scenario `beacon.profile` values reference these synthetic HTTP sequence profiles; keep profiles behavior-shaped, not live IOC replicas |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify inbound web visitor mix | `web_session_profiles.yaml` | `site_maps.yaml`, `traffic_rates.yaml`, `timing_profiles.yaml` |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names; keep `typo_model` rates/counts realistic |
@@ -95,7 +96,7 @@ Also read the relevant reference doc for field schemas and conventions:
 
 | Topic | Reference Doc |
 |-------|---------------|
-| DNS, traffic, proxy, site maps, network | `references/config-dns-network.md` |
+| DNS, traffic, proxy, beacon profiles, site maps, network | `references/config-dns-network.md` |
 | Applications, spawn rules, processes | `references/config-apps-processes.md` |
 | Sysmon filters, EDR pools, CallTrace, ProcessAccess masks, CreateRemoteThread pairs | `references/config-apps-processes.md` (Sysmon sections) |
 | Persona file structure | `references/config-personas.md` |
@@ -116,6 +117,11 @@ scenario-local domains, direct the user to `environment.network_identities` and
 domains, ask what `dns_tags` it needs, whether it should appear in proxy logs,
 whether it is browsable with page depth, which personas/roles should select it,
 and whether it has multiple IPs.
+
+**Adding a beacon profile:** Run `eforge info beacon_profiles` first to avoid
+duplicate names. Keep profile contents synthetic and behavior-shaped: URI shapes,
+method/status/byte ranges, User-Agent pools, and deterministic tokens are fine;
+do not encode live malware IOC paths, domains, or exact campaign payloads.
 
 **Adding an application:** Which OS(es)? Categories? Which personas? Image path? PE metadata? Command templates? Parent process? Children? Network traffic?
 

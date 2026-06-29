@@ -170,6 +170,9 @@ declared identity are warnings.
 proxy:
   mode: transparent              # Optional: transparent|explicit (default: transparent)
   listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+  auth_policy:
+    mode: realistic              # realistic|legacy (default: realistic)
+    non_human_principals: false  # Opt-in only; default keeps machine/service auth off
 ```
 
 `environment.proxy` controls how systems with `roles: [forward_proxy]` appear in network evidence:
@@ -178,6 +181,15 @@ proxy:
 - `explicit` models PAC/browser-configured proxy behavior by replacing the logical client-to-origin connection with two concrete legs: client-to-proxy on `listener_port`, then proxy-to-origin on the destination port. Sensor placement determines which leg each Zeek/IDS/firewall source sees. Denied proxy requests stop at the proxy and do not emit a proxy-to-origin leg.
 
 If `proxy_access` is requested and `environment.proxy` is omitted, validation warns and defaults to `transparent`. If `mode: explicit` is set without `listener_port`, validation warns and defaults to `8080`.
+
+`auth_policy.mode: realistic` renders ordinary browser/SaaS proxy rows with the
+assigned human user, while allowlisted infrastructure classes such as software
+updates, telemetry, CRL, and OCSP can render unauthenticated (`-`) proxy rows.
+Machine/service-account proxy usernames are not emitted routinely; set
+`non_human_principals: true` with low `machine_account_probability` or
+`service_account_probability` only for environments that intentionally
+authenticate non-human proxy clients. `mode: legacy` preserves the older
+machine-context User-Agent behavior for compatibility datasets.
 
 ### System Roles
 
@@ -591,6 +603,8 @@ storyline:
     actor: john.doe            # Required: username, built-in account (SYSTEM/root), or service_account
     system: WS-01              # Required: system hostname
     activity: "lateral movement via pass-the-hash"  # Required: human-readable description (GROUND_TRUTH.md)
+    event_spacing:             # Optional; omitted defaults to human typing cadence
+      mode: human              # human|automated|interval|explicit_offsets
     events:                    # Required: typed event declarations
       - type: logon
         source_ip: "10.0.1.20"
@@ -603,6 +617,13 @@ storyline:
 ### Event Types
 
 Each event in the `events` list has a `type` field that selects a validated schema. Unknown fields are rejected at load time.
+
+`event_spacing` controls the offsets between child events in one storyline or
+red-herring step. `human` is the default and preserves the current typing-like
+cadence. `automated` accepts `min_delay`/`max_delay` for script/tool bursts.
+`interval` accepts `interval` plus optional `jitter` for actions separated by
+minutes or hours. `explicit_offsets` accepts one offset per child event, such as
+`["0s", "18m", "2h10m"]`.
 
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
@@ -622,7 +643,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
-| `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `jitter` (default: 0.15) |
+| `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `profile`, `http_sequence`, `jitter` (default: 0.15) |
 | `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
 | `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4) |
 | `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` (default: 0.5) |
@@ -692,7 +713,11 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Hawkes temporal model:** User baseline events use a self-exciting Hawkes process — activity naturally clusters into bursts that taper off, producing realistic human work patterns. Parameters are derived from persona `risk_profile` (high = intense bursts, low = gentle clusters). System/service traffic uses periodic intervals with small jitter instead.
 
-**Storyline typing cadence:** Events within a multi-event storyline step are spaced with human typing rhythm (~1.5s between actions, occasional 3-12s thinking pauses) instead of sharing a single timestamp.
+**Storyline child-event spacing:** Events within a multi-event storyline step
+default to human typing rhythm (~1.5s between actions, occasional 3-12s
+thinking pauses) instead of sharing a single timestamp. Set `event_spacing` on
+the parent storyline or red-herring step when the child events should look
+automated, interval-driven, or explicitly minutes/hours apart.
 
 **Day-of-week variation:** Scenarios spanning multiple days show weekly rhythm — Monday login storms, Friday early departures, near-zero weekend activity (only sysadmin/security_analyst/help_desk personas active on Saturday/Sunday).
 
@@ -786,7 +811,27 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       duration: "7d"
       jitter: 0.2
       action: allow
+      profile: http_checkin
       technique: "T1071.001 - Web Protocols"
+
+# Explicit per-beat HTTP variation
+- time: "+3h30m"
+  actor: attacker
+  system: workstation01
+  activity: "C2 beacon with rotating tasking paths"
+  events:
+    - type: beacon
+      dst_ip: "45.83.221.30"
+      dst_port: 443
+      hostname: "api-sync.example.com"
+      interval: "90s"
+      count: 20
+      http_sequence:
+        - method: GET
+          uri: "/api/v1/checkin?id={host_id}&k={base64url:12}"
+        - method: POST
+          uri: "/api/v1/task/{campaign_id}/{hex8}"
+          orig_bytes: [180, 900]
 
 # Denied beacon (equivalent to former blocked_c2)
 - time: "+5h"
@@ -804,7 +849,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `profile` selects a behavior-shaped synthetic profile from `config/activity/beacon_profiles.yaml`; bundled profiles model broad check-in/tasking shapes, not live malware IoCs. `http_sequence` cycles explicit per-tick request shapes and can use deterministic URI tokens: `{host_id}`, `{campaign_id}`, `{tick}`, `{hex8}`, `{guid}`, and `{base64url:N}`. Sequence entries may override `method`, `uri`, `user_agent`, `referrer`, `status_code`, `response_body_len`, `orig_bytes`, and `resp_bytes`; byte fields accept either an integer or `[min, max]`. For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### DNS Query Events
 

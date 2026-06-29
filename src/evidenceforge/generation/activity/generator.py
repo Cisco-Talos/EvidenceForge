@@ -152,7 +152,10 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
-from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+from evidenceforge.generation.activity.proxy_uri import (
+    get_proxy_domain_class,
+    is_browser_like_proxy_domain,
+)
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
@@ -174,7 +177,7 @@ from evidenceforge.generation.identity import IdentityDirectory, default_linux_u
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
-from evidenceforge.models.scenario import System, User
+from evidenceforge.models.scenario import ProxyAuthPolicyConfig, System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -3913,6 +3916,8 @@ class ActivityGenerator:
         self._network_visibility = network_visibility
         self._proxy_mode = "transparent"
         self._proxy_listener_port = 8080
+        self._proxy_auth_policy = ProxyAuthPolicyConfig()
+        self._proxy_service_accounts: list[str] = []
         self._explicit_proxy_tunnels: dict[
             tuple[str, str, str, str, int, str], tuple[datetime, str]
         ] = {}
@@ -5424,9 +5429,49 @@ class ActivityGenerator:
         source_system: Optional["System"],
         user_agent: str,
         cache_result: str,
+        hostname: str | None = None,
     ) -> str:
         """Return the source-native authenticated proxy username for a client request."""
         if source_system is None or cache_result.upper() == "AUTH_REQUIRED":
+            return ""
+
+        auth_policy = getattr(self, "_proxy_auth_policy", ProxyAuthPolicyConfig())
+        netbios_domain = getattr(self, "_netbios_domain", "") or "CORP"
+        os_category = _get_os_category(getattr(source_system, "os", ""))
+        short_hostname = str(getattr(source_system, "hostname", "") or "").split(".", 1)[0]
+
+        def _service_principal(seed: int) -> str:
+            service_accounts = list(getattr(self, "_proxy_service_accounts", []) or [])
+            if not service_accounts:
+                return ""
+            service_account = service_accounts[seed % len(service_accounts)]
+            if os_category == "windows":
+                return f"{netbios_domain}\\{service_account}"
+            ad_domain = getattr(self, "_ad_domain", "")
+            return f"{service_account}@{ad_domain}" if ad_domain else service_account
+
+        domain_class = get_proxy_domain_class(hostname or "") if hostname else None
+        if (
+            auth_policy.mode == "realistic"
+            and domain_class
+            and domain_class.lower() in set(auth_policy.allowlisted_domain_classes)
+        ):
+            if not auth_policy.non_human_principals:
+                return ""
+            roll_seed = _stable_seed(
+                "proxy_auth_non_human:"
+                f"{getattr(source_system, 'hostname', '')}:"
+                f"{hostname or ''}:"
+                f"{user_agent}:"
+                f"{cache_result}"
+            )
+            roll = (roll_seed % 1_000_000) / 1_000_000.0
+            machine_cutoff = auth_policy.machine_account_probability
+            service_cutoff = machine_cutoff + auth_policy.service_account_probability
+            if roll < machine_cutoff and os_category == "windows" and short_hostname:
+                return f"{netbios_domain}\\{short_hostname}$"
+            if roll < service_cutoff:
+                return _service_principal(roll_seed)
             return ""
 
         assigned_user = getattr(source_system, "assigned_user", None)
@@ -5437,13 +5482,27 @@ class ActivityGenerator:
         if system_type != "workstation":
             return ""
 
-        netbios_domain = getattr(self, "_netbios_domain", "") or "CORP"
-        os_category = _get_os_category(getattr(source_system, "os", ""))
         if os_category == "windows":
             if _is_machine_context_proxy_user_agent(user_agent):
-                hostname = str(getattr(source_system, "hostname", "") or "").split(".", 1)[0]
-                if hostname:
-                    return f"{netbios_domain}\\{hostname}$"
+                if auth_policy.mode == "realistic" and not auth_policy.non_human_principals:
+                    return ""
+                if auth_policy.mode == "realistic":
+                    machine_roll_seed = _stable_seed(
+                        "proxy_auth_machine:"
+                        f"{getattr(source_system, 'hostname', '')}:"
+                        f"{hostname or ''}:"
+                        f"{user_agent}:"
+                        f"{cache_result}"
+                    )
+                    machine_roll = (machine_roll_seed % 1_000_000) / 1_000_000.0
+                    machine_cutoff = auth_policy.machine_account_probability
+                    service_cutoff = machine_cutoff + auth_policy.service_account_probability
+                    if machine_roll >= service_cutoff:
+                        return ""
+                    if machine_roll >= machine_cutoff:
+                        return _service_principal(machine_roll_seed)
+                if short_hostname:
+                    return f"{netbios_domain}\\{short_hostname}$"
             return f"{netbios_domain}\\{assigned_user}"
 
         ad_domain = getattr(self, "_ad_domain", "")
@@ -5695,6 +5754,7 @@ class ActivityGenerator:
                 source_system=source_system,
                 user_agent=user_agent,
                 cache_result=cache_result,
+                hostname=proxy_hostname,
             ),
             method=proxy_method,
             url=url,
@@ -12392,6 +12452,7 @@ class ActivityGenerator:
                         source_system=source_system,
                         user_agent=user_agent,
                         cache_result=cache_result,
+                        hostname=proxy_hostname,
                     ),
                     method=proxy_method,
                     url=url,

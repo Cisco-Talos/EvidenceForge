@@ -587,8 +587,8 @@ class TestProxyUriOsFiltering:
         for hostname, user_agent in expected.items():
             assert pick_proxy_user_agent(random.Random(42), source, hostname=hostname) == user_agent
 
-    def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
-        """Domain-specific proxy UA rules should override inherited browser session UAs."""
+    def test_infrastructure_domain_defaults_to_unauthenticated_proxy_user(self):
+        """Allowlisted infrastructure proxy traffic should not routinely auth as a machine."""
         from evidenceforge.events.contexts import HttpContext
         from evidenceforge.generation.activity.generator import ActivityGenerator
         from evidenceforge.generation.state_manager import StateManager
@@ -641,7 +641,126 @@ class TestProxyUriOsFiltering:
         )
 
         assert context.user_agent == "Microsoft-CryptoAPI/10.0"
+        assert context.username == ""
+
+    def test_legacy_proxy_auth_policy_preserves_machine_context_username(self):
+        """Legacy mode keeps prior machine-context User-Agent proxy attribution."""
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import ProxyAuthPolicyConfig, System, User
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.10.20.5",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "meridianhcs.local"
+        generator._netbios_domain = "MERIDIAN"
+        generator._proxy_auth_policy = ProxyAuthPolicyConfig(mode="legacy")
+        generator._users_by_username = {
+            "alex.morgan": User(
+                username="alex.morgan",
+                full_name="Alex Morgan",
+                email="alex.morgan@meridianhcs.local",
+            )
+        }
+
+        context = generator._build_proxy_context(
+            src_ip=source.ip,
+            dst_ip="13.107.4.50",
+            dst_port=80,
+            service="http",
+            duration=0.2,
+            orig_bytes=400,
+            resp_bytes=2048,
+            hostname="ctldl.windowsupdate.com",
+            source_system=source,
+            proxy_sys=proxy,
+            http=HttpContext(
+                method="GET",
+                uri="/msdownload/update/v3/static/trustedr/en/authrootstl.cab",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+            ),
+        )
+
+        assert context.user_agent == "Microsoft-CryptoAPI/10.0"
         assert context.username == "MERIDIAN\\WS-01$"
+
+    def test_opt_in_proxy_auth_policy_can_emit_machine_context_username(self):
+        """Realistic mode can opt in to rare machine-account proxy auth."""
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import ProxyAuthPolicyConfig, System
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
+        )
+        generator = ActivityGenerator(StateManager(), {})
+        generator._netbios_domain = "MERIDIAN"
+        generator._proxy_auth_policy = ProxyAuthPolicyConfig(
+            non_human_principals=True,
+            machine_account_probability=1.0,
+        )
+
+        assert (
+            generator._proxy_username_for_source(
+                source_system=source,
+                user_agent="Microsoft-CryptoAPI/10.0",
+                cache_result="MISS",
+                hostname="ctldl.windowsupdate.com",
+            )
+            == "MERIDIAN\\WS-01$"
+        )
+
+    def test_opt_in_proxy_auth_policy_can_emit_service_account_username(self):
+        """Realistic mode can opt in to rare service-account proxy auth."""
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import ProxyAuthPolicyConfig, System
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
+        )
+        generator = ActivityGenerator(StateManager(), {})
+        generator._netbios_domain = "MERIDIAN"
+        generator._proxy_service_accounts = ["svc_patch"]
+        generator._proxy_auth_policy = ProxyAuthPolicyConfig(
+            non_human_principals=True,
+            machine_account_probability=0.0,
+            service_account_probability=1.0,
+        )
+
+        assert (
+            generator._proxy_username_for_source(
+                source_system=source,
+                user_agent="Microsoft-CryptoAPI/10.0",
+                cache_result="MISS",
+                hostname="ctldl.windowsupdate.com",
+            )
+            == "MERIDIAN\\svc_patch"
+        )
 
     def test_proxy_context_uses_assigned_user_for_workstation_browser(self):
         """Authenticated proxy logs should carry user identity for workstation browsing."""

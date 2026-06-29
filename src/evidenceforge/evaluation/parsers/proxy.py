@@ -44,27 +44,6 @@ _COMBINED_PROXY_PATTERN = re.compile(
     r'"([^"]*)"'  # "user_agent"
 )
 
-# Legacy W3C Extended format:
-# date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result [x-proxy-action]
-_LEGACY_W3C_PROXY_PATTERN = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+"  # timestamp
-    r"(\S+)\s+"  # client_ip
-    r"(\S+)\s+"  # username
-    r"(\S+)\s+"  # method
-    r"(\S+)\s+"  # url
-    r"(\S+)\s+"  # protocol
-    r"(\d+)\s+"  # status_code
-    r"(\d+)\s+"  # sc_bytes
-    r"(\d+)\s+"  # cs_bytes
-    r"(\d+)\s+"  # time_taken
-    r"(\S+)\s+"  # host
-    r"(\S+)\s+"  # user_agent
-    r"(\S+)\s+"  # referrer
-    r"(\S+)\s+"  # content_type
-    r"(\S+)"  # cache_result
-    r"(?:\s+(\S+))?"  # optional proxy_action
-)
-
 
 def _proxy_host_from_request_target(method: str, request_target: str) -> str | None:
     """Return destination host from a proxy request target when it is present."""
@@ -131,22 +110,18 @@ class ProxyAccessParser(LogParser):
                 except ValueError:
                     errors.append(f"Invalid timestamp: {ts_str}")
 
-            fields["timestamp"] = ts_str
             fields["client_ip"] = client_ip
             if username != "-":
                 fields["username"] = username
             fields["method"] = method
             fields["url"] = request_target
-            fields["path"] = request_target
             fields["protocol"] = protocol
             fields["status_code"] = int(status)
             if bytes_sent != "-":
                 try:
-                    parsed_bytes = int(bytes_sent)
-                    fields["bytes_sent"] = parsed_bytes
-                    fields["sc_bytes"] = parsed_bytes
+                    fields["sc_bytes"] = int(bytes_sent)
                 except ValueError:
-                    fields["bytes_sent"] = bytes_sent
+                    fields["sc_bytes"] = bytes_sent
             if referrer != "-":
                 fields["referrer"] = referrer
             if user_agent != "-":
@@ -165,61 +140,12 @@ class ProxyAccessParser(LogParser):
                 source_host=hostname,
             )
 
-        match = _LEGACY_W3C_PROXY_PATTERN.match(line)
-        if not match:
-            errors.append("Line does not match proxy access format")
-            return ParsedRecord(
-                source_format=self.format_name,
-                raw=line,
-                fields=fields,
-                timestamp=None,
-                parse_errors=errors,
-                line_number=line_number,
-                source_host=hostname,
-            )
-
-        ts_str = match.group(1)
-        try:
-            timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
-        except ValueError:
-            errors.append(f"Invalid timestamp: {ts_str}")
-
-        fields["timestamp"] = ts_str
-        fields["client_ip"] = match.group(2)
-        username = match.group(3)
-        if username != "-":
-            fields["username"] = username
-        fields["method"] = match.group(4)
-        fields["url"] = match.group(5)
-        protocol = match.group(6)
-        if protocol != "-":
-            fields["protocol"] = protocol
-        fields["status_code"] = int(match.group(7))
-        fields["sc_bytes"] = int(match.group(8))
-        fields["cs_bytes"] = int(match.group(9))
-        fields["time_taken"] = int(match.group(10))
-        fields["host"] = match.group(11)
-        ua = match.group(12)
-        if ua != "-":
-            fields["user_agent"] = ua.replace("+", " ")
-        referrer = match.group(13)
-        if referrer != "-":
-            fields["referrer"] = referrer
-        ct = match.group(14)
-        if ct != "-":
-            fields["content_type"] = ct
-        cr = match.group(15)
-        if cr != "-":
-            fields["cache_result"] = cr
-        action = match.group(16)
-        if action and action != "-":
-            fields["proxy_action"] = action
-
+        errors.append("Line does not match proxy access combined log format")
         return ParsedRecord(
             source_format=self.format_name,
             raw=line,
             fields=fields,
-            timestamp=timestamp,
+            timestamp=None,
             parse_errors=errors,
             line_number=line_number,
             source_host=hostname,
