@@ -364,7 +364,7 @@ def _normalize_for_validation(
                 normalized["ts"] = float(ts)
             except ValueError:
                 pass
-    if format_name in ("web_access", "syslog", "snort_alert", "bash_history"):
+    if format_name in ("web_access", "proxy_access", "syslog", "snort_alert", "bash_history"):
         if parsed_timestamp is not None:
             normalized["timestamp"] = parsed_timestamp
     if format_name == "windows_event_security":

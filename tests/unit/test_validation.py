@@ -3532,6 +3532,52 @@ class TestLinkabilityTimeGap:
         assert rh_issues[0].severity == "error"
         assert "NONEXISTENT-HOST" in rh_issues[0].message
 
+    def test_red_herring_unknown_beacon_profile_errors(self):
+        """Red herring beacon profile references should be checked during validation."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            red_herrings=[
+                RedHerringEvent(
+                    id="rh-1",
+                    time="+30m",
+                    actor="u1",
+                    system="WS-01",
+                    activity="Profiled beacon decoy",
+                    explanation="Test explanation",
+                    events=[
+                        {
+                            "type": "beacon",
+                            "dst_ip": "198.51.100.10",
+                            "interval": "5m",
+                            "count": 1,
+                            "profile": "not_a_profile",
+                        }
+                    ],
+                ),
+            ],
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error" and issue.field_path == "red_herrings[0].events.0.profile"
+            for issue in issues
+        )
+
     def test_red_herring_valid_actors_and_systems(self):
         """Red herrings with valid actors and systems should produce no reference errors."""
         scenario = Scenario(

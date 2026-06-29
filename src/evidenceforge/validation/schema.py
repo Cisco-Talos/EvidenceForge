@@ -1298,6 +1298,25 @@ class ScenarioValidator:
                         suggestion="Provide exactly one offset per child event",
                     )
                 )
+            for spec_idx, spec in enumerate(rh.events):
+                if spec.type == "beacon" and getattr(spec, "profile", None):
+                    from evidenceforge.config.beacon_profiles import get_profile, list_profile_names
+
+                    if get_profile(spec.profile) is None:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"red_herrings[{idx}].events.{spec_idx}.profile",
+                                message=(
+                                    f"Red herring '{rh.id}' beacon profile '{spec.profile}' "
+                                    f"not found (available: {list_profile_names()})"
+                                ),
+                                suggestion=(
+                                    "Check the profile name or add it to "
+                                    "activity/beacon_profiles.yaml"
+                                ),
+                            )
+                        )
 
     def _validate_storyline_actor_work_hours(self) -> None:
         """Check that storyline actors have personas with work_hours defined."""

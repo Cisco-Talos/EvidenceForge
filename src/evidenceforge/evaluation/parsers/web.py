@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Parser for W3C web access log files."""
+"""Parser for Apache/Nginx combined web access logs."""
 
 import re
 from collections.abc import Iterator
