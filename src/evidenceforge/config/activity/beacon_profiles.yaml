@@ -1,0 +1,56 @@
+# Behavior-shaped synthetic beacon profiles.
+#
+# These profiles model broad C2/check-in traffic shapes without shipping live
+# malware IoCs. Override or extend with .eforge/config/activity/beacon_profiles.yaml.
+
+profiles:
+  http_checkin:
+    description: "Low-noise HTTP/S check-in with stable paths and rotating query tokens."
+    user_agents:
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
+    http_sequence:
+      - method: GET
+        uri: "/api/v1/checkin?id={host_id}&c={campaign_id}&n={tick}&k={base64url:12}"
+        response_body_len: [120, 1800]
+        resp_bytes: [800, 4200]
+        weight: 5
+      - method: GET
+        uri: "/cdn/pixel.gif?u={host_id}&v={hex8}"
+        response_body_len: [43, 320]
+        resp_bytes: [500, 1800]
+        weight: 2
+      - method: POST
+        uri: "/api/v1/task/{campaign_id}/{hex8}"
+        orig_bytes: [180, 1400]
+        response_body_len: [80, 900]
+        resp_bytes: [600, 2600]
+        weight: 1
+
+  json_tasking:
+    description: "JSON API tasking profile with occasional POST results."
+    user_agents:
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    http_sequence:
+      - method: GET
+        uri: "/v2/status/{host_id}?r={hex8}"
+        response_body_len: [180, 2400]
+        resp_bytes: [900, 6200]
+        weight: 4
+      - method: POST
+        uri: "/v2/results/{campaign_id}"
+        orig_bytes: [400, 4200]
+        response_body_len: [96, 850]
+        resp_bytes: [700, 2400]
+        weight: 1
+
+  sparse_poll:
+    description: "Sparse polling profile for long-running low-volume callbacks."
+    dns_resolution: cached
+    user_agents:
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+    http_sequence:
+      - method: GET
+        uri: "/assets/{campaign_id}/manifest.json?t={tick}"
+        response_body_len: [64, 780]
+        resp_bytes: [500, 2200]

@@ -27,6 +27,8 @@ import statistics
 
 import pytest
 
+from evidenceforge.generation.engine.storyline import _storyline_event_offsets
+from evidenceforge.models import EventSpacingConfig
 from evidenceforge.utils.timing import (
     hawkes_timestamps,
     periodic_timestamps,
@@ -246,3 +248,45 @@ class TestTypingCadence:
         offsets1 = typing_cadence(5, _make_rng(42))
         offsets2 = typing_cadence(5, _make_rng(42))
         assert offsets1 == offsets2
+
+
+class TestStorylineEventSpacing:
+    def test_default_uses_human_typing_cadence(self):
+        offsets = _storyline_event_offsets(3, _make_rng(42), None)
+        assert offsets == typing_cadence(3, _make_rng(42))
+
+    def test_automated_spacing_is_tight_and_monotonic(self):
+        offsets = _storyline_event_offsets(
+            5,
+            _make_rng(42),
+            EventSpacingConfig(mode="automated", min_delay="50ms", max_delay="100ms"),
+        )
+        assert offsets[0] == 0.0
+        assert offsets == sorted(offsets)
+        assert offsets[-1] < 0.5
+
+    def test_interval_spacing_with_jitter_is_monotonic(self):
+        offsets = _storyline_event_offsets(
+            4,
+            _make_rng(42),
+            EventSpacingConfig(mode="interval", interval="10m", jitter=0.25),
+        )
+        assert offsets[0] == 0.0
+        assert offsets == sorted(offsets)
+        assert offsets[-1] > 1200
+
+    def test_explicit_offsets_parse_durations(self):
+        offsets = _storyline_event_offsets(
+            3,
+            _make_rng(42),
+            EventSpacingConfig(mode="explicit_offsets", offsets=["0s", "5m", "1h"]),
+        )
+        assert offsets == [0.0, 300.0, 3600.0]
+
+    def test_explicit_offsets_require_one_per_event(self):
+        with pytest.raises(ValueError, match="one offset per child event"):
+            _storyline_event_offsets(
+                3,
+                _make_rng(42),
+                EventSpacingConfig(mode="explicit_offsets", offsets=["0s", "5m"]),
+            )

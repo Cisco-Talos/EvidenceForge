@@ -404,11 +404,17 @@ to the proxy, such as `https://host/path`. For CONNECT tunnel setup rows,
 `request-target` is the authority form, such as `host:443`. Missing values are
 `-`.
 
-**Username field:** Default combined text output preserves the full username
-value. The SOF-ELK target strips the domain prefix from identities such as
-`DOMAIN\user` and the trailing `$` from machine accounts such as `DOMAIN\HOST$`
-so SOF-ELK's HTTPD parser can ingest the row. Splunk JSON proxy output also
-preserves the full username value.
+**Username field:** Default proxy auth realism attributes ordinary
+browser/SaaS traffic to the assigned human user, while allowlisted
+infrastructure classes such as software updates, telemetry, CRL, and OCSP can
+render unauthenticated (`-`) rows. Machine/service-account proxy usernames are
+opt-in through `environment.proxy.auth_policy`; `mode: legacy` preserves the
+older machine-context User-Agent behavior. Default combined text output
+preserves the full username value when one is present. The SOF-ELK target
+strips the domain prefix from identities such as `DOMAIN\user` and the trailing
+`$` from machine accounts such as `DOMAIN\HOST$` so SOF-ELK's HTTPD parser can
+ingest the row. Splunk JSON proxy output also preserves the full username
+value.
 
 **Referrer field:** The combined format output includes the standard quoted
 `Referer` field, linking subresource requests back to the page that triggered

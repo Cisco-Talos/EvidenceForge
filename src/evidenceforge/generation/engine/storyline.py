@@ -70,7 +70,9 @@ from evidenceforge.generation.activity.http_content import (
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import (
     MAX_HTTP_RESPONSE_BODY_LEN,
+    BeaconHttpSequenceEntry,
     ConnectionEventSpec,
+    EventSpacingConfig,
     System,
     User,
 )
@@ -500,6 +502,143 @@ def _iter_dns_tunnel_ticks(
         if end_time is not None and paced_time > end_time:
             break
         yield paced_time
+
+
+def _range_or_value(value: int | list[int] | None, rng: random.Random) -> int | None:
+    """Resolve a fixed byte value or [lo, hi] range."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    return rng.randint(value[0], value[1])
+
+
+def _beacon_token_scope(spec: Any, system: System) -> dict[str, str]:
+    """Return stable per-campaign token values for beacon URI templates."""
+    host_key = f"{system.hostname}:{getattr(system, 'ip', '')}"
+    campaign_key = f"{spec.profile or ''}:{spec.hostname or ''}:{spec.dst_ip}:{spec.dst_port}"
+    return {
+        "host_id": f"{_stable_seed('beacon-host:' + host_key) & 0xFFFFFFFF:08x}",
+        "campaign_id": f"{_stable_seed('beacon-campaign:' + campaign_key) & 0xFFFFFFFF:08x}",
+    }
+
+
+def _render_beacon_template(
+    template: str,
+    *,
+    spec: Any,
+    system: System,
+    tick_index: int,
+) -> str:
+    """Render deterministic, synthetic-safe beacon URI template tokens."""
+    scope = _beacon_token_scope(spec, system)
+    rng = random.Random(
+        _stable_seed(
+            f"beacon-template:{system.hostname}:{spec.hostname or spec.dst_ip}:"
+            f"{spec.dst_port}:{tick_index}:{template}"
+        )
+    )
+    rendered = template.replace("{host_id}", scope["host_id"])
+    rendered = rendered.replace("{campaign_id}", scope["campaign_id"])
+    rendered = rendered.replace("{tick}", str(tick_index))
+    while "{hex8}" in rendered:
+        rendered = rendered.replace("{hex8}", f"{rng.getrandbits(32):08x}", 1)
+    while "{guid}" in rendered:
+        rendered = rendered.replace(
+            "{guid}",
+            stable_uuid(
+                "beacon-guid",
+                system.hostname,
+                spec.hostname or spec.dst_ip,
+                tick_index,
+                rng.getrandbits(64),
+            ),
+            1,
+        )
+
+    def _base64url(match: re.Match[str]) -> str:
+        length = int(match.group(1))
+        raw = bytes(rng.getrandbits(8) for _ in range(max(1, length)))
+        token = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return token[:length]
+
+    rendered = re.sub(r"\{base64url:(\d{1,3})\}", _base64url, rendered)
+    return rendered
+
+
+def _entry_value(entry: Any, field: str) -> Any:
+    """Read a sequence entry field from either a Pydantic model or config dict."""
+    if isinstance(entry, dict):
+        return entry.get(field)
+    return getattr(entry, field, None)
+
+
+def _weighted_profile_entry(
+    entries: list[dict[str, Any]],
+    *,
+    tick_index: int,
+    spec: Any,
+    system: System,
+) -> dict[str, Any] | None:
+    """Choose one profile entry using deterministic per-tick weighted selection."""
+    if not entries:
+        return None
+    rng = random.Random(
+        _stable_seed(
+            f"beacon-profile-entry:{system.hostname}:{spec.profile}:"
+            f"{spec.hostname or spec.dst_ip}:{tick_index}"
+        )
+    )
+    weights = [float(entry.get("weight", 1.0) or 1.0) for entry in entries]
+    return rng.choices(entries, weights=weights, k=1)[0]
+
+
+def _storyline_event_offsets(
+    num_events: int,
+    rng: random.Random,
+    spacing: EventSpacingConfig | None,
+) -> list[float]:
+    """Return child-event offsets for one storyline/red-herring step."""
+    from evidenceforge.utils.timing import typing_cadence
+
+    if not isinstance(spacing, EventSpacingConfig) or spacing.mode == "human":
+        return typing_cadence(num_events, rng)
+    if num_events <= 0:
+        return []
+    if spacing.mode == "automated":
+        min_delay = parse_duration(spacing.min_delay or "50ms").total_seconds()
+        max_delay = parse_duration(spacing.max_delay or "2s").total_seconds()
+        offsets = [0.0]
+        elapsed = 0.0
+        for _ in range(1, num_events):
+            elapsed += rng.uniform(min_delay, max_delay)
+            offsets.append(elapsed)
+        return offsets
+    if spacing.mode == "interval":
+        interval = parse_duration(spacing.interval or "1s").total_seconds()
+        offsets = []
+        last_offset = 0.0
+        for index in range(num_events):
+            nominal = interval * index
+            jitter_offset = (
+                rng.uniform(-spacing.jitter * interval, spacing.jitter * interval)
+                if index > 0 and spacing.jitter > 0.0
+                else 0.0
+            )
+            offset = max(0.0, nominal + jitter_offset)
+            if index > 0 and offset <= last_offset:
+                offset = last_offset + 0.001
+            offsets.append(offset)
+            last_offset = offset
+        return offsets
+    if len(spacing.offsets) != num_events:
+        raise ValueError(
+            "event_spacing explicit_offsets must provide exactly one offset per child event"
+        )
+    offsets = [parse_duration(offset).total_seconds() for offset in spacing.offsets]
+    if offsets != sorted(offsets):
+        raise ValueError("event_spacing explicit_offsets must be monotonic")
+    return offsets
 
 
 def _choose_dns_tunnel_campaign_ttl(
@@ -2221,11 +2360,11 @@ class StorylineMixin:
             self.state_manager.set_current_time(event_time)
             explicit_types = {spec.type for spec in storyline_event.events}
 
-            # Apply human typing cadence: space events in a step with
-            # realistic inter-action delays instead of shared timestamps
-            from evidenceforge.utils.timing import typing_cadence
-
-            cadence_offsets = typing_cadence(len(storyline_event.events), rng)
+            cadence_offsets = _storyline_event_offsets(
+                len(storyline_event.events),
+                rng,
+                storyline_event.event_spacing,
+            )
 
             previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
             self.dispatcher.storyline_cluster_id = storyline_event.id
@@ -2288,10 +2427,11 @@ class StorylineMixin:
 
         explicit_types = {spec.type for spec in storyline_event.events}
 
-        # Apply human typing cadence for intra-step event spacing
-        from evidenceforge.utils.timing import typing_cadence
-
-        cadence_offsets = typing_cadence(len(storyline_event.events), rng)
+        cadence_offsets = _storyline_event_offsets(
+            len(storyline_event.events),
+            rng,
+            storyline_event.event_spacing,
+        )
 
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = storyline_event.id
@@ -2350,11 +2490,11 @@ class StorylineMixin:
 
         explicit_types = {spec.type for spec in rh_event.events}
 
-        # Apply typing cadence so logon events precede process events
-        # within compound red herring steps (same as storyline events)
-        from evidenceforge.utils.timing import typing_cadence
-
-        cadence_offsets = typing_cadence(len(rh_event.events), rng)
+        cadence_offsets = _storyline_event_offsets(
+            len(rh_event.events),
+            rng,
+            rh_event.event_spacing,
+        )
 
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = f"red_herring:{rh_event.id}"
@@ -3806,6 +3946,27 @@ class StorylineMixin:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
 
+            beacon_profile: dict[str, Any] | None = None
+            profile_http_sequence: list[dict[str, Any]] = []
+            profile_user_agents: list[str] = []
+            profile_dns_resolution = None
+            if spec.profile:
+                from evidenceforge.config.beacon_profiles import get_profile
+
+                beacon_profile = get_profile(spec.profile)
+                if beacon_profile is None:
+                    raise ValueError(f"Unknown beacon profile: {spec.profile}")
+                raw_profile_sequence = beacon_profile.get("http_sequence", [])
+                if isinstance(raw_profile_sequence, list):
+                    profile_http_sequence = [
+                        entry for entry in raw_profile_sequence if isinstance(entry, dict)
+                    ]
+                raw_profile_user_agents = beacon_profile.get("user_agents", [])
+                if isinstance(raw_profile_user_agents, list):
+                    profile_user_agents = [str(value) for value in raw_profile_user_agents if value]
+                profile_dns_resolution = beacon_profile.get("dns_resolution")
+            explicit_http_sequence: list[BeaconHttpSequenceEntry] = list(spec.http_sequence)
+
             beacon_src_ip = spec.source_ip or system.ip
             beacon_dst_ip = spec.dst_ip
             if spec.hostname and not beacon_dst_ip:
@@ -3852,11 +4013,36 @@ class StorylineMixin:
                 # Build HttpContext if HTTP/proxy-visible request metadata is provided.
                 # HTTPS CONNECT beacons still need this for proxy User-Agent fidelity
                 # even though no origin-side Zeek http.log is emitted for TLS.
-                if spec.method or spec.uri or spec.user_agent:
+                first_sequence_entry: BeaconHttpSequenceEntry | dict[str, Any] | None = None
+                if explicit_http_sequence:
+                    first_sequence_entry = explicit_http_sequence[0]
+                elif profile_http_sequence:
+                    first_sequence_entry = profile_http_sequence[0]
+                profile_user_agent = profile_user_agents[0] if profile_user_agents else None
+
+                if (
+                    spec.method
+                    or spec.uri
+                    or spec.user_agent
+                    or profile_user_agent is not None
+                    or first_sequence_entry is not None
+                ):
                     from evidenceforge.events.contexts import HttpContext
 
-                    _method = spec.method or "GET"
-                    _uri_raw = spec.uri or "/"
+                    _method = _entry_value(first_sequence_entry, "method") or spec.method or "GET"
+                    _uri_template = _entry_value(first_sequence_entry, "uri") or spec.uri or "/"
+                    _uri_raw = _render_beacon_template(
+                        str(_uri_template),
+                        spec=spec,
+                        system=system,
+                        tick_index=0,
+                    )
+                    _user_agent = (
+                        _entry_value(first_sequence_entry, "user_agent")
+                        or spec.user_agent
+                        or profile_user_agent
+                        or "Mozilla/5.0"
+                    )
                     http_method = _method
                     http_uri = _uri_raw
                     _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
@@ -3876,14 +4062,22 @@ class StorylineMixin:
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
                     _http_host2 = spec.hostname or spec.dst_ip
-                    resp_bytes = _storyline_http_response_body_len(
-                        spec=spec,
-                        rng=rng,
-                        method=_method,
-                        uri=_uri_raw,
-                        host=_http_host2,
-                        is_c2_http=_is_c2_http,
-                        use_connection_path_hints=False,
+                    response_override = _range_or_value(
+                        _entry_value(first_sequence_entry, "response_body_len"),
+                        rng,
+                    )
+                    resp_bytes = (
+                        response_override
+                        if response_override is not None
+                        else _storyline_http_response_body_len(
+                            spec=spec,
+                            rng=rng,
+                            method=_method,
+                            uri=_uri_raw,
+                            host=_http_host2,
+                            is_c2_http=_is_c2_http,
+                            use_connection_path_hints=False,
+                        )
                     )
                     request_body_len = (
                         max(0, s_ob or 0)
@@ -3892,15 +4086,18 @@ class StorylineMixin:
                     )
                     if request_body_len == 0 and _method == "POST":
                         request_body_len = rng.randint(100, 10000)
+                    _status_code = (
+                        _entry_value(first_sequence_entry, "status_code") or spec.status_code or 200
+                    )
                     http_ctx = HttpContext(
                         method=_method,
                         host=_http_host2,
                         uri=_uri_raw,
                         version="1.1",
-                        user_agent=spec.user_agent or "Mozilla/5.0",
+                        user_agent=str(_user_agent),
                         request_body_len=request_body_len,
                         response_body_len=resp_bytes,
-                        status_code=spec.status_code or 200,
+                        status_code=_status_code,
                         status_msg={
                             200: "OK",
                             301: "Moved Permanently",
@@ -3908,13 +4105,13 @@ class StorylineMixin:
                             403: "Forbidden",
                             404: "Not Found",
                             500: "Internal Server Error",
-                        }.get(spec.status_code or 200, "OK"),
+                        }.get(_status_code, "OK"),
                         referrer=spec.referrer
                         if spec.referrer is not None
                         else ""
                         if _is_c2_http and rng.random() < 0.75
                         else pick_referrer(rng, _http_host2, context="general"),
-                        resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
+                        resp_mime_types=[_mime_type] if _status_code == 200 else [],
                         tags=[],
                     )
 
@@ -3945,25 +4142,124 @@ class StorylineMixin:
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
+                tick_sequence_entry: BeaconHttpSequenceEntry | dict[str, Any] | None = None
+                if explicit_http_sequence:
+                    tick_sequence_entry = explicit_http_sequence[
+                        attempt_count % len(explicit_http_sequence)
+                    ]
+                elif profile_http_sequence:
+                    tick_sequence_entry = _weighted_profile_entry(
+                        profile_http_sequence,
+                        tick_index=attempt_count,
+                        spec=spec,
+                        system=system,
+                    )
+                tick_method = _entry_value(tick_sequence_entry, "method") or spec.method or "GET"
+                tick_uri_template = _entry_value(tick_sequence_entry, "uri") or spec.uri or "/"
+                tick_uri = _render_beacon_template(
+                    str(tick_uri_template),
+                    spec=spec,
+                    system=system,
+                    tick_index=attempt_count,
+                )
+                tick_user_agent = (
+                    _entry_value(tick_sequence_entry, "user_agent")
+                    or spec.user_agent
+                    or (
+                        profile_user_agents[
+                            _stable_seed(
+                                f"beacon-ua:{system.hostname}:{spec.profile}:{attempt_count}"
+                            )
+                            % len(profile_user_agents)
+                        ]
+                        if profile_user_agents
+                        else None
+                    )
+                    or "Mozilla/5.0"
+                )
+                tick_status_code = (
+                    _entry_value(tick_sequence_entry, "status_code") or spec.status_code or 200
+                )
+                tick_response_override = _range_or_value(
+                    _entry_value(tick_sequence_entry, "response_body_len"),
+                    rng,
+                )
+                tick_orig_bytes = (
+                    _range_or_value(_entry_value(tick_sequence_entry, "orig_bytes"), rng)
+                    if tick_sequence_entry is not None
+                    else None
+                )
+                if tick_orig_bytes is None:
+                    tick_orig_bytes = s_ob
+                tick_resp_bytes = (
+                    _range_or_value(_entry_value(tick_sequence_entry, "resp_bytes"), rng)
+                    if tick_sequence_entry is not None
+                    else None
+                )
+                if tick_resp_bytes is None:
+                    tick_resp_bytes = s_rb
                 tick_emit_dns = emit_dns and (
-                    spec.dns_resolution == "each_tick" or attempt_count == 0
+                    spec.dns_resolution == "each_tick"
+                    or (profile_dns_resolution == "each_tick" and spec.dns_resolution == "cached")
+                    or attempt_count == 0
                 )
                 tick_http_ctx = http_ctx
-                tick_resp_bytes = s_rb
-                if http_ctx is not None and http_is_c2 and spec.response_body_len is None:
+                if tick_http_ctx is not None and tick_sequence_entry is not None:
+                    tick_mime_type = normalize_mime_type_for_path(tick_uri, "text/html")
+                    tick_http_ctx = replace(
+                        tick_http_ctx,
+                        method=str(tick_method),
+                        uri=tick_uri,
+                        user_agent=str(tick_user_agent),
+                        status_code=int(tick_status_code),
+                        status_msg={
+                            200: "OK",
+                            301: "Moved Permanently",
+                            302: "Found",
+                            403: "Forbidden",
+                            404: "Not Found",
+                            500: "Internal Server Error",
+                        }.get(int(tick_status_code), "OK"),
+                        response_body_len=tick_response_override
+                        if tick_response_override is not None
+                        else tick_http_ctx.response_body_len,
+                        request_body_len=max(0, tick_orig_bytes)
+                        if str(tick_method).upper() not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
+                        else 0,
+                        referrer=_entry_value(tick_sequence_entry, "referrer")
+                        if _entry_value(tick_sequence_entry, "referrer") is not None
+                        else tick_http_ctx.referrer,
+                        tags=list(tick_http_ctx.tags),
+                        resp_fuids=list(tick_http_ctx.resp_fuids),
+                        resp_mime_types=[tick_mime_type] if int(tick_status_code) == 200 else [],
+                    )
+                    if tick_response_override is not None:
+                        tick_resp_bytes = max(
+                            tick_resp_bytes,
+                            tick_response_override + rng.randint(300, 5000),
+                        )
+                if (
+                    http_ctx is not None
+                    and http_is_c2
+                    and spec.response_body_len is None
+                    and tick_response_override is None
+                ):
                     tick_http_body_len = _c2_http_response_size(
                         rng,
-                        method=http_method or http_ctx.method,
-                        uri=http_uri or http_ctx.uri,
+                        method=str(tick_method or http_method or http_ctx.method),
+                        uri=tick_uri or http_uri or http_ctx.uri,
                     )
                     tick_http_ctx = replace(
-                        http_ctx,
+                        tick_http_ctx or http_ctx,
                         response_body_len=tick_http_body_len,
-                        tags=list(http_ctx.tags),
-                        resp_fuids=list(http_ctx.resp_fuids),
-                        resp_mime_types=list(http_ctx.resp_mime_types),
+                        tags=list((tick_http_ctx or http_ctx).tags),
+                        resp_fuids=list((tick_http_ctx or http_ctx).resp_fuids),
+                        resp_mime_types=list((tick_http_ctx or http_ctx).resp_mime_types),
                     )
-                    tick_resp_bytes = max(s_rb, tick_http_body_len + rng.randint(300, 5000))
+                    tick_resp_bytes = max(
+                        tick_resp_bytes,
+                        tick_http_body_len + rng.randint(300, 5000),
+                    )
                 if story_pid <= 0:
                     story_pid, story_image = self._ensure_storyline_service_process_for_beacon(
                         actor,
@@ -3985,13 +4281,13 @@ class StorylineMixin:
 
                         proxy_sys = proxy_chain[0]
                         beacon_host = spec.hostname or spec.dst_ip
-                        proxy_method = "CONNECT" if spec.dst_port == 443 else (spec.method or "GET")
+                        proxy_method = "CONNECT" if spec.dst_port == 443 else str(tick_method)
                         proxy_url = (
                             f"{beacon_host}:443"
                             if proxy_method == "CONNECT"
-                            else f"http://{beacon_host}{spec.uri or '/'}"
+                            else f"http://{beacon_host}{tick_uri}"
                         )
-                        proxy_user_agent = spec.user_agent or "Mozilla/5.0"
+                        proxy_user_agent = str(tick_user_agent)
                         proxy_source_system = getattr(
                             self.activity_generator,
                             "_ip_to_system",
@@ -4003,6 +4299,7 @@ class StorylineMixin:
                                 source_system=proxy_source_system,
                                 user_agent=proxy_user_agent,
                                 cache_result="DENIED",
+                                hostname=beacon_host,
                             ),
                             method=proxy_method,
                             url=proxy_url,
@@ -4026,7 +4323,7 @@ class StorylineMixin:
                             proto=spec.protocol,
                             service="ssl" if spec.dst_port == 443 else "http",
                             duration=rng.uniform(0.05, 2.0),
-                            orig_bytes=s_ob,
+                            orig_bytes=tick_orig_bytes,
                             resp_bytes=tick_resp_bytes,
                             conn_state="SF",
                             emit_dns=tick_emit_dns,
@@ -4038,7 +4335,9 @@ class StorylineMixin:
                             process_image=story_image,
                             preserve_dst_ip=bool(spec.hostname),
                             preserve_explicit_payload=(
-                                spec.orig_bytes is not None or spec.resp_bytes is not None
+                                spec.orig_bytes is not None
+                                or spec.resp_bytes is not None
+                                or tick_sequence_entry is not None
                             ),
                         )
                     else:
@@ -4062,7 +4361,7 @@ class StorylineMixin:
                         proto=spec.protocol,
                         service=service,
                         duration=rng.uniform(0.5, 10.0),
-                        orig_bytes=s_ob,
+                        orig_bytes=tick_orig_bytes,
                         resp_bytes=tick_resp_bytes,
                         conn_state=s_conn_state,
                         emit_dns=tick_emit_dns,
@@ -4073,7 +4372,9 @@ class StorylineMixin:
                         process_image=story_image,
                         preserve_dst_ip=bool(spec.hostname),
                         preserve_explicit_payload=(
-                            spec.orig_bytes is not None or spec.resp_bytes is not None
+                            spec.orig_bytes is not None
+                            or spec.resp_bytes is not None
+                            or tick_sequence_entry is not None
                         ),
                     )
                 attempt_count += 1

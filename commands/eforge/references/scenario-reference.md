@@ -49,6 +49,7 @@ environment:
       last_active: "2024-01-02"
       reason: "CRM system decommissioned"
   groups: [...]               # Optional
+  identity: ...               # Optional: logical-user to platform-account overrides
 ```
 
 Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic. Each field:
@@ -66,6 +67,49 @@ All internal timestamps are stored in UTC. The timezone configuration controls o
   - Unmatched hostnames use the default
 
 Valid timezone names are any [pytz timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g., `America/New_York`, `Europe/London`, `Asia/Tokyo`, `UTC`).
+
+### Identity Directory
+
+Scenario `users` are logical people. During generation, EvidenceForge builds an
+internal identity directory that maps each logical user to optional Windows and
+Linux platform accounts. Existing scenarios do not need any identity block:
+
+- If `environment.domain` or a domain controller exists, scenario users get
+  Windows domain accounts by default.
+- If no Windows domain exists, Windows accounts default to host-local accounts on
+  the user's assigned or primary Windows workstation.
+- Linux accounts default to directory-backed identities with stable UIDs across
+  Linux hosts.
+- Windows SIDs/RIDs and Linux UIDs/GIDs are never shared identifiers. A user may
+  have both platforms at the same time; the logical username is the join point.
+- Built-in, machine, daemon, and service accounts remain platform-specific.
+
+Optional overrides are available when a scenario needs exact account naming or
+platform scoping:
+
+```yaml
+environment:
+  identity:
+    windows_default_scope: auto      # auto | domain | local
+    linux_default_scope: directory   # directory | local
+    users:
+      aisha.johnson:
+        windows:
+          scope: domain              # auto | domain | local | disabled
+          account_name: aisha.johnson
+        linux:
+          scope: directory           # auto | directory | local | disabled
+          account_name: aisha.johnson
+          uid: 2528                  # Optional, unique in Linux identity namespace
+          gid: 2528                  # Optional
+```
+
+All fields are optional. Explicit Windows SID overrides and Linux UID overrides
+must be unique within their platform namespace. Account existence and activity
+placement are intentionally separate: a directory-backed Linux account can exist
+across Linux hosts, while local interactive activity is still placed by the world
+model using assigned users, primary systems, host roles, and plausible admin
+behavior.
 
 ### Users
 
@@ -126,6 +170,9 @@ declared identity are warnings.
 proxy:
   mode: transparent              # Optional: transparent|explicit (default: transparent)
   listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+  auth_policy:
+    mode: realistic              # realistic|legacy (default: realistic)
+    non_human_principals: false  # Opt-in only; default keeps machine/service auth off
 ```
 
 `environment.proxy` controls how systems with `roles: [forward_proxy]` appear in network evidence:
@@ -134,6 +181,15 @@ proxy:
 - `explicit` models PAC/browser-configured proxy behavior by replacing the logical client-to-origin connection with two concrete legs: client-to-proxy on `listener_port`, then proxy-to-origin on the destination port. Sensor placement determines which leg each Zeek/IDS/firewall source sees. Denied proxy requests stop at the proxy and do not emit a proxy-to-origin leg.
 
 If `proxy_access` is requested and `environment.proxy` is omitted, validation warns and defaults to `transparent`. If `mode: explicit` is set without `listener_port`, validation warns and defaults to `8080`.
+
+`auth_policy.mode: realistic` renders ordinary browser/SaaS proxy rows with the
+assigned human user, while allowlisted infrastructure classes such as software
+updates, telemetry, CRL, and OCSP can render unauthenticated (`-`) proxy rows.
+Machine/service-account proxy usernames are not emitted routinely; set
+`non_human_principals: true` with low `machine_account_probability` or
+`service_account_probability` only for environments that intentionally
+authenticate non-human proxy clients. `mode: legacy` preserves the older
+machine-context User-Agent behavior for compatibility datasets.
 
 ### System Roles
 
@@ -525,6 +581,15 @@ Observation decisions are coherent inside source-local lifecycle groups, so a si
 not drop or delay process create/dependent/terminate rows, logon/logoff rows, or same-UID network
 companions independently in a way that would orphan its own evidence.
 
+The same profile name also selects endpoint host-clock defaults from
+`config/activity/timing_profiles.yaml`. `complete` keeps endpoint clocks aligned
+for training-friendly output. `enterprise_standard` and `messy_collection`
+introduce host-level offset/drift plus source-specific observation latency.
+Host-resident eCAR uses the same host clock as Windows Security/Sysmon on
+Windows hosts and syslog/bash-history on Linux hosts; eCAR does not get a
+separate synthetic clock by default. Network, proxy, firewall, and IDS sensors
+keep independent appliance clock profiles.
+
 ## Storyline
 
 Storyline events define specific actions at specific times. Each entry declares what happened (`activity`, for documentation/GROUND_TRUTH.md) and what events to generate (`events` list with typed, validated fields).
@@ -538,6 +603,8 @@ storyline:
     actor: john.doe            # Required: username, built-in account (SYSTEM/root), or service_account
     system: WS-01              # Required: system hostname
     activity: "lateral movement via pass-the-hash"  # Required: human-readable description (GROUND_TRUTH.md)
+    event_spacing:             # Optional; omitted defaults to human typing cadence
+      mode: human              # human|automated|interval|explicit_offsets
     events:                    # Required: typed event declarations
       - type: logon
         source_ip: "10.0.1.20"
@@ -550,6 +617,13 @@ storyline:
 ### Event Types
 
 Each event in the `events` list has a `type` field that selects a validated schema. Unknown fields are rejected at load time.
+
+`event_spacing` controls the offsets between child events in one storyline or
+red-herring step. `human` is the default and preserves the current typing-like
+cadence. `automated` accepts `min_delay`/`max_delay` for script/tool bursts.
+`interval` accepts `interval` plus optional `jitter` for actions separated by
+minutes or hours. `explicit_offsets` accepts one offset per child event, such as
+`["0s", "18m", "2h10m"]`.
 
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
@@ -569,7 +643,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
-| `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `jitter` (default: 0.15) |
+| `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `profile`, `http_sequence`, `jitter` (default: 0.15) |
 | `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
 | `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4) |
 | `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` (default: 0.5) |
@@ -579,7 +653,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
 | `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
 | `spillage` | Synthetic credential leaked into a semantic surface (`shell_history` → bash history; `process_command_line` → process/EDR telemetry; `syslog_message` → syslog; `http_request_url`/`http_referrer` → a web server's `web_access` log), per-event varied, + canonical `GROUND_TRUTH.json` tracking (emitted or explicitly skipped) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `http_*` surfaces need a compatible `web_server`-role host |
-| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host |
+| `adversarial_payload` | Known log-pipeline weakness payload (ANSI escape, CRLF log-forging, CSV formula, Log4Shell/JNDI, reflected XSS, SQL injection, structured-log/JSON injection, oversized field; each family ships a canonical form plus seed-picked evasion variants) injected into a semantic surface (`syslog_message`, `process_command_line`, `http_user_agent`, `http_request_url`, `http_referrer`, `dns_qname`, `auth_user`), per-surface encoded, + canonical `GROUND_TRUTH.json` tracking (`kind: adversarial_payload`, incl. `ids_alert` for signature-mapped cleartext-http families). See [adversarial_payload.md](adversarial_payload.md) | `surface`, and exactly one of `family`/`value` | `scheme` (`http`/`https`, HTTP surfaces only); `syslog_message` and `auth_user` are Linux-only; `dns_qname` needs a network sensor emitting Zeek; `http_*` surfaces need a compatible `web_server`-role host; an optional generation-time live-callback (OOB) mode (`generate`/`validate --oob-host`, opt-in) can replace the inert default canary — by default payloads use the non-resolving canary `canary.eforge.invalid` and are never executed, see [adversarial_payload.md](adversarial_payload.md) |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
@@ -639,7 +713,11 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Hawkes temporal model:** User baseline events use a self-exciting Hawkes process — activity naturally clusters into bursts that taper off, producing realistic human work patterns. Parameters are derived from persona `risk_profile` (high = intense bursts, low = gentle clusters). System/service traffic uses periodic intervals with small jitter instead.
 
-**Storyline typing cadence:** Events within a multi-event storyline step are spaced with human typing rhythm (~1.5s between actions, occasional 3-12s thinking pauses) instead of sharing a single timestamp.
+**Storyline child-event spacing:** Events within a multi-event storyline step
+default to human typing rhythm (~1.5s between actions, occasional 3-12s
+thinking pauses) instead of sharing a single timestamp. Set `event_spacing` on
+the parent storyline or red-herring step when the child events should look
+automated, interval-driven, or explicitly minutes/hours apart.
 
 **Day-of-week variation:** Scenarios spanning multiple days show weekly rhythm — Monday login storms, Friday early departures, near-zero weekend activity (only sysadmin/security_analyst/help_desk personas active on Saturday/Sunday).
 
@@ -659,13 +737,15 @@ The generation engine automatically provides several layers of realism in baseli
 
 **NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
 
-**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records use the well-synced network sensor timing profile in `config/activity/timing_profiles.yaml`. The default profile keeps stable per-sensor clock skew within +/-1.5 ms and per-flow path/capture delay within 50-2000 microseconds. Byte and packet counts remain canonical unless sensor observation variance is explicitly allowed for that source-native row.
+**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records use the network sensor timing profile in `config/activity/timing_profiles.yaml`. The default distributed-tap profile keeps stable per-sensor clock skew within roughly -18 to +22 ms and per-flow path/capture delay within 1.2 to 58 ms. Byte and packet counts remain canonical unless sensor observation variance is explicitly allowed for that source-native row. Endpoint sources use host-clock profiles instead of these network-sensor appliance clocks.
 
-**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
+**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, sparse journald housekeeping, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths. Journald capacity/vacuum/rotation rows are emitted as low-frequency host housekeeping episodes, and polkit GUI authentication-agent messages are limited to desktop-capable Linux hosts; server-side polkit authorization remains rare and tied to plausible service/package actions.
 
 **Command diversification:** Baseline process commands are parameterized with varied project paths, document names, build configurations, and per-user file references instead of fixed strings.
 
-**Realistic process trees:** Parent-child relationships are driven by `spawn_rules.yaml`, which defines valid parent processes for each child executable. CLI tools (dotnet.exe, git.exe, npm.exe, etc.) are parented from shells (cmd.exe, powershell.exe), GUI apps from explorer.exe, and system services from services.exe/svchost.exe. When a valid parent doesn't exist in the user's process history, the engine auto-creates the intermediate chain with realistic timing. Linux processes follow sshd→bash→command chains. Sysmon Event 1 `ParentCommandLine` is populated from the parent process's actual command line (no longer always "-").
+**Realistic process trees:** Parent-child relationships are driven by `spawn_rules.yaml`, which defines valid parent processes for each child executable. CLI tools (dotnet.exe, git.exe, npm.exe, etc.) are parented from shells (cmd.exe, powershell.exe), GUI apps from explorer.exe, and system services from services.exe/svchost.exe. Remote/admin Windows commands add an execution-family resolver above generic parent selection, so DC utilities use concrete owners such as live PsExec services, WMI, Task Scheduler, SCM/service context, or PowerShell/WinRM when those families can be inferred. When a valid parent doesn't exist in the user's process history, the engine auto-creates the intermediate chain with realistic timing. Linux processes follow sshd→bash→command chains. Sysmon Event 1 `ParentCommandLine` is populated from the parent process's actual command line (no longer always "-").
+
+**Endpoint ProcessAccess realism:** Sysmon Event 10 and eCAR PROCESS OPEN rows use canonical `ProcessAccessContext` owned by the generation bundle. Source images such as Defender, CSRSS, services, svchost, WMI, and suspicious tools select source-aware CallTrace palettes from package config; scenario authors do not need to set call traces in YAML.
 
 **PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
 
@@ -731,7 +811,27 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       duration: "7d"
       jitter: 0.2
       action: allow
+      profile: http_checkin
       technique: "T1071.001 - Web Protocols"
+
+# Explicit per-beat HTTP variation
+- time: "+3h30m"
+  actor: attacker
+  system: workstation01
+  activity: "C2 beacon with rotating tasking paths"
+  events:
+    - type: beacon
+      dst_ip: "45.83.221.30"
+      dst_port: 443
+      hostname: "api-sync.example.com"
+      interval: "90s"
+      count: 20
+      http_sequence:
+        - method: GET
+          uri: "/api/v1/checkin?id={host_id}&k={base64url:12}"
+        - method: POST
+          uri: "/api/v1/task/{campaign_id}/{hex8}"
+          orig_bytes: [180, 900]
 
 # Denied beacon (equivalent to former blocked_c2)
 - time: "+5h"
@@ -749,7 +849,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `profile` selects a behavior-shaped synthetic profile from `config/activity/beacon_profiles.yaml`; bundled profiles model broad check-in/tasking shapes, not live malware IoCs. `http_sequence` cycles explicit per-tick request shapes and can use deterministic URI tokens: `{host_id}`, `{campaign_id}`, `{tick}`, `{hex8}`, `{guid}`, and `{base64url:N}`. Sequence entries may override `method`, `uri`, `user_agent`, `referrer`, `status_code`, `response_body_len`, `orig_bytes`, and `resp_bytes`; byte fields accept either an integer or `[min, max]`. For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### DNS Query Events
 
@@ -937,9 +1037,9 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
 ```
 
-HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent. The `referrer` field defaults to `null` (auto-generated from the traffic context — search engine, same-origin, social, or blank); set it explicitly for phishing click scenarios or specific referrer chain modeling (e.g., `referrer: "https://evil.example.com/page"`). The same `referrer` field is available on `beacon` events.
+HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`, `response_body_len`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent. The `referrer` field defaults to `null` (auto-generated from the traffic context — search engine, same-origin, social, or blank); set it explicitly for phishing click scenarios or specific referrer chain modeling (e.g., `referrer: "https://evil.example.com/page"`). The same `referrer` and `response_body_len` fields are available on `beacon` events.
 
-**Byte and connection state overrides:** `orig_bytes` (originator payload bytes), `resp_bytes` (responder payload bytes), `conn_state` (Zeek connection outcome: SF, S0, REJ, etc.). When omitted, the engine auto-sizes bytes based on the event's `technique` and `description` fields (exfiltration -> large `orig_bytes`; C2 -> small bidirectional; download -> large `resp_bytes`), and defaults `conn_state` to SF. Set `conn_state` explicitly to model failed connections (e.g., `S0` for a dead C2 channel, `REJ` for a blocked exfil attempt).
+**Byte and connection state overrides:** `orig_bytes` (originator payload bytes), `resp_bytes` (responder payload bytes), `response_body_len` (HTTP response body bytes rendered in `web_access` / `proxy_access`), `conn_state` (Zeek connection outcome: SF, S0, REJ, etc.). When omitted, the engine auto-sizes bytes based on the event's `technique`, `description`, URI, and HTTP status (exfiltration -> large `orig_bytes`; C2 -> small bidirectional; downloads -> large successful response bodies; 4xx/5xx -> small error pages), and defaults `conn_state` to SF. Set `response_body_len` to pin exact HTTP body bytes; if it is omitted on an HTTP event, explicit `resp_bytes` is also used as the HTTP body-size override before connection-level protocol overhead is added. Set `conn_state` explicitly to model failed connections (e.g., `S0` for a dead C2 channel, `REJ` for a blocked exfil attempt).
 
 ### Raw Events
 
@@ -1002,7 +1102,7 @@ This safety net catches common cases, but should not be relied upon as the prima
 1. **Always declare the primary action explicitly** -- don't rely on inference for the main event
 2. **Declare correlated events for process commands** -- if a command creates an account, installs a service, clears logs, etc., add the corresponding event type to the `events` list
 3. **Explicitly declare cross-system events** -- inference cannot generate events on other systems (e.g., DC Kerberos for domain logon, RDP logon on target)
-4. **Explicitly declare events when field precision matters** -- auto-inference uses auto-generated values (random SIDs); declare explicitly if SIDs must match across steps
+4. **Explicitly declare events when field precision matters** -- auto-inference uses deterministic identity-directory values; declare typed account/identity events when a specific target, group, SID, UID, or account relationship matters to the exercise
 5. **Use explicit events for specialized detection types** -- CreateRemoteThread, LSASS access; inference doesn't detect these patterns
 
 ### Examples
@@ -1071,19 +1171,16 @@ output:
     - format: windows
     - format: zeek
     - format: ecar
-  destination: scenarios/<slug>
+  destination: ./output
   compression: false           # Optional (default: false)
 ```
 
 Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
-Use `scenarios/<slug>/` as the standard scenario bundle root. `scenario.yaml` and
-`ENVIRONMENT.md` live directly in that directory, optional authored collateral such as
-phishing `.eml` files lives under `scenarios/<slug>/artifacts/`, and generated logs always
-live in `scenarios/<slug>/data/`. Output formats here are canonical and target-neutral.
-Choose target-specific file shapes, such as SOF-ELK® Snare Windows events or
-year-partitioned RFC3164 syslog, with `eforge generate --target default|sof-elk`; do
-not encode a parser target in scenario YAML or create target-named output directories.
+Output formats here are canonical and target-neutral. Choose target-specific
+file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
+syslog, with `eforge generate --target default|sof-elk`; do not encode a parser
+target in scenario YAML.
 
 `proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 

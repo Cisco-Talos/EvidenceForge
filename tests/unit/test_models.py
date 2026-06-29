@@ -31,11 +31,13 @@ from evidenceforge.models import (
     ActiveSession,
     BaselineActivity,
     Environment,
+    EventSpacingConfig,
     GeneratorState,
     Group,
     OpenConnection,
     OutputSpec,
     Persona,
+    ProxyAuthPolicyConfig,
     RedHerringEvent,
     RunningProcess,
     Scenario,
@@ -481,6 +483,56 @@ class TestStorylineEvent:
 
         assert event.events[0].dns_resolution == "cached"
         assert event.events[1].dns_resolution == "each_tick"
+
+    def test_beacon_accepts_profile_and_http_sequence(self):
+        """Beacon profile/sequence fields are additive and optional."""
+        event = StorylineEvent(
+            id="evt-test-6",
+            time="+45m",
+            actor="jdoe",
+            system="WS-01",
+            activity="Profiled beacon",
+            events=[
+                {
+                    "type": "beacon",
+                    "dst_ip": "198.51.100.10",
+                    "interval": "3m",
+                    "count": 2,
+                    "profile": "http_checkin",
+                    "http_sequence": [
+                        {
+                            "method": "get",
+                            "uri": "/api/check?k={base64url:12}",
+                            "resp_bytes": [100, 500],
+                        }
+                    ],
+                }
+            ],
+        )
+
+        beacon = event.events[0]
+        assert beacon.profile == "http_checkin"
+        assert beacon.http_sequence[0].method == "GET"
+        assert beacon.http_sequence[0].resp_bytes == [100, 500]
+
+    def test_storyline_event_spacing_is_optional_and_structured(self):
+        """Storyline steps accept explicit spacing without changing old steps."""
+        event = StorylineEvent(
+            id="evt-test-7",
+            time="+45m",
+            actor="jdoe",
+            system="WS-01",
+            activity="Delayed actions",
+            event_spacing={"mode": "explicit_offsets", "offsets": ["0s", "20m"]},
+            events=[
+                {"type": "process", "process_name": "cmd.exe"},
+                {"type": "connection", "dst_ip": "198.51.100.10"},
+            ],
+        )
+
+        assert event.event_spacing is not None
+        assert event.event_spacing.mode == "explicit_offsets"
+        assert event.event_spacing.offsets == ["0s", "20m"]
 
 
 class TestOutputSpec:
@@ -954,6 +1006,14 @@ class TestPeriodicEventJitterDefaults:
 
         spec = BeaconEventSpec(dst_ip="1.2.3.4", interval="5m", count=1)
         assert spec.jitter == 0.15
+
+    def test_proxy_auth_policy_rejects_non_human_rates_when_disabled(self):
+        with pytest.raises(ValidationError, match="non_human_principals=true"):
+            ProxyAuthPolicyConfig(machine_account_probability=0.1)
+
+    def test_event_spacing_interval_requires_interval(self):
+        with pytest.raises(ValidationError, match="requires interval"):
+            EventSpacingConfig(mode="interval")
 
     def test_web_scan_jitter_default(self):
         from evidenceforge.models.scenario import WebScanEventSpec

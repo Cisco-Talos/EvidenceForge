@@ -15,12 +15,14 @@ overlays for reusable domain libraries that should influence many scenarios.
 1. [dns_registry.yaml](#dns_registryyaml)
 2. [traffic_profiles.yaml](#traffic_profilesyaml)
 3. [proxy_uri_templates.yaml](#proxy_uri_templatesyaml)
-4. [site_maps.yaml](#site_mapsyaml)
-5. [web_session_profiles.yaml](#web_session_profilesyaml)
-6. [network_params.yaml](#network_paramsyaml)
-7. [tls_issuers.yaml](#tls_issuersyaml)
-8. [tls_realism.yaml](#tls_realismyaml)
-9. [smb_file_transfers.yaml](#smb_file_transfersyaml)
+4. [proxy_user_agents.yaml](#proxy_user_agentsyaml)
+5. [beacon_profiles.yaml](#beacon_profilesyaml)
+6. [site_maps.yaml](#site_mapsyaml)
+7. [web_session_profiles.yaml](#web_session_profilesyaml)
+8. [network_params.yaml](#network_paramsyaml)
+9. [tls_issuers.yaml](#tls_issuersyaml)
+10. [tls_realism.yaml](#tls_realismyaml)
+11. [smb_file_transfers.yaml](#smb_file_transfersyaml)
 
 ---
 
@@ -301,6 +303,56 @@ server:
 - Keep OS-specific package UAs matched to `os_keywords`; do not use Fedora `libdnf` for Ubuntu hosts.
 - Use `domain_overrides` for update, telemetry, certificate, OCSP, and CRL endpoints that have a service-specific User-Agent even when the proxy request is HTTPS CONNECT.
 - Use `server.generic` for SaaS/API/CDN destinations from servers.
+
+---
+
+## beacon_profiles.yaml
+
+Synthetic HTTP behavior profiles for storyline `beacon` events. Profiles provide
+named URI/method/status/User-Agent/byte-shape sequences that scenario authors can
+reuse with `profile: <name>` instead of writing every beacon tick by hand. These
+profiles should be behavior-shaped, not live malware IOC replicas.
+
+### Structure
+
+```yaml
+profiles:
+  http_checkin:
+    description: Periodic HTTP check-in with small encoded query tokens
+    user_agents:
+      - "Mozilla/5.0 ..."
+    dns_resolution: true
+    http_sequence:
+      - weight: 3
+        method: GET
+        uri: "/api/v1/check?k={base64url:12}&h={host_id}&n={tick}"
+        status_code: [200, 204]
+        response_body_len: [120, 900]
+        orig_bytes: [300, 800]
+        resp_bytes: [600, 2500]
+```
+
+### Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `profiles.<name>.description` | string | no | Human-readable profile purpose |
+| `profiles.<name>.user_agents` | list[string] | no | User-Agent pool selected deterministically per beacon tick |
+| `profiles.<name>.dns_resolution` | bool | no | Whether profile-shaped beacons should emit prerequisite DNS when a hostname is present |
+| `profiles.<name>.http_sequence` | list[object] | yes | Weighted HTTP variants. Scenario `beacon.http_sequence` overrides this list and cycles explicitly by tick. |
+| `weight` | int | no | Relative weight for profile selection. Ignored for scenario-authored `http_sequence`, which cycles in order. |
+| `method` | string | no | HTTP method such as `GET` or `POST` |
+| `uri` | string | no | Origin-form URI beginning with `/`; supports deterministic template tokens |
+| `status_code` | int or list[int] | no | Response status or deterministic per-tick choice set |
+| `response_body_len`, `orig_bytes`, `resp_bytes` | int or `[min, max]` | no | Fixed or ranged byte/body size controls |
+
+Supported deterministic template tokens: `{host_id}`, `{campaign_id}`, `{tick}`,
+`{hex8}`, `{guid}`, and `{base64url:N}` such as `{base64url:12}`.
+
+Overlay files go in `.eforge/config/activity/beacon_profiles.yaml`. Matching
+profile names deep-merge with package defaults; new profile names are added.
+Run `eforge validate-config` after overlay changes. Scenario validation rejects
+unknown `beacon.profile` values before generation.
 
 ---
 

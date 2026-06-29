@@ -942,9 +942,81 @@ def _validate_duration_string(v: str, field_name: str) -> str:
     return v
 
 
+def _validate_nonnegative_duration_string(v: str, field_name: str) -> str:
+    """Validate a duration string format and allow zero seconds."""
+    if not _DURATION_RE.match(v):
+        raise ValueError(
+            f"{field_name} must match pattern like '0s', '30m', '6h', or '5m30s' "
+            "(digits followed by d/h/m/s/ms units)"
+        )
+    from evidenceforge.utils.time import parse_duration
+
+    seconds = parse_duration(v).total_seconds()
+    if seconds < 0:
+        raise ValueError(f"{field_name} must be non-negative (got '{v}')")
+    return v
+
+
 _VALID_QTYPES = {"A", "AAAA", "TXT", "CNAME", "MX", "NULL", "SRV", "PTR"}
 _VALID_RCODES = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
 _MAX_DNS_TUNNEL_PAYLOAD_BYTES = 1024 * 1024
+_HTTP_METHOD_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+
+class BeaconHttpSequenceEntry(BaseModel):
+    """One HTTP/proxy-visible request shape for a periodic beacon tick."""
+
+    method: str | None = None
+    uri: str | None = None
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    user_agent: str | None = None
+    referrer: str | None = None
+    response_body_len: int | list[int] | None = None
+    orig_bytes: int | list[int] | None = None
+    resp_bytes: int | list[int] | None = None
+
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, v: str | None) -> str | None:
+        """Normalize HTTP method tokens."""
+        if v is None:
+            return v
+        method = v.upper()
+        if _HTTP_METHOD_RE.fullmatch(method) is None:
+            raise ValueError(f"invalid HTTP method token: {v!r}")
+        return method
+
+    @field_validator("uri")
+    @classmethod
+    def validate_uri(cls, v: str | None) -> str | None:
+        """Require origin-form URI paths for sequence entries."""
+        if v is not None and (not v.startswith("/") or any(char.isspace() for char in v)):
+            raise ValueError(
+                "beacon http_sequence uri must start with '/' and contain no whitespace"
+            )
+        return v
+
+    @field_validator("response_body_len", "orig_bytes", "resp_bytes")
+    @classmethod
+    def validate_byte_value_or_range(
+        cls, v: int | list[int] | None, info: ValidationInfo
+    ) -> int | list[int] | None:
+        """Accept either a fixed non-negative byte count or a [lo, hi] range."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            if v < 0:
+                raise ValueError(f"{info.field_name} must be non-negative")
+            return v
+        if len(v) != 2:
+            raise ValueError(f"{info.field_name} range must contain exactly two integers")
+        if not all(isinstance(item, int) for item in v):
+            raise ValueError(f"{info.field_name} range values must be integers")
+        if v[0] < 0 or v[1] < v[0]:
+            raise ValueError(f"{info.field_name} range must be non-negative [lo, hi]")
+        return v
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class _PeriodicEventBase(_EventSpecBase):
@@ -1020,6 +1092,15 @@ class BeaconEventSpec(_PeriodicEventBase):
     user_agent: str | None = None
     referrer: str | None = None  # Referer header value (None = auto-generated)
     response_body_len: int | None = Field(default=None, ge=0, le=MAX_HTTP_RESPONSE_BODY_LEN)
+    profile: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+        description="Optional behavior-shaped beacon profile from beacon_profiles.yaml.",
+    )
+    http_sequence: list[BeaconHttpSequenceEntry] = Field(
+        default_factory=list,
+        description="Optional deterministic per-tick HTTP request sequence.",
+    )
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None
     resp_bytes: int | None = None
@@ -1038,6 +1119,29 @@ class BeaconEventSpec(_PeriodicEventBase):
         """Validate hostname is a bare FQDN (no scheme/port/path)."""
         if v is not None:
             _validate_hostname(v, "beacon.hostname")
+        return v
+
+    @field_validator("http_sequence")
+    @classmethod
+    def validate_http_sequence_not_empty_entries(
+        cls, v: list[BeaconHttpSequenceEntry]
+    ) -> list[BeaconHttpSequenceEntry]:
+        """Require each sequence entry to actually override at least one field."""
+        for entry in v:
+            if not any(
+                value is not None
+                for value in (
+                    entry.method,
+                    entry.uri,
+                    entry.status_code,
+                    entry.user_agent,
+                    entry.referrer,
+                    entry.response_body_len,
+                    entry.orig_bytes,
+                    entry.resp_bytes,
+                )
+            ):
+                raise ValueError("beacon http_sequence entries must set at least one field")
         return v
 
     @model_validator(mode="after")
@@ -1442,6 +1546,65 @@ EventSpec = Annotated[
 ]
 
 
+class EventSpacingConfig(BaseModel):
+    """Timing offsets for child events inside one storyline/red-herring step."""
+
+    mode: Literal["human", "automated", "interval", "explicit_offsets"] = "human"
+    min_delay: str | None = Field(
+        default=None,
+        description="Minimum inter-event delay for automated spacing.",
+    )
+    max_delay: str | None = Field(
+        default=None,
+        description="Maximum inter-event delay for automated spacing.",
+    )
+    interval: str | None = Field(
+        default=None,
+        description="Base inter-event interval for interval spacing.",
+    )
+    jitter: float = Field(default=0.0, ge=0.0, le=1.0)
+    offsets: list[str] = Field(
+        default_factory=list,
+        description="Per-child event offsets for explicit_offsets mode.",
+    )
+
+    @field_validator("min_delay", "max_delay", "interval")
+    @classmethod
+    def validate_duration_fields(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Validate optional duration strings."""
+        if v is not None:
+            _validate_duration_string(v, info.field_name)
+        return v
+
+    @field_validator("offsets")
+    @classmethod
+    def validate_offsets(cls, v: list[str]) -> list[str]:
+        """Validate explicit offset duration strings."""
+        for offset in v:
+            _validate_nonnegative_duration_string(offset, "offsets")
+        return v
+
+    @model_validator(mode="after")
+    def validate_mode_fields(self) -> "EventSpacingConfig":
+        """Require the fields needed by each spacing mode."""
+        if self.mode == "automated":
+            min_delay = self.min_delay or "50ms"
+            max_delay = self.max_delay or "2s"
+            from evidenceforge.utils.time import parse_duration
+
+            if parse_duration(min_delay) > parse_duration(max_delay):
+                raise ValueError("event_spacing min_delay must be <= max_delay")
+        elif self.mode == "interval":
+            if self.interval is None:
+                raise ValueError("event_spacing mode=interval requires interval")
+        elif self.mode == "explicit_offsets":
+            if not self.offsets:
+                raise ValueError("event_spacing mode=explicit_offsets requires offsets")
+        return self
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class StorylineEvent(BaseModel):
     """Storyline event with typed event declarations.
 
@@ -1454,6 +1617,7 @@ class StorylineEvent(BaseModel):
         actor: Username of the account performing the action
         system: Target system hostname
         activity: Human-readable activity description (used in GROUND_TRUTH.md only)
+        event_spacing: Optional child-event timing mode/offsets
         events: List of typed event declarations — each specifies type + type-specific fields
     """
 
@@ -1462,6 +1626,7 @@ class StorylineEvent(BaseModel):
     actor: str
     system: str
     activity: str
+    event_spacing: EventSpacingConfig | None = None
     events: list[EventSpec]
 
 
@@ -1488,6 +1653,7 @@ class RedHerringEvent(BaseModel):
     system: str
     activity: str
     explanation: str = Field(..., description="Why this is benign (for instructor ground truth)")
+    event_spacing: EventSpacingConfig | None = None
     events: list[EventSpec]
 
 
@@ -1723,6 +1889,7 @@ class ProxyConfig(BaseModel):
         mode: transparent preserves direct-looking client→origin network evidence;
               explicit emits client→proxy and proxy→origin legs.
         listener_port: Client-visible proxy listener port for explicit mode.
+        auth_policy: Source-native proxy authentication behavior.
     """
 
     mode: Literal["transparent", "explicit"] = Field(
@@ -1738,6 +1905,62 @@ class ProxyConfig(BaseModel):
         le=65535,
         description="Client-visible listener port used when mode is explicit.",
     )
+    auth_policy: "ProxyAuthPolicyConfig" = Field(
+        default_factory=lambda: ProxyAuthPolicyConfig(),
+        description="Proxy username attribution policy for proxy_access rows.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProxyAuthPolicyConfig(BaseModel):
+    """Proxy username attribution policy."""
+
+    mode: Literal["realistic", "legacy"] = Field(
+        default="realistic",
+        description=(
+            "realistic emits unauthenticated rows for allowlisted infrastructure classes; "
+            "legacy preserves prior machine-context User-Agent account behavior."
+        ),
+    )
+    allowlisted_domain_classes: list[str] = Field(
+        default_factory=lambda: [
+            "windows_update",
+            "windows_trust_list",
+            "software_update",
+            "telemetry",
+            "crl",
+            "ocsp",
+        ],
+        description="Proxy URI domain_class values that bypass human proxy auth.",
+    )
+    non_human_principals: bool = Field(
+        default=False,
+        description="Opt in to rare machine/service principal proxy authentication.",
+    )
+    machine_account_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    service_account_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @field_validator("allowlisted_domain_classes")
+    @classmethod
+    def validate_allowlisted_classes(cls, v: list[str]) -> list[str]:
+        """Normalize and reject empty proxy domain classes."""
+        normalized = [item.strip().lower() for item in v]
+        if any(not item for item in normalized):
+            raise ValueError("allowlisted_domain_classes must not contain empty values")
+        return normalized
+
+    @model_validator(mode="after")
+    def probabilities_require_non_human_principals(self) -> "ProxyAuthPolicyConfig":
+        """Avoid surprising non-human rates when the feature is disabled."""
+        if not self.non_human_principals and (
+            self.machine_account_probability > 0.0 or self.service_account_probability > 0.0
+        ):
+            raise ValueError(
+                "machine_account_probability/service_account_probability require "
+                "non_human_principals=true"
+            )
+        return self
 
     model_config = ConfigDict(extra="forbid")
 
