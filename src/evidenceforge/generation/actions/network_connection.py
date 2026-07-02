@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     ProxyContext,
     SmtpContext,
     SslContext,
+    X509Context,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
@@ -92,6 +93,8 @@ class NetworkConnectionRequest:
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
     ssl: SslContext | None = None
+    x509: X509Context | None = None
+    x509_chain: list[X509Context] = field(default_factory=list)
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None

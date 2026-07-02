@@ -74,6 +74,7 @@ from evidenceforge.events.contexts import (
     RemoteThreadContext,
     SmtpContext,
     SslContext,
+    X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
 from evidenceforge.generation.actions import (
@@ -10965,6 +10966,8 @@ class ActivityGenerator:
         email: Optional["EmailContext"] = None,
         smtp: Optional["SmtpContext"] = None,
         ssl: SslContext | None = None,
+        x509: X509Context | None = None,
+        x509_chain: list[X509Context] | None = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
@@ -11035,6 +11038,8 @@ class ActivityGenerator:
             email=email,
             smtp=smtp,
             ssl=ssl,
+            x509=x509,
+            x509_chain=list(x509_chain or []),
             ids=ids,
             http=http,
             file_transfer=file_transfer,
@@ -11466,6 +11471,19 @@ class ActivityGenerator:
                 if tls
                 else None
             )
+            x509_chain = (
+                self._smtp_starttls_certificate_chain(
+                    ssl=ssl_ctx,
+                    dst_system=dst_system,
+                    message_id=message_id,
+                    hop_index=index,
+                    event_time=hop_time,
+                )
+                if ssl_ctx is not None
+                else []
+            )
+            if ssl_ctx is not None and x509_chain:
+                ssl_ctx.cert_chain_fuids = [cert.fuid for cert in x509_chain]
             uid = self.generate_connection(
                 src_ip=src_system.ip,
                 dst_ip=dst_system.ip,
@@ -11485,6 +11503,8 @@ class ActivityGenerator:
                 email=email_ctx,
                 smtp=smtp_ctx,
                 ssl=ssl_ctx,
+                x509=x509_chain[0] if x509_chain else None,
+                x509_chain=x509_chain,
                 file_transfers=mime_file_transfers,
                 suppress_application_side_effects=True,
             )
@@ -11935,6 +11955,117 @@ class ActivityGenerator:
                 established=True,
                 resumed=resumed,
             ),
+        )
+
+    def _smtp_starttls_certificate_chain(
+        self,
+        *,
+        ssl: SslContext,
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        event_time: datetime,
+    ) -> list[X509Context]:
+        """Return passive Zeek certificate evidence for visible SMTP STARTTLS handshakes."""
+        if ssl.version == "TLSv13" or ssl.resumed:
+            return []
+
+        import hashlib
+
+        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+        server_name = ssl.server_name or self._email_server_fqdn(dst_system.hostname)
+        internal_cert_name = server_name if _is_private_ip(dst_system.ip) else ""
+        cert_name = server_name or internal_cert_name or dst_system.ip
+        cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
+        if internal_cert_name:
+            issuer_cfg = _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
+        elif _is_ip_literal(cert_name):
+            issuer_cfg = _raw_ip_tls_issuer(cert_name)
+        else:
+            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name, event_time=event_time)
+        key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
+        key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
+        is_ecdsa = key_type == "ecdsa"
+
+        validity = self._tls_cert_validity.get(cert_name)
+        if validity is None:
+            fallback_days = issuer_cfg.get("validity_days", 397)
+            validity = _certificate_validity_window(
+                event_time,
+                cert_rng,
+                validity_days_min=int(issuer_cfg.get("validity_days_min", fallback_days)),
+                validity_days_max=int(issuer_cfg.get("validity_days_max", fallback_days)),
+                not_before_max_days=int(issuer_cfg.get("not_before_max_days", 300)),
+            )
+        validity = _bound_certificate_validity_to_issuer_window(
+            validity,
+            str(issuer_cfg["name"]),
+            event_time,
+        )
+        self._tls_cert_validity[cert_name] = validity
+        serial_seed = "|".join(
+            [
+                "smtp_tls_cert_serial",
+                cert_name,
+                str(issuer_cfg["name"]),
+                key_type,
+                str(key_length),
+                str(validity[0]),
+                str(validity[1]),
+            ]
+        )
+        serial_number = _tls_certificate_serial(serial_seed)
+        fingerprint = hashlib.sha1(
+            "|".join(
+                [
+                    "smtp_tls_cert",
+                    cert_name,
+                    serial_number,
+                    str(issuer_cfg["name"]),
+                    key_type,
+                    str(key_length),
+                    str(validity[0]),
+                    str(validity[1]),
+                ]
+            ).encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+        leaf = X509Context(
+            fuid=generate_stable_zeek_uid(
+                "F",
+                f"smtp_cert_fuid:{cert_name}:{message_id}:{hop_index}",
+            ),
+            fingerprint=fingerprint,
+            certificate_version=3,
+            certificate_serial=serial_number,
+            certificate_subject=f"CN={cert_name}",
+            certificate_issuer=str(issuer_cfg["name"]),
+            certificate_not_valid_before=validity[0],
+            certificate_not_valid_after=validity[1],
+            certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+            certificate_sig_alg=_tls_signature_algorithm_for_issuer(
+                str(issuer_cfg["name"]),
+                fallback_key_type=key_type,
+                fallback_key_length=key_length,
+            ),
+            certificate_key_type=key_type,
+            certificate_key_length=key_length,
+            certificate_exponent="65537" if not is_ecdsa else "",
+            san_dns=list(dict.fromkeys([cert_name, cert_name.split(".", 1)[0]]))
+            if internal_cert_name
+            else _tls_san_dns_names(cert_name),
+            basic_constraints_ca=False,
+            host_cert=True,
+            client_cert=False,
+        )
+        return self._build_tls_certificate_chain(
+            leaf=leaf,
+            cert_name=cert_name,
+            issuer_name=str(issuer_cfg["name"]),
+            event_time=event_time,
+            connection_uid=f"smtp-starttls:{message_id}:{hop_index}",
+            rng=cert_rng,
         )
 
     def _smtp_transfer_sizes(
@@ -12847,6 +12978,8 @@ class ActivityGenerator:
         dns = request.dns
         email = request.email
         smtp = request.smtp
+        x509 = request.x509
+        x509_chain = request.x509_chain
         ids = request.ids
         http = request.http
         caller_supplied_http = http is not None
@@ -14038,6 +14171,10 @@ class ActivityGenerator:
             event.smtp = smtp
         if request.ssl is not None:
             event.ssl = request.ssl
+        if x509 is not None:
+            event.x509 = x509
+        if x509_chain:
+            event.x509_chain = list(x509_chain)
         if http is not None:
             event.http = http
         if file_transfer is not None:

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from evidenceforge.evaluation.parsers import discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
+from evidenceforge.events.contexts import SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.models.scenario import (
@@ -387,7 +388,21 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     assert "To: <team@corp.example>" in eml_text
 
 
-def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> None:
+def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monkeypatch) -> None:
+    def _tls12_starttls(self, *, dst_system, **_kwargs) -> SslContext:
+        return SslContext(
+            version="TLSv12",
+            cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            server_name=self._email_server_fqdn(dst_system.hostname),
+            resumed=False,
+            established=True,
+            ssl_history="Csxk",
+        )
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.generator.ActivityGenerator._smtp_starttls_ssl_context",
+        _tls12_starttls,
+    )
     scenario = _email_scenario()
     assert scenario.environment.email is not None
     scenario.environment.email.outbound_routes = [
@@ -417,6 +432,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
     file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
     ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
+    x509_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "x509.json")
 
     assert [(row["id.orig_h"], row["id.resp_h"], row["id.resp_p"]) for row in smtp_records] == [
         ("10.10.1.10", "10.10.2.25", 587),
@@ -435,6 +451,14 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     assert starttls_uids
     assert starttls_uids <= {row["uid"] for row in ssl_records}
     assert all(row["id.resp_p"] == 25 for row in ssl_records if row["uid"] in starttls_uids)
+    starttls_tls12 = [
+        row for row in ssl_records if row["uid"] in starttls_uids and row["version"] == "TLSv12"
+    ]
+    assert starttls_tls12
+    cert_fuids = [fuid for row in starttls_tls12 for fuid in (row.get("cert_chain_fuids") or [])]
+    assert cert_fuids
+    assert set(cert_fuids) <= {row["fuid"] for row in file_records}
+    assert set(cert_fuids) <= {row["id"] for row in x509_records}
     conn_by_uid = {row["uid"]: row for row in conn_records}
     assert all(conn_by_uid[uid]["orig_bytes"] > 1000 for uid in starttls_uids)
     assert any(
