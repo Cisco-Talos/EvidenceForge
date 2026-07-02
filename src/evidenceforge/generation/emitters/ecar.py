@@ -750,8 +750,12 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["principal"] = principal
             if process_identity_safe:
                 self._apply_process_provenance(event_data, rendered_source_proc)
-            self._apply_flow_edr_context(event_data, event, include_actor=process_identity_safe)
-            if process_identity_safe and "actorID" not in event_data:
+            self._apply_flow_edr_context(
+                event_data,
+                event,
+                include_actor=process_identity_safe and bool(principal),
+            )
+            if process_identity_safe and principal and "actorID" not in event_data:
                 actor_id = self._process_actor_id(event.src_host, rendered_source_proc)
                 if actor_id:
                     event_data["actorID"] = actor_id
