@@ -4470,7 +4470,7 @@ class BaselineMixin:
 
                 # Choose deny pattern candidate
                 roll = rng.random()
-                if roll < 0.74:
+                if roll < 0.82:
                     # External -> public address space (scanner pool + public CIDRs)
                     src_ip = rng.choices(
                         self._external_scanner_ips,
@@ -4480,7 +4480,7 @@ class BaselineMixin:
                     dst_ip = _pick_public_scan_target()
                     dst_port = external_scanner_port_for_source(src_ip, rng)
                     proto = "tcp"
-                elif roll < 0.84:
+                elif roll < 0.86:
                     # Cross-segment blocked — source-sticky internal probe/noisy tooling.
                     if not internal_probe_sources:
                         continue
