@@ -12139,6 +12139,24 @@ class ActivityGenerator:
             f"Email server {server_name!r} references unknown system {server.system!r}"
         )
 
+    def _email_dns_system_for_hostname(self, hostname: str | None) -> "System | None":
+        """Return the configured mail server system that owns an email DNS hostname."""
+        if not hostname:
+            return None
+        wanted = hostname.lower().rstrip(".")
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return None
+        for server in email_config.mail_servers:
+            candidates = {
+                str(server.hostname).lower().rstrip("."),
+                str(server.name).lower().rstrip("."),
+                str(server.system).lower().rstrip("."),
+            }
+            if wanted in candidates:
+                return self._email_system_for_server_name(server.name)
+        return None
+
     def _email_server_for_user_address(self, address: str) -> str:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
         if email_config is None:
@@ -16555,7 +16573,21 @@ class ActivityGenerator:
         qtype_name = (dns.query_type or "").upper()
         if qtype_name in {"A", "AAAA", "PTR", "MX", "NS", "SOA"}:
             dns.query = self._dns_canonical_internal_hostname(dns.query) or dns.query
-        is_internal = qtype_name == "SRV" or _dns_is_internal_name(dns.query, ad_domain)
+        email_dns_system = self._email_dns_system_for_hostname(dns.query)
+        email_dns_ip = str(getattr(email_dns_system, "ip", "") or "") if email_dns_system else ""
+        if email_dns_ip and qtype_name == "A":
+            dns.answers = [email_dns_ip]
+        elif email_dns_ip and qtype_name == "AAAA":
+            dns.answers = _public_dns_aaaa_answers(
+                dns.query,
+                email_dns_ip,
+                is_internal=True,
+            )
+        is_internal = (
+            qtype_name == "SRV"
+            or _dns_is_internal_name(dns.query, ad_domain)
+            or email_dns_system is not None
+        )
         if is_internal:
             dns.AA = True
         elif qtype_name != "TXT":
@@ -16667,6 +16699,8 @@ class ActivityGenerator:
             else:
                 hostname = _generate_random_hostname(rng, dst_ip)
         hostname = self._dns_canonical_internal_hostname(hostname) or hostname
+        email_dns_system = self._email_dns_system_for_hostname(hostname)
+        email_dns_ip = str(getattr(email_dns_system, "ip", "") or "") if email_dns_system else ""
 
         # DNS caching: skip re-emission if this source/resolver/hostname tuple
         # still has a client-visible address answer. Values are expiration
@@ -16699,7 +16733,8 @@ class ActivityGenerator:
             self._dns_cache_last_prune = ts_epoch
 
         ad_domain = getattr(self, "_ad_domain", "corp.local")
-        is_internal = _dns_is_internal_name(hostname, ad_domain)
+        is_email_internal_name = email_dns_system is not None
+        is_internal = _dns_is_internal_name(hostname, ad_domain) or is_email_internal_name
 
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies use a sticky configured resolver policy instead of rotating
@@ -16775,17 +16810,29 @@ class ActivityGenerator:
         if ":" in dst_ip and force_address:
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            answers = [dst_ip]
+            answers = [_IPV6_MAP.get(email_dns_ip, dst_ip) if email_dns_ip else dst_ip]
         elif qtype_roll < 0.65:
             # A record: hostname → IPv4
             qtype, qtype_name = 1, "A"
             query = hostname
-            answers = _dns_address_rrset(hostname, dst_ip, is_internal=is_internal)
+            answers = (
+                [email_dns_ip]
+                if email_dns_ip
+                else _dns_address_rrset(
+                    hostname,
+                    dst_ip,
+                    is_internal=is_internal,
+                )
+            )
         elif qtype_roll < 0.85:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            answers = _public_dns_aaaa_answers(hostname, dst_ip, is_internal=is_internal)
+            answers = _public_dns_aaaa_answers(
+                hostname,
+                email_dns_ip or dst_ip,
+                is_internal=is_internal,
+            )
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"

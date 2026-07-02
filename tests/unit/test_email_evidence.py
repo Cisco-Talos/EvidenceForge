@@ -582,6 +582,41 @@ def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path)
     assert route[2]["dst_fqdn"] == "mx1.vendor.example.org"
 
 
+def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.accepted_domains = ["corp-mail.example"]
+    scenario.environment.email.mail_servers[0].hostname = "mail.corp-mail.example"
+    scenario.environment.email.mail_servers[1].hostname = "mail-fin.corp-mail.example"
+    scenario.environment.users[0].email = "alice@corp-mail.example"
+    scenario.environment.users[1].email = "bob@corp-mail.example"
+    scenario.storyline[0].events = [
+        EmailMessageEventSpec(
+            to=["bob@corp-mail.example"],
+            subject="Mail DNS identity",
+            body="Mail DNS should use the configured mail server system IP.\n",
+        )
+    ]
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
+    mail_answers = [
+        answer
+        for row in dns_records
+        if row["query"] == "mail.corp-mail.example" and row["qtype_name"] in {"A", "AAAA"}
+        for answer in row.get("answers", [])
+    ]
+    assert mail_answers
+    assert set(mail_answers) <= {"10.10.2.25", "fd00:3714:0019::1"}
+
+
 def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
