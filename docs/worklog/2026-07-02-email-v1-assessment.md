@@ -2244,3 +2244,62 @@ Verification so far:
   `uv run pytest --no-cov tests/unit/test_baseline_canonical.py::TestDhcpLease::test_dhcp_renewal_schedule_catches_up_from_warmup tests/unit/test_baseline_canonical.py::TestDhcpLease::test_dhcp_renewal_schedule_emits_multiple_due_renewals tests/unit/test_activity.py::test_disambiguate_icmp_observation_time_uses_monotonic_varied_sequence -q`.
 - `uv run ruff check src/evidenceforge/generation/engine/baseline.py tests/unit/test_baseline_canonical.py`
   and matching format check passed.
+
+## Loop 42
+
+Priority category: workstation startup and proxy/browser burst texture.
+
+Family contract:
+
+- Owning abstraction: baseline interactive-session activity scheduling and
+  persona/profile traffic timing before browser/proxy expansion.
+- Invariant: routine baseline desktop activity should not collapse unrelated
+  app launches and web/proxy sessions into the first few seconds after an
+  interactive logon. Startup-adjacent activity should have deterministic but
+  human/OS-scale pacing, and persona web sessions should inherit that pacing
+  before fan-out into proxy requests.
+- Entry paths: baseline user activity, baseline persona profile traffic,
+  world-planner session reuse, browser-session action bundles, proxy
+  transaction evidence, Windows process telemetry, and eCAR flow/process rows.
+- Consumers: Windows Security/Sysmon, eCAR, proxy access logs, Zeek
+  HTTP/SSL/conn rows, and blind threat-hunter/detection review.
+
+Implemented fixes feeding loop 42:
+
+- Added deterministic per-session startup pacing for baseline interactive
+  activity inside the first five minutes after logon.
+- Applied the same pacing to profile/persona traffic before it creates or reuses
+  a process and before browser-session fan-out reaches proxy/network evidence.
+- Added focused tests for early event staggering and hour/logoff boundary
+  handling.
+
+Verification so far:
+
+- Focused tests passed:
+  `uv run pytest --no-cov tests/unit/test_baseline_canonical.py::test_interactive_startup_activity_pacing_spreads_early_baseline_events tests/unit/test_baseline_canonical.py::test_interactive_startup_activity_pacing_respects_hour_and_logoff_boundaries -q`.
+- `uv run ruff check src/evidenceforge/generation/engine/baseline.py tests/unit/test_baseline_canonical.py`
+  and matching format check passed.
+- Automated eval passed with overall score 95.726 over 62,326 records.
+- Rendered-output startup/proxy probe found 11 interactive logins, zero proxy
+  requests within 5 or 30 seconds after those logins, 60 proxy requests within
+  180 seconds, median first user-process gap of 70.471 seconds, and one
+  user-process gap under five seconds.
+- Fix committed and pushed as `6d6a950f`.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 68.
+- Detection Engineer: Inconclusive, synthetic-confidence 48.
+- Network Forensics: Synthetic, synthetic-confidence 70.
+- Host/EDR: Synthetic, synthetic-confidence 84.
+- Average: 67.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so this priority category is not cleared. The
+startup/proxy compression probe improved, but reviewers shifted to adjacent
+source-native texture problems: endpoint process lifecycle contradictions,
+implausible process-to-file/registry ownership, overly tidy proxy/browser
+process attribution, SMTP 587 plaintext semantics, and one public-service TLS
+certificate mismatch. Loop 43 targets endpoint process lifecycle ownership
+because it was the largest blind-score driver and affects the same workstation
+process realism family.

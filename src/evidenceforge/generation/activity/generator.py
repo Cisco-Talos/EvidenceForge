@@ -10100,17 +10100,26 @@ class ActivityGenerator:
         proc = event.process
         if host is None or proc is None or proc.start_time is None:
             return
-        self._plan_process_source_create_times(event)
-        source_timing = event.source_timing
-        process_create_ts = proc.start_time
-        if source_timing is not None:
-            ecar_create_times = [
-                timestamp
-                for key, timestamp in source_timing.source_times.items()
-                if key.startswith("source.ecar_process_create|")
-            ]
-            if ecar_create_times:
-                process_create_ts = max(ecar_create_times)
+        process_create_ts = self.process_source_create_time(host.hostname, proc.pid)
+        if process_create_ts is None:
+            create_anchor_event = SecurityEvent(
+                timestamp=proc.start_time,
+                event_type="process_create",
+                src_host=host,
+                process=proc,
+            )
+            self._plan_process_source_create_times(create_anchor_event)
+            source_timing = create_anchor_event.source_timing
+            if source_timing is not None:
+                ecar_create_times = [
+                    timestamp
+                    for key, timestamp in source_timing.source_times.items()
+                    if key.startswith("source.ecar_process_create|")
+                ]
+                if ecar_create_times:
+                    process_create_ts = max(ecar_create_times)
+        if process_create_ts is None:
+            process_create_ts = proc.start_time
         canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
         self._source_timing_planner.source_time(
             event,
