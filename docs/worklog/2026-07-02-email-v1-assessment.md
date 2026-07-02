@@ -791,3 +791,58 @@ sibling DNS-cache defect: repeated same-client/same-query/same-answer internal
 DNS lookups inside advertised TTL windows. Loop 16 should target DNS
 repeat-inside-TTL behavior across internal service/background DNS paths while
 preserving the loop-15 expired-answer fix.
+
+## Loop 16
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: canonical DNS context handling in the network connection
+  bundle path.
+- Invariant: successful A/AAAA/MX/SRV DNS observations with the same
+  client/resolver/query/type/answer set should not repeat inside their visible
+  TTL window, regardless of whether the row came from a caller-supplied
+  `DnsContext`, forced connection-prerequisite DNS, or hostname-only DNS
+  fallback.
+- Entry paths: causal DNS-before-TCP expansion, direct/background DNS
+  connections, hostname-only DNS fallback, email route DNS, proxy-origin DNS,
+  internal service DNS, and out-of-order generation.
+- Consumers: Zeek `dns.json`, `conn.json`, `ssl.json`, `http.json`, proxy and
+  endpoint flow evidence, evaluator checks, and blind network review.
+- Residual sibling risk: source-native SMTP reply/status texture, generic
+  failed-connection scan texture, eCAR endpoint flow timing, and environment
+  DNS/DHCP registry consistency remain separate families.
+
+Implemented fixes:
+
+- Added a shared DNS observation cache keyed by
+  client/resolver/query/type/answers.
+- Cache windows are overlap-aware so out-of-order generation does not create
+  duplicate visible DNS observations inside TTL.
+- Applied the shared cache to caller-supplied `DnsContext` rows and the
+  hostname-only DNS fallback path.
+- Added focused tests for direct DNS suppression, hostname fallback
+  suppression, and out-of-order duplicate suppression.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_dns_realism.py tests/unit/test_activity.py::test_emit_dns_lookup_prunes_and_bounds_dns_cache tests/unit/test_causal_engine.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after final regeneration found 0 repeat-inside-TTL DNS
+  pairs across 1,657 eligible A/AAAA/MX/SRV DNS rows.
+- Automated eval passed with score 96.36 over 70,905 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 64.
+- Detection Engineer: Synthetic, synthetic-confidence 68.
+- Network Forensics: Synthetic, synthetic-confidence 63.
+- Host/EDR: Inconclusive, synthetic-confidence 44.
+- Average: 59.75.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 17. The DNS repeat-inside-TTL finding did not recur. Loop 17 should target
+SMTP source-native texture, especially the uniform `last_reply` value across
+all SMTP rows.
