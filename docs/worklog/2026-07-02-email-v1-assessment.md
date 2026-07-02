@@ -846,3 +846,61 @@ temporary-solve threshold, so Zeek cross-source contracts remain active for
 loop 17. The DNS repeat-inside-TTL finding did not recur. Loop 17 should target
 SMTP source-native texture, especially the uniform `last_reply` value across
 all SMTP rows.
+
+## Loop 17
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: email delivery bundle and canonical SMTP context
+  creation.
+- Invariant: SMTP delivery rows should carry plausible server/profile-specific
+  completion replies and route hops should render in delivery order; response
+  texture must not be one fixed `250` string across the dataset.
+- Entry paths: storyline email, background email, internal submission,
+  internal relay, outbound relay/MX, inbound mail, same-server collapse, and
+  TLS/plaintext SMTP hops.
+- Consumers: Zeek `smtp.json`, Zeek `conn.json`, Zeek `files.json`, email
+  artifacts, EMAIL_ARTIFACTS.json, ground truth SMTP UID references, and blind
+  network/detection review.
+- Residual sibling risk: manifest route UID namespace, SMTP submission TLS and
+  endpoint process attribution, external SMTP peer IP role realism, and
+  non-source-native manifest fields remain separate families.
+
+Implemented fixes:
+
+- Replaced the single delivered-hop reply string with deterministic
+  source-native SMTP completion replies using server role/OS/message/hop
+  context.
+- Added plausible Postfix/Exchange-like and external MTA-style queue IDs while
+  preserving successful `250` semantics and varied 5xx rejection replies.
+- Made email route hop times monotonic by accumulating relay offsets instead
+  of multiplying each hop by an independently sampled delay.
+- Added a regression assertion that delivered background SMTP replies vary
+  across multi-message output.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 60 SMTP rows with 60 unique
+  `last_reply` values.
+- Automated eval passed with score 96 over 71,212 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 82.
+- Detection Engineer: Synthetic, synthetic-confidence 70.
+- Network Forensics: Synthetic, synthetic-confidence 72.
+- Host/EDR: Synthetic, synthetic-confidence 74.
+- Average: 74.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 18. The uniform `last_reply` finding did not recur, but Detection and
+Network both found a hard cross-source contradiction: route UIDs in
+`EMAIL_ARTIFACTS.json` used canonical pre-sensor UIDs while rendered Zeek
+`smtp.json`/`conn.json` used sensor-derived UIDs. Loop 18 should make email
+manifest and ground-truth SMTP UID references use the same sensor-visible UID
+namespace as rendered Zeek evidence.
