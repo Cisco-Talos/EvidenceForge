@@ -11331,6 +11331,8 @@ class ActivityGenerator:
         )
         message_id = self._email_message_id(artifact_id, sender, user_agent)
         route = self._plan_email_route(sender, expanded_recipients, request.system)
+        if route and route[0].get("submission"):
+            route[0]["recipients"] = envelope_recipients
         received_headers = self._received_headers_for_route(
             route=route,
             message_id=message_id,
@@ -11392,7 +11394,8 @@ class ActivityGenerator:
             smtp_ctx = SmtpContext(
                 helo=self._email_server_fqdn(src_system.hostname),
                 mailfrom=sender,
-                rcptto=envelope_recipients if index == 0 else expanded_recipients,
+                rcptto=hop.get("recipients")
+                or (envelope_recipients if index == 0 else expanded_recipients),
                 date=date_header,
                 from_header=email_ctx.header_from,
                 to_header=[*email_ctx.to, *[self._email_header_address(addr) for addr in spec.cc]],
@@ -11798,6 +11801,7 @@ class ActivityGenerator:
                     server_to_server=True,
                     src_server_name="",
                     dst_server_name=inbound_server_name,
+                    recipients=internal_recipients,
                 )
             ]
             sender_server_name = inbound_server_name
@@ -11813,6 +11817,7 @@ class ActivityGenerator:
                     server_to_server=False,
                     src_server_name="",
                     dst_server_name=sender_server_name,
+                    recipients=recipients,
                 )
             ]
         for server_name in sorted(
@@ -11828,6 +11833,11 @@ class ActivityGenerator:
                         server_to_server=True,
                         src_server_name=sender_server_name,
                         dst_server_name=server_name,
+                        recipients=[
+                            address
+                            for address in internal_recipients
+                            if self._email_server_for_user_address(address) == server_name
+                        ],
                     )
                 )
         if external_recipients:
@@ -11842,6 +11852,7 @@ class ActivityGenerator:
                         server_to_server=True,
                         src_server_name=sender_server_name,
                         dst_server_name=outbound_server_name,
+                        recipients=external_recipients,
                     )
                 )
             if email_config.isp_relays:
@@ -11849,12 +11860,22 @@ class ActivityGenerator:
                     _stable_seed(f"email_isp_relay:{sender}") % len(email_config.isp_relays)
                 ]
                 route.append(
-                    self._external_email_hop(outbound_system, relay_host, outbound_server_name)
+                    self._external_email_hop(
+                        outbound_system,
+                        relay_host,
+                        outbound_server_name,
+                        recipients=external_recipients,
+                    )
                 )
             else:
                 mx_host = self._external_mx_for_domain(self._email_domain(external_recipients[0]))
                 route.append(
-                    self._external_email_hop(outbound_system, mx_host, outbound_server_name)
+                    self._external_email_hop(
+                        outbound_system,
+                        mx_host,
+                        outbound_server_name,
+                        recipients=external_recipients,
+                    )
                 )
         return route
 
@@ -11867,6 +11888,7 @@ class ActivityGenerator:
         server_to_server: bool,
         src_server_name: str,
         dst_server_name: str,
+        recipients: list[str],
     ) -> dict[str, Any]:
         servers = self._email_servers_by_name()
         src_cfg = servers.get(src_server_name)
@@ -11883,6 +11905,7 @@ class ActivityGenerator:
                 dst_cfg is not None and dst_cfg.allow_inbound_starttls
             ),
             "external_hostname": "",
+            "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
         }
 
     def _external_email_hop(
@@ -11890,6 +11913,7 @@ class ActivityGenerator:
         src_system: "System",
         dst_hostname: str,
         src_server_name: str,
+        recipients: list[str],
     ) -> dict[str, Any]:
         servers = self._email_servers_by_name()
         src_cfg = servers.get(src_server_name)
@@ -11913,6 +11937,7 @@ class ActivityGenerator:
             ),
             "dst_server_allows_starttls": True,
             "external_hostname": dst_hostname,
+            "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
         }
 
     def _external_source_mail_system(self, sender: str) -> "System":

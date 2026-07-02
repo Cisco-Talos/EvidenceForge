@@ -352,7 +352,7 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
 
     assert sorted(smtp_records[0]["rcptto"]) == ["bob@corp.example", "team@corp.example"]
     assert smtp_records[0]["to"] == ["<team@corp.example>"]
-    assert sorted(smtp_records[1]["rcptto"]) == ["alice@corp.example", "bob@corp.example"]
+    assert smtp_records[1]["rcptto"] == ["bob@corp.example"]
     assert manifest["messages"][0]["bcc"] == ["bob@corp.example"]
     assert "Bcc:" not in eml_text
     assert "To: <team@corp.example>" in eml_text
@@ -410,6 +410,46 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     plaintext_fuids = [fuid for fuids in plaintext_fuid_sets for fuid in fuids]
     assert len(plaintext_fuids) == len(set(plaintext_fuids))
     assert {row["fuid"] for row in file_records} >= set(plaintext_fuids)
+
+
+def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.outbound_routes = [
+        EmailRouteConfig(name="default", servers=["eng"]),
+        EmailRouteConfig(name="engineering-egress", sender_groups=["engineering"], servers=["fin"]),
+    ]
+    scenario.environment.email.isp_relays = ["smtp.isp.example"]
+    scenario = _with_email_storyline(
+        scenario,
+        EmailMessageEventSpec(
+            to=["analyst@example.net"],
+            cc=["bob@corp.example"],
+            subject="Mixed recipient route",
+            body="This message has both internal and external recipients.\n",
+        ),
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+
+    assert [(row["id.orig_h"], row["id.resp_h"], row["id.resp_p"]) for row in smtp_records] == [
+        ("10.10.1.10", "10.10.2.25", 587),
+        ("10.10.2.25", "10.10.2.26", 25),
+        ("10.10.2.25", "10.10.2.26", 25),
+        ("10.10.2.26", smtp_records[3]["id.resp_h"], 25),
+    ]
+    assert sorted(smtp_records[0]["rcptto"]) == ["analyst@example.net", "bob@corp.example"]
+    assert smtp_records[1]["rcptto"] == ["bob@corp.example"]
+    assert smtp_records[2]["rcptto"] == ["analyst@example.net"]
+    assert smtp_records[3]["rcptto"] == ["analyst@example.net"]
 
 
 def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
