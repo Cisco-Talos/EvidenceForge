@@ -50,6 +50,7 @@ from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
     _ambient_registry_entry_allowed,
     _baseline_inbound_ids_probe_profile,
+    _dhcp_renewal_epochs_for_hour,
     _extra_syslog_service_values,
     _linux_ambient_logind_probability,
     _linux_baseline_pam_close_lead,
@@ -1355,6 +1356,41 @@ class TestWeirdContext:
 
 class TestDhcpLease:
     """DHCP lease events dispatch through canonical path."""
+
+    def test_dhcp_renewal_schedule_catches_up_from_warmup(self):
+        """Renewal scheduling should skip hidden catch-up renewals and emit visible ones."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        warmup_lease_epoch = datetime(2024, 3, 15, 11, 3, 0, tzinfo=UTC).timestamp()
+
+        due, updated_last = _dhcp_renewal_epochs_for_hour(
+            last_renewal=warmup_lease_epoch,
+            lease_time=3600.0,
+            current_hour=current_hour,
+            rng=random.Random(7),
+        )
+
+        hour_start = current_hour.timestamp()
+        hour_end = (current_hour + timedelta(hours=1)).timestamp()
+        assert len(due) >= 2
+        assert all(hour_start <= epoch < hour_end for epoch in due)
+        assert updated_last == due[-1]
+
+    def test_dhcp_renewal_schedule_emits_multiple_due_renewals(self):
+        """One-hour leases can have more than one visible renewal inside one hour."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        recent_renewal_epoch = datetime(2024, 3, 15, 12, 45, 0, tzinfo=UTC).timestamp()
+
+        due, updated_last = _dhcp_renewal_epochs_for_hour(
+            last_renewal=recent_renewal_epoch,
+            lease_time=3600.0,
+            current_hour=current_hour,
+            rng=random.Random(11),
+        )
+
+        assert len(due) == 2
+        assert due == sorted(due)
+        assert updated_last == due[-1]
+        assert min(b - a for a, b in zip(due[:-1], due[1:], strict=True)) > 20 * 60
 
     def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
         """DHCP lease requests should expose durable deterministic anchors."""

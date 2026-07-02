@@ -384,6 +384,36 @@ def _ntp_sync_seconds_for_hour_from_state(
     return observed_seconds
 
 
+def _dhcp_renewal_epochs_for_hour(
+    *,
+    last_renewal: float,
+    lease_time: float,
+    current_hour: datetime,
+    rng: random.Random,
+) -> tuple[list[float], float]:
+    """Return DHCP renewal epochs due in this hour and the updated schedule anchor."""
+    base_renewal = max(60.0, lease_time / 2)
+    hour_start_epoch = current_hour.timestamp()
+    hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
+    due: list[float] = []
+    schedule_anchor = last_renewal
+
+    max_iterations = max(
+        8,
+        int((hour_end_epoch - last_renewal) / max(60.0, base_renewal * 0.8)) + 4,
+    )
+    for _ in range(max_iterations):
+        jitter_factor = 1.0 + rng.uniform(-0.10, 0.10)
+        next_renewal = schedule_anchor + (base_renewal * jitter_factor)
+        if next_renewal >= hour_end_epoch:
+            break
+        schedule_anchor = next_renewal
+        if next_renewal >= hour_start_epoch:
+            due.append(next_renewal)
+
+    return due, schedule_anchor
+
+
 def _linux_baseline_session_initiator(
     user: str,
     *,
@@ -6592,17 +6622,16 @@ class BaselineMixin:
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
             if dhcp_state and "zeek_dhcp" in self.emitters:
                 lease_time = dhcp_state["lease_time"]
-                # RFC 2131: renew at T1 ≈ T/2, with ±10% jitter per renewal
-                base_renewal = lease_time / 2
-                jitter_factor = 1.0 + rng.uniform(-0.10, 0.10)
-                renewal_interval = base_renewal * jitter_factor
-                last_renewal = dhcp_state["last_renewal"]
-                hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
-                # Check if a renewal falls within this hour
-                next_renewal = last_renewal + renewal_interval
-                if next_renewal < hour_end_epoch:
+                renewal_epochs, updated_last_renewal = _dhcp_renewal_epochs_for_hour(
+                    last_renewal=dhcp_state["last_renewal"],
+                    lease_time=lease_time,
+                    current_hour=current_hour,
+                    rng=rng,
+                )
+                if renewal_epochs:
                     from evidenceforge.utils.ids import generate_zeek_uid
 
+                for next_renewal in renewal_epochs:
                     renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
                     # Randomize fractional seconds (OS timer imprecision)
                     renewal_ts = renewal_ts.replace(microsecond=rng.randint(0, 999999))
@@ -6623,7 +6652,7 @@ class BaselineMixin:
                         sys_pids=sys_pids,
                         dhcp_state=dhcp_state,
                     )
-                    dhcp_state["last_renewal"] = next_renewal
+                dhcp_state["last_renewal"] = updated_last_renewal
 
             # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])

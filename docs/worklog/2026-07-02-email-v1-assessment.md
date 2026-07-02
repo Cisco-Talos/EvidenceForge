@@ -2171,3 +2171,76 @@ Network review called it a weak signal, Host review found endpoint/file timing
 coherent, and Threat review found no hard cross-source timing contradictions.
 The remaining timing-family concrete finding is exact 11 ms ICMP burst spacing,
 so loop 40 targets ICMP observation cadence before moving on.
+
+## Loop 40
+
+Priority category: source/cross-source timing texture, narrowed to ICMP
+observation cadence.
+
+Implemented fixes feeding loop 40:
+
+- Replaced fixed 11 ms duplicate-ICMP observation spacing with deterministic
+  tuple-local variable gaps while preserving monotonic observation times and
+  constant-time duplicate handling.
+- Updated the focused ICMP disambiguation test to assert monotonic varied
+  spacing instead of the old fixed cadence.
+
+Verification:
+
+- Focused test passed:
+  `uv run pytest --no-cov tests/unit/test_activity.py::test_disambiguate_icmp_observation_time_uses_monotonic_varied_sequence -q`.
+- `uv run ruff check src/evidenceforge/generation/activity/generator.py tests/unit/test_activity.py`
+  and matching format check passed.
+- Rendered-output probe after regeneration found 145 ICMP rows, 117 adjacent
+  same-tuple gaps, zero exact 11 ms gaps, and 117 unique adjacent gaps.
+- Automated eval passed with score 95.790 over 65,038 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 34.
+- Detection Engineer: Real, synthetic-confidence 34.
+- Network Forensics: Inconclusive, synthetic-confidence 43.
+- Host/EDR: Inconclusive, synthetic-confidence 43.
+- Average: 38.5.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears source/cross-source timing texture. The next priority
+category for loop 41 is DHCP lease lifecycle continuity: Network review found
+visible one-hour DHCP renewals followed by later client activity without
+subsequent visible renewals.
+
+## Loop 41
+
+Priority category: DHCP lease lifecycle continuity.
+
+Family contract:
+
+- Owning abstraction: DHCP lease baseline scheduler plus DHCP lease action
+  bundle.
+- Invariant: DHCP-managed hosts with visible one-hour leases and later visible
+  network activity should have visible renewal evidence before expiry, unless
+  DHCP collection is explicitly out of scope for that host. The baseline
+  scheduler must catch up from warm-up state and emit every renewal that falls
+  inside the visible hour.
+- Entry paths: warm-up lease acquisition, hourly baseline system traffic,
+  DHCP renewal transactions, DHCP registry side effects, Zeek DHCP/conn rows,
+  Linux dhclient syslog companions, and evaluator/blind network review.
+- Consumers: Zeek `dhcp.json`, Zeek `conn.json`, eCAR registry side effects,
+  Linux syslog, source timing checks, and blind Network/Detection review.
+
+Implemented fixes feeding loop 41:
+
+- Added a DHCP renewal scheduler helper that skips hidden catch-up renewals,
+  emits every renewal due inside the current hour, and updates the schedule
+  anchor even when no visible renewal falls in that hour.
+- Replaced the old one-renewal-per-hour baseline block with iteration over the
+  helper's due renewal epochs.
+- Added focused tests for catch-up from warm-up and multiple visible renewals
+  for one-hour leases.
+
+Verification so far:
+
+- Focused tests passed:
+  `uv run pytest --no-cov tests/unit/test_baseline_canonical.py::TestDhcpLease::test_dhcp_renewal_schedule_catches_up_from_warmup tests/unit/test_baseline_canonical.py::TestDhcpLease::test_dhcp_renewal_schedule_emits_multiple_due_renewals tests/unit/test_activity.py::test_disambiguate_icmp_observation_time_uses_monotonic_varied_sequence -q`.
+- `uv run ruff check src/evidenceforge/generation/engine/baseline.py tests/unit/test_baseline_canonical.py`
+  and matching format check passed.
