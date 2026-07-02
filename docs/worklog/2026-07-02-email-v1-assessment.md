@@ -904,3 +904,57 @@ Network both found a hard cross-source contradiction: route UIDs in
 `smtp.json`/`conn.json` used sensor-derived UIDs. Loop 18 should make email
 manifest and ground-truth SMTP UID references use the same sensor-visible UID
 namespace as rendered Zeek evidence.
+
+## Loop 18
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: email delivery route summary and ground-truth SMTP UID
+  reporting.
+- Invariant: email manifest route UIDs and ground-truth `smtp_uids` must be in
+  the same sensor-visible UID namespace as rendered Zeek `smtp.json` and
+  `conn.json`.
+- Entry paths: storyline email, background email, internal submission,
+  internal relay, inbound SMTP, outbound direct/ISP relay, and sensor
+  multiplexing.
+- Consumers: `EMAIL_ARTIFACTS.json`, `GROUND_TRUTH.json`,
+  `GROUND_TRUTH.md`, Zeek `smtp.json`, Zeek `conn.json`, evaluator parsers,
+  and blind detection/network review.
+- Residual sibling risk: STARTTLS SMTP visibility, Zeek SMTP `path`
+  semantics, port-587 TLS posture, external SMTP peer role realism, manifest
+  label leakage, and endpoint mail-client attribution remain separate families.
+
+Implemented fixes:
+
+- Added sensor-visible UID derivation for email route summaries.
+- Updated `EmailDeliveryResult.smtp_uids` so ground truth references rendered
+  Zeek sensor UIDs instead of canonical pre-sensor UIDs.
+- Added regression assertions that manifest route UIDs and ground-truth SMTP
+  UIDs exist in rendered Zeek SMTP rows.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 60 manifest route UIDs and
+  10 ground-truth SMTP UIDs, with zero missing from Zeek `smtp.json` or
+  `conn.json`.
+- Automated eval passed with score 96 over 71,212 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 72.
+- Detection Engineer: Synthetic, synthetic-confidence 72.
+- Network Forensics: Synthetic, synthetic-confidence 68.
+- Host/EDR: Synthetic, synthetic-confidence 68.
+- Average: 70.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 19. The manifest UID contradiction did not recur. The highest-priority
+remaining cross-source issue is STARTTLS visibility: encrypted SMTP rows still
+expose post-STARTTLS envelope/reply/path fields. Loop 19 should suppress those
+protected fields in Zeek SMTP output while preserving plaintext SMTP metadata
+and Zeek files linkage.
