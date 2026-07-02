@@ -113,6 +113,9 @@ _BASELINE_SMB_SERVICE_ALIASES = {"smb", "samba", "smbd", "lanmanserver", "ad-ds"
 _BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
 _BASELINE_WEBMAIL_PROFILE_TERMS = ("owa", "webmail", "mailbox", "mail client", "email")
 _BASELINE_SUCCESS_FALLBACK_PORTS = (22, 80, 443, 8080, 3306, 5432, 53)
+_BASELINE_INTERACTIVE_STARTUP_WINDOW_SECONDS = 300.0
+_BASELINE_INTERACTIVE_STARTUP_INITIAL_DELAY_SECONDS = (35.0, 95.0)
+_BASELINE_INTERACTIVE_STARTUP_GAP_SECONDS = (12.0, 45.0)
 _BASELINE_SERVER_ADMIN_PERSONA_TYPES = {"server", "domain_controller"}
 _BASELINE_SERVER_ADMIN_PERSONA_ROLES = {
     "app_server",
@@ -4953,6 +4956,71 @@ class BaselineMixin:
 
         return sorted(final)
 
+    def _pace_interactive_startup_activity(
+        self,
+        *,
+        session: Any,
+        system: Any,
+        user: Any,
+        candidate_time: datetime,
+        activity_key: str,
+        current_hour: datetime | None = None,
+        planned_logoffs: dict[tuple[str, str], float] | None = None,
+    ) -> datetime | None:
+        """Spread baseline desktop activity away from a fresh interactive logon."""
+        if getattr(session, "logon_type", None) not in {2, 10, 11}:
+            return candidate_time
+        if getattr(session, "session_kind", "") in {"network", "service"}:
+            return candidate_time
+
+        session_start = getattr(session, "start_time", None)
+        if session_start is None:
+            return candidate_time
+
+        age_seconds = (candidate_time - session_start).total_seconds()
+        if age_seconds < 0 or age_seconds >= _BASELINE_INTERACTIVE_STARTUP_WINDOW_SECONDS:
+            return candidate_time
+
+        next_age_by_session = getattr(self, "_baseline_startup_next_age_seconds", None)
+        if next_age_by_session is None:
+            next_age_by_session = {}
+            self._baseline_startup_next_age_seconds = next_age_by_session
+
+        key = (getattr(session, "system", ""), getattr(session, "logon_id", ""))
+        next_age = next_age_by_session.get(key)
+        if next_age is None:
+            seed = _stable_seed(
+                "baseline_startup_initial_delay:"
+                f"{getattr(system, 'hostname', '')}:{getattr(user, 'username', '')}:"
+                f"{getattr(session, 'logon_id', '')}:{session_start.isoformat()}"
+            )
+            rng = random.Random(seed)
+            next_age = rng.uniform(*_BASELINE_INTERACTIVE_STARTUP_INITIAL_DELAY_SECONDS)
+
+        target_age = max(age_seconds, next_age)
+        paced_time = session_start + timedelta(seconds=target_age)
+
+        gap_seed = _stable_seed(
+            "baseline_startup_activity_gap:"
+            f"{getattr(system, 'hostname', '')}:{getattr(user, 'username', '')}:"
+            f"{getattr(session, 'logon_id', '')}:{activity_key}:{target_age:.3f}"
+        )
+        gap_rng = random.Random(gap_seed)
+        next_age_by_session[key] = min(
+            _BASELINE_INTERACTIVE_STARTUP_WINDOW_SECONDS,
+            target_age + gap_rng.uniform(*_BASELINE_INTERACTIVE_STARTUP_GAP_SECONDS),
+        )
+
+        if current_hour is not None and paced_time >= current_hour + timedelta(hours=1):
+            return None
+        if planned_logoffs and current_hour is not None:
+            logoff_offset = planned_logoffs.get((getattr(system, "hostname", ""), session.logon_id))
+            if logoff_offset is not None and paced_time >= current_hour + timedelta(
+                seconds=logoff_offset
+            ):
+                return None
+        return paced_time
+
     def _generate_user_activity(
         self,
         user: User,
@@ -5037,6 +5105,18 @@ class BaselineMixin:
             )
             if active_session is None:
                 continue
+            paced_t = self._pace_interactive_startup_activity(
+                session=active_session,
+                system=system,
+                user=user,
+                candidate_time=t,
+                activity_key=f"user_activity:{activity_type}",
+                current_hour=current_hour,
+                planned_logoffs=planned_logoffs,
+            )
+            if paced_t is None:
+                continue
+            t = paced_t
             self.state_manager.set_current_time(t)
             self.activity_generator.execute_baseline_activity(
                 user=user, system=system, time=t, activity_type=activity_type
@@ -6333,6 +6413,18 @@ class BaselineMixin:
                 raw_offset = _burst_offset()
                 offset = max(session_start_sec, min(_max_offset, raw_offset))
                 ts = current_hour + timedelta(seconds=offset)
+                paced_ts = self._pace_interactive_startup_activity(
+                    session=session,
+                    system=system,
+                    user=user_obj,
+                    candidate_time=ts,
+                    activity_key=f"profile:{conn.get('service', '')}:{hostname or conn['role']}",
+                    current_hour=current_hour,
+                    planned_logoffs=planned_logoffs,
+                )
+                if paced_ts is None:
+                    continue
+                ts = paced_ts
 
                 persona_pid = -1
                 # Thread effective persona so _server_admin sessions don't

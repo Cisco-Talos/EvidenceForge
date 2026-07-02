@@ -112,6 +112,94 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
     assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
 
 
+def test_interactive_startup_activity_pacing_spreads_early_baseline_events():
+    """Fresh interactive desktop activity should not collapse into the logon second."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 13, 0, 0, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    system = SimpleNamespace(hostname="WS-01")
+    user = SimpleNamespace(username="analyst")
+    current_hour = datetime(2026, 4, 13, 13, 0, 0, tzinfo=UTC)
+
+    first = engine._pace_interactive_startup_activity(
+        session=session,
+        system=system,
+        user=user,
+        candidate_time=current_hour + timedelta(seconds=2),
+        activity_key="user_activity:connection_web",
+        current_hour=current_hour,
+    )
+    second = engine._pace_interactive_startup_activity(
+        session=session,
+        system=system,
+        user=user,
+        candidate_time=current_hour + timedelta(seconds=3),
+        activity_key="profile:ssl:portal.example",
+        current_hour=current_hour,
+    )
+    later = engine._pace_interactive_startup_activity(
+        session=session,
+        system=system,
+        user=user,
+        candidate_time=current_hour + timedelta(minutes=8),
+        activity_key="user_activity:process_user_apps",
+        current_hour=current_hour,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert 35 <= (first - session.start_time).total_seconds() <= 95
+    assert (second - first).total_seconds() >= 12
+    assert later == current_hour + timedelta(minutes=8)
+
+
+def test_interactive_startup_activity_pacing_respects_hour_and_logoff_boundaries():
+    """Startup pacing should skip baseline events that no longer fit the session window."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 13, 59, 20, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    system = SimpleNamespace(hostname="WS-01")
+    user = SimpleNamespace(username="analyst")
+    current_hour = datetime(2026, 4, 13, 13, 0, 0, tzinfo=UTC)
+
+    assert (
+        engine._pace_interactive_startup_activity(
+            session=session,
+            system=system,
+            user=user,
+            candidate_time=current_hour + timedelta(seconds=3565),
+            activity_key="user_activity:connection_web",
+            current_hour=current_hour,
+        )
+        is None
+    )
+
+    session.start_time = datetime(2026, 4, 13, 13, 10, 0, tzinfo=UTC)
+    engine = object.__new__(BaselineMixin)
+    assert (
+        engine._pace_interactive_startup_activity(
+            session=session,
+            system=system,
+            user=user,
+            candidate_time=current_hour + timedelta(minutes=10, seconds=2),
+            activity_key="profile:ssl:portal.example",
+            current_hour=current_hour,
+            planned_logoffs={("WS-01", "0x12345"): 615},
+        )
+        is None
+    )
+
+
 def test_linux_baseline_session_initiator_creates_pam_session_message():
     """Ambient logind session noise should have a concrete PAM initiator."""
     samples = [
