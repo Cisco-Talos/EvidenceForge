@@ -3332,6 +3332,8 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.kerberos.service_name == "krbtgt/example.local"
         assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
+        assert event.kerberos.target_username == "alice"
+        assert event.kerberos.target_domain == "EXAMPLE.LOCAL"
 
     def test_machine_account_logon_emits_nearby_dc_kerberos_audit(
         self, activity_gen, state_manager, mock_emitters

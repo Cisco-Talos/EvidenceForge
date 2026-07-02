@@ -1114,9 +1114,7 @@ class WindowsEventEmitter(LogEmitter):
             "Keywords": "0x8010000000000000" if is_failure else "0x8020000000000000",
             "ExecutionProcessID": krb.reporting_pid or 600,
             "ExecutionThreadID": rng.randint(100, 500),
-            "TargetUserName": krb.target_username
-            if "@" in krb.target_username
-            else f"{krb.target_username}@{krb.target_domain.upper()}",
+            "TargetUserName": krb.target_username.split("@", 1)[0],
             "TargetDomainName": krb.target_domain,
             "ServiceName": krb.service_name,
             "ServiceSid": krb.service_sid,

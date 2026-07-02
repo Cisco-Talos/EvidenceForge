@@ -6,10 +6,15 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+from email import policy
+from email.parser import BytesParser
+from hashlib import md5, sha1, sha256
 from pathlib import Path
 
 from evidenceforge.evaluation.parsers import discover_log_files, get_parser
+from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.models.scenario import (
@@ -39,6 +44,27 @@ from evidenceforge.validation.schema import ScenarioValidator
 
 def _read_ndjson(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _parse_eval_records(data_dir: Path) -> dict[str, list]:
+    discovered = discover_log_files(data_dir)
+    records: dict[str, list] = {}
+    for format_name, paths in discovered.items():
+        parser = get_parser(format_name)
+        records[format_name] = [
+            record
+            for path in paths
+            for record in parser.parse_file(path)
+            if not record.parse_errors
+        ]
+    return records
+
+
+def _is_global_non_test_net(ip: str) -> bool:
+    parsed = ipaddress.ip_address(ip)
+    return parsed.is_global and not (
+        ip.startswith("192.0.2.") or ip.startswith("198.51.100.") or ip.startswith("203.0.113.")
+    )
 
 
 def _email_scenario(*, include_email_config: bool = True) -> Scenario:
@@ -312,8 +338,9 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     materialized = tmp_path / manifest["messages"][0]["artifact_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
-    assert sorted(smtp_records[0]["rcptto"]) == ["alice@corp.example", "bob@corp.example"]
+    assert sorted(smtp_records[0]["rcptto"]) == ["bob@corp.example", "team@corp.example"]
     assert smtp_records[0]["to"] == ["<team@corp.example>"]
+    assert sorted(smtp_records[1]["rcptto"]) == ["alice@corp.example", "bob@corp.example"]
     assert manifest["messages"][0]["bcc"] == ["bob@corp.example"]
     assert "Bcc:" not in eml_text
     assert "To: <team@corp.example>" in eml_text
@@ -346,6 +373,8 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
+    file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
+    ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
 
     assert [(row["id.orig_h"], row["id.resp_h"], row["id.resp_p"]) for row in smtp_records] == [
         ("10.10.1.10", "10.10.2.25", 587),
@@ -353,13 +382,22 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
         ("10.10.2.26", smtp_records[2]["id.resp_h"], 25),
     ]
     assert smtp_records[1]["tls"] is True
+    assert "fuids" not in smtp_records[1]
     assert smtp_records[2]["tls"] is False
+    starttls_uids = {row["uid"] for row in smtp_records if row["tls"]}
+    assert starttls_uids
+    assert starttls_uids <= {row["uid"] for row in ssl_records}
+    assert all(row["id.resp_p"] == 25 for row in ssl_records if row["uid"] in starttls_uids)
     assert any(
         row["query"] == "smtp.isp.example" and row["qtype_name"] == "A" for row in dns_records
     )
     assert not any(
         row["qtype_name"] == "MX" and row["query"] == "example.net" for row in dns_records
     )
+    plaintext_fuid_sets = [tuple(row.get("fuids", [])) for row in smtp_records if not row["tls"]]
+    plaintext_fuids = [fuid for fuids in plaintext_fuid_sets for fuid in fuids]
+    assert len(plaintext_fuids) == len(set(plaintext_fuids))
+    assert {row["fuid"] for row in file_records} >= set(plaintext_fuids)
 
 
 def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
@@ -385,13 +423,61 @@ def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
     engine.generate()
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+    dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
+    conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
 
     assert len(smtp_records) == 2
-    assert smtp_records[0]["id.orig_h"].startswith("198.51.100.")
+    assert _is_global_non_test_net(smtp_records[0]["id.orig_h"])
     assert smtp_records[0]["id.resp_h"] == "10.10.2.26"
     assert smtp_records[0]["id.resp_p"] == 25
     assert smtp_records[1]["id.orig_h"] == "10.10.2.26"
     assert smtp_records[1]["id.resp_h"] == "10.10.2.25"
+    inbound_conn = next(row for row in conn_records if row["uid"] == smtp_records[0]["uid"])
+    assert inbound_conn["local_orig"] is False
+    assert inbound_conn["local_resp"] is True
+    assert not any(
+        row["id.orig_h"] == smtp_records[0]["id.orig_h"] and row["id.resp_h"] == "10.10.0.10"
+        for row in dns_records
+    )
+    assert not any(
+        row["id.orig_h"] == smtp_records[0]["id.orig_h"] and row["qtype_name"] == "SRV"
+        for row in dns_records
+    )
+
+
+def test_inbound_email_does_not_emit_external_mx_endpoint_ecar(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.inbound_route = ["fin"]
+    scenario = _with_email_storyline(
+        scenario,
+        EmailMessageEventSpec(
+            sender="news@example.net",
+            to=["alice@corp.example"],
+            subject="Inbound collection boundary test",
+            body="External sender should not create external endpoint telemetry.\n",
+        ),
+    ).model_copy(
+        update={
+            "output": OutputSpec(
+                logs=[{"format": "zeek"}, {"format": "ecar"}],
+                destination="./data",
+            )
+        }
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    assert not any(
+        "mx1.example.net" in str(path) for path in (tmp_path / "data").rglob("ecar.json")
+    )
+    assert _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
 
 
 def test_email_validator_reports_actionable_topology_errors() -> None:
@@ -478,6 +564,8 @@ messages:
 
     plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 587)
     assert plaintext_smtp["subject"] == "Vendor AI summary"
+    assert not plaintext_smtp["msg_id"].startswith("<00000000")
+    assert "prompt-injection" not in plaintext_smtp["msg_id"]
     assert len(plaintext_smtp["fuids"]) == 2
     assert {row["fuid"] for row in file_records} >= set(plaintext_smtp["fuids"])
     assert [row["source"] for row in file_records if row["fuid"] in plaintext_smtp["fuids"]] == [
@@ -489,6 +577,18 @@ messages:
     }
     assert "X-Campaign-ID: ai-vendor-1" in eml_text
     assert "prompt.txt" in eml_text
+    parsed_email = BytesParser(policy=policy.default).parsebytes(materialized.read_bytes())
+    attachment_parts = {
+        part.get_filename(): part.get_payload(decode=True)
+        for part in parsed_email.walk()
+        if part.get_filename()
+    }
+    prompt_payload = attachment_parts["prompt.txt"]
+    prompt_file_row = next(row for row in file_records if row.get("filename") == "prompt.txt")
+    assert prompt_file_row["seen_bytes"] == len(prompt_payload)
+    assert prompt_file_row["md5"] == md5(prompt_payload, usedforsecurity=False).hexdigest()
+    assert prompt_file_row["sha1"] == sha1(prompt_payload, usedforsecurity=False).hexdigest()
+    assert prompt_file_row["sha256"] == sha256(prompt_payload).hexdigest()
 
 
 def test_email_read_event_generates_opaque_tls_access(tmp_path: Path) -> None:
@@ -542,6 +642,67 @@ def test_email_read_event_generates_opaque_tls_access(tmp_path: Path) -> None:
     assert not smtp_path.exists()
     assert ground_truth["events"][0]["kind"] == "email_read"
     assert ground_truth["events"][0]["attributes"]["protocol"] == "owa"
+
+
+def test_email_storyline_events_count_as_causality_traces(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.mail_servers[1] = scenario.environment.email.mail_servers[
+        1
+    ].model_copy(update={"platform": "exchange"})
+    scenario = scenario.model_copy(
+        update={
+            "storyline": [
+                StorylineEvent(
+                    id="email-step",
+                    time="+10m",
+                    actor="alice",
+                    system="WS-ALICE",
+                    activity="Alice sends Bob a message",
+                    events=[
+                        EmailMessageEventSpec(
+                            to=["bob@corp.example"],
+                            subject="Trace me",
+                            body="This should count as a causality trace.\n",
+                        )
+                    ],
+                ),
+                StorylineEvent(
+                    id="read-step",
+                    time="+15m",
+                    actor="bob",
+                    system="WS-BOB",
+                    activity="Bob reads his mailbox",
+                    events=[
+                        EmailReadEventSpec(
+                            mailbox="bob@corp.example",
+                            server="fin",
+                            protocol="owa",
+                            message_ids=["email-step"],
+                            duration=30.0,
+                        )
+                    ],
+                ),
+            ]
+        }
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+    result = CausalityScorer().score(_parse_eval_records(tmp_path / "data"), scenario)
+
+    event_presence = next(score for score in result.sub_scores if score.key == "event_presence")
+    temporal_integrity = next(
+        score for score in result.sub_scores if score.key == "temporal_integrity"
+    )
+    assert event_presence.score == 100.0
+    assert event_presence.details.startswith("2/2 expected-visible storyline events")
+    assert temporal_integrity.score == 100.0
 
 
 def test_email_validator_reports_corpus_and_read_errors(tmp_path: Path) -> None:
@@ -622,7 +783,28 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
 
-    assert any(row["id.orig_h"].startswith("198.51.100.") for row in smtp_records)
-    assert any(row["id.resp_h"].startswith("203.0.113.") for row in smtp_records)
+    inbound_external_ips = [
+        row["id.orig_h"]
+        for row in smtp_records
+        if row["id.resp_h"] in {"10.10.2.25", "10.10.2.26"}
+        and not row["id.orig_h"].startswith("10.10.")
+    ]
+    outbound_external_ips = [
+        row["id.resp_h"]
+        for row in smtp_records
+        if row["id.orig_h"] in {"10.10.2.25", "10.10.2.26"}
+        and not row["id.resp_h"].startswith("10.10.")
+    ]
+    assert inbound_external_ips
+    assert outbound_external_ips
+    assert all(_is_global_non_test_net(ip) for ip in inbound_external_ips)
+    assert all(_is_global_non_test_net(ip) for ip in outbound_external_ips)
     assert any(row["id.resp_p"] in {443, 993} and row["service"] == "ssl" for row in conn_records)
     assert all(not message["storyline_id"] for message in manifest["messages"])
+    uas_by_sender: dict[str, set[str]] = {}
+    for row in smtp_records:
+        if row.get("id.resp_p") != 587 or not row.get("mailfrom", "").endswith("@corp.example"):
+            continue
+        uas_by_sender.setdefault(row["mailfrom"], set()).add(row.get("user_agent", ""))
+    assert uas_by_sender
+    assert all(len(user_agents) == 1 for user_agents in uas_by_sender.values())

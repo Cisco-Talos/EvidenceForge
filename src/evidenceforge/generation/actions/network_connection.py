@@ -39,6 +39,7 @@ from evidenceforge.events.contexts import (
     PeContext,
     ProxyContext,
     SmtpContext,
+    SslContext,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
@@ -90,6 +91,7 @@ class NetworkConnectionRequest:
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
+    ssl: SslContext | None = None
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
@@ -120,7 +122,8 @@ class NetworkConnectionRequest:
             f"{self.proto}:{self.service or ''}:{self.duration or ''}:"
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:{self.src_port or ''}:"
             f"{self.emit_dns}:{self.pid}:{source_hostname}:{self.conn_state or ''}:"
-            f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ids)}:"
+            f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ssl)}:"
+            f"{_context_fingerprint(self.ids)}:"
             f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
             f"{_context_fingerprint(self.file_transfers)}:"
             f"{_context_fingerprint(self.pe)}:{_context_fingerprint(self.ocsp)}:"

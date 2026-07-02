@@ -70,6 +70,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
     RemoteThreadContext,
     SmtpContext,
+    SslContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
@@ -203,6 +204,7 @@ from .network import (
     EXTERNAL_IPS,
     REVERSE_DNS,
     _generate_internal_hostname,
+    _generate_random_external_ip,
     _generate_random_hostname,
     _generate_rdns_name,
     _get_http_status,
@@ -236,6 +238,40 @@ def _format_windows_account_attribute_time(value: datetime) -> str:
     hour = timestamp.hour % 12 or 12
     meridiem = "AM" if timestamp.hour < 12 else "PM"
     return f"{timestamp.month}/{timestamp.day}/{timestamp.year} {hour}:{timestamp:%M:%S} {meridiem}"
+
+
+def _is_modeled_local_ip(executor: Any, ip: str) -> bool:
+    """Return whether an IP belongs to the modeled organization/network."""
+    if hasattr(executor, "_ip_to_system") and ip in executor._ip_to_system:
+        return True
+    environment = getattr(executor, "_scenario_environment", None)
+    network = getattr(environment, "network", None)
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if network is not None:
+        for segment in getattr(network, "segments", []) or []:
+            if getattr(segment, "exposure", "internal") not in {"internal", "both"}:
+                continue
+            try:
+                if address in ipaddress.ip_network(segment.cidr, strict=False):
+                    return True
+            except ValueError:
+                continue
+        for rule in getattr(network, "nat_rules", []) or []:
+            if ip in {
+                str(getattr(rule, "mapped_ip", "") or ""),
+                str(getattr(rule, "real_ip", "") or ""),
+            }:
+                return True
+    dispatcher = getattr(executor, "dispatcher", None)
+    visibility = getattr(dispatcher, "visibility_engine", None)
+    if visibility is not None:
+        vip_to_real = getattr(visibility, "_vip_to_real_ip", {})
+        if ip in vip_to_real or ip in set(vip_to_real.values()):
+            return True
+    return False
 
 
 @dataclass(slots=True)
@@ -10888,6 +10924,7 @@ class ActivityGenerator:
         dns: Optional["DnsContext"] = None,
         email: Optional["EmailContext"] = None,
         smtp: Optional["SmtpContext"] = None,
+        ssl: SslContext | None = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
@@ -10957,6 +10994,7 @@ class ActivityGenerator:
             dns=dns,
             email=email,
             smtp=smtp,
+            ssl=ssl,
             ids=ids,
             http=http,
             file_transfer=file_transfer,
@@ -11244,6 +11282,7 @@ class ActivityGenerator:
         corpus_entry = self._email_corpus_entry(spec.corpus_id)
         sender = (spec.sender or request.actor.email).lower()
         recipients_all = list(dict.fromkeys([*spec.to, *spec.cc, *spec.bcc]))
+        envelope_recipients = [recipient.lower() for recipient in recipients_all]
         expanded_recipients = self._expand_email_recipients(recipients_all)
         subject = (
             spec.subject
@@ -11272,10 +11311,11 @@ class ActivityGenerator:
         )
         message_id = self._email_message_id(artifact_id, sender)
         date_header = request.time.strftime("%a, %d %b %Y %H:%M:%S +0000")
+        corpus_user_agent = (
+            corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
+        )
         user_agent = (
-            spec.user_agent
-            or (corpus_entry.user_agent if corpus_entry is not None else "")
-            or self._email_user_agent(request.system, rng)
+            spec.user_agent or corpus_user_agent or self._email_user_agent(request.system, rng)
         )
         route = self._plan_email_route(sender, expanded_recipients, request.system)
         received_headers = self._received_headers_for_route(
@@ -11309,7 +11349,7 @@ class ActivityGenerator:
         smtp_uids: list[str] = []
         route_summary: list[dict[str, str]] = []
 
-        self._emit_email_route_dns(route, request.time, request.system)
+        self._emit_email_route_dns(route, request.time)
 
         for index, hop in enumerate(route):
             hop_time = request.time + timedelta(seconds=1.2 + index * rng.uniform(2.0, 8.0))
@@ -11328,6 +11368,7 @@ class ActivityGenerator:
             mime_file_transfers = (
                 self._email_mime_file_transfers(
                     artifact_id=artifact_id,
+                    hop_index=index,
                     body=body,
                     attachments=attachments,
                     duration=rng.uniform(0.04, 0.4),
@@ -11338,7 +11379,7 @@ class ActivityGenerator:
             smtp_ctx = SmtpContext(
                 helo=self._email_server_fqdn(src_system.hostname),
                 mailfrom=sender,
-                rcptto=expanded_recipients,
+                rcptto=envelope_recipients if index == 0 else expanded_recipients,
                 date=date_header,
                 from_header=email_ctx.header_from,
                 to_header=[*email_ctx.to, *[self._email_header_address(addr) for addr in spec.cc]],
@@ -11350,6 +11391,16 @@ class ActivityGenerator:
                 tls=tls,
                 encrypted_message=tls,
                 fuids=[file_transfer.fuid for file_transfer in mime_file_transfers],
+            )
+            ssl_ctx = (
+                self._smtp_starttls_ssl_context(
+                    src_system=src_system,
+                    dst_system=dst_system,
+                    message_id=message_id,
+                    hop_index=index,
+                )
+                if tls
+                else None
             )
             uid = self.generate_connection(
                 src_ip=src_system.ip,
@@ -11363,10 +11414,13 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(90, 450),
                 conn_state="SF",
                 emit_dns=True,
-                source_system=src_system,
+                source_system=(
+                    None if "external_mail_server" in (src_system.roles or []) else src_system
+                ),
                 hostname=self._email_server_fqdn(dst_system.hostname),
                 email=email_ctx,
                 smtp=smtp_ctx,
+                ssl=ssl_ctx,
                 file_transfers=mime_file_transfers,
                 suppress_application_side_effects=True,
             )
@@ -11443,8 +11497,10 @@ class ActivityGenerator:
 
     def _email_message_id(self, artifact_id: str, sender: str) -> str:
         domain = self._email_domain(sender)
-        seed = _stable_seed(f"email_message_id:{artifact_id}:{sender}")
-        return f"<{seed:016x}.{artifact_id}@{domain}>"
+        seed_hi = _stable_seed(f"email_message_id_hi:{artifact_id}:{sender}")
+        seed_lo = _stable_seed(f"email_message_id_lo:{artifact_id}:{sender}")
+        queue_id = _stable_seed(f"email_message_queue:{artifact_id}:{sender}")
+        return f"<{seed_hi:08x}.{seed_lo:08x}.{queue_id:08x}@{domain}>"
 
     def _deterministic_email_subject(
         self,
@@ -11472,15 +11528,58 @@ class ActivityGenerator:
 
     def _email_user_agent(self, system: "System", rng: random.Random) -> str:
         os_category = _get_os_category(system.os)
+        client_rng = random.Random(
+            _stable_seed(
+                "email_user_agent:"
+                f"{system.hostname}:{getattr(system, 'assigned_user', '')}:{os_category}"
+            )
+        )
         if os_category == "windows":
-            return rng.choice(
+            return client_rng.choice(
                 [
                     "Microsoft Outlook 16.0",
                     "Microsoft Office Outlook 12.0",
                     "Microsoft Outlook 15.0",
                 ]
             )
-        return rng.choice(["Thunderbird 115.0", "Evolution 3.44", "Apple Mail (2.3608.120.23.2.7)"])
+        return client_rng.choice(
+            ["Thunderbird 115.0", "Evolution 3.44", "Apple Mail (2.3608.120.23.2.7)"]
+        )
+
+    def _smtp_starttls_ssl_context(
+        self,
+        *,
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+    ) -> SslContext:
+        """Return Zeek SSL metadata for a successful SMTP STARTTLS upgrade."""
+        rng = random.Random(
+            _stable_seed(
+                "smtp_starttls:"
+                f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
+            )
+        )
+        version = rng.choices(_TLS_VERSION_VALUES, weights=(70, 30), k=1)[0]
+        if version == "TLSv13":
+            cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+        else:
+            cipher = rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+        resumed = rng.random() < 0.12
+        return SslContext(
+            version=version,
+            cipher=cipher,
+            server_name=self._email_server_fqdn(dst_system.hostname),
+            resumed=resumed,
+            established=True,
+            ssl_history=_choose_ssl_history(
+                rng,
+                tls_version=version,
+                established=True,
+                resumed=resumed,
+            ),
+        )
 
     def _email_servers_by_name(self) -> dict[str, Any]:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
@@ -11666,7 +11765,7 @@ class ActivityGenerator:
         servers = self._email_servers_by_name()
         src_cfg = servers.get(src_server_name)
         seed = _stable_seed(f"email_external_mx:{dst_hostname}")
-        dst_ip = f"203.0.113.{10 + seed % 180}"
+        dst_ip = _generate_random_external_ip(random.Random(seed))
         dst_system = type(src_system)(
             hostname=dst_hostname,
             ip=dst_ip,
@@ -11693,7 +11792,7 @@ class ActivityGenerator:
         seed = _stable_seed(f"email_external_sender:{sender}")
         return type(next(iter(self._scenario_environment.systems)))(
             hostname=hostname,
-            ip=f"198.51.100.{10 + seed % 180}",
+            ip=_generate_random_external_ip(random.Random(seed)),
             os="Internet SMTP Server",
             type="server",
             services=["smtp"],
@@ -11758,11 +11857,13 @@ class ActivityGenerator:
         self,
         route: list[dict[str, Any]],
         time: datetime,
-        source_system: "System",
     ) -> None:
         resolver_ips = getattr(self, "_dns_server_ips", []) or ["10.0.0.1"]
         resolver_ip = resolver_ips[0]
         for index, hop in enumerate(route):
+            source_system = hop["src_system"]
+            if not _is_modeled_local_ip(self, source_system.ip):
+                continue
             dst_host = hop.get("external_hostname") or self._email_server_fqdn(
                 hop["dst_system"].hostname
             )
@@ -11824,6 +11925,7 @@ class ActivityGenerator:
         self,
         *,
         artifact_id: str,
+        hop_index: int,
         body: str,
         attachments: list[dict[str, Any]],
         duration: float,
@@ -11838,25 +11940,27 @@ class ActivityGenerator:
             }
         ]
         for attachment in attachments:
-            content = str(attachment.get("content") or "")
-            size = int(attachment.get("size") or len(content.encode("utf-8")))
+            payload = self._email_attachment_payload_bytes(attachment, artifact_id)
             parts.append(
                 {
                     "name": str(attachment.get("filename") or "attachment.bin"),
                     "mime_type": str(attachment.get("content_type") or "application/octet-stream"),
-                    "content": content,
-                    "size": size,
+                    "payload": payload,
+                    "size": len(payload),
                 }
             )
         transfers: list[FileTransferContext] = []
         for depth, part in enumerate(parts):
-            seed = f"email-mime:{artifact_id}:{depth}:{part['name']}:{part['mime_type']}"
-            payload = f"{seed}:{part['content']}:{part['size']}".encode()
+            content_seed = f"email-mime:{artifact_id}:{depth}:{part['name']}:{part['mime_type']}"
+            observation_seed = f"{content_seed}:hop:{hop_index}"
+            payload = part.get("payload")
+            if payload is None:
+                payload = str(part.get("content") or "").encode("utf-8")
             size = max(0, int(part["size"]))
             analyzers = ["MD5", "SHA1", "SHA256"]
             transfers.append(
                 FileTransferContext(
-                    fuid=f"F{_stable_seed(seed):017x}"[:18],
+                    fuid=f"F{_stable_seed(observation_seed):017x}"[:18],
                     source="SMTP",
                     depth=depth,
                     filename=str(part["name"]),
@@ -11876,6 +11980,26 @@ class ActivityGenerator:
                 )
             )
         return transfers
+
+    @staticmethod
+    def _email_attachment_payload_bytes(
+        attachment: dict[str, Any],
+        artifact_id: str,
+    ) -> bytes:
+        """Return the canonical bytes for an email attachment payload."""
+        content = attachment.get("content")
+        if content is not None:
+            return str(content).encode("utf-8")
+        size = max(0, int(attachment.get("size") or 0))
+        if size == 0:
+            return b""
+        seed = (
+            f"email-attachment:{artifact_id}:"
+            f"{attachment.get('filename') or 'attachment.bin'}:"
+            f"{attachment.get('content_type') or 'application/octet-stream'}"
+        ).encode()
+        repeats = (size // len(seed)) + 1
+        return (seed * repeats)[:size]
 
     def _maybe_generate_email_recipient_reads(
         self,
@@ -11990,12 +12114,12 @@ class ActivityGenerator:
                 msg[header] = value
         msg.set_content(email_ctx.body or "")
         for attachment in email_ctx.attachments:
-            content = str(attachment.get("content") or "")
+            payload = self._email_attachment_payload_bytes(attachment, email_ctx.artifact_id)
             maintype, _, subtype = str(
                 attachment.get("content_type") or "application/octet-stream"
             ).partition("/")
             msg.add_attachment(
-                content.encode("utf-8"),
+                payload,
                 maintype=maintype or "application",
                 subtype=subtype or "octet-stream",
                 filename=str(attachment.get("filename") or "attachment.bin"),
@@ -12387,13 +12511,15 @@ class ActivityGenerator:
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         # Only internal hosts generate DNS lookups — external source IPs (e.g.,
         # attacker IPs in storylines) don't query the victim's internal resolver.
+        src_ip_is_local = _is_modeled_local_ip(self, src_ip)
+        dst_ip_is_local = _is_modeled_local_ip(self, dst_ip)
         force_visible_prereq_dns = (
             source_system is not None
             and "forward_proxy" in (source_system.roles or [])
             and hostname_is_external
             and proto == "tcp"
             and dst_port in (80, 443)
-            and _is_private_ip(src_ip)
+            and src_ip_is_local
         )
         if force_visible_prereq_dns:
             self._emit_dns_lookup(
@@ -12403,7 +12529,7 @@ class ActivityGenerator:
                 hostname=hostname,
                 force_address=True,
             )
-        elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
+        elif emit_dns and proto == "tcp" and dst_port not in (53,) and src_ip_is_local:
             self._expand_and_emit(
                 "connection",
                 time,
@@ -13228,8 +13354,8 @@ class ActivityGenerator:
                 resp_ip_bytes=resp_ip_bytes,
                 conn_state=conn_state,
                 history=history,
-                local_orig=_is_private_ip(src_ip),
-                local_resp=_is_private_ip(dst_ip),
+                local_orig=src_ip_is_local,
+                local_resp=dst_ip_is_local,
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
@@ -13257,6 +13383,8 @@ class ActivityGenerator:
             event.email = email
         if smtp is not None:
             event.smtp = smtp
+        if request.ssl is not None:
+            event.ssl = request.ssl
         if http is not None:
             event.http = http
         if file_transfer is not None:
@@ -17412,7 +17540,7 @@ class ActivityGenerator:
             event_type="kerberos_service",
             dst_host=self._build_dc_host_context(dc_hostname),
             kerberos=KerberosContext(
-                target_username=f"{username}@{domain}",
+                target_username=username.split("@", 1)[0],
                 target_domain=domain,
                 service_name=service_name,
                 service_sid=(

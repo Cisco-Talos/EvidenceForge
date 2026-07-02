@@ -2582,6 +2582,45 @@ class TestWindowsEventEmitter:
         assert len(timestamps) == 20
         assert len({fraction[-1] for fraction in timestamps}) > 1
 
+    def test_kerberos_service_ticket_target_username_is_account_name(self, format_def, temp_output):
+        """4769 renders account/domain fields separately instead of UPN-style TargetUserName."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="domain_controller",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="kerberos_service",
+            dst_host=host,
+            kerberos=KerberosContext(
+                target_username="alice@CORP.LOCAL",
+                target_domain="CORP.LOCAL",
+                service_name="cifs/FILE-01",
+                service_sid="S-1-5-21-123-456-789-1104",
+                ticket_options="0x40810010",
+                ticket_status="0x0",
+                encryption_type="0x12",
+                source_ip="::ffff:10.0.0.50",
+                source_port=55961,
+                reporting_pid=732,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>4769</EventID>" in content
+        assert '<Data Name="TargetUserName">alice</Data>' in content
+        assert '<Data Name="TargetDomainName">CORP.LOCAL</Data>' in content
+        assert "alice@CORP.LOCAL" not in content
+
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
         """Test emitting 4771 (Kerberos pre-auth failed)."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

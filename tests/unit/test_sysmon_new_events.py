@@ -502,6 +502,36 @@ class TestRenderEvent3:
             == expected_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         )
 
+    def test_event3_normalizes_mail_hostname_to_port_family(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe",
+                username="NETWORK SERVICE",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="74.125.200.27",
+                src_port=49152,
+                dst_port=25,
+                protocol="tcp",
+                initiating_pid=4567,
+            ),
+        )
+        with patch(
+            "evidenceforge.generation.activity.network.REVERSE_DNS",
+            {"74.125.200.27": "pop.gmail.com"},
+        ):
+            emitter.emit(event)
+
+        assert emitter._event_dicts[0]["DestinationHostname"] == "smtp.gmail.com"
+        assert emitter._event_dicts[0]["DestinationPortName"] == "smtp"
+
 
 class TestRenderEvent7:
     """Test Event 7 (ImageLoaded) rendering."""

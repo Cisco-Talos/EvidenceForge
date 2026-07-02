@@ -27,7 +27,6 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -86,7 +85,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ft.analyzers if ft.analyzers else None,
                 "mime_type": ft.mime_type or None,
                 "duration": file_duration,
-                "local_orig": ft.local_orig,
+                "local_orig": net.local_orig if ft.is_orig else net.local_resp,
                 "is_orig": ft.is_orig,
                 "seen_bytes": ft.seen_bytes,
                 "total_bytes": ft.total_bytes,
@@ -128,7 +127,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ["X509", "MD5", "SHA1", "SHA256"],
                 "mime_type": "application/pkix-cert",
                 "duration": None,
-                "local_orig": _is_private_ip(net.dst_ip),
+                "local_orig": net.local_resp,
                 "is_orig": False,
                 "seen_bytes": size,
                 "total_bytes": size,
@@ -159,11 +158,6 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         for f in optional_fields:
             if f not in event_data:
                 event_data[f] = None
-        tx_hosts = event_data.get("tx_hosts")
-        if isinstance(tx_hosts, list) and tx_hosts:
-            event_data["local_orig"] = any(
-                isinstance(host, str) and _is_private_ip(host) for host in tx_hosts
-            )
         return self._render_zeek_json(event_data)
 
 
