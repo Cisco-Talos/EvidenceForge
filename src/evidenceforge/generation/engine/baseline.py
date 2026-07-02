@@ -4293,6 +4293,66 @@ class BaselineMixin:
         # endpoint but can still hit the firewall's outside interface.
         return True
 
+    @staticmethod
+    def _firewall_internal_probe_sources(
+        sensor_name: str,
+        systems: list[System],
+    ) -> list[System]:
+        """Return a small stable source set for internal denied probe noise."""
+        if not systems:
+            return []
+
+        scanner_role_terms = {
+            "scanner",
+            "vulnerability_scanner",
+            "vulnerability-scanner",
+            "security_scanner",
+            "security-scanner",
+            "monitoring",
+        }
+
+        def _roles(system: System) -> set[str]:
+            return {str(role).lower() for role in system.roles or []}
+
+        explicit_scanners = [system for system in systems if scanner_role_terms & _roles(system)]
+        workstations = [
+            system for system in systems if (system.type or "workstation").lower() == "workstation"
+        ]
+        non_dc_servers = [
+            system
+            for system in systems
+            if (system.type or "").lower() == "server"
+            and "domain_controller" not in _roles(system)
+            and "dc" not in system.hostname.lower()
+        ]
+        candidates = explicit_scanners or workstations or non_dc_servers or systems
+        source_count = 1 if len(candidates) < 8 else 2
+        ranked = sorted(
+            candidates,
+            key=lambda system: _stable_seed(
+                f"firewall_internal_probe_source:{sensor_name}:{system.hostname}"
+            ),
+        )
+        return ranked[:source_count]
+
+    @staticmethod
+    def _firewall_blocked_port_for_internal_source(src_ip: str, rng: random.Random) -> int:
+        """Return a source-sticky denied-port preference instead of a broad shared pool."""
+        profiles = [
+            (44, [3389, 445, 135, 5985]),
+            (24, [1433, 3306, 5432, 6379]),
+            (18, [22, 3389, 5900]),
+            (14, [23, 2323, 80, 8080]),
+        ]
+        seed = _stable_seed(f"firewall_internal_blocked_port_profile:{src_ip}")
+        selector = random.Random(seed)
+        profile_ports = selector.choices(
+            [ports for _weight, ports in profiles],
+            weights=[weight for weight, _ports in profiles],
+            k=1,
+        )[0]
+        return rng.choice(profile_ports)
+
     def _generate_firewall_deny_baseline(self, current_hour: datetime) -> None:
         """Generate denied connection events for firewall sensors.
 
@@ -4318,9 +4378,6 @@ class BaselineMixin:
 
         # Collect internal IPs from scenario systems
         internal_ips = [s.ip for s in self.scenario.environment.systems if s.ip]
-
-        # Ports rarely allowed in corporate firewalls
-        _BLOCKED_PORTS = [23, 135, 137, 138, 139, 445, 1433, 3389, 5900, 6379]
 
         for sensor in self.scenario.environment.network.sensors:
             if sensor.type != "firewall" or "cisco_asa" not in sensor.log_formats:
@@ -4381,6 +4438,19 @@ class BaselineMixin:
 
             sensor_interfaces = sensor.interfaces
             deny_conn_state = "REJ" if sensor.drop_mode == "reject" else "S0"
+            internal_probe_sources = self._firewall_internal_probe_sources(
+                sensor.hostname or sensor.name,
+                sensor_systems,
+            )
+            workstation_probe_sources = [
+                system
+                for system in internal_probe_sources
+                if (system.type or "workstation").lower() == "workstation"
+            ] or [
+                system
+                for system in sensor_systems
+                if (system.type or "workstation").lower() == "workstation"
+            ][:1]
 
             def _resolve_iface(ip: str, _ifaces: dict = sensor_interfaces) -> str:  # noqa: B006
                 for seg_name, cidr in segment_cidrs.items():
@@ -4400,7 +4470,7 @@ class BaselineMixin:
 
                 # Choose deny pattern candidate
                 roll = rng.random()
-                if roll < 0.60:
+                if roll < 0.74:
                     # External -> public address space (scanner pool + public CIDRs)
                     src_ip = rng.choices(
                         self._external_scanner_ips,
@@ -4410,28 +4480,26 @@ class BaselineMixin:
                     dst_ip = _pick_public_scan_target()
                     dst_port = external_scanner_port_for_source(src_ip, rng)
                     proto = "tcp"
-                elif roll < 0.80:
-                    # Cross-segment blocked
-                    if len(internal_ips) >= 2:
-                        src_ip, dst_ip = rng.sample(internal_ips, 2)
-                    else:
-                        src_ip = internal_ips[0] if internal_ips else "10.0.10.1"
-                        dst_ip = "10.0.20.1"
-                    dst_port = rng.choice(_BLOCKED_PORTS)
+                elif roll < 0.84:
+                    # Cross-segment blocked — source-sticky internal probe/noisy tooling.
+                    if not internal_probe_sources:
+                        continue
+                    src_system = rng.choice(internal_probe_sources)
+                    src_ip = src_system.ip
+                    candidates = [ip for ip in internal_ips if ip != src_ip]
+                    if not candidates:
+                        continue
+                    dst_ip = rng.choice(candidates)
+                    dst_port = self._firewall_blocked_port_for_internal_source(src_ip, rng)
                     proto = "tcp"
-                elif roll < 0.90:
+                elif roll < 0.88:
                     # Outbound blocked — only workstations generate suspicious outbound;
                     # servers never initiate random connections on scanning ports
-                    workstation_ips = [
-                        s.ip
-                        for s in self.scenario.environment.systems
-                        if (s.type or "workstation").lower() == "workstation" and s.ip
-                    ]
-                    if not workstation_ips:
+                    if not workstation_probe_sources:
                         continue
-                    src_ip = rng.choice(workstation_ips)
+                    src_ip = rng.choice(workstation_probe_sources).ip
                     dst_ip = self._generate_external_client_ip(rng)
-                    dst_port = rng.choice(_BLOCKED_PORTS)
+                    dst_port = self._firewall_blocked_port_for_internal_source(src_ip, rng)
                     proto = "tcp"
                 else:
                     # ICMP ping sweep from external (use scanner pool + public CIDRs)

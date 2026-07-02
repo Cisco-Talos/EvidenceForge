@@ -884,6 +884,58 @@ Verification:
 
 - Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
 - `uv run ruff check .` and `uv run ruff format --check .` passed.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 42.
+- Detection Engineer: Real, synthetic-confidence 30.
+- Network Forensics: Inconclusive, synthetic-confidence 52.
+- Host/EDR: Real, synthetic-confidence 32.
+- Average: 39.0.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears email artifact/content texture. The next priority
+category for loop 36 is failed sensitive-port probe distribution: Network
+Forensics repeatedly found SYN-only probes to RDP/VNC/Telnet/MSSQL/Redis-style
+ports spread too evenly across nearly every internal host and hour.
+
+## Loop 36
+
+Priority category: failed sensitive-port probe distribution.
+
+Family contract:
+
+- Owning abstraction: firewall deny baseline generation.
+- Invariant: external scanner/firewall deny noise remains the dominant blocked
+  traffic family. Internal denied scan-like traffic should come from a small,
+  stable, role-plausible source set and each source should use a narrow
+  source-sticky port vocabulary, not a broad shared blocked-port pool spread
+  across all workstations, mail servers, proxy, and DCs.
+- Entry paths: hourly firewall deny baseline, cross-segment denied TCP
+  attempts, outbound denied TCP attempts, external scanner denies, Cisco ASA
+  deny rendering, Zeek `conn.json`, and eCAR/network visibility companions.
+- Consumers: Zeek `conn.json`, Cisco ASA 106023 rows, evaluator distribution
+  checks, and blind Network/Threat Hunter review.
+- Residual sibling risk: explicit storyline/nmap scanner events, Linux UFW
+  block noise on DMZ hosts, DNS answer texture, proxy HTTP diversity, and
+  endpoint command/process-pool texture remain separate families.
+
+Implemented fixes feeding loop 36:
+
+- Firewall deny baseline now selects a small stable internal denied-probe source
+  set per firewall sensor, preferring explicit scanner/monitoring roles, then
+  workstations, then non-DC servers.
+- Internal cross-segment and outbound denied probe attempts now use a
+  source-sticky port profile instead of every source drawing from the same broad
+  blocked-port list.
+- External scanner and ICMP deny families now account for more of the generated
+  firewall deny texture, reducing all-host internal sensitive-port spray.
+
+Verification:
+
+- Focused tests passed:
+  `uv run pytest --no-cov tests/unit/test_firewall_baseline.py tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
 - Rendered-output probe after regeneration found 60 SMTP rows with 60 unique
   `last_reply` values.
 - Automated eval passed with score 96 over 71,212 records.
