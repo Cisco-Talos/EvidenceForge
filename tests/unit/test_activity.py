@@ -7256,6 +7256,50 @@ class TestActivityGenerator:
             "ssh",
         )
 
+    def test_generate_connection_drops_recorded_terminated_process_pid(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        test_user,
+        test_system,
+    ):
+        """Connections should not inherit PID identity from a terminated process instance."""
+        start_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line="chrome.exe --type=renderer",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+        running = state_manager.get_process(test_system.hostname, pid)
+        assert running is not None
+        activity_gen._terminated_process_keys.add((test_system.hostname, pid, running.start_time))
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="93.184.216.34",
+            time=start_time + timedelta(minutes=20),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            pid=pid,
+            source_system=test_system,
+            process_image=running.image,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.process is None
+        assert event.network.initiating_pid == -1
+
     def test_generate_connection_preserves_public_vip_for_inbound_web_host(
         self,
         state_manager,

@@ -13936,6 +13936,20 @@ class ActivityGenerator:
                 )
                 pid = -1
                 resolved_process = None
+            elif self._process_termination_recorded(
+                resolved_source_system.hostname,
+                pid,
+                resolved_process.start_time if resolved_process is not None else None,
+            ):
+                logger.debug(
+                    "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
+                    resolved_source_system.hostname,
+                    pid,
+                    dst_ip,
+                    dst_port,
+                )
+                pid = -1
+                resolved_process = None
             elif (
                 resolved_process
                 and resolved_process.start_time
