@@ -109,6 +109,7 @@ class NetworkConnectionRequest:
     preserve_dst_ip: bool = False
     preserve_http_outcome: bool = False
     suppress_application_side_effects: bool = False
+    suppress_source_pid_inference: bool = False
     preserve_explicit_payload: bool = False
     packet_overhead_bytes: int | None = None
     responding_pid: int = -1
@@ -134,8 +135,8 @@ class NetworkConnectionRequest:
             f"{_context_fingerprint(self.firewall)}:{self.hostname or ''}:"
             f"{self.proxy_bypass}:{self.process_image or ''}:{self.preserve_dst_ip}:"
             f"{self.preserve_http_outcome}:{self.suppress_application_side_effects}:"
-            f"{self.preserve_explicit_payload}:{self.packet_overhead_bytes or ''}:"
-            f"{self.responding_pid}:{self.source}"
+            f"{self.suppress_source_pid_inference}:{self.preserve_explicit_payload}:"
+            f"{self.packet_overhead_bytes or ''}:{self.responding_pid}:{self.source}"
         )
         return f"network-connection-{seed:016x}"
 

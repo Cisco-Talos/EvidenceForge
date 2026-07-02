@@ -110,7 +110,8 @@ _LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
 _BASELINE_GUARDED_SUCCESS_PORTS = {445, 3389}
 _BASELINE_RDP_SERVICE_ALIASES = {"rdp", "termservice", "terminal-services", "xrdp"}
 _BASELINE_SMB_SERVICE_ALIASES = {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}
-_BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587}
+_BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
+_BASELINE_WEBMAIL_PROFILE_TERMS = ("owa", "webmail", "mailbox", "mail client", "email")
 _BASELINE_SUCCESS_FALLBACK_PORTS = (22, 80, 443, 8080, 3306, 5432, 53)
 _BASELINE_SERVER_ADMIN_PERSONA_TYPES = {"server", "domain_controller"}
 _BASELINE_SERVER_ADMIN_PERSONA_ROLES = {
@@ -5246,14 +5247,21 @@ class BaselineMixin:
         return 1 + int(rng.random() < second_session_probability)
 
     @staticmethod
-    def _is_profile_smtp_connection(conn: dict[str, Any]) -> bool:
-        """Return whether a generic traffic-profile entry is SMTP-shaped."""
+    def _is_profile_email_connection(conn: dict[str, Any]) -> bool:
+        """Return whether a generic traffic-profile entry is email-shaped."""
         service = str(conn.get("service", "")).lower()
         try:
             port = int(conn.get("port", 0))
         except (TypeError, ValueError):
             port = 0
-        return service == "smtp" or port in _BASELINE_EMAIL_PROFILE_PORTS
+        if service == "smtp" or port in _BASELINE_EMAIL_PROFILE_PORTS:
+            return True
+        if service in {"imap", "imaps", "pop3", "pop3s"}:
+            return True
+        if service in {"http", "ssl"} and port in {80, 443}:
+            description = str(conn.get("description", "")).lower()
+            return any(term in description for term in _BASELINE_WEBMAIL_PROFILE_TERMS)
+        return False
 
     # Service→DNS tag defaults for external resolution when dns_tags is absent
     _SERVICE_DNS_DEFAULTS: dict[str, tuple[str, ...]] = {
@@ -5758,7 +5766,7 @@ class BaselineMixin:
 
         # --- Role traffic (system-level, 24/7) ---
         role_conns = get_role_connections(roles, os_cat)
-        explicit_email_topology = self.scenario.environment.email is not None
+        explicit_email_topology = getattr(self.scenario.environment, "email", None) is not None
         if role_conns:
             weights = [c.get("weight", 1) for c in role_conns]
             # Scale connection count by time-of-day (fewer at night)
@@ -5769,7 +5777,7 @@ class BaselineMixin:
 
             for _ in range(base_count):
                 conn = rng.choices(role_conns, weights=weights, k=1)[0]
-                if explicit_email_topology and self._is_profile_smtp_connection(conn):
+                if explicit_email_topology and self._is_profile_email_connection(conn):
                     continue
                 dst_ip, hostname = self._resolve_role(
                     conn["role"],
@@ -5882,7 +5890,7 @@ class BaselineMixin:
         inbound_conns = get_role_inbound_connections(roles, os_cat)
         if explicit_email_topology:
             inbound_conns = [
-                conn for conn in inbound_conns if not self._is_profile_smtp_connection(conn)
+                conn for conn in inbound_conns if not self._is_profile_email_connection(conn)
             ]
         if inbound_conns:
             # Gate external inbound on segment exposure — internal-only

@@ -10990,6 +10990,7 @@ class ActivityGenerator:
         preserve_dst_ip: bool = False,
         preserve_http_outcome: bool = False,
         suppress_application_side_effects: bool = False,
+        suppress_source_pid_inference: bool = False,
         preserve_explicit_payload: bool = False,
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
@@ -11062,6 +11063,7 @@ class ActivityGenerator:
             preserve_dst_ip=preserve_dst_ip,
             preserve_http_outcome=preserve_http_outcome,
             suppress_application_side_effects=suppress_application_side_effects,
+            suppress_source_pid_inference=suppress_source_pid_inference,
             preserve_explicit_payload=preserve_explicit_payload,
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
@@ -11171,6 +11173,23 @@ class ActivityGenerator:
         port = 443 if protocol == "owa" else 993
         service = "ssl"
         hostname = self._email_server_fqdn(request.server.hostname)
+        process_image = self._email_access_process_image(
+            request.system,
+            protocol,
+            request.user_agent,
+            rng,
+        )
+        process_pid, resolved_process_image = self._ensure_email_client_process(
+            user=request.user,
+            system=request.system,
+            time=request.time,
+            image=process_image,
+            command_line=self._email_access_process_command_line(
+                process_image,
+                protocol=protocol,
+                server_hostname=hostname,
+            ),
+        )
         return self.generate_connection(
             src_ip=request.system.ip,
             dst_ip=request.server.ip,
@@ -11184,12 +11203,14 @@ class ActivityGenerator:
             conn_state="SF",
             emit_dns=True,
             source_system=request.system,
+            pid=process_pid,
             hostname=hostname,
-            process_image=self._email_access_process_image(
-                request.system,
-                protocol,
-                request.user_agent,
-                rng,
+            process_image=resolved_process_image or process_image,
+            suppress_source_pid_inference=process_pid <= 0,
+            responding_pid=self._email_responding_process_pid(
+                request.server,
+                time=request.time,
+                port=port,
             ),
         )
 
@@ -11221,6 +11242,236 @@ class ActivityGenerator:
         if os_category == "windows":
             return r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"
         return "/usr/bin/thunderbird"
+
+    def _email_access_process_command_line(
+        self,
+        image: str,
+        *,
+        protocol: str,
+        server_hostname: str,
+    ) -> str:
+        """Return a source-plausible command line for mailbox access ownership."""
+        exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name in {"chrome.exe", "msedge.exe", "firefox", "firefox.exe", "chromium"}:
+            scheme = "https"
+            path = "/owa/" if protocol == "owa" else "/mail/"
+            return (
+                f'"{image}" {scheme}://{server_hostname}{path}'
+                if "\\" in image
+                else (f"{image} {scheme}://{server_hostname}{path}")
+            )
+        if "thunderbird" in exe_name:
+            return f'"{image}" -mail' if "\\" in image else f"{image} -mail"
+        if exe_name == "outlook.exe":
+            return f'"{image}" /recycle'
+        return image
+
+    def _ensure_email_client_process(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        time: datetime,
+        image: str,
+        command_line: str,
+    ) -> tuple[int, str | None]:
+        """Create or reuse a user mail client process for endpoint flow attribution."""
+        os_category = _get_os_category(system.os)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and _session_started_by(session, time)
+        ]
+        if os_category == "windows":
+            sessions = [
+                session
+                for session in sessions
+                if session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            ]
+        if not sessions:
+            return -1, None
+        session = max(sessions, key=lambda candidate: candidate.start_time)
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.username == user.username
+            and proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and not self._foreground_process_expired_for_attribution(system, proc, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+            return proc.pid, proc.image
+
+        rng = random.Random(
+            _stable_seed(
+                f"email_client_process:{system.hostname}:{user.username}:{image}:{time.isoformat()}"
+            )
+        )
+        lead_seconds = rng.uniform(3.0, 180.0)
+        process_time = time - timedelta(seconds=lead_seconds)
+        min_process_time = session.start_time + timedelta(milliseconds=500)
+        if process_time < min_process_time:
+            process_time = min_process_time
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+        parent_pid = self._select_parent_pid(
+            system,
+            user,
+            image,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        pid = self.generate_process(
+            user=user,
+            system=system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+        self._record_user_process(system, user, pid, image)
+        self.state_manager.update_process_activity_time(system.hostname, pid, time)
+        self.state_manager.set_current_time(time)
+        running = self.state_manager.get_process(system.hostname, pid)
+        if running is not None:
+            return pid, running.image
+        return pid, image
+
+    def _email_source_process_attribution(
+        self,
+        *,
+        actor: "User",
+        src_system: "System",
+        hop: dict[str, Any],
+        time: datetime,
+        user_agent: str,
+    ) -> tuple[int, str | None]:
+        """Return source PID/image ownership for SMTP submission or relay hops."""
+        if "external_mail_server" in (src_system.roles or []):
+            return -1, None
+        if hop.get("submission"):
+            image = self._email_access_process_image(src_system, "smtp", user_agent, _get_rng())
+            command_line = self._email_access_process_command_line(
+                image,
+                protocol="smtp",
+                server_hostname=self._email_server_fqdn(hop["dst_system"].hostname),
+            )
+            return self._ensure_email_client_process(
+                user=actor,
+                system=src_system,
+                time=time,
+                image=image,
+                command_line=command_line,
+            )
+        if hop.get("server_to_server"):
+            pid = self._ensure_email_server_process(src_system, time=time, port=25)
+            image = self._email_server_process_image(src_system, port=25)
+            return pid, image if pid > 0 else None
+        return -1, None
+
+    def _email_responding_process_pid(
+        self,
+        system: "System",
+        *,
+        time: datetime,
+        port: int,
+    ) -> int:
+        """Return destination-side mail service ownership for endpoint evidence."""
+        if "external_mail_server" in (system.roles or []):
+            return -1
+        return self._ensure_email_server_process(system, time=time, port=port)
+
+    def _email_server_process_image(self, system: "System", *, port: int) -> str:
+        """Return platform-specific mail service process image for a local server."""
+        os_category = _get_os_category(system.os)
+        if os_category == "windows":
+            if port == 443:
+                return r"C:\Windows\System32\inetsrv\w3wp.exe"
+            if port == 993:
+                return r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe"
+            return r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe"
+        if port == 993:
+            return "/usr/sbin/dovecot"
+        if port == 443:
+            return "/usr/sbin/nginx"
+        return "/usr/lib/postfix/sbin/smtpd"
+
+    def _email_server_command_line(self, image: str, *, port: int) -> str:
+        """Return a stable service command line for a mail daemon process."""
+        exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name == "edgetransport.exe":
+            return f'"{image}" -service'
+        if exe_name == "microsoft.exchange.imap4.exe":
+            return f'"{image}"'
+        if exe_name == "w3wp.exe":
+            return f'{image} -ap "MSExchangeOWAAppPool"'
+        if "postfix" in image:
+            return f"{image} -n smtpd"
+        if exe_name == "dovecot":
+            return f"{image} -F"
+        return image
+
+    def _ensure_email_server_process(
+        self,
+        system: "System",
+        *,
+        time: datetime,
+        port: int,
+    ) -> int:
+        """Create or reuse a local mail service process for flow ownership."""
+        image = self._email_server_process_image(system, port=port)
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and self._is_pid_active_at(system, proc.pid, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+            return proc.pid
+
+        os_category = _get_os_category(system.os)
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        if os_category == "windows":
+            username = "SYSTEM"
+            parent_pid = sys_pids.get("services", sys_pids.get("wininit", 4))
+        else:
+            username = "dovecot" if port == 993 else "postfix"
+            parent_pid = sys_pids.get("systemd", sys_pids.get("init", 1))
+        process_time = time - timedelta(
+            seconds=random.Random(
+                _stable_seed(f"email_server_process:{system.hostname}:{image}:{time.isoformat()}")
+            ).uniform(30.0, 900.0)
+        )
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+        pid = self.generate_system_process(
+            system=system,
+            time=process_time,
+            process_name=image,
+            command_line=self._email_server_command_line(image, port=port),
+            parent_pid=parent_pid,
+            username=username,
+            emit_linux_syslog=False,
+        )
+        if pid > 0:
+            self.state_manager.update_process_activity_time(system.hostname, pid, time)
+            self.state_manager.set_current_time(time)
+        return pid
 
     def _load_email_corpus(self) -> dict[str, EmailCorpusEntry]:
         """Load and cache the optional scenario-created email corpus."""
@@ -11505,6 +11756,18 @@ class ActivityGenerator:
             )
             if ssl_ctx is not None and x509_chain:
                 ssl_ctx.cert_chain_fuids = [cert.fuid for cert in x509_chain]
+            source_pid, source_process_image = self._email_source_process_attribution(
+                actor=request.actor,
+                src_system=src_system,
+                hop=hop,
+                time=hop_time,
+                user_agent=user_agent,
+            )
+            responding_pid = self._email_responding_process_pid(
+                dst_system,
+                time=hop_time,
+                port=587 if hop["submission"] else 25,
+            )
             uid = self.generate_connection(
                 src_ip=src_system.ip,
                 dst_ip=dst_system.ip,
@@ -11520,7 +11783,9 @@ class ActivityGenerator:
                 source_system=(
                     None if "external_mail_server" in (src_system.roles or []) else src_system
                 ),
+                pid=source_pid,
                 hostname=self._email_server_fqdn(dst_system.hostname),
+                process_image=source_process_image,
                 email=email_ctx,
                 smtp=smtp_ctx,
                 ssl=ssl_ctx,
@@ -11528,6 +11793,7 @@ class ActivityGenerator:
                 x509_chain=x509_chain,
                 file_transfers=mime_file_transfers,
                 suppress_application_side_effects=True,
+                responding_pid=responding_pid,
             )
             visible_uid = self._visible_network_uid_for_format(
                 uid,
@@ -12527,7 +12793,12 @@ class ActivityGenerator:
     def _external_mx_for_domain(domain: str) -> str:
         safe = re.sub(r"[^a-z0-9.-]+", "", domain.lower()).strip(".")
         safe = public_safe_mail_hostname(safe)
-        return f"mx1.{safe}"
+        mx_answers = _public_dns_mx_answers(safe)
+        if mx_answers:
+            parts = mx_answers[0].split(maxsplit=1)
+            if len(parts) == 2:
+                return public_safe_mail_hostname(parts[1].rstrip("."))
+        return f"mail.{safe}"
 
     def _received_headers_for_route(
         self,
@@ -13141,6 +13412,7 @@ class ActivityGenerator:
         preserve_dst_ip = request.preserve_dst_ip
         preserve_http_outcome = request.preserve_http_outcome
         suppress_application_side_effects = request.suppress_application_side_effects
+        suppress_source_pid_inference = request.suppress_source_pid_inference
         preserve_explicit_payload = request.preserve_explicit_payload
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
@@ -13575,7 +13847,7 @@ class ActivityGenerator:
             dns_pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
             if dns_pid > 0:
                 pid = dns_pid
-        elif pid <= 0:
+        elif pid <= 0 and not suppress_source_pid_inference:
             pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
 
         resolved_process = None

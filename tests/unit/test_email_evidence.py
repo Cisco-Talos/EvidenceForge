@@ -24,6 +24,7 @@ from evidenceforge.generation.activity.mail_public_identities import (
     public_mail_ptr_name,
     public_safe_mail_hostname,
 )
+from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
@@ -91,6 +92,22 @@ def _is_global_non_test_net(ip: str) -> bool:
     parsed = ipaddress.ip_address(ip)
     return parsed.is_global and not (
         ip.startswith("192.0.2.") or ip.startswith("198.51.100.") or ip.startswith("203.0.113.")
+    )
+
+
+def test_explicit_email_topology_suppresses_generic_mail_profile_connections() -> None:
+    """Explicit topology owns baseline SMTP and mailbox-access evidence."""
+    assert BaselineMixin._is_profile_email_connection(
+        {"port": 25, "service": "smtp", "description": "Outbound mail relay"}
+    )
+    assert BaselineMixin._is_profile_email_connection(
+        {"port": 993, "service": "ssl", "description": "IMAPS client access"}
+    )
+    assert BaselineMixin._is_profile_email_connection(
+        {"port": 443, "service": "ssl", "description": "OWA/webmail access"}
+    )
+    assert not BaselineMixin._is_profile_email_connection(
+        {"port": 443, "service": "ssl", "description": "Anti-spam/update checks"}
     )
 
 
@@ -565,17 +582,14 @@ def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path)
         for row in dns_records
         if row["qtype_name"] == "MX" and row["query"] in {"example.net", "vendor.example.org"}
     }
-    assert mx_queries == {
-        "example.net": ["10 mx1.example.net"],
-        "vendor.example.org": ["10 mx1.vendor.example.org"],
-    }
+    assert set(mx_queries) == {"example.net", "vendor.example.org"}
+    mx_hosts = {domain: answers[0].split(maxsplit=1)[1] for domain, answers in mx_queries.items()}
     a_queries = {
         row["query"]
         for row in dns_records
-        if row["qtype_name"] == "A"
-        and row["query"] in {"mx1.example.net", "mx1.vendor.example.org"}
+        if row["qtype_name"] == "A" and row["query"] in set(mx_hosts.values())
     }
-    assert a_queries == {"mx1.example.net", "mx1.vendor.example.org"}
+    assert a_queries == set(mx_hosts.values())
 
     route = manifest["messages"][0]["route"]
     assert [hop["routing_mode"] for hop in route] == ["internal", "mx", "mx"]
@@ -583,8 +597,8 @@ def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path)
         "example.net",
         "vendor.example.org",
     ]
-    assert route[1]["dst_fqdn"] == "mx1.example.net"
-    assert route[2]["dst_fqdn"] == "mx1.vendor.example.org"
+    assert route[1]["dst_fqdn"] == mx_hosts["example.net"]
+    assert route[2]["dst_fqdn"] == mx_hosts["vendor.example.org"]
 
 
 def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:

@@ -173,6 +173,38 @@ class TestConnectionPidPropagation:
         assert event is not None
         assert event.network.initiating_pid == -1
 
+    def test_connection_can_suppress_source_pid_inference(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """Callers can prefer no attribution over a generic service-process guess."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "NETWORK SERVICE",
+            "System",
+        )
+        activity_gen._system_pids = {"WKS-01": {"svchost_netsvcs": pid}}
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.0.25",
+            time=timestamp,
+            dst_port=993,
+            proto="tcp",
+            service="ssl",
+            source_system=win_system,
+            suppress_source_pid_inference=True,
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == -1
+        assert event.edr is not None
+        assert event.edr.actor_id == ""
+
     def test_inferred_dns_pid_from_source_ip(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters
     ):
