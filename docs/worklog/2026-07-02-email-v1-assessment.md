@@ -1181,3 +1181,59 @@ visible SMTP-port connections but only 60 SMTP parser rows, with the orphan
 flows coming from generic mail-server role-profile traffic. Loop 23 should
 suppress profile-generated SMTP when explicit email topology exists so mail
 traffic is owned by the email bundle.
+
+## Loop 23
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: SMTP route transfer sizing and DNS route semantics in
+  the email delivery bundle.
+- Invariant: visible SMTP relay connections, including STARTTLS-protected hops,
+  should carry byte, packet, and duration weight consistent with the message
+  they transport. Configured ISP smart hosts should be resolved as smart-host
+  A/AAAA targets, not as self-referential recipient-domain MX lookups.
+- Entry paths: outbound ISP relay delivery, internal STARTTLS relay, inbound
+  mail relay, plaintext submission, background mail, storyline artifact-backed
+  mail, and route DNS prerequisite generation.
+- Consumers: Zeek `conn.json`, `dns.json`, `smtp.json`, `ssl.json`,
+  `files.json`, evaluator checks, and blind network/detection review.
+- Residual sibling risk: endpoint mail-client attribution, source-native MTA
+  logs, public SMTP peer IP role realism, client-submission TLS posture,
+  DNS-cache personality, MIME payload scale, STARTTLS imperfection, and
+  manifest label leakage remain separate families.
+
+Implemented fixes feeding loop 23:
+
+- Suppressed generic traffic-profile SMTP when explicit `environment.email`
+  topology exists, so mail-shaped port 25/587 traffic is generated through the
+  email bundle.
+- Added regression coverage requiring explicit-email mail-port connections to
+  have matching Zeek SMTP rows.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 60 mail-port connections, 60
+  SMTP rows, and zero missing SMTP parser UIDs, down from 237 orphan
+  mail-port connections in loop 22.
+- Automated eval passed with score 96 over 77,151 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 76.
+- Detection Engineer: Synthetic, synthetic-confidence 82.
+- Network Forensics: Synthetic, synthetic-confidence 86.
+- Host/EDR: Synthetic, synthetic-confidence 72.
+- Average: 79.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 24. The orphan SMTP connection finding did not recur, but Network found
+two high-signal SMTP route realism issues: STARTTLS relay connections carried
+only handshake-scale byte counts, and configured ISP relay DNS was modeled as
+self-referential MX lookups. Loop 24 should size relay connections from the
+message body/attachment weight and treat ISP relays as smart-host A/AAAA
+resolution targets.
