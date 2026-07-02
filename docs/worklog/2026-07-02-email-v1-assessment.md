@@ -1480,3 +1480,63 @@ hosts because generic DNS paths did not treat configured email FQDNs as
 authoritative internal names. Loop 28 should make `environment.email` mail
 server hostnames authoritative for both automatic DNS lookups and normalized
 caller-provided DNS contexts.
+
+## Loop 28
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: public identity pools for SMTP senders, external MX
+  targets, and configured smart hosts.
+- Invariant: public SMTP peers should use mail-role IP, PTR, DNS, SNI, and
+  certificate identities rather than borrowing generic web/CDN/SaaS address
+  pools. Port 25 senders and relays should look like MTAs or relay providers,
+  while generic browser/CDN activity keeps its separate public identity model.
+- Entry paths: inbound external SMTP senders, outbound smart-host hops, direct
+  external MX hops, public PTR companion lookups, STARTTLS SNI/cert generation,
+  Zeek DNS, Zeek SMTP, Zeek SSL/X.509, and route manifests.
+- Consumers: Zeek `dns.json`, `conn.json`, `smtp.json`, `ssl.json`,
+  `x509.json`, `EMAIL_ARTIFACTS.json`, evaluator consistency checks, and blind
+  network/detection review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, source-native MTA logs, SMTP failure/retry texture, STARTTLS
+  pre-encryption reply semantics, and answer-key fields in blind-facing
+  artifacts remain separate families.
+
+Implemented fixes feeding loop 28:
+
+- Made configured `environment.email` mail server hostnames authoritative for
+  automatic DNS lookups and normalized caller-provided `DnsContext` rows.
+- Treated configured mail FQDNs as internal even when the accepted mail domain
+  differs from the AD domain.
+- Rewrote A/AAAA answers for configured mail hostnames to the owning mail
+  server system IP and deterministic IPv6 mapping.
+- Added regression coverage for a mail accepted domain outside the AD DNS
+  namespace.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found `mail.alderridge.example`
+  answering only `10.55.20.25` for A and `fd00:3714:0019::1` for AAAA, instead
+  of unrelated DC, file-server, mailbox-server, or workstation IPs.
+- Automated eval passed with score 97 over 69,446 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 76.
+- Detection Engineer: Pass with reservations, synthetic-confidence 58.
+- Network Forensics: Synthetic, synthetic-confidence 78.
+- Host/EDR: Synthetic, synthetic-confidence 82.
+- Average: 73.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 29. The internal mail DNS drift finding did not recur, but Network and
+Detection both called out public SMTP peer identity: inbound senders and
+outbound smart hosts were still drawn from web/CDN-looking IP families with PTR
+and provider identities that did not look like mail infrastructure. Loop 29
+should add mail-specific public identity pools and use them for external SMTP
+senders, smart hosts, direct MX targets, and PTR answers.
