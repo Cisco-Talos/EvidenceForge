@@ -1655,3 +1655,61 @@ to flag SMTP/MIME transfer texture, especially very tidy body/file sizes and
 thin transfer realism. Loop 31 should improve body-size texture at the
 canonical rendered-message layer so Zeek file rows naturally reflect more
 realistic content without falsifying emitter-side byte counts.
+
+## Loop 31
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: external SMTP public identity planning for DNS, PTR,
+  STARTTLS SNI/certificates, Received headers, and route manifests.
+- Invariant: public SMTP infrastructure rendered as Internet-facing DNS/TLS/PTR
+  evidence should not use bare reserved TLD hostnames such as `.example`,
+  `.test`, `.invalid`, or `.localhost`, even when scenario authors use those
+  domains as safe shorthand. Internal accepted domains remain exactly as
+  authored.
+- Entry paths: inbound external SMTP sender MX hosts, outbound direct-MX
+  targets, configured ISP smart hosts, mail public PTR generation, SMTP
+  STARTTLS SSL/X.509, route DNS evidence, Received headers, and baseline
+  background email domains.
+- Consumers: Zeek `dns.json`, `smtp.json`, `ssl.json`, `x509.json`,
+  `conn.json`, `.eml` artifacts, `EMAIL_ARTIFACTS.json`, evaluator checks, and
+  blind network/detection/threat review.
+- Residual sibling risk: V1 plaintext client submission, answer-key-like
+  manifest fields in blind packets, endpoint mail-client attribution, and
+  non-email proxy/firewall texture remain separate families.
+
+Implemented fixes feeding loop 31:
+
+- Added deterministic mail-client/gateway footer material at the canonical
+  rendered-body layer before MIME and Zeek file rendering.
+- Preserved emitter-side byte truth by allowing `files.json` sizes to derive
+  from the rendered MIME body and attachments instead of post-hoc size edits.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found SMTP body part sizes ranging
+  from 404 to 574 bytes with a median of 515 bytes, while attachment rows
+  remained tied to their actual small test payloads.
+- Automated eval passed with score 97 over 69,379 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 64.
+- Detection Engineer: Synthetic, synthetic-confidence 66.
+- Network Forensics: Synthetic, synthetic-confidence 64.
+- Host/EDR: Real, synthetic-confidence 32.
+- Average: 56.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 32. The SMTP file/body texture issue softened and Host review dropped
+below threshold, but the panel clustered on public external mail identities
+using reserved `.example` TLDs in DNS, STARTTLS certificates, Received headers,
+SMTP HELOs, and artifacts. Loop 32 should keep internal safe domains intact
+while rendering external public SMTP infrastructure under less glaring
+reserved-domain forms such as `*.example.net` and update the assessment
+scenario's explicit external partner names accordingly.
