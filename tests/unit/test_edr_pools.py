@@ -543,6 +543,17 @@ class TestTemplateMaterialization:
 
         assert value == "10.10.2.20"
 
+    def test_materializes_dns_server_ip_context(self):
+        import random
+
+        value = materialize_edr_template(
+            "{dns_server_ip}",
+            random.Random(9),
+            dns_server_ip="10.55.20.10",
+        )
+
+        assert value == "10.55.20.10"
+
     def test_materializes_interface_guid_stably_per_host_ip(self):
         import random
 
@@ -599,6 +610,24 @@ class TestTemplateMaterialization:
         assert first == second
         assert first != other
         assert first[2] == "10.10.2.20"
+
+    def test_materializes_group_dns_server_ip_context(self):
+        import random
+
+        templates = (
+            r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
+            "DhcpNameServer",
+            "{dns_server_ip}",
+        )
+        key, value_name, details = materialize_edr_template_group(
+            templates,
+            random.Random(1),
+            dns_server_ip="10.55.20.10",
+        )
+
+        assert key.endswith(r"Tcpip\Parameters")
+        assert value_name == "DhcpNameServer"
+        assert details == "10.55.20.10"
 
     def test_materializes_installed_product_identity_stably_per_host(self):
         product = {

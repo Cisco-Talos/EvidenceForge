@@ -306,7 +306,7 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate", "DWORD (0x00000000)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management", "ClearPageFileAtShutdown", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA", "DWORD (0x00000001)"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "10.10.2.10"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "{dns_server_ip}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config", "MaxPollInterval", "DWORD (0x0000000f)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters", "EnableSecuritySignature", "DWORD (0x00000001)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending", "TrustedInstaller", "DWORD (0x00000001)"]

@@ -29,11 +29,12 @@ multiple emitters, producing correlated cross-source records.
 import random
 import re
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 
-from evidenceforge.events.contexts import HttpContext, IdsContext
+from evidenceforge.events.contexts import HostContext, HttpContext, IdsContext
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
@@ -46,6 +47,7 @@ from evidenceforge.generation.engine.baseline import (
     _LINUX_AMBIENT_SSH_NOISE_BAND,
     _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
     _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
+    BaselineMixin,
     _ambient_registry_entry_allowed,
     _baseline_inbound_ids_probe_profile,
     _extra_syslog_service_values,
@@ -1748,6 +1750,60 @@ class TestBaselineRegistryRealism:
             {"lease_time": 3600},
             cfg,
         )
+
+    def test_dhcp_registry_side_effect_uses_lease_server_for_name_server(self):
+        """DhcpNameServer registry writes should match the canonical DHCP server."""
+        workstation = System(
+            hostname="WS-01",
+            ip="10.55.10.21",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alice",
+        )
+        dispatched = []
+        host_context = HostContext(
+            hostname=workstation.hostname,
+            ip=workstation.ip,
+            os=workstation.os,
+            os_category="windows",
+            system_type=workstation.type,
+        )
+        fake_activity_generator = SimpleNamespace(
+            _build_host_context=Mock(return_value=host_context),
+            _get_sid=Mock(return_value="S-1-5-20"),
+            dispatcher=SimpleNamespace(dispatch=dispatched.append),
+        )
+        baseline = SimpleNamespace(
+            emitters={"windows_event_sysmon": Mock()},
+            activity_generator=fake_activity_generator,
+            state_manager=SimpleNamespace(get_process=Mock(return_value=None)),
+        )
+        dhcp_state = {"server_addr": "10.55.20.10", "lease_time": 3600.0}
+
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.get_registry_keys_hklm",
+            return_value=[
+                (
+                    r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
+                    "DhcpNameServer",
+                    "{dns_server_ip}",
+                )
+            ],
+        ):
+            BaselineMixin._emit_dhcp_registry_side_effect(
+                baseline,
+                system=workstation,
+                time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+                rng=random.Random(7),
+                sys_pids={"svchost_netsvcs": 912},
+                dhcp_state=dhcp_state,
+            )
+
+        assert len(dispatched) == 1
+        event = dispatched[0]
+        assert event.registry is not None
+        assert event.registry.key.endswith(r"Tcpip\Parameters\DhcpNameServer")
+        assert event.registry.value == "10.55.20.10"
 
     def test_ambient_registry_noise_suppresses_static_inventory_values(self):
         """Ambient churn should not rewrite static installed-software inventory fields."""

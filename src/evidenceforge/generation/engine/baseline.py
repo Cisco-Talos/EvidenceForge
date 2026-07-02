@@ -2138,6 +2138,7 @@ class BaselineMixin:
             return
 
         _host_ctx = self.activity_generator._build_host_context(system)
+        dns_server_ip = str((dhcp_state or {}).get("server_addr") or "10.0.0.1")
         count = min(len(dhcp_entries), rng.randint(1, min(2, len(dhcp_entries))))
         for key_tmpl, value_tmpl, details_tmpl in rng.sample(dhcp_entries, count):
             reg_ts = time + timedelta(milliseconds=rng.randint(45, 900))
@@ -2146,6 +2147,7 @@ class BaselineMixin:
                 rng,
                 system.assigned_user or "SYSTEM",
                 host_ip=system.ip,
+                dns_server_ip=dns_server_ip,
                 host_key=system.hostname,
                 host_os=system.os,
             )
@@ -6958,6 +6960,7 @@ class BaselineMixin:
                         rng,
                         _template_user,
                         host_ip=system.ip,
+                        dns_server_ip=str((_dhcp_state or {}).get("server_addr") or "10.0.0.1"),
                         host_key=system.hostname,
                         host_os=system.os,
                     )
