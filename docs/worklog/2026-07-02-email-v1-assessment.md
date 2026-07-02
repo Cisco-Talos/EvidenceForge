@@ -958,3 +958,57 @@ remaining cross-source issue is STARTTLS visibility: encrypted SMTP rows still
 expose post-STARTTLS envelope/reply/path fields. Loop 19 should suppress those
 protected fields in Zeek SMTP output while preserving plaintext SMTP metadata
 and Zeek files linkage.
+
+## Loop 19
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: Zeek SMTP emitter visibility rules for protected SMTP
+  transfer.
+- Invariant: STARTTLS-protected SMTP hops should not expose post-STARTTLS
+  envelope, header, reply, path, body, or file metadata in Zeek SMTP/files
+  evidence; plaintext hops should still expose SMTP metadata and MIME fuids.
+- Entry paths: internal relay STARTTLS, outbound relay STARTTLS, inbound relay
+  STARTTLS, plaintext client submission, plaintext inbound/outbound hops, and
+  MIME file extraction.
+- Consumers: Zeek `smtp.json`, Zeek `ssl.json`, Zeek `files.json`, email
+  artifacts, evaluator checks, and blind network/detection review.
+- Residual sibling risk: SMTP `path` semantics on plaintext rows, DNS NS/PTR
+  cache repeats, port-587 plaintext posture, external SMTP peer role realism,
+  endpoint mail-client attribution, and manifest label leakage remain separate
+  families.
+
+Implemented fixes:
+
+- Suppressed `mailfrom`, `rcptto`, `last_reply`, `path`, headers, message IDs,
+  subjects, user agents, and fuids from protected SMTP rows.
+- Preserved plaintext SMTP envelope/reply/header/fuid visibility.
+- Added regression coverage for encrypted internal relays, mixed-recipient
+  routes, and plaintext SMTP metadata preservation.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 21 protected SMTP rows with
+  zero protected-field leaks and 39 plaintext rows with retained envelope/reply
+  metadata.
+- Automated eval passed with score 96 over 71,212 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 74.
+- Detection Engineer: Inconclusive, synthetic-confidence 54.
+- Network Forensics: Synthetic, synthetic-confidence 82.
+- Host/EDR: Synthetic, synthetic-confidence 76.
+- Average: 71.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 20. The STARTTLS hard contradiction improved the Detection Engineer score
+but did not solve the category. The next highest-signal Zeek SMTP issue is
+plaintext `path` rendering: all visible `path` values still look mechanically
+derived as `[destination, source]`. Loop 20 should derive SMTP paths from
+prior route/Received-chain context or omit them when no prior path is visible.
