@@ -11329,20 +11329,24 @@ class ActivityGenerator:
             or (corpus_entry.subject if corpus_entry is not None else "")
             or self._deterministic_email_subject(sender, expanded_recipients, rng)
         )
-        body = (
-            spec.body
-            if spec.body is not None
-            else (
-                corpus_entry.body
-                if corpus_entry is not None
-                else self._deterministic_email_body(
-                    subject,
-                    rng,
+        if spec.body is not None:
+            body = spec.body
+        elif corpus_entry is not None:
+            body = corpus_entry.body
+            if not request.storyline_id:
+                body = self._contextualize_background_email_body(
+                    body,
+                    subject=subject,
                     sender=sender,
                     recipients=expanded_recipients,
                 )
+        else:
+            body = self._deterministic_email_body(
+                subject,
+                rng,
+                sender=sender,
+                recipients=expanded_recipients,
             )
-        )
         attachments = (
             [dict(attachment) for attachment in corpus_entry.attachments]
             if corpus_entry is not None
@@ -11835,6 +11839,27 @@ class ActivityGenerator:
             f"{rng.choice(details)} {context_line} {rng.choice(followups)}\n\n"
             f"{rng.choice(closings)}\n"
         )
+
+    def _contextualize_background_email_body(
+        self,
+        body: str,
+        *,
+        subject: str,
+        sender: str,
+        recipients: list[str],
+    ) -> str:
+        """Add deterministic per-message context to reused background corpus bodies."""
+        seed = _stable_seed(
+            f"background_email_corpus_body:{sender}:{','.join(recipients)}:{subject}:{len(body)}"
+        )
+        recipient_domain = (
+            self._email_domain(recipients[0]) if recipients else self._email_domain(sender)
+        )
+        context_line = (
+            f"\nReference: {recipient_domain.split('.')[0].upper()}-"
+            f"{seed & 0xFFFF:04X}-{(seed >> 16) & 0xFFF:03X}\n"
+        )
+        return body.rstrip() + context_line
 
     def _email_user_agent(self, system: "System", rng: random.Random) -> str:
         os_category = _get_os_category(system.os)
