@@ -11400,6 +11400,12 @@ class ActivityGenerator:
         )
         smtp_uids: list[str] = []
         route_summary: list[dict[str, str]] = []
+        transfer_sizes = self._smtp_transfer_sizes(
+            message_id=message_id,
+            body=body,
+            attachments=attachments,
+            route=route,
+        )
 
         self._emit_email_route_dns(route, request.time)
 
@@ -11467,9 +11473,9 @@ class ActivityGenerator:
                 dst_port=587 if hop["submission"] else 25,
                 proto="tcp",
                 service="smtp",
-                duration=rng.uniform(0.18, 2.8),
-                orig_bytes=max(180, email_ctx.body_size + rng.randint(250, 900)),
-                resp_bytes=rng.randint(90, 450),
+                duration=transfer_sizes[index]["duration"],
+                orig_bytes=transfer_sizes[index]["orig_bytes"],
+                resp_bytes=transfer_sizes[index]["resp_bytes"],
                 conn_state="SF",
                 emit_dns=True,
                 source_system=(
@@ -11931,6 +11937,51 @@ class ActivityGenerator:
             ),
         )
 
+    def _smtp_transfer_sizes(
+        self,
+        *,
+        message_id: str,
+        body: str,
+        attachments: list[dict[str, Any]],
+        route: list[dict[str, Any]],
+    ) -> list[dict[str, float | int]]:
+        """Return deterministic SMTP transfer byte and duration estimates per route hop."""
+        body_size = len(body.encode("utf-8"))
+        attachment_size = sum(
+            len(self._email_attachment_payload_bytes(attachment, message_id))
+            for attachment in attachments
+        )
+        message_weight = max(
+            600,
+            body_size
+            + attachment_size
+            + sum(len(address) + 12 for hop in route for address in hop["recipients"])
+            + 520,
+        )
+        sizes: list[dict[str, float | int]] = []
+        for index, hop in enumerate(route):
+            rng = random.Random(_stable_seed(f"smtp_transfer_size:{message_id}:{index}"))
+            is_submission = bool(hop["submission"])
+            is_external = bool(hop.get("external_hostname"))
+            control_overhead = rng.randint(360, 920) + 70 * len(hop["recipients"])
+            if is_submission:
+                orig_bytes = message_weight + control_overhead + rng.randint(450, 1600)
+                resp_bytes = rng.randint(260, 1300)
+                duration = rng.uniform(0.45, 4.2)
+            else:
+                relay_overhead = rng.randint(900, 2600) if is_external else rng.randint(650, 1800)
+                orig_bytes = message_weight + control_overhead + relay_overhead
+                resp_bytes = rng.randint(420, 2400)
+                duration = rng.uniform(1.2, 8.5 if is_external else 5.5)
+            sizes.append(
+                {
+                    "orig_bytes": int(orig_bytes),
+                    "resp_bytes": int(resp_bytes),
+                    "duration": round(float(duration), 6),
+                }
+            )
+        return sizes
+
     def _email_servers_by_name(self) -> dict[str, Any]:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
         if email_config is None:
@@ -12083,6 +12134,7 @@ class ActivityGenerator:
                         relay_host,
                         outbound_server_name,
                         recipients=external_recipients,
+                        routing_mode="smart_host",
                     )
                 )
             else:
@@ -12093,6 +12145,7 @@ class ActivityGenerator:
                         mx_host,
                         outbound_server_name,
                         recipients=external_recipients,
+                        routing_mode="mx",
                     )
                 )
         return route
@@ -12132,6 +12185,8 @@ class ActivityGenerator:
         dst_hostname: str,
         src_server_name: str,
         recipients: list[str],
+        *,
+        routing_mode: str,
     ) -> dict[str, Any]:
         servers = self._email_servers_by_name()
         src_cfg = servers.get(src_server_name)
@@ -12155,6 +12210,7 @@ class ActivityGenerator:
             ),
             "dst_server_allows_starttls": True,
             "external_hostname": dst_hostname,
+            "external_routing_mode": routing_mode,
             "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
         }
 
@@ -12242,7 +12298,11 @@ class ActivityGenerator:
             dst_host = hop.get("external_hostname") or self._email_server_fqdn(
                 hop["dst_system"].hostname
             )
-            qtype = "MX" if hop.get("external_hostname") else "A"
+            qtype = (
+                "MX"
+                if hop.get("external_hostname") and hop.get("external_routing_mode") != "smart_host"
+                else "A"
+            )
             answer = dst_host if qtype == "MX" else hop["dst_system"].ip
             dns_rng = random.Random(
                 _stable_seed(

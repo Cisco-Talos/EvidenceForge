@@ -413,6 +413,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     engine.generate()
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+    conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
     dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
     file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
     ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
@@ -434,8 +435,13 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     assert starttls_uids
     assert starttls_uids <= {row["uid"] for row in ssl_records}
     assert all(row["id.resp_p"] == 25 for row in ssl_records if row["uid"] in starttls_uids)
+    conn_by_uid = {row["uid"]: row for row in conn_records}
+    assert all(conn_by_uid[uid]["orig_bytes"] > 1000 for uid in starttls_uids)
     assert any(
         row["query"] == "smtp.isp.example" and row["qtype_name"] == "A" for row in dns_records
+    )
+    assert not any(
+        row["query"] == "smtp.isp.example" and row["qtype_name"] == "MX" for row in dns_records
     )
     assert all(row["trans_id"] > 0 for row in dns_records if "smtp.isp.example" in row["query"])
     assert not any(
