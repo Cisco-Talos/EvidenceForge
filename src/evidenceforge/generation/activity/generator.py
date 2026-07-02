@@ -12211,10 +12211,13 @@ class ActivityGenerator:
     ) -> list[str]:
         headers: list[str] = []
         recipient_clause = f" for <{recipients[0]}>" if len(recipients) == 1 else ""
+        hop_offset = 1.4
         for index, hop in enumerate(route):
             by_host = self._email_server_fqdn(hop["dst_system"].hostname)
             from_host = self._email_server_fqdn(hop["src_system"].hostname)
-            hop_time = time + timedelta(seconds=index * 4)
+            hop_time = time + timedelta(seconds=hop_offset)
+            hop_rng = random.Random(_stable_seed(f"email_received_hop:{message_id}:{index}"))
+            hop_offset += hop_rng.uniform(3.0, 14.0)
             headers.insert(
                 0,
                 (
@@ -12241,15 +12244,22 @@ class ActivityGenerator:
             )
             qtype = "MX" if hop.get("external_hostname") else "A"
             answer = dst_host if qtype == "MX" else hop["dst_system"].ip
+            dns_rng = random.Random(
+                _stable_seed(
+                    "email_route_dns:"
+                    f"{source_system.ip}:{resolver_ip}:{dst_host}:{qtype}:{time.isoformat()}"
+                )
+            )
             dns_ctx = DnsContext(
                 query=self._email_domain(dst_host) if qtype == "MX" else dst_host,
+                trans_id=dns_rng.randint(1, 65535),
                 query_type=qtype,
                 qtype=15 if qtype == "MX" else 1,
                 rcode="NOERROR",
                 rcode_num=0,
                 answers=[f"10 {answer}" if qtype == "MX" else answer],
-                TTLs=[300.0],
-                rtt=0.003 + index * 0.0005,
+                TTLs=[float(dns_rng.choice([300, 450, 600, 900, 1200]))],
+                rtt=round(dns_rng.uniform(0.0022, 0.012), 6),
             )
             self.generate_connection(
                 src_ip=source_system.ip,
@@ -12269,13 +12279,14 @@ class ActivityGenerator:
             if qtype == "MX":
                 a_ctx = DnsContext(
                     query=answer,
+                    trans_id=dns_rng.randint(1, 65535),
                     query_type="A",
                     qtype=1,
                     rcode="NOERROR",
                     rcode_num=0,
                     answers=[hop["dst_system"].ip],
-                    TTLs=[300.0],
-                    rtt=0.004 + index * 0.0005,
+                    TTLs=[float(dns_rng.choice([300, 450, 600, 900, 1200]))],
+                    rtt=round(dns_rng.uniform(0.0025, 0.014), 6),
                 )
                 self.generate_connection(
                     src_ip=source_system.ip,

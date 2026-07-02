@@ -11,6 +11,7 @@ import json
 import re
 from email import policy
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 from hashlib import md5, sha1, sha256
 from pathlib import Path
 
@@ -56,6 +57,14 @@ def _header_names(message_text: str) -> list[str]:
             continue
         names.append(line.split(":", 1)[0])
     return names
+
+
+def _received_header_datetimes(message_text: str) -> list[str]:
+    return [
+        line.rsplit(";", 1)[-1].strip()
+        for line in message_text.splitlines()
+        if line.startswith("Received:")
+    ]
 
 
 def _parse_eval_records(data_dir: Path) -> dict[str, list]:
@@ -310,6 +319,15 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert "Received:" in eml_text
     assert "for <bob@corp.example>" in eml_text
     assert "for <alice@corp.example>" not in eml_text
+    received_dates = _received_header_datetimes(eml_text)
+    assert received_dates
+    if len(received_dates) > 1:
+        parsed_received = sorted(parsedate_to_datetime(date) for date in received_dates)
+        received_gaps = [
+            (parsed_received[index + 1] - parsed_received[index]).total_seconds()
+            for index in range(len(parsed_received) - 1)
+        ]
+        assert any(gap != 4.0 for gap in received_gaps)
     assert ground_truth["events"][0]["kind"] == "email_message"
     assert ground_truth["events"][0]["attributes"]["artifact_path"].endswith(".eml")
     rendered_smtp_uids = {record["uid"] for record in smtp_records}
@@ -419,6 +437,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     assert any(
         row["query"] == "smtp.isp.example" and row["qtype_name"] == "A" for row in dns_records
     )
+    assert all(row["trans_id"] > 0 for row in dns_records if "smtp.isp.example" in row["query"])
     assert not any(
         row["qtype_name"] == "MX" and row["query"] == "example.net" for row in dns_records
     )
