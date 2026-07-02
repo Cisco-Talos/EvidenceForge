@@ -19,6 +19,10 @@ from evidenceforge.evaluation.parsers import discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.events.contexts import SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
+from evidenceforge.generation.activity.mail_public_identities import (
+    is_public_mail_ip,
+    public_mail_ptr_name,
+)
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
@@ -1097,6 +1101,9 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert outbound_external_ips
     assert all(_is_global_non_test_net(ip) for ip in inbound_external_ips)
     assert all(_is_global_non_test_net(ip) for ip in outbound_external_ips)
+    assert all(is_public_mail_ip(ip) for ip in inbound_external_ips)
+    assert all(is_public_mail_ip(ip) for ip in outbound_external_ips)
+    assert public_mail_ptr_name(outbound_external_ips[0], "smtp.isp.example")
     assert any(row["id.resp_p"] in {443, 993} and row["service"] == "ssl" for row in conn_records)
     mail_conn_uids = {row["uid"] for row in conn_records if row.get("id.resp_p") in {25, 587}}
     smtp_uids = {row["uid"] for row in smtp_records}

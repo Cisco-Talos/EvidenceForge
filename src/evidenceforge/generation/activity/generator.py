@@ -168,6 +168,10 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
+from evidenceforge.generation.activity.mail_public_identities import (
+    generate_public_mail_ip,
+    public_mail_ptr_name,
+)
 from evidenceforge.generation.activity.proxy_uri import (
     get_proxy_domain_class,
     is_browser_like_proxy_domain,
@@ -2837,6 +2841,9 @@ def _dns_reverse_query(ip: str) -> str:
 def _public_dns_ptr_response(ip: str, forward_hostname: str | None) -> tuple[str, int, list[str]]:
     """Return a resolver-visible public PTR response for companion lookups."""
     rng = random.Random(_stable_seed(f"public_dns_ptr:{ip}:{forward_hostname or ''}"))
+    mail_ptr = public_mail_ptr_name(ip, forward_hostname)
+    if mail_ptr:
+        return "NOERROR", 0, [mail_ptr]
     # Public reverse DNS is often absent for SaaS/CDN destinations observed
     # through enterprise resolvers. Keep that incompleteness stable per tuple.
     if rng.random() < 0.28:
@@ -12356,8 +12363,7 @@ class ActivityGenerator:
     ) -> dict[str, Any]:
         servers = self._email_servers_by_name()
         src_cfg = servers.get(src_server_name)
-        seed = _stable_seed(f"email_external_mx:{dst_hostname}")
-        dst_ip = _generate_random_external_ip(random.Random(seed))
+        dst_ip = generate_public_mail_ip(f"email_external_mx:{dst_hostname}")
         dst_system = type(src_system)(
             hostname=dst_hostname,
             ip=dst_ip,
@@ -12384,10 +12390,9 @@ class ActivityGenerator:
     def _external_source_mail_system(self, sender: str) -> "System":
         domain = self._email_domain(sender)
         hostname = self._external_mx_for_domain(domain)
-        seed = _stable_seed(f"email_external_sender:{sender}")
         return type(next(iter(self._scenario_environment.systems)))(
             hostname=hostname,
-            ip=_generate_random_external_ip(random.Random(seed)),
+            ip=generate_public_mail_ip(f"email_external_sender:{sender}"),
             os="Internet SMTP Server",
             type="server",
             services=["smtp"],
