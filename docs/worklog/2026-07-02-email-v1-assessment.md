@@ -1293,3 +1293,60 @@ loop 25. Host/EDR dropped below the threshold individually, but Network still
 found missing certificate-chain evidence for SMTP STARTTLS rows. Loop 25 should
 attach TLS 1.2 SMTP STARTTLS certificate chains through canonical x509/files
 contexts while preserving TLS 1.3 opacity.
+
+## Loop 25
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: Zeek SMTP row shape and STARTTLS visibility semantics in
+  the SMTP emitter, backed by canonical SMTP/file contexts.
+- Invariant: every Zeek SMTP row should keep a stable parser-compatible field
+  shape, while STARTTLS-protected transfers expose only unprotected connection
+  and TLS facts. Protected rows should not leak message headers, envelope
+  values, body/file metadata, or MIME FUIds.
+- Entry paths: plaintext submission, plaintext relay, internal STARTTLS relay,
+  outbound smart-host STARTTLS, inbound relay STARTTLS, storyline messages,
+  background messages, artifact-backed MIME messages, and corpus-backed mail.
+- Consumers: Zeek `smtp.json`, `conn.json`, `ssl.json`, `files.json`,
+  `x509.json`, `EMAIL_ARTIFACTS.json`, evaluator schema checks, evaluator
+  cross-source checks, and blind network/detection review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, source-native MTA logs, public SMTP peer IP role realism,
+  DNS-cache personality, MIME payload scale, STARTTLS imperfection, and
+  manifest label leakage remain separate families.
+
+Implemented fixes feeding loop 25:
+
+- Added SMTP STARTTLS certificate evidence for TLS 1.2 protected hops.
+- Routed SMTP STARTTLS certificate chains through canonical network connection,
+  Zeek `ssl`, Zeek `files`, and Zeek `x509` contexts.
+- Preserved TLS 1.3 opacity so TLS 1.3 SMTP STARTTLS rows do not fabricate
+  passive certificate artifacts.
+- Added regression coverage forcing TLS 1.2 on the ISP relay path to verify
+  `ssl.cert_chain_fuids` link to both `files.json` and `x509.json`.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 21 SMTP STARTTLS rows, 17 TLS
+  1.2 SMTP STARTTLS rows, certificate chains on all 17 TLS 1.2 rows, 41
+  certificate FUIds, and zero missing `files.json` or `x509.json` references.
+- Automated eval passed with score 97 over 75,409 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 60.
+- Detection Engineer: Inconclusive, synthetic-confidence 42.
+- Network Forensics: Synthetic, synthetic-confidence 28.
+- Host/EDR: Synthetic, synthetic-confidence 72.
+- Average: 50.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 26. STARTTLS certificate linkage improved, but Detection and Network both
+flagged Zeek SMTP field-shape/schema gaps. Loop 26 should stabilize Zeek SMTP
+optional fields across plaintext and protected rows without leaking protected
+headers, envelope values, or MIME file metadata.
