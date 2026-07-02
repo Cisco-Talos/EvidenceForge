@@ -1350,3 +1350,68 @@ loop 26. STARTTLS certificate linkage improved, but Detection and Network both
 flagged Zeek SMTP field-shape/schema gaps. Loop 26 should stabilize Zeek SMTP
 optional fields across plaintext and protected rows without leaking protected
 headers, envelope values, or MIME file metadata.
+
+## Loop 26
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: SMTP route planning and Zeek-visible DNS/SMTP route
+  causality.
+- Invariant: outbound SMTP route decisions should remain explicit and
+  deterministic without collapsing multi-domain delivery into one synthetic
+  destination. Direct MX routing should emit recipient-domain MX lookups,
+  selected-MX A lookups, and SMTP connections to the selected hosts. ISP relay
+  mode should make smart-host routing evident and should not hide route policy
+  behind one sender-only choice when multiple relays are configured.
+- Entry paths: storyline outbound messages, background outbound messages,
+  sender-group route overrides, direct MX routing, global ISP relays,
+  route-specific ISP relay lists, Zeek DNS, Zeek SMTP, Zeek conn, STARTTLS
+  relay evidence, and `EMAIL_ARTIFACTS.json`.
+- Consumers: Zeek `dns.json`, `conn.json`, `smtp.json`, `ssl.json`,
+  `files.json`, `x509.json`, `EMAIL_ARTIFACTS.json`, evaluator consistency
+  checks, and blind network/detection review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, source-native MTA logs, public SMTP peer IP role realism,
+  fleet-wide mailbox-read topology, DNS companion-query behavior, SMTP failure
+  and retry texture, and manifest label leakage remain separate families.
+
+Implemented fixes feeding loop 26:
+
+- Stabilized Zeek SMTP row shape so plaintext and protected SMTP rows include
+  the same parser-compatible optional fields.
+- Preserved STARTTLS opacity by rendering protected envelope/header/body/file
+  fields as empty strings or arrays instead of missing keys, nulls, or leaked
+  values.
+- Updated regression coverage for protected SMTP rows to require stable empty
+  values rather than absent keys.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 60 SMTP rows, 39 plaintext
+  rows, 21 protected rows, zero missing required SMTP fields, and protected
+  rows with blank strings/empty arrays for protected values.
+- Automated eval passed with score 97 over 75,409 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive leaning realistic, synthetic-confidence 34.
+- Detection Engineer: Mostly realistic and detection-useful,
+  synthetic-confidence 38.
+- Network Forensics: Synthetic-leaning, synthetic-confidence 70.
+- Host/EDR: Fail for host/EDR realism, synthetic-confidence 84.
+- Average: 56.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 27. Detection explicitly called the SMTP field shape parser-compatible,
+and Threat Hunter dropped below the threshold, but Network still flagged
+outbound SMTP route collapse and MX-to-A causality while Host/EDR highlighted
+endpoint ownership as the largest remaining non-Zeek sibling family. Loop 27
+should split outbound external routing by recipient domain, choose ISP relays
+with sender-plus-domain scope when a relay pool exists, fix direct-MX owner
+queries, and enrich manifest route metadata with FQDN/routing-mode/domain
+fields.
