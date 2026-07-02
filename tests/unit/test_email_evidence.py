@@ -519,6 +519,69 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
     assert smtp_records[3]["rcptto"] == ["analyst@example.net"]
 
 
+def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.isp_relays = []
+    scenario = _with_email_storyline(
+        scenario,
+        EmailMessageEventSpec(
+            to=["analyst@example.net", "reviewer@vendor.example.org"],
+            subject="External delivery split",
+            body="This message should produce one external SMTP route per recipient domain.\n",
+        ),
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+    dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
+    manifest = json.loads(
+        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
+    )
+
+    assert [(row["id.orig_h"], row["id.resp_p"]) for row in smtp_records] == [
+        ("10.10.1.10", 587),
+        ("10.10.2.25", 25),
+        ("10.10.2.25", 25),
+    ]
+    external_hops = [row for row in smtp_records if row["id.resp_p"] == 25]
+    assert [row["rcptto"] for row in external_hops] == [[], []]
+    assert len({row["id.resp_h"] for row in external_hops}) == 2
+
+    mx_queries = {
+        row["query"]: row["answers"]
+        for row in dns_records
+        if row["qtype_name"] == "MX" and row["query"] in {"example.net", "vendor.example.org"}
+    }
+    assert mx_queries == {
+        "example.net": ["10 mx1.example.net"],
+        "vendor.example.org": ["10 mx1.vendor.example.org"],
+    }
+    a_queries = {
+        row["query"]
+        for row in dns_records
+        if row["qtype_name"] == "A"
+        and row["query"] in {"mx1.example.net", "mx1.vendor.example.org"}
+    }
+    assert a_queries == {"mx1.example.net", "mx1.vendor.example.org"}
+
+    route = manifest["messages"][0]["route"]
+    assert [hop["routing_mode"] for hop in route] == ["internal", "mx", "mx"]
+    assert [hop["recipient_domains"] for hop in route[1:]] == [
+        "example.net",
+        "vendor.example.org",
+    ]
+    assert route[1]["dst_fqdn"] == "mx1.example.net"
+    assert route[2]["dst_fqdn"] == "mx1.vendor.example.org"
+
+
 def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None

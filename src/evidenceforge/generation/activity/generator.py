@@ -11516,12 +11516,19 @@ class ActivityGenerator:
             )
             if uid:
                 smtp_uids.append(visible_uid or uid)
+            recipient_domains = sorted(
+                {self._email_domain(address) for address in hop.get("recipients", [])}
+            )
             route_summary.append(
                 {
                     "src": src_system.hostname,
                     "dst": dst_system.hostname,
+                    "src_fqdn": self._email_server_fqdn(src_system.hostname),
+                    "dst_fqdn": self._email_server_fqdn(dst_system.hostname),
                     "port": str(587 if hop["submission"] else 25),
                     "tls": str(tls).lower(),
+                    "routing_mode": str(hop.get("external_routing_mode") or "internal"),
+                    "recipient_domains": ",".join(recipient_domains),
                     "uid": visible_uid,
                 }
             )
@@ -12241,7 +12248,12 @@ class ActivityGenerator:
                     )
                 )
         if external_recipients:
-            outbound_server_name = self._select_outbound_email_server(sender)
+            outbound_route = self._select_outbound_email_route(sender)
+            outbound_server_name = self._select_outbound_email_server_from_route(
+                sender,
+                outbound_route,
+                email_config,
+            )
             outbound_system = self._email_system_for_server_name(outbound_server_name)
             if outbound_system.ip != sender_server_system.ip:
                 route.append(
@@ -12255,27 +12267,32 @@ class ActivityGenerator:
                         recipients=external_recipients,
                     )
                 )
-            if email_config.isp_relays:
-                relay_host = email_config.isp_relays[
-                    _stable_seed(f"email_isp_relay:{sender}") % len(email_config.isp_relays)
-                ]
-                route.append(
-                    self._external_email_hop(
-                        outbound_system,
-                        relay_host,
-                        outbound_server_name,
-                        recipients=external_recipients,
-                        routing_mode="smart_host",
+            external_by_domain: dict[str, list[str]] = {}
+            for recipient in external_recipients:
+                external_by_domain.setdefault(self._email_domain(recipient), []).append(recipient)
+            relay_hosts = list(outbound_route.isp_relays or email_config.isp_relays)
+            for domain, domain_recipients in sorted(external_by_domain.items()):
+                if relay_hosts:
+                    relay_host = relay_hosts[
+                        _stable_seed(f"email_isp_relay:{sender}:{domain}") % len(relay_hosts)
+                    ]
+                    route.append(
+                        self._external_email_hop(
+                            outbound_system,
+                            relay_host,
+                            outbound_server_name,
+                            domain_recipients,
+                            routing_mode="smart_host",
+                        )
                     )
-                )
-            else:
-                mx_host = self._external_mx_for_domain(self._email_domain(external_recipients[0]))
+                    continue
+                mx_host = self._external_mx_for_domain(domain)
                 route.append(
                     self._external_email_hop(
                         outbound_system,
                         mx_host,
                         outbound_server_name,
-                        recipients=external_recipients,
+                        domain_recipients,
                         routing_mode="mx",
                     )
                 )
@@ -12341,6 +12358,7 @@ class ActivityGenerator:
             ),
             "dst_server_allows_starttls": True,
             "external_hostname": dst_hostname,
+            "external_recipient_domain": self._email_domain(recipients[0]) if recipients else "",
             "external_routing_mode": routing_mode,
             "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
         }
@@ -12358,7 +12376,7 @@ class ActivityGenerator:
             roles=["external_mail_server"],
         )
 
-    def _select_outbound_email_server(self, sender: str) -> str:
+    def _select_outbound_email_route(self, sender: str) -> Any:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
         if email_config is None:
             raise ValueError("environment.email is not configured")
@@ -12378,10 +12396,28 @@ class ActivityGenerator:
                 break
             if route.name == "default" and not selected.sender_groups:
                 selected = route
-        servers = selected.servers
+        return selected
+
+    def _select_outbound_email_server_from_route(
+        self,
+        sender: str,
+        route: Any,
+        email_config: Any,
+    ) -> str:
+        servers = route.servers
         if servers == ["default"]:
             servers = email_config.default_mailbox_servers
         return servers[_stable_seed(f"email_outbound:{sender}") % len(servers)]
+
+    def _select_outbound_email_server(self, sender: str) -> str:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        return self._select_outbound_email_server_from_route(
+            sender,
+            self._select_outbound_email_route(sender),
+            email_config,
+        )
 
     @staticmethod
     def _external_mx_for_domain(domain: str) -> str:
@@ -12441,8 +12477,13 @@ class ActivityGenerator:
                     f"{source_system.ip}:{resolver_ip}:{dst_host}:{qtype}:{time.isoformat()}"
                 )
             )
+            query = (
+                str(hop.get("external_recipient_domain") or self._email_domain(dst_host))
+                if qtype == "MX"
+                else dst_host
+            )
             dns_ctx = DnsContext(
-                query=self._email_domain(dst_host) if qtype == "MX" else dst_host,
+                query=query,
                 trans_id=dns_rng.randint(1, 65535),
                 query_type=qtype,
                 qtype=15 if qtype == "MX" else 1,
