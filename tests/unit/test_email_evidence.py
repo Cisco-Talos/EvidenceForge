@@ -308,6 +308,12 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert "for <alice@corp.example>" not in eml_text
     assert ground_truth["events"][0]["kind"] == "email_message"
     assert ground_truth["events"][0]["attributes"]["artifact_path"].endswith(".eml")
+    rendered_smtp_uids = {record["uid"] for record in smtp_records}
+    manifest_route_uids = {
+        hop["uid"] for message in manifest["messages"] for hop in message["route"] if hop["uid"]
+    }
+    assert manifest_route_uids <= rendered_smtp_uids
+    assert set(ground_truth["events"][0]["attributes"]["smtp_uids"]) <= rendered_smtp_uids
 
     discovered = discover_log_files(tmp_path / "data")
     assert smtp_path in discovered["zeek_smtp"]

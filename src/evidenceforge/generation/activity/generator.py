@@ -75,7 +75,7 @@ from evidenceforge.events.contexts import (
     SmtpContext,
     SslContext,
 )
-from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -11473,15 +11473,21 @@ class ActivityGenerator:
                 file_transfers=mime_file_transfers,
                 suppress_application_side_effects=True,
             )
+            visible_uid = self._visible_network_uid_for_format(
+                uid,
+                src_ip=src_system.ip,
+                dst_ip=dst_system.ip,
+                format_name="zeek_smtp",
+            )
             if uid:
-                smtp_uids.append(uid)
+                smtp_uids.append(visible_uid or uid)
             route_summary.append(
                 {
                     "src": src_system.hostname,
                     "dst": dst_system.hostname,
                     "port": str(587 if hop["submission"] else 25),
                     "tls": str(tls).lower(),
-                    "uid": uid,
+                    "uid": visible_uid,
                 }
             )
 
@@ -11522,6 +11528,34 @@ class ActivityGenerator:
         if ad_domain and "." not in hostname:
             return f"{hostname}.{ad_domain}"
         return hostname
+
+    def _visible_network_uid_for_format(
+        self,
+        uid: str,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        format_name: str,
+    ) -> str:
+        """Return the sensor-visible network UID for a rendered network format."""
+        if not uid:
+            return ""
+        dispatcher = getattr(self, "dispatcher", None)
+        visibility = getattr(dispatcher, "visibility_engine", None)
+        if visibility is None:
+            return uid
+        visible_formats = visibility.get_log_formats_for_connection(src_ip, dst_ip)
+        if format_name not in visible_formats:
+            return ""
+        sensors = visibility.get_observing_sensors(src_ip, dst_ip)
+        for sensor in sensors:
+            if format_name not in expand_formats(sensor.log_formats):
+                continue
+            from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+
+            sensor_hostname = sensor.hostname or sensor.name
+            return SensorMultiplexEmitter._derive_sensor_uid(uid, sensor_hostname)
+        return uid
 
     @staticmethod
     def _email_domain(address: str) -> str:
