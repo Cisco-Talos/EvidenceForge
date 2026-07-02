@@ -2303,3 +2303,71 @@ process attribution, SMTP 587 plaintext semantics, and one public-service TLS
 certificate mismatch. Loop 43 targets endpoint process lifecycle ownership
 because it was the largest blind-score driver and affects the same workstation
 process realism family.
+
+## Loop 43
+
+Priority category: endpoint process lifecycle ownership and delayed source
+observation consistency.
+
+Family contract:
+
+- Owning abstraction: canonical process lifecycle/state plus dispatcher
+  source-observation handling before source-native rendering.
+- Invariant: source-native process, flow, and dependent rows must not create
+  visible same-process contradictions across Windows Security, Sysmon, and eCAR.
+  When a delayed source row carries process identity, the running process
+  lifetime must extend to that visible source timestamp before later
+  finalization can terminate it.
+- Entry paths: process create/terminate bundles, network-connection action
+  bundle, source-observation delays, Sysmon Event 3, Windows 5156, eCAR FLOW,
+  and foreground-process finalizers.
+- Consumers: Windows Security/Sysmon, eCAR, Zeek/proxy pivot review, and blind
+  Host/EDR plus Detection review.
+
+Implemented fixes feeding loop 43:
+
+- Fixed eCAR process termination timing so the source terminate timestamp is
+  anchored to the original process-create source timestamp instead of planning a
+  new create timestamp from the terminate event.
+- Dropped connection process attribution when the referenced process instance is
+  already known to have emitted termination evidence.
+- Updated dispatcher source-observation handling so delayed endpoint source rows
+  with process identity extend `StateManager` process activity time before
+  emission.
+
+Verification:
+
+- Focused tests passed:
+  `uv run pytest --no-cov tests/unit/test_dispatcher.py::TestObservationProfiles::test_delayed_process_source_observation_extends_process_activity tests/unit/test_activity.py::TestActivityGenerator::test_generate_connection_drops_recorded_terminated_process_pid tests/unit/test_timing_profiles.py::test_process_source_terminate_time_preserves_visible_ecar_lifetime tests/unit/test_timing_profiles.py::test_process_source_terminate_time_uses_stored_visible_create_anchor -q`.
+- `uv run ruff check src/evidenceforge/events/dispatcher.py src/evidenceforge/generation/activity/generator.py tests/unit/test_dispatcher.py tests/unit/test_activity.py tests/unit/test_timing_profiles.py`
+  and matching format check passed.
+- Automated eval passed with overall score 95.727 over 62,382 records.
+- Strict lifecycle probe still found three large eCAR/Sysmon browser termination
+  deltas, so the underlying endpoint observation asymmetry is not fully
+  eliminated; however, the blind Host reviewer no longer treated that specific
+  browser termination pattern as the dominant issue.
+- Fixes committed and pushed as `1b9509b8`, `0fb6e6bf`, and `8953d4be`.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 52.
+- Detection Engineer: Inconclusive, synthetic-confidence 36.
+- Network Forensics: Inconclusive, synthetic-confidence 34.
+- Host/EDR: Inconclusive, synthetic-confidence 56.
+- Average: 44.5.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears this priority item. Per the user's explicit instruction,
+the assessment stopped after loop 43 and did not proceed to loop 44.
+
+Top remaining blind findings for the next resumed loop:
+
+- Network `contract_gap`: one concurrent TCP source-port reuse by
+  `10.55.10.21:61712` for a long SSH session and a Kerberos TCP connection.
+- Host `hard_contradiction`: `PROXY-ARD-01` bash history records `exit`, then
+  later commands still parented to the same eCAR `/bin/bash` process.
+- Detection `schema_or_format`: `EMAIL_ARTIFACTS.json` looks like an
+  analyst-ready manifest rather than a production-native source.
+- Threat/Detection/Network `contract_gap` and `distribution_texture`: source-side
+  SSH attribution gaps, exact same-millisecond paired eCAR FLOW observations,
+  and uneven eCAR principal attribution remain visible.
