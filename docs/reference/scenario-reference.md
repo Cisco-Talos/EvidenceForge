@@ -810,6 +810,11 @@ automated, interval-driven, or explicitly minutes/hours apart.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 
+The suspicious DNS and unusual outbound target pools are reusable configuration
+data in `activity/suspicious_benign.yaml`; edit that config overlay when a
+project needs different benign red-herring identities. Storyline-authored IPs,
+hostnames, and email addresses still win over fallback pools.
+
 **Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
 
 **Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.

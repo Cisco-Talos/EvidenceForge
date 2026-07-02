@@ -39,6 +39,8 @@ from evidenceforge.generation.activity.host_activity_profiles import (
 )
 from evidenceforge.models.scenario import Persona, System, User
 
+from .suspicious_benign_config import pick_suspicious_dns_host, pick_unusual_connection
+
 logger = logging.getLogger(__name__)
 
 
@@ -296,101 +298,6 @@ def generate_service_account_anomaly(
     }
 
 
-# Suspicious-looking but legitimate DNS query patterns
-_BENIGN_SUSPICIOUS_DNS_HOSTS = [
-    # High-entropy CDN/analytics subdomains (look like DGA but are legitimate)
-    "a1b2c3d4e5.cloudfront.net",
-    "x7k9m2.akamaized.net",
-    "cdn-b4f8a2.azureedge.net",
-    "f3d7e1a9b2c4.fastly.net",
-    "tr-8a2f4b.doubleclick.net",
-    # DNS-over-HTTPS / privacy services (look like tunneling)
-    "dns.google",
-    "cloudflare-dns.com",
-    "mozilla.cloudflare-dns.com",
-    "doh.opendns.com",
-    # Rare TLDs that look suspicious but are legitimate
-    "corp-updates.io",
-    "developer-portal.dev",
-    "status-monitor.app",
-    "internal-metrics.cloud",
-    # Long subdomains (look like encoding/tunneling)
-    "session-f8a2b4c6d8e0-tracking.analytics.customeriq.net",
-    "pixel-7f3a9b2e1d4c.marketing-cdn.com",
-    "telemetry-x9k2m4.windows.com",
-]
-
-# Unusual but legitimate outbound connection targets
-_BENIGN_UNUSUAL_CONNECTIONS = [
-    # Cloud regions the org doesn't normally use
-    {
-        "dst_ip": "13.236.8.128",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "ec2.ap-southeast-2.amazonaws.com",
-        "desc": "AWS ap-southeast-2 (dev testing)",
-    },
-    {
-        "dst_ip": "20.205.243.166",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "copilot.github.com",
-        "desc": "GitHub Copilot endpoint",
-    },
-    {
-        "dst_ip": "104.16.0.35",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "api.cloudflare.com",
-        "desc": "Cloudflare API",
-    },
-    # Package registries and dev tools
-    {
-        "dst_ip": "151.101.0.63",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "pypi.org",
-        "desc": "PyPI package download",
-    },
-    {
-        "dst_ip": "185.125.190.39",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "snapcraft.io",
-        "desc": "Ubuntu snap store",
-    },
-    {
-        "dst_ip": "34.104.35.123",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "gcr.io",
-        "desc": "Google Container Registry",
-    },
-    # Large outbound transfers (look like exfil but are backup/sync)
-    {
-        "dst_ip": "52.216.84.0",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "s3.amazonaws.com",
-        "desc": "AWS S3 backup sync",
-    },
-    {
-        "dst_ip": "13.107.42.14",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "onedrive.live.com",
-        "desc": "OneDrive sync",
-    },
-    {
-        "dst_ip": "142.250.80.46",
-        "dst_port": 443,
-        "service": "ssl",
-        "hostname": "drive.google.com",
-        "desc": "Google Drive upload",
-    },
-]
-
-
 def generate_suspicious_dns(
     rng: random.Random,
     users: list[User],
@@ -406,7 +313,7 @@ def generate_suspicious_dns(
     system = rng.choice(systems)
     offset = timedelta(seconds=rng.randint(0, 3599))
     event_time = current_hour + offset
-    hostname = rng.choice(_BENIGN_SUSPICIOUS_DNS_HOSTS)
+    hostname = pick_suspicious_dns_host(rng)
 
     return {
         "pattern": "suspicious_dns",
@@ -433,7 +340,7 @@ def generate_unusual_outbound(
 
     offset = timedelta(seconds=rng.randint(0, 3599))
     event_time = current_hour + offset
-    conn_info = rng.choice(_BENIGN_UNUSUAL_CONNECTIONS)
+    conn_info = pick_unusual_connection(rng)
 
     return {
         "pattern": "unusual_outbound",

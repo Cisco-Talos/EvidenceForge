@@ -134,6 +134,11 @@ sessions; IMAPS uses 993 and OWA-style access uses 443.
 
 EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Custom personas in the project overlay (`.eforge/config/personas/`) are also available. Only define personas inline if you need to customize behavior for a single scenario. Run `eforge info personas` to see the full list of available persona names (including any overlay additions), or `eforge info --fields` to see all available queries.
 
+For external IPs, public domains, and email addresses that are part of the
+storyline or environment, author them explicitly in the scenario. Reusable
+fallback/background pools live in config overlays (`eforge info identity_pools`),
+but scenario-authored IPs/domains and `environment.network_identities` always win.
+
 | Persona | Work Hours | Risk Profile | Typical Role |
 |---------|-----------|--------------|-------------|
 | developer | 9am-6pm (lunch 12-1) | high | Software engineer |

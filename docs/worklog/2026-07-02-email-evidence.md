@@ -23,6 +23,30 @@ error paths.
   `4622 passed, 41 skipped`.
 - Ruff lint and format checks passed across the repository.
 
+## 2026-07-02 Data-Driven Identity Pool Refactor
+
+Moved email and related generated identity pools out of Python literals and
+into overlay-aware `config/activity/*.yaml` files: baseline email domains and
+local-parts, reserved public mail replacement domains, omitted storyline
+external IP pools, suspicious-benign DNS/connection targets, and command
+URL/host placeholder pools. Added cached loaders, `validate-config` schemas,
+`eforge info identity_pools`, docs, repo-local skill references, and focused
+unit/install-skill coverage.
+
+Verification for this pass:
+
+- `uv run pytest tests/unit/test_identity_pools.py tests/unit/test_install_skills.py --no-cov`
+- `uv run pytest tests/unit/test_email_evidence.py tests/unit/test_activity_helpers.py tests/unit/test_application_catalog.py --no-cov`
+- `uv run eforge validate-config`
+- `uv run eforge info identity_pools --json`
+- `uv run ruff check .`
+- `uv run ruff format --check .`
+
+Full `uv run pytest --no-cov` currently fails on 10 pre-existing standalone
+tests unrelated to this refactor, including process spacing, DNS/FQDN/Kerberos
+connection expectations, explicit proxy visibility, local_orig/local_resp, and
+Zeek files timing. Two sampled failures reproduce when run alone.
+
 ## Follow-Up Candidates
 
 - POP3/POP3S and semantic mailbox read modeling.

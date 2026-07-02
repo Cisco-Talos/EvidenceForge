@@ -17,6 +17,13 @@ scenario-local host/IP ownership. Use that for one-off lab, partner, attacker,
 or public-service identities that should travel with a scenario. Use config
 overlays for reusable libraries shared by many scenarios.
 
+Generated identity pools are reusable config, not scenario schema. Use
+`activity/email_background.yaml`, `activity/mail_public_identities.yaml`,
+`activity/external_actor_profiles.yaml`, `activity/suspicious_benign.yaml`, and
+`activity/command_parameter_pools.yaml` for fallback/background identities that
+should affect many scenarios. Scenario-authored IPs, domains, mailboxes, and
+`environment.network_identities` stay authoritative for a specific scenario.
+
 ## Table of Contents
 
 1. [Dependency Matrix](#dependency-matrix)

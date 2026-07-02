@@ -407,6 +407,30 @@ def validate_config() -> ValidationResult:
         "activity/process_network_map.yaml": {
             "list_fields": {"mappings": None},
         },
+        "activity/email_background.yaml": {
+            "list_fields": {
+                "external_domains": "domain",
+                "inbound_local_parts": "local_part",
+                "outbound_local_parts": "local_part",
+            },
+        },
+        "activity/mail_public_identities.yaml": {
+            "list_fields": {"providers": "name"},
+            "string_list_fields": {"reserved_replacement_domains"},
+        },
+        "activity/external_actor_profiles.yaml": {
+            "list_fields": {
+                "logon_source_ips": "ip",
+                "failed_logon_source_ips": "ip",
+                "connection_c2_ips": "ip",
+            },
+        },
+        "activity/suspicious_benign.yaml": {
+            "list_fields": {"dns_hosts": "hostname", "unusual_connections": "hostname"},
+        },
+        "activity/command_parameter_pools.yaml": {
+            "dict_fields": {"general", "query", "linux_query"},
+        },
         "activity/process_access_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
         },
@@ -737,16 +761,26 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
     from evidenceforge.generation.activity.calltrace_patterns import load_calltrace_config
+    from evidenceforge.generation.activity.command_parameter_pools import (
+        load_command_parameter_pools,
+    )
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
         load_create_remote_thread_config,
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.email_background import load_email_background
     from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
+    from evidenceforge.generation.activity.external_actor_profiles import (
+        load_external_actor_profiles,
+    )
     from evidenceforge.generation.activity.host_activity_profiles import (
         load_host_activity_profiles,
     )
     from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+    from evidenceforge.generation.activity.mail_public_identities import (
+        load_mail_public_identities,
+    )
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
     )
@@ -756,6 +790,9 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
+    from evidenceforge.generation.activity.suspicious_benign_config import (
+        load_suspicious_benign,
+    )
     from evidenceforge.generation.activity.system_processes import load_system_processes
     from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
@@ -776,6 +813,11 @@ def validate_config() -> ValidationResult:
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
+    email_background_data = load_email_background()
+    mail_public_identities_data = load_mail_public_identities()
+    external_actor_profiles_data = load_external_actor_profiles()
+    suspicious_benign_data = load_suspicious_benign()
+    command_parameter_pools_data = load_command_parameter_pools()
     process_access_data = load_process_access_patterns()
     calltrace_config = load_calltrace_config()
     auth_noise_data = load_auth_noise_config()
@@ -2358,6 +2400,7 @@ def validate_config() -> ValidationResult:
         BeaconProfilesConfig,
         CallTracePatternEntry,
         CallTraceSourceFamilyEntry,
+        CommandParameterPoolsConfig,
         ConnectionEntry,
         CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
@@ -2366,10 +2409,13 @@ def validate_config() -> ValidationResult:
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
         EdrInstalledSoftwareProduct,
+        EmailBackgroundConfig,
         EndpointNoiseConfig,
+        ExternalActorProfilesConfig,
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
         KerberosRealismConfig,
+        MailPublicIdentitiesConfig,
         ObservationProfilesConfig,
         OuiEntry,
         PersonaEntry,
@@ -2382,6 +2428,7 @@ def validate_config() -> ValidationResult:
         ScheduledTaskEntry,
         SmbFileTransferConfig,
         SpawnRuleEntry,
+        SuspiciousBenignConfig,
         SyslogProgramEntry,
         SystemBinaryEntry,
         SystemdScheduleEntry,
@@ -2396,6 +2443,19 @@ def validate_config() -> ValidationResult:
         (domains, DnsEntry, "dns_registry.yaml"),
         (apps, ApplicationEntry, "application_catalog.yaml"),
         (all_merged_personas, PersonaEntry, "personas"),
+        ([email_background_data], EmailBackgroundConfig, "email_background.yaml"),
+        ([mail_public_identities_data], MailPublicIdentitiesConfig, "mail_public_identities.yaml"),
+        (
+            [external_actor_profiles_data],
+            ExternalActorProfilesConfig,
+            "external_actor_profiles.yaml",
+        ),
+        ([suspicious_benign_data], SuspiciousBenignConfig, "suspicious_benign.yaml"),
+        (
+            [command_parameter_pools_data],
+            CommandParameterPoolsConfig,
+            "command_parameter_pools.yaml",
+        ),
     ]
 
     # system_processes.yaml: scheduled_tasks, system_services, system_binaries

@@ -67,6 +67,11 @@ and `.eml` files when investigating `email_message` ground truth. Other optional
 input. The evaluator discovers `artifacts/email/EMAIL_ARTIFACTS.json` as a
 sibling of the `data/` directory and parses one record per manifest message.
 
+`eforge eval` does not need special parser changes for generated identity pools.
+If realism findings point at repetitive or obviously fake fallback identities,
+inspect `eforge info identity_pools` and the corresponding project overlay files
+before proposing scenario changes.
+
 If they don't specify, look for scenario directories under `scenarios/`. Ask if you can't find it.
 
 ### Step 2: Run the Evaluation

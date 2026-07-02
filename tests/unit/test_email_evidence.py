@@ -487,13 +487,13 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     assert set(cert_fuids) <= {row["id"] for row in x509_records}
     conn_by_uid = {row["uid"]: row for row in conn_records}
     assert all(conn_by_uid[uid]["orig_bytes"] > 1000 for uid in starttls_uids)
-    assert any(
-        row["query"] == "smtp.isp.example.net" and row["qtype_name"] == "A" for row in dns_records
-    )
+    safe_isp_relay = public_safe_mail_hostname("smtp.isp.example")
+    assert safe_isp_relay != "smtp.isp.example.net"
+    assert any(row["query"] == safe_isp_relay and row["qtype_name"] == "A" for row in dns_records)
     assert not any(
-        row["query"] == "smtp.isp.example.net" and row["qtype_name"] == "MX" for row in dns_records
+        row["query"] == safe_isp_relay and row["qtype_name"] == "MX" for row in dns_records
     )
-    assert all(row["trans_id"] > 0 for row in dns_records if "smtp.isp.example" in row["query"])
+    assert all(row["trans_id"] > 0 for row in dns_records if safe_isp_relay == row["query"])
     assert not any(
         row["qtype_name"] == "MX" and row["query"] == "example.net" for row in dns_records
     )
@@ -892,6 +892,9 @@ messages:
     plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 25)
 
     assert headers[0] == "Received"
+    assert eml_text.count("Received:") >= 3
+    assert "mail.example.net" not in eml_text
+    assert public_safe_mail_hostname("docflow-service.example") in eml_text
     assert headers.index("Date") < headers.index("From")
     assert headers.index("Subject") < headers.index("Auto-Submitted")
     assert headers.index("X-DocFlow-Workspace") < headers.index("MIME-Version")
@@ -1174,7 +1177,10 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert all(_is_global_non_test_net(ip) for ip in outbound_external_ips)
     assert all(is_public_mail_ip(ip) for ip in inbound_external_ips)
     assert all(is_public_mail_ip(ip) for ip in outbound_external_ips)
-    assert public_safe_mail_hostname("smtp.isp.example") == "smtp.isp.example.net"
+    safe_hostname = public_safe_mail_hostname("smtp.isp.example")
+    assert safe_hostname.startswith("smtp.isp.")
+    assert not safe_hostname.endswith((".example", ".example.net", ".example.com", ".example.org"))
+    assert "example.net" not in public_safe_mail_hostname("docflow-service.example.net")
     ptr_name = public_mail_ptr_name(outbound_external_ips[0], "smtp.isp.example")
     assert ptr_name
     assert not ptr_name.endswith(".example")

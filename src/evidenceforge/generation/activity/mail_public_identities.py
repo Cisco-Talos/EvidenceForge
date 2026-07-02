@@ -15,7 +15,8 @@ from evidenceforge.utils.rng import _stable_seed
 
 _IDENTITIES_PATH = get_activity_directory() / "mail_public_identities.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
-_RESERVED_PUBLIC_SUFFIXES = (".example", ".test", ".invalid", ".localhost")
+_RESERVED_PUBLIC_SUFFIXES = ("example", "test", "invalid", "localhost")
+_RESERVED_DOCUMENTATION_DOMAINS = ("example.com", "example.net", "example.org")
 
 
 def _merge_mail_public_identities(default: dict, overlay: dict) -> dict:
@@ -56,7 +57,7 @@ def _domain_from_hostname(hostname: str) -> str:
     lowered = public_safe_mail_hostname(hostname)
     labels = [label for label in lowered.split(".") if label]
     if len(labels) <= 2:
-        return lowered or "mail.example"
+        return lowered or "mail.postrelay.net"
     if labels[0] in {"mail", "mail1", "mail2", "mx", "mx1", "mx2", "smtp", "smtp1", "smtp2"}:
         return ".".join(labels[1:])
     return ".".join(labels[-2:])
@@ -66,18 +67,46 @@ def public_safe_mail_hostname(hostname: str) -> str:
     """Return a public-safe mail hostname for external SMTP infrastructure.
 
     Scenario authors often use reserved domains to avoid spillage.  That is
-    still right for safety, but a bare reserved TLD such as ``.example`` looks
-    implausible when rendered as public SMTP DNS, PTR, or WebPKI identity.  For
-    external public infrastructure only, preserve the authored labels and move
-    the reserved suffix underneath the reserved ``example.net`` namespace.
+    still right for examples and fixtures, but reserved domains are implausible
+    when rendered as public SMTP DNS, PTR, or WebPKI identity.  For external
+    public infrastructure only, preserve the authored labels and move reserved
+    suffixes under a stable pool of realistic non-reserved mail domains.
     """
     lowered = hostname.lower().rstrip(".")
     if not lowered:
-        return "mail.example.net"
+        return "mail.postrelay.net"
+    replacement_domain = _reserved_replacement_domain(lowered)
+    for suffix in _RESERVED_DOCUMENTATION_DOMAINS:
+        prefix = _reserved_hostname_prefix(lowered, suffix)
+        if prefix is not None:
+            return f"{prefix}.{replacement_domain}" if prefix else f"mail.{replacement_domain}"
     for suffix in _RESERVED_PUBLIC_SUFFIXES:
-        if lowered.endswith(suffix):
-            return f"{lowered}.net"
+        prefix = _reserved_hostname_prefix(lowered, suffix)
+        if prefix is not None:
+            return f"{prefix}.{replacement_domain}" if prefix else f"mail.{replacement_domain}"
     return lowered
+
+
+def _reserved_hostname_prefix(hostname: str, reserved_suffix: str) -> str | None:
+    """Return labels before a reserved suffix, or None when it does not match."""
+    if hostname == reserved_suffix:
+        return ""
+    dotted_suffix = f".{reserved_suffix}"
+    if hostname.endswith(dotted_suffix):
+        return hostname[: -len(dotted_suffix)].strip(".")
+    return None
+
+
+def _reserved_replacement_domain(hostname: str) -> str:
+    """Return a stable realistic-looking public mail domain for a reserved name."""
+    configured = load_mail_public_identities().get("reserved_replacement_domains", [])
+    domains = [
+        str(domain).strip().lower().rstrip(".") for domain in configured if str(domain).strip()
+    ]
+    if not domains:
+        domains = ["postrelay.net"]
+    index = _stable_seed(f"mail_reserved_replacement:{hostname}") % len(domains)
+    return domains[index]
 
 
 def _provider_for_key(key: str) -> dict[str, Any]:

@@ -299,6 +299,8 @@ Metadata generation uses a hybrid model:
 
 - built-in structured grammar and data-driven pools by default,
 - optional scenario-created `email_corpus.yaml` overlays for richer contacts,
+- baseline background email domains and local-parts from overlay-aware
+  `activity/email_background.yaml`,
   subjects, bodies, headers, user agents, and MIME parts.
 
 Corpus files are scenario-relative and contain a top-level `messages` list keyed

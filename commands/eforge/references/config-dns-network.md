@@ -10,6 +10,24 @@ For a domain/IP that belongs only to one portable scenario, prefer
 `environment.network_identities` in the scenario YAML. Use `dns_registry.yaml`
 overlays for reusable domain libraries that should influence many scenarios.
 
+## Generated Public Identity Pools
+
+The following overlay-aware files keep generated public identities out of Python
+literals:
+
+- `activity/mail_public_identities.yaml` — public SMTP provider pools plus
+  `reserved_replacement_domains`, used when external mail infrastructure would
+  otherwise render a reserved/documentation domain.
+- `activity/external_actor_profiles.yaml` — weighted public IP fallback pools
+  for omitted storyline logon, failed-logon, and C2 connection addresses.
+- `activity/suspicious_benign.yaml` — suspicious-looking but legitimate DNS
+  hostnames and unusual outbound connection targets used by ambient noise.
+
+Run `eforge info identity_pools` to discover counts and overlay paths. Run
+`eforge validate-config` after edits; it rejects empty pools, duplicate keys,
+malformed domains/IPs, invalid weights, and reserved documentation domains where
+realistic public identities are required.
+
 ## Table of Contents
 
 1. [dns_registry.yaml](#dns_registryyaml)

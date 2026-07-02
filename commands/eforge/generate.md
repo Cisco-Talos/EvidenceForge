@@ -115,6 +115,13 @@ and endpoint flow rendering. `baseline_activity.traffic_affinities` produce
 baseline traffic only; they should not appear as storyline or red-herring leads
 in the generated ground truth.
 
+Generated fallback identities are deterministic but data-driven. Baseline email
+domains/local-parts, public mail replacement domains, omitted storyline external
+IP pools, suspicious-benign DNS/connection targets, and command URL/host
+placeholders come from overlay-aware files under `activity/`. Inspect them with
+`eforge info identity_pools` and validate overlays with `eforge validate-config`.
+The generator still never calls an LLM.
+
 Generation writes log files to a `data/` subdirectory alongside the scenario file:
 
 ```

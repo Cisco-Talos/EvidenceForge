@@ -59,6 +59,7 @@ from evidenceforge.generation.actions import (
 )
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
+from evidenceforge.generation.activity.external_actor_profiles import pick_external_actor_ip
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -2567,14 +2568,7 @@ class StorylineMixin:
             return "(filtered by sensor placement)"
 
         if spec.type == "logon":
-            _attacker_ips = [
-                "45.33.32.156",
-                "185.220.101.34",
-                "91.219.236.174",
-                "23.129.64.210",
-                "116.202.120.181",
-            ]
-            source_ip = spec.source_ip or rng.choice(_attacker_ips)
+            source_ip = spec.source_ip or pick_external_actor_ip("logon_source_ips", rng)
             logon_id = self.activity_generator.generate_logon(
                 user=actor,
                 system=system,
@@ -2591,8 +2585,10 @@ class StorylineMixin:
             self._record_storyline_logon(actor, system, logon_id, source_ip=source_ip)
 
         elif spec.type == "failed_logon":
-            _attacker_ips = ["45.33.32.156", "185.220.101.34", "91.219.236.174"]
-            source_ip = spec.source_ip or rng.choice(_attacker_ips)
+            source_ip = spec.source_ip or pick_external_actor_ip(
+                "failed_logon_source_ips",
+                rng,
+            )
             dc = next(
                 (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
                 None,
@@ -3307,7 +3303,6 @@ class StorylineMixin:
                     self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
         elif spec.type == "connection":
-            _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]
             source_ip = spec.source_ip or system.ip
             dst_ip = spec.dst_ip
             effective_dst_ip = dst_ip
@@ -3318,6 +3313,8 @@ class StorylineMixin:
                 )
                 if resolved_dst_ip:
                     effective_dst_ip = resolved_dst_ip
+            if not effective_dst_ip:
+                effective_dst_ip = pick_external_actor_ip("connection_c2_ips", rng)
             if (
                 not _is_private_ip(source_ip)
                 and hasattr(self, "dispatcher")
@@ -3354,7 +3351,7 @@ class StorylineMixin:
                     )[0]
                 from evidenceforge.generation.activity.referrer import pick_referrer
 
-                _http_host = spec.hostname or dst_ip
+                _http_host = spec.hostname or effective_dst_ip
                 resp_bytes = _storyline_http_response_body_len(
                     spec=spec,
                     rng=rng,
@@ -3406,7 +3403,11 @@ class StorylineMixin:
             if story_pid > 0 and src_sys is not None and service in {"ssl", "https"}:
                 story_proc = self.state_manager.get_process(src_sys.hostname, story_pid)
                 story_command = story_proc.command_line if story_proc is not None else ""
-                if self._command_contains_raw_tcp_endpoint(story_command, dst_ip, dst_port):
+                if self._command_contains_raw_tcp_endpoint(
+                    story_command,
+                    effective_dst_ip,
+                    dst_port,
+                ):
                     service = ""
             # Only use explicit hostname from scenario.  Do NOT fall back to
             # Hostname resolution for storyline connections:
@@ -3418,7 +3419,7 @@ class StorylineMixin:
             if spec.hostname:
                 conn_hostname = spec.hostname
                 emit_dns = True
-            elif dst_ip in REVERSE_DNS:
+            elif effective_dst_ip in REVERSE_DNS:
                 conn_hostname = None  # let generate_connection resolve via REVERSE_DNS
                 emit_dns = True
             else:
@@ -3487,7 +3488,7 @@ class StorylineMixin:
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
                 dst_sys = next(
-                    (s for s in self.scenario.environment.systems if s.ip == dst_ip),
+                    (s for s in self.scenario.environment.systems if s.ip == logged_dst_ip),
                     None,
                 )
                 if (

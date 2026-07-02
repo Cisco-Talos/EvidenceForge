@@ -461,7 +461,7 @@ class ProxyTransactionActionBundle:
             file_transfer=client_file_transfer,
             pe=client_pe,
             proxy=proxy_context,
-            hostname=executor._proxy_fqdn(proxy_sys),
+            hostname="",
             proxy_bypass=True,
             preserve_http_outcome=True,
             process_image=client_process_image,

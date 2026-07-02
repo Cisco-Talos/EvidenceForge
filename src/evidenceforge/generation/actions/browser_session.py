@@ -369,6 +369,9 @@ class BrowserSessionActionBundle:
             group=group,
             first_in_group=first_in_group,
         )
+        emit_dns = (request.emit_dns_on_page_load and req.is_page_load) or (
+            req_hostname != request.hostname
+        )
 
         generate_kwargs: dict[str, Any] = {
             "src_ip": request.src_ip,
@@ -380,9 +383,8 @@ class BrowserSessionActionBundle:
             "duration": conn_duration,
             "orig_bytes": conn_orig_bytes,
             "resp_bytes": conn_resp_bytes,
-            "emit_dns": request.emit_dns_on_page_load
-            and req.is_page_load
-            or req_hostname != request.hostname,
+            "emit_dns": emit_dns,
+            "suppress_prereq_dns": not emit_dns,
             "source_system": request.source_system,
             "hostname": req_hostname,
             "http": self._http_context(

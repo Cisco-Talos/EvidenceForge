@@ -55,6 +55,10 @@ from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
 )
+from evidenceforge.generation.activity.email_background import (
+    pick_email_background_domain,
+    pick_email_background_local_part,
+)
 from evidenceforge.generation.activity.generator import (
     _dns_base_ttl,
     _dns_is_internal_name,
@@ -2632,12 +2636,6 @@ class BaselineMixin:
         if len(recipients) < 2:
             return
         hourly_rate = email_config.background_messages_per_user_per_day / 24.0
-        external_domains = [
-            "vendors.example.net",
-            "partners.example.net",
-            "customer-mail.example.net",
-            "industry-news.example.net",
-        ]
         for user in recipients:
             rng = random.Random(
                 _stable_seed(f"baseline_email:{self.scenario.name}:{user.username}:{current_hour}")
@@ -2673,15 +2671,15 @@ class BaselineMixin:
                 actor_system = source_system
             elif flow == "inbound":
                 local = rng.choice(recipients)
-                sender_name = rng.choice(["billing", "alerts", "notifications", "support"])
-                sender_domain = rng.choice(external_domains)
+                sender_name = pick_email_background_local_part(rng, "inbound_local_parts")
+                sender_domain = pick_email_background_domain(rng)
                 sender = f"{sender_name}@{sender_domain}"
                 recipients_to = [local.email]
                 actor = local
                 actor_system = self._find_system(local.primary_system or "") or source_system
             else:
-                target_name = rng.choice(["contact", "orders", "support", "team"])
-                target_domain = rng.choice(external_domains)
+                target_name = pick_email_background_local_part(rng, "outbound_local_parts")
+                target_domain = pick_email_background_domain(rng)
                 recipients_to = [f"{target_name}@{target_domain}"]
                 actor = user
                 actor_system = source_system

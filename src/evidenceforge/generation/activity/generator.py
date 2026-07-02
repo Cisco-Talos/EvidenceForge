@@ -277,9 +277,14 @@ def _is_modeled_local_ip(executor: Any, ip: str) -> bool:
     dispatcher = getattr(executor, "dispatcher", None)
     visibility = getattr(dispatcher, "visibility_engine", None)
     if visibility is not None:
+        resolve_segments = getattr(visibility, "_resolve_ip_segments", None)
+        if callable(resolve_segments) and resolve_segments(ip):
+            return True
         vip_to_real = getattr(visibility, "_vip_to_real_ip", {})
         if ip in vip_to_real or ip in set(vip_to_real.values()):
             return True
+    if network is None and visibility is None:
+        return _is_private_ip(ip)
     return False
 
 
@@ -9121,6 +9126,28 @@ class ActivityGenerator:
         self._last_one_shot_cli_launch_by_command[command_key] = adjusted_time
         return adjusted_time
 
+    def _remember_one_shot_cli_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> None:
+        """Record the final launch timestamp for later one-shot CLI spacing."""
+        if _get_os_category(system.os) != "windows":
+            return
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
+            return
+        normalized_command = " ".join(command_line.lower().split())
+        exe_key = (system.hostname, username, logon_id, exe_name)
+        command_key = (*exe_key, normalized_command)
+        self._last_one_shot_cli_launch_by_exe[exe_key] = time
+        self._last_one_shot_cli_launch_by_command[command_key] = time
+
     @staticmethod
     def _is_top_level_browser_launch(process_name: str, command_line: str) -> bool:
         """Return whether a Windows browser command represents a user-facing process."""
@@ -9566,6 +9593,14 @@ class ActivityGenerator:
             )
             if spaced_time != time:
                 time = spaced_time
+            self._remember_one_shot_cli_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
         self.state_manager.set_current_time(time)
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
@@ -10960,8 +10995,11 @@ class ActivityGenerator:
             weights=[34, 36, 20, 10],
             k=1,
         )[0]
+        machine_service_principal = (
+            f"{machine_principal}@{getattr(self, '_ad_domain', 'corp.local').upper()}"
+        )
         self.generate_kerberos_service_ticket(
-            username=machine_principal,
+            username=machine_service_principal,
             service_name=service_name,
             source_ip=src_ip,
             dc_hostname=dc_hostname,
@@ -11007,6 +11045,7 @@ class ActivityGenerator:
         suppress_application_side_effects: bool = False,
         suppress_source_pid_inference: bool = False,
         preserve_explicit_payload: bool = False,
+        suppress_prereq_dns: bool = False,
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
     ) -> str:
@@ -11080,6 +11119,7 @@ class ActivityGenerator:
             suppress_application_side_effects=suppress_application_side_effects,
             suppress_source_pid_inference=suppress_source_pid_inference,
             preserve_explicit_payload=preserve_explicit_payload,
+            suppress_prereq_dns=suppress_prereq_dns,
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
         )
@@ -11664,6 +11704,7 @@ class ActivityGenerator:
             route[0]["recipients"] = envelope_recipients
         received_headers = self._received_headers_for_route(
             route=route,
+            sender=sender,
             message_id=message_id,
             recipients=expanded_recipients,
             time=request.time,
@@ -12622,17 +12663,17 @@ class ActivityGenerator:
             )
             inbound_system = self._email_system_for_server_name(inbound_server_name)
             external_mx = self._external_source_mail_system(sender)
-            route = [
-                self._email_hop(
-                    external_mx,
-                    inbound_system,
-                    submission=False,
-                    server_to_server=True,
-                    src_server_name="",
-                    dst_server_name=inbound_server_name,
-                    recipients=internal_recipients,
-                )
-            ]
+            inbound_hop = self._email_hop(
+                external_mx,
+                inbound_system,
+                submission=False,
+                server_to_server=True,
+                src_server_name="",
+                dst_server_name=inbound_server_name,
+                recipients=internal_recipients,
+            )
+            inbound_hop["external_routing_mode"] = "inbound"
+            route = [inbound_hop]
             sender_server_name = inbound_server_name
             sender_server_system = inbound_system
         else:
@@ -12855,6 +12896,7 @@ class ActivityGenerator:
         self,
         *,
         route: list[dict[str, Any]],
+        sender: str,
         message_id: str,
         recipients: list[str],
         time: datetime,
@@ -12876,7 +12918,69 @@ class ActivityGenerator:
                     f"{recipient_clause}; {hop_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
                 ),
             )
+        headers.extend(
+            self._external_sender_received_headers(
+                route=route,
+                sender=sender,
+                message_id=message_id,
+                time=time,
+            )
+        )
         return headers
+
+    def _external_sender_received_headers(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+        time: datetime,
+    ) -> list[str]:
+        """Return stable pre-recipient Received headers for inbound public mail."""
+        if not route:
+            return []
+        first_hop = route[0]
+        src_system = first_hop["src_system"]
+        if "external_mail_server" not in (src_system.roles or []):
+            return []
+
+        sender_domain = public_safe_mail_hostname(self._email_domain(sender))
+        edge_host = self._email_server_fqdn(src_system.hostname)
+        edge_ip = src_system.ip
+        local_part = sender.split("@", 1)[0].lower()
+        rng = random.Random(_stable_seed(f"email_external_received:{sender_domain}:{message_id}"))
+        app_prefixes = (
+            ["notify", "worker", "app", "mailer"]
+            if any(marker in local_part for marker in ("notice", "workspace", "alert", "support"))
+            else ["smtp", "mail", "relay", "outbound"]
+        )
+        app_host = f"{rng.choice(app_prefixes)}-{1 + rng.randrange(6):02d}.{sender_domain}"
+        mta_host = rng.choice(
+            [
+                f"mailout-{1 + rng.randrange(4):02d}.{sender_domain}",
+                f"smtp-out-{1 + rng.randrange(4):02d}.{sender_domain}",
+                f"mta{1 + rng.randrange(4)}.{sender_domain}",
+            ]
+        )
+        app_ip = generate_public_mail_ip(f"email_external_received_app:{sender_domain}:{app_host}")
+        mta_ip = generate_public_mail_ip(f"email_external_received_mta:{sender_domain}:{mta_host}")
+
+        edge_time = time - timedelta(seconds=rng.uniform(14.0, 55.0))
+        mta_time = edge_time - timedelta(seconds=rng.uniform(5.0, 24.0))
+        mta_id = _stable_seed(f"received-external-mta:{message_id}") & 0xFFFFFFFF
+        edge_id = _stable_seed(f"received-external-edge:{message_id}") & 0xFFFFFFFF
+        return [
+            (
+                f"from {mta_host} ({mta_ip}) by {edge_host} ({edge_ip}) "
+                f"with ESMTPS id {edge_id:08x}; "
+                f"{edge_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+            ),
+            (
+                f"from {app_host} ({app_ip}) by {mta_host} ({mta_ip}) "
+                f"with ESMTPS id {mta_id:08x}; "
+                f"{mta_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+            ),
+        ]
 
     def _emit_email_route_dns(
         self,
@@ -13467,6 +13571,7 @@ class ActivityGenerator:
         suppress_application_side_effects = request.suppress_application_side_effects
         suppress_source_pid_inference = request.suppress_source_pid_inference
         preserve_explicit_payload = request.preserve_explicit_payload
+        suppress_prereq_dns = request.suppress_prereq_dns
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
 
@@ -13782,7 +13887,7 @@ class ActivityGenerator:
                 force_address=True,
             )
         elif (
-            (emit_dns or (hostname and not hostname_from_reverse_dns))
+            (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
             and proto == "tcp"
             and dst_port not in (53,)
             and src_ip_is_local
@@ -18967,7 +19072,11 @@ class ActivityGenerator:
             event_type="kerberos_service",
             dst_host=self._build_dc_host_context(dc_hostname),
             kerberos=KerberosContext(
-                target_username=username.split("@", 1)[0],
+                target_username=(
+                    username
+                    if "@" in username and username.split("@", 1)[0].endswith("$")
+                    else username.split("@", 1)[0]
+                ),
                 target_domain=domain,
                 service_name=service_name,
                 service_sid=(

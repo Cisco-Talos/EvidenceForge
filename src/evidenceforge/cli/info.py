@@ -170,6 +170,69 @@ def _collect_format_groups() -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in FORMAT_GROUPS.items()}
 
 
+def _collect_identity_pools() -> dict[str, Any]:
+    """Collect counts and overlay paths for data-driven generated identity pools."""
+    from evidenceforge.generation.activity.command_parameter_pools import (
+        load_command_parameter_pools,
+    )
+    from evidenceforge.generation.activity.email_background import load_email_background
+    from evidenceforge.generation.activity.external_actor_profiles import (
+        load_external_actor_profiles,
+    )
+    from evidenceforge.generation.activity.mail_public_identities import (
+        load_mail_public_identities,
+    )
+    from evidenceforge.generation.activity.suspicious_benign_config import (
+        load_suspicious_benign,
+    )
+
+    email_background = load_email_background()
+    mail_public = load_mail_public_identities()
+    external_actor = load_external_actor_profiles()
+    suspicious_benign = load_suspicious_benign()
+    command_pools = load_command_parameter_pools()
+    command_keys = sorted(
+        {
+            str(key)
+            for section in command_pools.values()
+            if isinstance(section, dict)
+            for key in section
+        }
+    )
+    return {
+        "overlay_paths": [
+            "activity/email_background.yaml",
+            "activity/mail_public_identities.yaml",
+            "activity/external_actor_profiles.yaml",
+            "activity/suspicious_benign.yaml",
+            "activity/command_parameter_pools.yaml",
+        ],
+        "email_background": {
+            "external_domains": len(email_background.get("external_domains", [])),
+            "inbound_local_parts": len(email_background.get("inbound_local_parts", [])),
+            "outbound_local_parts": len(email_background.get("outbound_local_parts", [])),
+        },
+        "mail_public_identities": {
+            "reserved_replacement_domains": len(
+                mail_public.get("reserved_replacement_domains", [])
+            ),
+            "providers": len(mail_public.get("providers", [])),
+        },
+        "external_actor_profiles": {
+            "logon_source_ips": len(external_actor.get("logon_source_ips", [])),
+            "failed_logon_source_ips": len(external_actor.get("failed_logon_source_ips", [])),
+            "connection_c2_ips": len(external_actor.get("connection_c2_ips", [])),
+        },
+        "suspicious_benign": {
+            "dns_hosts": len(suspicious_benign.get("dns_hosts", [])),
+            "unusual_connections": len(suspicious_benign.get("unusual_connections", [])),
+        },
+        "command_parameter_pools": {
+            "keys": command_keys,
+        },
+    }
+
+
 def _gather_lightweight() -> dict[str, Any]:
     """Gather lightweight fields that don't require overlay-backed loaders.
 
@@ -238,6 +301,7 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "web_scan_presets": _collect_web_scan_presets,
         "beacon_profiles": _collect_beacon_profiles,
         "format_groups": _collect_format_groups,
+        "identity_pools": _collect_identity_pools,
     }
     for key, collector in inventories.items():
         try:
@@ -316,6 +380,15 @@ def format_human_readable(data: dict[str, Any]) -> str:
     roles = data["system_roles"]
     lines.append(f"System roles ({len(roles)}):")
     lines.append(_format_list(roles))
+    lines.append("")
+
+    identity_pools = data["identity_pools"]
+    lines.append("Identity pools:")
+    if isinstance(identity_pools, dict):
+        for overlay_path in identity_pools["overlay_paths"]:
+            lines.append(f"  {overlay_path}")
+    else:
+        lines.append(f"  {identity_pools}")
 
     return "\n".join(lines)
 
@@ -327,6 +400,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
     "format_groups": "Format group names and their expanded formats (for --formats flag)",
     "formats": "Supported log format names",
+    "identity_pools": "Generated identity pool counts and overlay paths",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",
     "overlay.files": "YAML files in the overlay directory",

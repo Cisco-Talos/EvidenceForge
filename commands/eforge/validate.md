@@ -52,6 +52,14 @@ where the named server does not host the mailbox. Fix these by adding the
 explicit mail topology/corpus sidecar or by changing the storyline to use
 non-email evidence.
 
+Config validation is separate. If `eforge validate-config` reports errors in
+`email_background.yaml`, `mail_public_identities.yaml`,
+`external_actor_profiles.yaml`, `suspicious_benign.yaml`, or
+`command_parameter_pools.yaml`, fix the project overlay rather than the scenario.
+Common failures include empty pools, duplicate domains/hosts/IPs, malformed IPs
+or domains, reserved documentation domains in public realism-bound pools,
+non-positive weights, and command URL values without HTTP(S) hosts.
+
 Network identity warnings are advisory unless they describe an actual conflict.
 Custom hostnames in storyline/red-herring/domain-aware fields should normally be
 declared under `environment.network_identities`; undeclared custom domains warn
