@@ -77,7 +77,7 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
             "helo": smtp.helo,
             "mailfrom": "" if protected else smtp.mailfrom,
             "rcptto": [] if protected else smtp.rcptto,
-            "last_reply": "" if protected else smtp.last_reply,
+            "last_reply": smtp.last_reply,
             "path": [] if protected or not smtp.path else smtp.path,
             "tls": smtp.tls,
             "date": "" if protected else smtp.date,

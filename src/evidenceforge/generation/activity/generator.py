@@ -11440,6 +11440,13 @@ class ActivityGenerator:
                 dst_system=dst_system,
                 submission=bool(hop["submission"]),
             )
+            if tls:
+                last_reply = self._smtp_starttls_reply(
+                    message_id=message_id,
+                    hop_index=index,
+                    src_system=src_system,
+                    dst_system=dst_system,
+                )
             mime_file_transfers = (
                 self._email_mime_file_transfers(
                     artifact_id=artifact_id,
@@ -11707,6 +11714,29 @@ class ActivityGenerator:
             f"250 2.0.0 Ok: queued as {queue_short}",
             f"250 2.0.0 {queue_hex[:8]} Message accepted for delivery",
             f"250 2.0.0 queued as {queue_short.lower()} on {dst_hostname}",
+        ]
+        return replies[rng.randrange(len(replies))]
+
+    def _smtp_starttls_reply(
+        self,
+        *,
+        message_id: str,
+        hop_index: int,
+        src_system: Any,
+        dst_system: Any,
+    ) -> str:
+        """Return a deterministic pre-encryption STARTTLS server reply."""
+        seed = _stable_seed(
+            "smtp_starttls_reply:"
+            f"{message_id}:{hop_index}:"
+            f"{getattr(src_system, 'hostname', '')}:{getattr(dst_system, 'hostname', '')}"
+        )
+        rng = random.Random(seed)
+        replies = [
+            "220 2.0.0 Ready to start TLS",
+            "220 2.0.0 SMTP server ready",
+            "220 2.0.0 Begin TLS negotiation now",
+            "220 2.0.0 Go ahead with STARTTLS",
         ]
         return replies[rng.randrange(len(replies))]
 

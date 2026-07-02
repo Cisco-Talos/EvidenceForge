@@ -308,7 +308,7 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert smtp_records[1]["tls"] is True
     assert smtp_records[1]["mailfrom"] == ""
     assert smtp_records[1]["rcptto"] == []
-    assert smtp_records[1]["last_reply"] == ""
+    assert smtp_records[1]["last_reply"].startswith("220 2.0.0")
     assert smtp_records[1]["path"] == []
     assert smtp_records[1]["subject"] == ""
     assert any(record["qtype_name"] == "A" for record in dns_records)
@@ -446,7 +446,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     assert smtp_records[1]["tls"] is True
     assert smtp_records[1]["mailfrom"] == ""
     assert smtp_records[1]["rcptto"] == []
-    assert smtp_records[1]["last_reply"] == ""
+    assert smtp_records[1]["last_reply"].startswith("220 2.0.0")
     assert smtp_records[1]["path"] == []
     assert smtp_records[1]["fuids"] == []
     assert smtp_records[2]["tls"] is False
