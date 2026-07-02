@@ -631,3 +631,53 @@ Loop 13 should move to endpoint/host mail and process realism. Highest-priority
 next finding: sub-second post-logon desktop bursts that mix autostart
 applications with typed shell commands, especially bare PowerShell spawning a
 build command one millisecond later.
+
+## Loop 13
+
+Priority category: endpoint/host mail and process realism.
+
+Family contract:
+
+- Owning abstraction: Windows process execution timing in the process action
+  bundle path.
+- Invariant: children of bare interactive Windows shells should not appear with
+  machine-speed timing. Sub-second children remain valid for explicit inline
+  command wrappers, scripts, automation, or storyline-authored timing.
+- Entry paths: baseline process launches, application-catalog CLI tools,
+  spawn-rule parent materialization, shell parent reuse, Sysmon/Security/eCAR
+  process rendering, and endpoint-owned network side effects.
+- Consumers: Windows Security 4688/4689, Sysmon Event 1/5/3/22, eCAR
+  PROCESS/FLOW rows, source timing checks, and blind endpoint review.
+- Residual sibling risk: workstation assignment and server interactive-session
+  texture are a separate world-model/activity-profile family.
+
+Implemented fixes:
+
+- Added an interactive-shell child spacing helper after parent repair, so both
+  existing bare shell parents and auto-created shell parents get human-scale
+  dwell time before child commands.
+- Preserved explicit storyline process timing.
+- Added focused tests for background bare-shell child spacing and storyline
+  timing preservation.
+
+Verification:
+
+- Rendered-output probe: the reviewed Linh Tran PowerShell-to-`kubectl.exe`
+  startup example now has roughly 17 seconds of dwell time rather than a
+  sub-second gap.
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_activity.py::TestActivityGenerator::test_generate_process_spaces_bare_shell_child_commands tests/unit/test_activity.py::TestActivityGenerator::test_storyline_process_preserves_bare_shell_child_timing tests/unit/test_activity.py::TestActivityGenerator::test_generate_process_rejects_one_shot_shell_parent tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Automated eval passed with score 96.93 over 69,437 records.
+
+Blind panel:
+
+- Threat Hunter: Real, synthetic-confidence 32.
+- Detection Engineer: Inconclusive, synthetic-confidence 34.
+- Network Forensics: Real, synthetic-confidence 28.
+- Host/EDR: Real, synthetic-confidence 32.
+- Average: 31.5.
+
+Result: average blind synthetic-confidence is `<=45`, so endpoint/host mail and
+process realism is temporarily solved under the user's special rule. Loop 14
+should move to email routing and recipient semantics. Good candidate: avoid
+mixed internal/external recipient envelopes on outbound external relay hops.
