@@ -890,6 +890,8 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert all(_is_global_non_test_net(ip) for ip in outbound_external_ips)
     assert any(row["id.resp_p"] in {443, 993} and row["service"] == "ssl" for row in conn_records)
     assert all(not message["storyline_id"] for message in manifest["messages"])
+    visible_subjects = [row["subject"] for row in smtp_records if row.get("subject")]
+    assert len(set(visible_subjects)) >= max(4, len(visible_subjects) // 3)
     uas_by_sender: dict[str, set[str]] = {}
     for row in smtp_records:
         if row.get("id.resp_p") != 587 or not row.get("mailfrom", "").endswith("@corp.example"):

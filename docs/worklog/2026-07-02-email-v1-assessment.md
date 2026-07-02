@@ -581,3 +581,53 @@ email content/artifact realism remains active for loop 12. The next target is
 background corpus entropy: diversify deterministic subjects/bodies and restrict
 exact repeats to plausible threads, list/newsletter traffic, repeated
 transactional notices, or true duplicate/relay artifacts.
+
+## Loop 12
+
+Priority category: email content/artifact realism.
+
+Family contract:
+
+- Owning abstraction: email content selection and deterministic built-in
+  metadata/body helpers.
+- Invariant: background email should not overuse a small corpus/content pool
+  when a scenario provides reusable background corpus entries; template-backed
+  messages must maintain varied senders, subjects, body text, and visible SMTP
+  metadata.
+- Entry paths: baseline internal, inbound, outbound, SMTP delivery,
+  artifact-backed messages, metadata-only messages, Zeek SMTP rendering, and
+  `.eml` artifact rendering.
+- Consumers: Zeek `smtp.json`, `files.json`, `.eml` artifacts,
+  `EMAIL_ARTIFACTS.json`, ground truth references, and blind review packages.
+- Residual sibling risk: conversation-thread state is still shallow, so a
+  single sender can repeat subjects more than ideal.
+
+Implemented fixes:
+
+- Baseline background mail now samples scenario corpus entries opportunistically
+  instead of always using the small corpus whenever one is present.
+- Built-in deterministic background subjects and bodies now use larger,
+  structured pools and more subject forms.
+- Added focused subject-diversity coverage for generated background SMTP.
+
+Verification:
+
+- Rendered-output probe: 39 visible SMTP subjects, 28 unique subjects.
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Automated eval passed with score 97.14 over 70,169 records.
+
+Blind panel:
+
+- Threat Hunter: Real, synthetic-confidence 34.
+- Detection Engineer: Inconclusive, synthetic-confidence 38.
+- Network Forensics: Real, synthetic-confidence 34.
+- Host/EDR: Inconclusive, synthetic-confidence 43.
+- Average: 37.25.
+
+Result: average blind synthetic-confidence is `<=45`, so email
+content/artifact realism is temporarily solved under the user's special rule.
+Loop 13 should move to endpoint/host mail and process realism. Highest-priority
+next finding: sub-second post-logon desktop bursts that mix autostart
+applications with typed shell commands, especially bare PowerShell spawning a
+build command one millisecond later.

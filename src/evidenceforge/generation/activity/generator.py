@@ -11547,21 +11547,87 @@ class ActivityGenerator:
         recipients: list[str],
         rng: random.Random,
     ) -> str:
-        verbs = ["Follow up", "Question", "Update", "Review", "Schedule", "Notes"]
-        nouns = ["request", "timeline", "access", "report", "meeting", "invoice"]
+        verbs = [
+            "Follow up",
+            "Question",
+            "Update",
+            "Review",
+            "Schedule",
+            "Notes",
+            "Revised",
+            "Confirming",
+            "Reminder",
+            "Draft",
+            "Closeout",
+            "Heads up",
+        ]
+        nouns = [
+            "request",
+            "timeline",
+            "access",
+            "report",
+            "meeting",
+            "invoice",
+            "renewal",
+            "change window",
+            "vendor packet",
+            "forecast",
+            "approval",
+            "field note",
+            "shipping date",
+            "badge update",
+            "service ticket",
+            "training roster",
+        ]
+        qualifiers = [
+            "today",
+            "this week",
+            "before review",
+            "for closeout",
+            "from yesterday",
+            "for next steps",
+            "after the call",
+            "for the shared folder",
+            "before noon",
+        ]
         if recipients:
             domain = self._email_domain(recipients[0])
         else:
             domain = self._email_domain(sender)
-        return f"{rng.choice(verbs)}: {rng.choice(nouns)} for {domain.split('.')[0]}"
+        style = rng.randrange(4)
+        if style == 0:
+            return f"{rng.choice(verbs)}: {rng.choice(nouns)} for {domain.split('.')[0]}"
+        if style == 1:
+            return f"{rng.choice(nouns).title()} {rng.randint(1040, 9980)} {rng.choice(qualifiers)}"
+        if style == 2:
+            return f"{rng.choice(verbs)} {rng.choice(nouns)} - {rng.choice(qualifiers)}"
+        return f"{domain.split('.')[0].title()} {rng.choice(nouns)} notes"
 
     def _deterministic_email_body(self, subject: str, rng: random.Random) -> str:
-        openings = ["Hi,", "Hello,", "Good morning,", "Team,"]
-        closings = ["Thanks,", "Regards,", "Best,"]
+        openings = ["Hi,", "Hello,", "Good morning,", "Team,", "Good afternoon,", "All,"]
+        closings = ["Thanks,", "Regards,", "Best,", "Thank you,", "Appreciate it,"]
+        details = [
+            "I added the latest notes to the shared folder.",
+            "The owner list changed after this morning's sync.",
+            "Please use the attached dates when you update your tracker.",
+            "The vendor asked for confirmation before they close the item.",
+            "I am waiting on one more answer, but the current version is usable.",
+            "No action is needed if the numbers still match your copy.",
+            "Please reply only if you see a mismatch in the current draft.",
+            "This is mostly a reminder so the handoff does not get lost.",
+        ]
+        followups = [
+            "I will check back after the next status call.",
+            "The next update should be ready later today.",
+            "We can fold any corrections into the Friday packet.",
+            "I will leave the ticket open until everyone has confirmed.",
+            "Please send changes directly to the group thread.",
+            "I will archive the old copy once the update is approved.",
+        ]
         return (
             f"{rng.choice(openings)}\n\n"
             f"Please see the note below regarding {subject.lower()}. "
-            "Let me know if you have any questions.\n\n"
+            f"{rng.choice(details)} {rng.choice(followups)}\n\n"
             f"{rng.choice(closings)}\n"
         )
 

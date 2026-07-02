@@ -2621,7 +2621,9 @@ class BaselineMixin:
                 continue
             event_time = current_hour + timedelta(seconds=rng.uniform(300, 3300))
             corpus_entries = self.activity_generator._email_background_corpus_entries()
-            corpus_id = rng.choice(corpus_entries).entry_id if corpus_entries else None
+            corpus_id = None
+            if corpus_entries and rng.random() < min(0.35, len(corpus_entries) / 10.0):
+                corpus_id = rng.choice(corpus_entries).entry_id
             hour_slot = int(current_hour.timestamp()) // 3600
             flow = ["internal", "inbound", "outbound"][(hour_slot + recipients.index(user)) % 3]
             sender = None
