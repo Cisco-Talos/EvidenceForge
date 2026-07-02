@@ -515,3 +515,69 @@ texture, and optional mail-daemon host evidence. The authoritative loop-10
 synthesis is saved at `scenarios/email-v1-assessment/blind-test/loop-10/REPORT.md`;
 machine-readable scores are saved at
 `scenarios/email-v1-assessment/blind-test/loop-10/scores.json`.
+
+## Loop 11
+
+Priority item: email content/artifact realism.
+
+Family contract:
+
+- Owning abstraction: email artifact rendering and shared mailer-profile
+  helpers inside the email delivery path.
+- Invariant: materialized `.eml` artifacts should not all look like one generic
+  Python email serializer. Header order, Message-ID morphology, visible mailer
+  header, MIME boundary style, and service-vs-human mailer fingerprints should
+  be deterministic but profile-specific.
+- Entry paths: storyline email, corpus-backed email, selected/background
+  artifact email, MIME rendering, Zeek SMTP Message-ID metadata, and manifest
+  references.
+- Consumers: `.eml` artifacts, Zeek `smtp.json`, Zeek `files.json`, email
+  artifact parser, ground truth artifact references, and blind reviewer
+  workflows.
+- Residual sibling risk: repeated background subject/body pools remain in scope
+  for this priority. Endpoint mail process ownership, Zeek SMTP `path`, To/Cc
+  schema shape, and background SMTP conn/protocol coverage are separate priority
+  families or sibling contract gaps.
+
+Implemented fixes:
+
+- Added deterministic mailer-profile classification for Outlook, Thunderbird,
+  Apple Mail, and service mail.
+- Varied Message-ID morphology by profile.
+- Replaced generic stdlib `.eml` serialization output with deterministic
+  source-native-ish header ordering and MIME boundary generation.
+- Preserved custom header insertion before MIME headers.
+- Normalized service-origin corpus/default mail that carried human
+  Outlook-like fingerprints into service mailer fingerprints, while preserving
+  explicit event-level `user_agent` overrides.
+
+Focused verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_zeek_files.py tests/unit/test_sysmon_new_events.py::TestRenderEvent3::test_event3_normalizes_mail_hostname_to_port_family tests/unit/test_emitters.py::TestWindowsEventEmitter::test_kerberos_service_ticket_target_username_is_account_name tests/unit/test_activity.py::TestActivityGenerator::test_kerberos_krbtgt_service_ticket_uses_domain_rid_502 -q`
+  passed: 43 tests.
+- `uv run ruff check src/evidenceforge/generation/activity/generator.py tests/unit/test_email_evidence.py`
+  passed.
+- `uv run ruff format --check src/evidenceforge/generation/activity/generator.py tests/unit/test_email_evidence.py`
+  passed.
+- Rendered `.eml` probe confirmed Received-first headers, profile-specific
+  Message-IDs, service `X-Mailer` values, custom headers before MIME headers,
+  and non-stdlib MIME boundary shapes.
+
+Automated eval passed:
+
+- Overall score: 96.716
+- Records: 68,584
+
+Panel result:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 49.
+- Detection Engineer: Inconclusive, synthetic-confidence 53.
+- Network Forensics: Inconclusive, synthetic-confidence 56.
+- Host/EDR Forensics: Synthetic, synthetic-confidence 66.
+- Average synthetic-confidence: 56.0.
+
+The average did not meet the user-defined `<=45` temporary-solve threshold, so
+email content/artifact realism remains active for loop 12. The next target is
+background corpus entropy: diversify deterministic subjects/bodies and restrict
+exact repeats to plausible threads, list/newsletter traffic, repeated
+transactional notices, or true duplicate/relay artifacts.

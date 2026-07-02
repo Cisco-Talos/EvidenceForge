@@ -27,6 +27,7 @@ activity events (logon, logoff, process creation, network connections) and
 coordinates them across multiple log formats for consistency.
 """
 
+import base64
 import hashlib
 import heapq
 import ipaddress
@@ -34,9 +35,11 @@ import itertools
 import logging
 import math
 import ntpath
+import quopri
 import random
 import re
 import shlex
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -11309,14 +11312,15 @@ class ActivityGenerator:
             expanded_recipients,
             request.time,
         )
-        message_id = self._email_message_id(artifact_id, sender)
         date_header = request.time.strftime("%a, %d %b %Y %H:%M:%S +0000")
         corpus_user_agent = (
             corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
         )
-        user_agent = (
-            spec.user_agent or corpus_user_agent or self._email_user_agent(request.system, rng)
+        user_agent = spec.user_agent or self._email_effective_user_agent(
+            sender,
+            corpus_user_agent or self._email_user_agent(request.system, rng),
         )
+        message_id = self._email_message_id(artifact_id, sender, user_agent)
         route = self._plan_email_route(sender, expanded_recipients, request.system)
         received_headers = self._received_headers_for_route(
             route=route,
@@ -11495,12 +11499,47 @@ class ActivityGenerator:
         prefix = re.sub(r"[^a-zA-Z0-9_-]+", "-", storyline_id or "email").strip("-")[:40]
         return f"{prefix or 'email'}-{seed:012x}"
 
-    def _email_message_id(self, artifact_id: str, sender: str) -> str:
+    def _email_message_id(self, artifact_id: str, sender: str, user_agent: str = "") -> str:
         domain = self._email_domain(sender)
-        seed_hi = _stable_seed(f"email_message_id_hi:{artifact_id}:{sender}")
-        seed_lo = _stable_seed(f"email_message_id_lo:{artifact_id}:{sender}")
-        queue_id = _stable_seed(f"email_message_queue:{artifact_id}:{sender}")
-        return f"<{seed_hi:08x}.{seed_lo:08x}.{queue_id:08x}@{domain}>"
+        seed_hi = _stable_seed(f"email_message_id_hi:{artifact_id}:{sender}:{user_agent}")
+        seed_lo = _stable_seed(f"email_message_id_lo:{artifact_id}:{sender}:{user_agent}")
+        profile = self._email_mailer_profile(sender, user_agent)
+        if profile == "thunderbird":
+            return f"<{seed_hi}.{seed_lo % 1_000_000}.{seed_lo:08x}@{domain}>"
+        if profile == "apple_mail":
+            uuid_like = uuid.UUID(int=((seed_hi << 64) | seed_lo) & ((1 << 128) - 1))
+            return f"<{str(uuid_like).upper()}@{domain}>"
+        if profile == "service":
+            token = re.sub(r"[^a-z0-9]+", "-", sender.split("@", 1)[0].lower()).strip("-")
+            token = token or "notice"
+            queue_fragment = seed_hi & 0xFFFFFFFF
+            sequence_fragment = seed_lo % 10_000_000
+            return f"<{token}-{queue_fragment:08x}-{sequence_fragment:07d}@{domain}>"
+        mailbox_id = f"{seed_hi & 0xFFFF:04X}{seed_lo & 0xFFFF:04X}"
+        left_fragment = seed_hi & 0xFFFFFFFF
+        right_fragment = seed_lo & 0xFFFFFFFF
+        return f"<{left_fragment:08x}{right_fragment:08x}@{mailbox_id}.{domain}>"
+
+    @staticmethod
+    def _email_mailer_profile(sender: str, user_agent: str) -> str:
+        """Return a coarse source-native mailer profile for headers and IDs."""
+        agent = user_agent.lower()
+        local_part = sender.split("@", 1)[0].lower()
+        domain = ActivityGenerator._email_domain(sender)
+        if "thunderbird" in agent:
+            return "thunderbird"
+        if "apple mail" in agent:
+            return "apple_mail"
+        if any(marker in agent for marker in ("docflow", "mailer", "notification", "service")):
+            return "service"
+        if any(
+            marker in local_part
+            for marker in ("alert", "notice", "notification", "workspace", "billing", "support")
+        ):
+            return "service"
+        if any(marker in domain for marker in ("service", "notify", "news", "vendor")):
+            return "service"
+        return "outlook"
 
     def _deterministic_email_subject(
         self,
@@ -11545,6 +11584,21 @@ class ActivityGenerator:
         return client_rng.choice(
             ["Thunderbird 115.0", "Evolution 3.44", "Apple Mail (2.3608.120.23.2.7)"]
         )
+
+    def _email_effective_user_agent(self, sender: str, user_agent: str) -> str:
+        """Return a profile-compatible mailer fingerprint for generated/corpus mail."""
+        profile = self._email_mailer_profile(sender, user_agent)
+        if profile != "service":
+            return user_agent
+        agent = user_agent.lower()
+        if not any(marker in agent for marker in ("outlook", "thunderbird", "apple mail")):
+            return user_agent
+        local_part = sender.split("@", 1)[0].lower()
+        domain_label = self._email_domain(sender).split(".", 1)[0]
+        label = re.sub(r"[^A-Za-z0-9]+", " ", local_part or domain_label).strip().title()
+        label = label or "Notification"
+        seed = _stable_seed(f"email_service_user_agent:{sender}")
+        return f"{label} Mailer {2 + seed % 4}.{seed % 10}"
 
     def _smtp_starttls_ssl_context(
         self,
@@ -12078,55 +12132,260 @@ class ActivityGenerator:
         )
 
     def _write_email_artifact(self, email_ctx: EmailContext) -> str:
-        from email.message import EmailMessage
-        from email.utils import formatdate
-
         artifact_dir = getattr(self, "_email_artifact_dir", None)
         if artifact_dir is None:
             return ""
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        msg = EmailMessage()
-        msg["Message-ID"] = email_ctx.message_id
-        msg["Date"] = email_ctx.date_header or formatdate(localtime=False)
-        msg["From"] = email_ctx.header_from
-        if email_ctx.to:
-            msg["To"] = ", ".join(email_ctx.to)
-        if email_ctx.cc:
-            msg["Cc"] = ", ".join(email_ctx.cc)
-        msg["Subject"] = email_ctx.subject
-        if email_ctx.user_agent:
-            msg["User-Agent"] = email_ctx.user_agent
-        for received in email_ctx.received_headers:
-            msg["Received"] = received
+        path = artifact_dir / f"{email_ctx.artifact_id}.eml"
+        path.write_bytes(self._render_email_artifact(email_ctx).encode("utf-8"))
+        return path.relative_to(artifact_dir.parent.parent).as_posix()
+
+    def _render_email_artifact(self, email_ctx: EmailContext) -> str:
+        """Render a deterministic MIME message with profile-specific header texture."""
+        profile = self._email_mailer_profile(email_ctx.envelope_from, email_ctx.user_agent)
+        has_attachments = bool(email_ctx.attachments)
+        boundary = self._email_mime_boundary(email_ctx.artifact_id, profile)
+        header_lines = self._email_artifact_header_lines(
+            email_ctx,
+            profile=profile,
+            boundary=boundary,
+            has_attachments=has_attachments,
+        )
+        if not has_attachments:
+            body = self._quoted_printable_text(email_ctx.body or "")
+            return "\r\n".join([*header_lines, "", body, ""])
+
+        parts = [
+            f"--{boundary}",
+            'Content-Type: text/plain; charset="utf-8"',
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            self._quoted_printable_text(email_ctx.body or ""),
+            "",
+        ]
+        for attachment in email_ctx.attachments:
+            payload = self._email_attachment_payload_bytes(attachment, email_ctx.artifact_id)
+            content_type = str(attachment.get("content_type") or "application/octet-stream")
+            filename = self._sanitize_email_header_value(
+                str(attachment.get("filename") or "attachment.bin")
+            )
+            parts.extend(
+                [
+                    f"--{boundary}",
+                    f'Content-Type: {content_type}; name="{filename}"',
+                    "Content-Transfer-Encoding: base64",
+                    f'Content-Disposition: attachment; filename="{filename}"',
+                    "",
+                    *self._base64_mime_lines(payload),
+                    "",
+                ]
+            )
+        parts.append(f"--{boundary}--")
+        parts.append("")
+        return "\r\n".join([*header_lines, "", *parts])
+
+    def _email_artifact_header_lines(
+        self,
+        email_ctx: EmailContext,
+        *,
+        profile: str,
+        boundary: str,
+        has_attachments: bool,
+    ) -> list[str]:
+        """Return source-native-ish ordered message headers for one mailer profile."""
+        header_values = {
+            "Return-Path": email_ctx.header_from,
+            "Date": email_ctx.date_header,
+            "From": email_ctx.header_from,
+            "To": ", ".join(email_ctx.to),
+            "Cc": ", ".join(email_ctx.cc),
+            "Subject": email_ctx.subject,
+            "Message-ID": email_ctx.message_id,
+            "MIME-Version": "1.0",
+            "Content-Type": (
+                f'multipart/mixed; boundary="{boundary}"'
+                if has_attachments
+                else 'text/plain; charset="utf-8"'
+            ),
+            "Content-Transfer-Encoding": "" if has_attachments else "quoted-printable",
+        }
+        generated_mailer_header = self._email_profile_mailer_header(
+            profile,
+            email_ctx.user_agent,
+        )
+        if generated_mailer_header is not None:
+            header_values[generated_mailer_header[0]] = generated_mailer_header[1]
+        if profile == "outlook":
+            header_values["Thread-Topic"] = email_ctx.subject
+            if has_attachments:
+                header_values["X-MS-Has-Attach"] = "yes"
+        if profile == "service":
+            header_values["Auto-Submitted"] = "auto-generated"
+            header_values["X-Auto-Response-Suppress"] = "All"
+
         owned_headers = {
-            "message-id",
+            "return-path",
+            "received",
             "date",
             "from",
             "to",
             "cc",
             "bcc",
             "subject",
+            "message-id",
+            "mime-version",
+            "content-type",
+            "content-transfer-encoding",
+            "thread-topic",
+            "x-ms-has-attach",
             "user-agent",
-            "received",
+            "x-mailer",
+            "auto-submitted",
+            "x-auto-response-suppress",
         }
-        for header, value in sorted(email_ctx.custom_headers.items()):
-            if header.lower() not in owned_headers:
-                msg[header] = value
-        msg.set_content(email_ctx.body or "")
-        for attachment in email_ctx.attachments:
-            payload = self._email_attachment_payload_bytes(attachment, email_ctx.artifact_id)
-            maintype, _, subtype = str(
-                attachment.get("content_type") or "application/octet-stream"
-            ).partition("/")
-            msg.add_attachment(
-                payload,
-                maintype=maintype or "application",
-                subtype=subtype or "octet-stream",
-                filename=str(attachment.get("filename") or "attachment.bin"),
-            )
-        path = artifact_dir / f"{email_ctx.artifact_id}.eml"
-        path.write_text(msg.as_string(), encoding="utf-8")
-        return path.relative_to(artifact_dir.parent.parent).as_posix()
+        custom_headers = [
+            (str(header), str(value))
+            for header, value in email_ctx.custom_headers.items()
+            if str(header).lower() not in owned_headers
+        ]
+        custom_header_names = {header.lower() for header, _ in custom_headers}
+
+        lines = [
+            self._format_email_header("Received", received)
+            for received in email_ctx.received_headers
+        ]
+        order = self._email_profile_header_order(profile, has_attachments)
+        custom_inserted = False
+        for header in order:
+            if header == "_CUSTOM":
+                lines.extend(
+                    self._format_email_header(custom_header, custom_value)
+                    for custom_header, custom_value in custom_headers
+                )
+                custom_inserted = True
+                continue
+            if header in {"X-Mailer", "User-Agent"} and header.lower() in custom_header_names:
+                continue
+            value = header_values.get(header, "")
+            if value:
+                lines.append(self._format_email_header(header, value))
+        if not custom_inserted:
+            for header, value in custom_headers:
+                lines.append(self._format_email_header(header, value))
+        return lines
+
+    @staticmethod
+    def _email_profile_header_order(profile: str, has_attachments: bool) -> list[str]:
+        """Return the deterministic header order for a coarse mailer profile."""
+        if profile == "thunderbird":
+            return [
+                "Return-Path",
+                "Date",
+                "From",
+                "To",
+                "Cc",
+                "Subject",
+                "Message-ID",
+                "User-Agent",
+                "_CUSTOM",
+                "MIME-Version",
+                "Content-Type",
+                "Content-Transfer-Encoding",
+            ]
+        if profile == "apple_mail":
+            return [
+                "Return-Path",
+                "From",
+                "To",
+                "Cc",
+                "Subject",
+                "Date",
+                "Message-ID",
+                "X-Mailer",
+                "_CUSTOM",
+                "MIME-Version",
+                "Content-Type",
+                "Content-Transfer-Encoding",
+            ]
+        if profile == "service":
+            return [
+                "Return-Path",
+                "Date",
+                "From",
+                "To",
+                "Cc",
+                "Message-ID",
+                "Subject",
+                "Auto-Submitted",
+                "X-Auto-Response-Suppress",
+                "X-Mailer",
+                "_CUSTOM",
+                "MIME-Version",
+                "Content-Type",
+                "Content-Transfer-Encoding",
+            ]
+        return [
+            "Return-Path",
+            "From",
+            "To",
+            "Cc",
+            "Subject",
+            "Date",
+            "Message-ID",
+            "Thread-Topic",
+            "X-MS-Has-Attach",
+            "X-Mailer",
+            "_CUSTOM",
+            "MIME-Version",
+            "Content-Type",
+            "Content-Transfer-Encoding",
+        ]
+
+    @staticmethod
+    def _email_profile_mailer_header(
+        profile: str,
+        user_agent: str,
+    ) -> tuple[str, str] | None:
+        """Return the profile-appropriate visible mailer header."""
+        if not user_agent:
+            return None
+        if profile == "thunderbird":
+            return "User-Agent", user_agent
+        return "X-Mailer", user_agent
+
+    @staticmethod
+    def _email_mime_boundary(artifact_id: str, profile: str) -> str:
+        seed_hi = _stable_seed(f"email_mime_boundary:{profile}:{artifact_id}:hi")
+        seed_lo = _stable_seed(f"email_mime_boundary:{profile}:{artifact_id}:lo")
+        if profile == "outlook":
+            return f"_004_{seed_hi:016X}{seed_lo:016X}_"
+        if profile == "thunderbird":
+            return f"------------{seed_hi:012x}{seed_lo & 0xFFFFFF:06x}"
+        if profile == "apple_mail":
+            return f"Apple-Mail=_${seed_hi:08X}-{seed_lo:08X}"
+        return f"----=_Part_{seed_hi % 1000000}_{seed_lo}"
+
+    @staticmethod
+    def _sanitize_email_header_value(value: str) -> str:
+        return " ".join(value.replace("\r", " ").replace("\n", " ").split())
+
+    def _format_email_header(self, header: str, value: str) -> str:
+        safe_header = re.sub(r"[^A-Za-z0-9-]+", "-", header).strip("-") or "X-Header"
+        return f"{safe_header}: {self._sanitize_email_header_value(str(value))}"
+
+    @staticmethod
+    def _quoted_printable_text(text: str) -> str:
+        encoded = quopri.encodestring(text.encode("utf-8"), quotetabs=False).decode("ascii")
+        return encoded.replace("\n", "\r\n").rstrip("\r\n")
+
+    @staticmethod
+    def _base64_mime_lines(payload: bytes) -> list[str]:
+        if not payload:
+            return [""]
+        return [
+            base64.b64encode(payload[index : index + 57]).decode("ascii")
+            for index in range(0, len(payload), 57)
+        ]
 
     def _record_email_artifact_manifest(
         self,
