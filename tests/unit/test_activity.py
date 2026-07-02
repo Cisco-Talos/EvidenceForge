@@ -9818,8 +9818,8 @@ def activity_gen():
     return ActivityGenerator(sm, mock_emitters)
 
 
-def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
-    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+def test_disambiguate_icmp_observation_time_uses_monotonic_varied_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe or use fixed spacing."""
 
     class CountingDict(dict[tuple[str, int, str, int], int]):
         """Dictionary that counts next-timestamp lookups."""
@@ -9847,8 +9847,16 @@ def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity
         for _ in range(1000)
     ]
 
+    gaps = [
+        (current - previous).total_seconds()
+        for previous, current in zip(adjusted_times[:-1], adjusted_times[1:], strict=True)
+    ]
+
     assert adjusted_times[0] == base_time
-    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert all(gap > 0 for gap in gaps)
+    assert min(gaps) >= timedelta(milliseconds=7).total_seconds()
+    assert max(gaps) < timedelta(milliseconds=84).total_seconds()
+    assert len({round(gap, 6) for gap in gaps}) > 100
     assert next_timestamps.get_calls == len(adjusted_times)
     assert len(next_timestamps) == 1
 

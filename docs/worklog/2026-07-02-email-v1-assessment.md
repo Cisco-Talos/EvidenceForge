@@ -1983,3 +1983,191 @@ Verification:
 
 - Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
 - `uv run ruff check .` and `uv run ruff format --check .` passed.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 42.
+- Detection Engineer: Inconclusive, synthetic-confidence 30.
+- Network Forensics: Inconclusive, synthetic-confidence 52.
+- Host/EDR: Real, synthetic-confidence 32.
+- Average: 39.0.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears email artifact/content texture. The next priority
+category for loop 36 is failed sensitive-port probe distribution.
+
+## Loop 36
+
+Priority category: failed sensitive-port probe distribution.
+
+Implemented fixes feeding loop 36:
+
+- Concentrated internal firewall false-positive probe traffic into a smaller,
+  more plausible set of hosts and reduced broad sensitive-port spray behavior.
+- Reduced internal firewall probe volume so low-value denied connections no
+  longer dominated the visible network/security texture.
+
+Verification:
+
+- Focused probe showed fewer internal denied sensitive-port connection
+  families, with less workstation-wide fan-out.
+- `uv run ruff check .` and `uv run ruff format --check .` passed before the
+  related commits.
+
+Blind panel:
+
+- Threat Hunter: Real, synthetic-confidence 34.
+- Detection Engineer: Inconclusive, synthetic-confidence 34.
+- Network Forensics: Real, synthetic-confidence 28.
+- Host/EDR: Real, synthetic-confidence 29.
+- Average: 31.25.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears failed sensitive-port probe distribution. The next
+priority category for loop 37 is DHCP/DNS endpoint configuration consistency.
+
+## Loop 37
+
+Priority category: DHCP/DNS endpoint configuration consistency.
+
+Family contract:
+
+- Owning abstraction: baseline DHCP registry side-effect materialization and
+  endpoint configuration template expansion.
+- Invariant: endpoint registry evidence for DHCP-provided DNS servers must
+  render the actual modeled DHCP/DNS server for the environment, not a static
+  address from a generic template.
+- Entry paths: DHCP baseline lease evidence, Windows registry side effects,
+  eCAR registry rendering, DNS resolver evidence, and endpoint configuration
+  probes.
+- Consumers: eCAR registry rows, Zeek DHCP/DNS, evaluator consistency checks,
+  and blind host/detection review.
+
+Implemented fixes feeding loop 37:
+
+- Replaced the hardcoded `10.10.2.10` DHCP DNS registry template value with a
+  `{dns_server_ip}` placeholder.
+- Passed the modeled DHCP lease DNS server into EDR registry template
+  materialization.
+- Added focused unit tests for EDR template substitution and baseline DHCP
+  registry side effects.
+
+Verification:
+
+- Focused tests passed:
+  `uv run pytest --no-cov tests/unit/test_edr_pools.py tests/unit/test_baseline_canonical.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe found DHCP servers `10.55.20.10`, DNS servers
+  `10.55.20.10`, and all 13 `DhcpNameServer` registry writes using
+  `10.55.20.10`.
+- Automated eval passed with score 95.699 over 65,037 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 42.
+- Detection Engineer: Inconclusive, synthetic-confidence 28.
+- Network Forensics: Inconclusive, synthetic-confidence 38.
+- Host/EDR: Inconclusive, synthetic-confidence 45.
+- Average: 38.25.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears DHCP/DNS endpoint configuration consistency. The next
+priority category for loop 38 is eCAR flow attribution coherence.
+
+## Loop 38
+
+Priority category: eCAR flow attribution coherence.
+
+Family contract:
+
+- Owning abstraction: eCAR source-native flow attribution renderer, consuming
+  canonical process/principal ownership from endpoint/process state.
+- Invariant: for the same host/PID/image flow group, eCAR `FLOW` rows should
+  not alternate between populated and missing principal or actor identity unless
+  the canonical source intentionally lacks attribution.
+- Entry paths: client outbound connections, server inbound listener flows,
+  paired endpoint flow rows, failed/no-duration flows, and process-owned
+  network bundle requests.
+- Consumers: eCAR `FLOW`, Zeek/eCAR tuple probes, blind host/detection review,
+  and endpoint process ownership tests.
+
+Implemented fixes feeding loop 38:
+
+- Stabilized eCAR `FLOW` principal attribution across inbound/outbound
+  directions for the same host/PID/username/image identity.
+- Coupled `actorID` population to principal attribution so service flows do not
+  produce actor-only mixed-attribution groups.
+- Allowed inbound listener `FLOW` rows to use the listener process object ID
+  when principal attribution is available.
+
+Verification:
+
+- Focused eCAR tests passed after each attribution fix.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe found zero mixed-principal groups and zero mixed-actor
+  groups after regeneration.
+- Automated eval passed with score 95.790 over 65,037 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 38.
+- Detection Engineer: Inconclusive, synthetic-confidence 34.
+- Network Forensics: Synthetic, synthetic-confidence 68.
+- Host/EDR: Inconclusive, synthetic-confidence 34.
+- Average: 43.5.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears eCAR flow attribution coherence. Network review surfaced
+the next priority category: source/cross-source timing texture, especially
+eCAR `FLOW` timestamps landing too close to Zeek `conn` timestamps at scale.
+
+## Loop 39
+
+Priority category: source/cross-source timing texture.
+
+Family contract:
+
+- Owning abstraction: source timing and endpoint flow timestamp planning for
+  eCAR `FLOW` rows relative to canonical network connection intervals.
+- Invariant: endpoint flow observations should preserve lifecycle causality
+  while avoiding dataset-wide near-identical timestamps to Zeek `conn` rows,
+  especially for failed/no-duration and very short flows.
+- Entry paths: successful short connections, failed connections, paired endpoint
+  flow companions, DNS/Kerberos/NTP flows, and source-visible process-owned
+  network evidence.
+- Consumers: eCAR `FLOW`, Zeek `conn`, evaluator timing checks, rendered-output
+  timing probes, and blind network/detection/host review.
+
+Implemented fixes feeding loop 39:
+
+- Added endpoint timing texture for failed/no-duration eCAR `FLOW` rows instead
+  of anchoring them exactly to the canonical event timestamp.
+- Spread very short completed endpoint `FLOW` observations after close with
+  deterministic small-source latency instead of forcing them inside
+  sub-100 ms Zeek intervals.
+- Added focused tests for failed, no-duration, and short-flow endpoint timing
+  behavior.
+
+Verification:
+
+- Focused eCAR timing tests passed.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe improved eCAR/Zeek tuple timing matches from 717 to 34
+  within 1 ms, from 4,008 to 198 within 10 ms, and median delta from about
+  48.6 ms to about 184.8 ms.
+- Automated eval passed with score 95.740 over 65,039 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 46.
+- Detection Engineer: Synthetic, synthetic-confidence 78.
+- Network Forensics: Real, synthetic-confidence 35.
+- Host/EDR: Inconclusive, synthetic-confidence 34.
+- Average: 48.25.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold. The specific eCAR/Zeek timing issue was downgraded:
+Network review called it a weak signal, Host review found endpoint/file timing
+coherent, and Threat review found no hard cross-source timing contradictions.
+The remaining timing-family concrete finding is exact 11 ms ICMP burst spacing,
+so loop 40 targets ICMP observation cadence before moving on.

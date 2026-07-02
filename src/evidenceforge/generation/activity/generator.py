@@ -5441,7 +5441,13 @@ class ActivityGenerator:
             requested_ts_us,
             self._next_icmp_observation_ts_us.get(tuple_key, requested_ts_us),
         )
-        self._next_icmp_observation_ts_us[tuple_key] = adjusted_ts_us + 11_000
+        gap_seed = _stable_seed(
+            f"icmp_observation_gap:{src_ip}:{zeek_type}:{dst_ip}:{zeek_code}:{adjusted_ts_us}"
+        )
+        # High-rate ICMP sweeps can create many Zeek rows for the same type/code tuple.
+        # Keep duplicate observations monotonic without leaving a fixed inter-row cadence.
+        next_gap_us = 7_000 + (gap_seed % 77_000)
+        self._next_icmp_observation_ts_us[tuple_key] = adjusted_ts_us + next_gap_us
         if adjusted_ts_us == requested_ts_us:
             return time
         return time + timedelta(microseconds=adjusted_ts_us - requested_ts_us)
