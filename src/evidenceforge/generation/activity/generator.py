@@ -11370,6 +11370,12 @@ class ActivityGenerator:
             expanded_recipients,
             request.time,
         )
+        body = self._email_body_with_transport_footer(
+            body,
+            artifact_id=artifact_id,
+            sender=sender,
+            recipients=expanded_recipients,
+        )
         date_header = request.time.strftime("%a, %d %b %Y %H:%M:%S +0000")
         corpus_user_agent = (
             corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
@@ -11930,6 +11936,49 @@ class ActivityGenerator:
             f"{seed & 0xFFFF:04X}-{(seed >> 16) & 0xFFF:03X}\n"
         )
         return body.rstrip() + context_line
+
+    def _email_body_with_transport_footer(
+        self,
+        body: str,
+        *,
+        artifact_id: str,
+        sender: str,
+        recipients: list[str],
+    ) -> str:
+        """Add deterministic mail-client/gateway footer text to rendered messages."""
+        seed = _stable_seed(
+            "email_transport_footer:"
+            f"{artifact_id}:{sender}:{','.join(recipients)}:{len(body.encode('utf-8'))}"
+        )
+        rng = random.Random(seed)
+        ref = f"{seed & 0xFFFF:04X}-{(seed >> 16) & 0xFFFFFF:06X}"
+        org_label = self._email_domain(sender).split(".", 1)[0].upper() or "MAIL"
+        confidentiality = rng.choice(
+            [
+                "This message may contain confidential business information intended only for the listed recipients.",
+                "This email and any attachments are intended for the addressed recipients and may contain privileged information.",
+                "If you received this message in error, please notify the sender and delete it from your mailbox.",
+            ]
+        )
+        handling = rng.choice(
+            [
+                "Please do not forward externally without the document owner's approval.",
+                "Use the current shared-folder copy as the record of authority for follow-up changes.",
+                "Attachments are scanned by the company mail gateway before delivery.",
+                "Reply in the existing thread so the mail archive keeps the approval trail together.",
+            ]
+        )
+        classification = rng.choice(
+            ["Internal", "Internal Use", "Business Confidential", "Company Restricted"]
+        )
+        footer_lines = [
+            "-- ",
+            f"{org_label} Mail Gateway ref {ref}",
+            f"Classification: {classification}",
+            confidentiality,
+            handling,
+        ]
+        return body.rstrip() + "\n\n" + "\n".join(footer_lines) + "\n"
 
     def _email_user_agent(self, system: "System", rng: random.Random) -> str:
         os_category = _get_os_category(system.os)
