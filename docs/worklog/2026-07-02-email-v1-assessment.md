@@ -1598,3 +1598,60 @@ but Network still flagged STARTTLS source semantics and SMTP transaction
 texture. Loop 30 should preserve pre-STARTTLS reply metadata on encrypted SMTP
 rows while continuing to suppress post-STARTTLS envelope, header, body, and
 file metadata.
+
+## Loop 30
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: SMTP MIME/file and source-native transfer texture in the
+  email action bundle before Zeek rendering.
+- Invariant: plaintext SMTP should expose body and attachment file evidence
+  whose sizes and timestamps come from the canonical rendered message, not
+  post-hoc emitter sizing. STARTTLS-protected hops remain opaque after the TLS
+  upgrade, while pre-STARTTLS negotiation metadata can remain visible.
+- Entry paths: storyline email, background email, corpus-backed content,
+  artifact-backed MIME messages, inbound external SMTP, internal relays,
+  outbound smart-host relays, Zeek SMTP, Zeek files, and email artifacts.
+- Consumers: Zeek `smtp.json`, `files.json`, `conn.json`, `ssl.json`,
+  `x509.json`, `.eml` artifacts, `EMAIL_ARTIFACTS.json`, evaluator checks, and
+  blind network/detection review.
+- Residual sibling risk: V1 plaintext client submission, endpoint mail-client
+  attribution, source-native MTA logs, DNS cache/causality texture, and
+  mailbox-read semantics remain separate families.
+
+Implemented fixes feeding loop 30:
+
+- Preserved source-native STARTTLS negotiation replies on encrypted SMTP rows
+  instead of rendering protected rows as empty parser placeholders.
+- Kept post-STARTTLS envelope, header, recipient, body, and file metadata
+  suppressed for encrypted hops.
+- Added focused coverage that encrypted SMTP rows retain pre-TLS reply metadata
+  while omitting protected SMTP details and `files.log` linkage.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 21 TLS SMTP rows with visible
+  `220` STARTTLS replies and no leaked subject, recipients, message IDs, or
+  file identifiers.
+- Automated eval passed with score 97 over 69,379 records.
+
+Blind panel:
+
+- Threat Hunter: Realistic, synthetic-confidence 26.
+- Detection Engineer: Synthetic-leaning but detection-useful,
+  synthetic-confidence 78.
+- Network Forensics: Marginal pass for hunt usability, synthetic-confidence 72.
+- Host/EDR: Conditional fail, synthetic-confidence 78.
+- Average: 63.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 31. STARTTLS opacity improved, but Detection and Network both continued
+to flag SMTP/MIME transfer texture, especially very tidy body/file sizes and
+thin transfer realism. Loop 31 should improve body-size texture at the
+canonical rendered-message layer so Zeek file rows naturally reflect more
+realistic content without falsifying emitter-side byte counts.
