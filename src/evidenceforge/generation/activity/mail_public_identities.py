@@ -15,6 +15,7 @@ from evidenceforge.utils.rng import _stable_seed
 
 _IDENTITIES_PATH = get_activity_directory() / "mail_public_identities.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_RESERVED_PUBLIC_SUFFIXES = (".example", ".test", ".invalid", ".localhost")
 
 
 def _merge_mail_public_identities(default: dict, overlay: dict) -> dict:
@@ -52,13 +53,31 @@ def reset_mail_public_identities_cache() -> None:
 
 
 def _domain_from_hostname(hostname: str) -> str:
-    lowered = hostname.lower().rstrip(".")
+    lowered = public_safe_mail_hostname(hostname)
     labels = [label for label in lowered.split(".") if label]
     if len(labels) <= 2:
         return lowered or "mail.example"
     if labels[0] in {"mail", "mail1", "mail2", "mx", "mx1", "mx2", "smtp", "smtp1", "smtp2"}:
         return ".".join(labels[1:])
     return ".".join(labels[-2:])
+
+
+def public_safe_mail_hostname(hostname: str) -> str:
+    """Return a public-safe mail hostname for external SMTP infrastructure.
+
+    Scenario authors often use reserved domains to avoid spillage.  That is
+    still right for safety, but a bare reserved TLD such as ``.example`` looks
+    implausible when rendered as public SMTP DNS, PTR, or WebPKI identity.  For
+    external public infrastructure only, preserve the authored labels and move
+    the reserved suffix underneath the reserved ``example.net`` namespace.
+    """
+    lowered = hostname.lower().rstrip(".")
+    if not lowered:
+        return "mail.example.net"
+    for suffix in _RESERVED_PUBLIC_SUFFIXES:
+        if lowered.endswith(suffix):
+            return f"{lowered}.net"
+    return lowered
 
 
 def _provider_for_key(key: str) -> dict[str, Any]:

@@ -22,6 +22,7 @@ from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.generation.activity.mail_public_identities import (
     is_public_mail_ip,
     public_mail_ptr_name,
+    public_safe_mail_hostname,
 )
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.models.scenario import (
@@ -466,10 +467,10 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     conn_by_uid = {row["uid"]: row for row in conn_records}
     assert all(conn_by_uid[uid]["orig_bytes"] > 1000 for uid in starttls_uids)
     assert any(
-        row["query"] == "smtp.isp.example" and row["qtype_name"] == "A" for row in dns_records
+        row["query"] == "smtp.isp.example.net" and row["qtype_name"] == "A" for row in dns_records
     )
     assert not any(
-        row["query"] == "smtp.isp.example" and row["qtype_name"] == "MX" for row in dns_records
+        row["query"] == "smtp.isp.example.net" and row["qtype_name"] == "MX" for row in dns_records
     )
     assert all(row["trans_id"] > 0 for row in dns_records if "smtp.isp.example" in row["query"])
     assert not any(
@@ -1103,7 +1104,10 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert all(_is_global_non_test_net(ip) for ip in outbound_external_ips)
     assert all(is_public_mail_ip(ip) for ip in inbound_external_ips)
     assert all(is_public_mail_ip(ip) for ip in outbound_external_ips)
-    assert public_mail_ptr_name(outbound_external_ips[0], "smtp.isp.example")
+    assert public_safe_mail_hostname("smtp.isp.example") == "smtp.isp.example.net"
+    ptr_name = public_mail_ptr_name(outbound_external_ips[0], "smtp.isp.example")
+    assert ptr_name
+    assert not ptr_name.endswith(".example")
     assert any(row["id.resp_p"] in {443, 993} and row["service"] == "ssl" for row in conn_records)
     mail_conn_uids = {row["uid"] for row in conn_records if row.get("id.resp_p") in {25, 587}}
     smtp_uids = {row["uid"] for row in smtp_records}

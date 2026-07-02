@@ -171,6 +171,7 @@ from evidenceforge.generation.activity.linux_interfaces import linux_primary_int
 from evidenceforge.generation.activity.mail_public_identities import (
     generate_public_mail_ip,
     public_mail_ptr_name,
+    public_safe_mail_hostname,
 )
 from evidenceforge.generation.activity.proxy_uri import (
     get_proxy_domain_class,
@@ -12442,6 +12443,7 @@ class ActivityGenerator:
     ) -> dict[str, Any]:
         servers = self._email_servers_by_name()
         src_cfg = servers.get(src_server_name)
+        dst_hostname = public_safe_mail_hostname(dst_hostname)
         dst_ip = generate_public_mail_ip(f"email_external_mx:{dst_hostname}")
         dst_system = type(src_system)(
             hostname=dst_hostname,
@@ -12524,6 +12526,7 @@ class ActivityGenerator:
     @staticmethod
     def _external_mx_for_domain(domain: str) -> str:
         safe = re.sub(r"[^a-z0-9.-]+", "", domain.lower()).strip(".")
+        safe = public_safe_mail_hostname(safe)
         return f"mx1.{safe}"
 
     def _received_headers_for_route(

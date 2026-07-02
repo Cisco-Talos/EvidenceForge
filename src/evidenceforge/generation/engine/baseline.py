@@ -2597,10 +2597,10 @@ class BaselineMixin:
             return
         hourly_rate = email_config.background_messages_per_user_per_day / 24.0
         external_domains = [
-            "vendors.example",
-            "partners.example",
-            "customer-mail.example",
-            "industry-news.example",
+            "vendors.example.net",
+            "partners.example.net",
+            "customer-mail.example.net",
+            "industry-news.example.net",
         ]
         for user in recipients:
             rng = random.Random(
