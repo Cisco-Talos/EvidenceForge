@@ -948,6 +948,15 @@ class EcarEmitter(HostMultiplexEmitter):
             lower_bound = (
                 event.timestamp if lower_bound is None else max(lower_bound, event.timestamp)
             )
+        min_offset_ms = EcarEmitter._flow_min_endpoint_offset_ms(event, seed_parts)
+        if min_offset_ms > 0:
+            min_observation_time = event.timestamp + timedelta(milliseconds=min_offset_ms)
+            if min_observation_time <= not_after:
+                lower_bound = (
+                    min_observation_time
+                    if lower_bound is None
+                    else max(lower_bound, min_observation_time)
+                )
 
         seed = _stable_seed(
             "ecar_paired_flow_observation:"
@@ -1074,10 +1083,31 @@ class EcarEmitter(HostMultiplexEmitter):
             return close_time
         duration_us = int((close_time - event.timestamp).total_seconds() * 1_000_000)
         seed = _stable_seed("ecar_flow_not_after:" + ":".join(str(part) for part in seed_parts))
+        if duration_us < 100_000:
+            return close_time + timedelta(milliseconds=35 + (seed % 340))
         margin_us = 1000 + (seed % 4000)
         if duration_us <= margin_us:
             margin_us = max(0, duration_us // 2)
         return close_time - timedelta(microseconds=margin_us)
+
+    @staticmethod
+    def _flow_min_endpoint_offset_ms(event: SecurityEvent, seed_parts: tuple[Any, ...]) -> int:
+        """Return minimum FLOW observation separation from the network timestamp."""
+        net = event.network
+        if net is None:
+            return 0
+        applies = False
+        if net.duration is None:
+            applies = net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}
+        else:
+            applies = 0 <= net.duration < 0.1
+        if not applies:
+            return 0
+        seed = _stable_seed(
+            "ecar_flow_min_endpoint_offset:"
+            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+        )
+        return 18 + (seed % 65)
 
     @staticmethod
     def _flow_connection_failed(net: NetworkContext | None) -> bool:

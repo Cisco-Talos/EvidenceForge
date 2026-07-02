@@ -1205,13 +1205,13 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
-    def test_short_flow_stays_inside_canonical_connection_interval(
+    def test_short_flow_uses_endpoint_completion_latency(
         self,
         emitter,
         monkeypatch,
         ts,
     ):
-        """FLOW rows should not be source-timed after the canonical transport close."""
+        """Very short FLOW rows should not share Zeek's packet-level timestamp."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         process = ProcessContext(
@@ -1248,9 +1248,10 @@ class TestChronologicalOutput:
 
         emitter._render_connection(event)
 
-        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=50)
-        assert emitted[0]["pid"] == -1
-        assert "actorID" not in emitted[0]
+        assert ts + timedelta(milliseconds=18) <= emitted[0]["timestamp"]
+        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=424)
+        assert emitted[0]["pid"] == 1234
+        assert emitted[0]["actorID"] == "process-1"
 
     def test_incomplete_flow_without_duration_uses_attempt_result_latency(
         self,
