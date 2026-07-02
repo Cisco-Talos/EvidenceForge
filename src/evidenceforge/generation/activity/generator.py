@@ -12888,7 +12888,12 @@ class ActivityGenerator:
                 hostname=hostname,
                 force_address=True,
             )
-        elif emit_dns and proto == "tcp" and dst_port not in (53,) and src_ip_is_local:
+        elif (
+            (emit_dns or (hostname and not hostname_from_reverse_dns))
+            and proto == "tcp"
+            and dst_port not in (53,)
+            and src_ip_is_local
+        ):
             self._expand_and_emit(
                 "connection",
                 time,

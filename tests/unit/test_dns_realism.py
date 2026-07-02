@@ -233,6 +233,44 @@ class TestHostnameConsistency:
         assert dns_event.dns.query == hostname
         assert conn_event.network.dst_ip in dns_event.dns.answers
 
+    def test_hostname_backed_local_tcp_emits_dns_without_emit_dns_flag(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Visible SNI/Host evidence from local clients should have DNS cache evidence."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        rng = random.Random(42)
+        monkeypatch.setattr(rng, "random", lambda: 0.5)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        state_manager.set_current_time(timestamp)
+        hostname = "updates.example.net"
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="151.101.141.68",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=False,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+
+        assert address_events
+        assert conn_event.ssl is not None
+        assert conn_event.ssl.server_name == hostname
+        assert conn_event.network.dst_ip in address_events[0].dns.answers
+
     def test_registered_multi_ip_prerequisite_orders_connected_ip_first(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
     ):
