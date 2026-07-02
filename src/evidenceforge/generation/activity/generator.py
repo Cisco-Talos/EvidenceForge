@@ -13860,6 +13860,14 @@ class ActivityGenerator:
                 rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
                 AA=dns_is_internal,
             )
+            if self._dns_observation_cache_hit_or_store(
+                src_ip=src_ip,
+                resolver_ip=dst_ip,
+                dns=event.dns,
+                time=time,
+            ):
+                self._last_connection_effective_dst_ip = dst_ip
+                return ""
             if not resp_bytes:
                 event.network.conn_state = "SF"
                 event.network.history = "Dd"

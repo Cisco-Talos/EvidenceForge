@@ -685,6 +685,36 @@ class TestHostnameConsistency:
 
         assert len(address_events) == 1
 
+    def test_hostname_dns_fallback_suppresses_repeats_inside_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Hostname-only DNS connections should use the same visible cache contract."""
+        state_manager.set_current_time(timestamp)
+
+        for offset in (0, 10):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.1",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                hostname="dc01.example.org",
+                duration=0.01,
+                orig_bytes=64,
+                resp_bytes=160,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "dc01.example.org"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+
     def test_registered_a_rrset_is_stable_across_cache_expirations(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
