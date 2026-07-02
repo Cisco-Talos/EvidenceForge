@@ -13334,9 +13334,9 @@ class ActivityGenerator:
         if manifest is None:
             self._email_artifact_manifest = []
             manifest = self._email_artifact_manifest
+        eml_path = Path(artifact_path).name if artifact_path else ""
         manifest.append(
             {
-                "artifact_id": email_ctx.artifact_id,
                 "message_id": email_ctx.message_id,
                 "sender": email_ctx.envelope_from,
                 "to": email_ctx.to,
@@ -13346,12 +13346,10 @@ class ActivityGenerator:
                 "subject": email_ctx.subject,
                 "date": email_ctx.date_header,
                 "outcome": email_ctx.outcome,
-                "verdict": email_ctx.verdict,
-                "mail_action": email_ctx.mail_action,
-                "artifact_path": artifact_path,
+                "delivery_action": email_ctx.mail_action,
+                "eml_path": eml_path,
                 "route": route,
                 "received_headers": email_ctx.received_headers,
-                "storyline_id": email_ctx.storyline_id,
             }
         )
 
@@ -13369,7 +13367,11 @@ class ActivityGenerator:
             "schema_version": "1.0",
             "messages": sorted(
                 manifest,
-                key=lambda item: (item.get("storyline_id") or "", item.get("artifact_id") or ""),
+                key=lambda item: (
+                    item.get("date") or "",
+                    item.get("message_id") or "",
+                    item.get("sender") or "",
+                ),
             ),
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

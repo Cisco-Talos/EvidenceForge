@@ -88,6 +88,7 @@ class CausalityScorer(DimensionScorer):
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
+        self._email_gt = context.email_ground_truth or {}
         # storyline_id -> adversarial-payload labels (from the canonical GROUND_TRUTH.json)
         # + per-format searchable text (parsed fields + raw lines, newline-normalized)
         # so a labeled payload — including a CRLF split that spans two physical
@@ -871,7 +872,9 @@ class CausalityScorer(DimensionScorer):
     ) -> bool:
         """Match storyline email delivery to manifest or plaintext SMTP evidence."""
         if format_name == "email_artifacts":
-            return fields.get("storyline_id") == event.storyline_id
+            gt = self._email_gt.get(event.storyline_id) or {}
+            message_id = gt.get("message_id")
+            return bool(message_id and fields.get("message_id") == message_id)
         if format_name != "zeek_smtp":
             return False
 

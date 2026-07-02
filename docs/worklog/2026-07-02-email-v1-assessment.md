@@ -1773,3 +1773,105 @@ priority category for loop 33 should be endpoint mail attribution: Host/EDR
 continues to find systematic missing eCAR process/user ownership for all
 workstation SMTP/587 submissions, all mail-server mail-port flows, and overly
 regular `svchost.exe` ownership for IMAPS/993 reads.
+
+## Loop 33
+
+Priority category: endpoint mail attribution.
+
+Family contract:
+
+- Owning abstraction: email delivery/access action bundles as adapters into the
+  canonical network-connection bundle's endpoint process ownership contract.
+- Invariant: modeled mail submission, server relay, and mailbox-read network
+  flows should either carry a compatible source process/principal or explicitly
+  suppress endpoint process inference when no modeled client PID is available;
+  opaque mailbox reads must not fall back to unrelated `svchost.exe` ownership.
+- Entry paths: storyline email delivery, baseline background mail, automatic
+  recipient reads, explicit `email_read` events, generic mail-server baseline
+  traffic, and canonical network connection PID inference.
+- Consumers: eCAR `FLOW`, Zeek `conn/smtp/ssl`, endpoint process lineage,
+  evaluator cross-source checks, and blind Host/EDR review.
+- Residual sibling risk: answer-key-like manifest fields, SMTP timestamp
+  anchoring, DHCP/DNS endpoint configuration drift, source-native MTA logs, and
+  full mailbox/client process modeling remain separate families.
+
+Implemented fixes feeding loop 33:
+
+- Added source PID inference suppression to canonical network connection
+  requests for cases where endpoint process ownership is intentionally unknown.
+- Attached modeled mail-client processes to SMTP/587 submission and mailbox-read
+  flows when host/user context is available.
+- Attached modeled MTA/IMAP/OWA server processes to mail-server relay and
+  server-side mail access flows.
+- Suppressed generic mail profile SMTP/OWA/IMAPS baseline traffic when explicit
+  `environment.email` topology exists.
+
+Verification:
+
+- Focused tests passed:
+  `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_edr_flow_pid.py::TestConnectionPidPropagation::test_connection_can_suppress_source_pid_inference -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found mail submission flows owned
+  mostly by Outlook/Thunderbird, mailbox reads owned by Outlook/Thunderbird or
+  browser processes when attributable, no read flows owned by `svchost.exe`, and
+  all sampled server relay/access flows owned by compatible mail services.
+- Automated eval passed with score 97 over 65,285 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 48.
+- Detection Engineer: Inconclusive, synthetic-confidence 36.
+- Network Forensics: Inconclusive, synthetic-confidence 52.
+- Host/EDR: Inconclusive, synthetic-confidence 38.
+- Average: 43.5.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears endpoint mail attribution. The next priority category
+for loop 34 is blind-facing manifest semantics: Threat Hunter again identified
+`EMAIL_ARTIFACTS.json` fields such as `storyline_id`, `verdict`, `artifact_id`,
+and local artifact paths as exercise/generator metadata rather than
+production-facing evidence.
+
+## Loop 34
+
+Priority category: blind-facing manifest semantics.
+
+Family contract:
+
+- Owning abstraction: email artifact manifest schema plus evaluator
+  ground-truth matching.
+- Invariant: `EMAIL_ARTIFACTS.json` is a production-facing message manifest and
+  must not expose storyline IDs, exercise verdict labels, generator artifact
+  IDs, or local filesystem paths. Scenario/storyline correlation belongs in
+  `GROUND_TRUTH.json`, and evaluator causality matching should use that
+  ground-truth-only linkage.
+- Entry paths: storyline email artifacts, background artifact-backed messages,
+  metadata-only background messages, `EMAIL_ARTIFACTS.json` rendering, email
+  docs/skill references, and causality event-presence matching.
+- Consumers: blind review packages, email artifact browsers, evaluator
+  causality checks, `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, docs, and
+  development skill references.
+- Residual sibling risk: `.eml` header ordering and content texture, SMTP row
+  timestamp anchoring, DHCP/DNS endpoint configuration drift, and reviewer
+  packaging choices remain separate families.
+
+Implemented fixes feeding loop 34:
+
+- Removed `storyline_id`, `verdict`, `artifact_id`, and local `artifact_path`
+  from `EMAIL_ARTIFACTS.json`.
+- Replaced manifest `mail_action` with production-facing `delivery_action` and
+  exposed only a relative `eml_path` basename for materialized messages.
+- Loaded email storyline identifiers from `GROUND_TRUTH.json` inside the
+  evaluator so email artifact event-presence checks no longer depend on leaking
+  storyline labels into the artifact manifest.
+- Updated user-facing docs and repo-local development skill references to
+  describe the manifest as production-facing metadata.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 34 manifest messages, zero
+  leaked exercise fields, and no broken `eml_path` references.
+- Automated eval passed with score 97 over 65,285 records and event presence
+  remained 8/8.

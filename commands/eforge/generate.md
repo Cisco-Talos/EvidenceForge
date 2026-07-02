@@ -158,7 +158,7 @@ After successful generation:
 - Check that expected formats were produced
 - Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
-- Email artifacts under `artifacts/email/` are generated sidecars when `environment.email.artifacts` enables them; `EMAIL_ARTIFACTS.json` is written for modeled messages, `.eml` files are written according to artifact mode, and plaintext SMTP MIME parts can also appear in Zeek `files.json`
+- Email artifacts under `artifacts/email/` are generated sidecars when `environment.email.artifacts` enables them; `EMAIL_ARTIFACTS.json` is written for modeled messages, `.eml` files are written according to artifact mode, and plaintext SMTP MIME parts can also appear in Zeek `files.json`. The manifest is production-facing and omits storyline IDs, exercise verdict labels, and local filesystem paths; use `GROUND_TRUTH.json` for scenario correlation.
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, auth/session-bundle validation, Kerberos/DC-bundle TGT/TGS evidence before domain logons, Windows-audit-bundle events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
 

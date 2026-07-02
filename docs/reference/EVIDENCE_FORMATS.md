@@ -84,8 +84,11 @@ normal DNS and network-visibility layers. Generated email artifacts live outside
 
 **Files:**
 
-- `artifacts/email/EMAIL_ARTIFACTS.json` — manifest for materialized and
-  metadata-only messages.
+- `artifacts/email/EMAIL_ARTIFACTS.json` — production-facing manifest for
+  materialized and metadata-only messages. It records message IDs,
+  sender/recipient metadata, delivery action, optional `eml_path`, and route
+  metadata, but does not include storyline IDs, exercise verdict labels, or
+  local filesystem artifact paths.
 - `artifacts/email/<artifact-id>.eml` — RFC 5322 message artifacts for selected
   or storyline-backed messages.
 - `<sensor>/smtp.json` — Zeek `smtp.log` NDJSON for visible SMTP transactions.

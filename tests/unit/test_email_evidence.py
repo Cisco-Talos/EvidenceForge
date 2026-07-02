@@ -332,10 +332,14 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert any(record["qtype_name"] == "A" for record in dns_records)
     assert {record["uid"] for record in smtp_records} <= {record["uid"] for record in conn_records}
 
-    assert manifest["messages"][0]["storyline_id"] == "phish-email"
+    assert "storyline_id" not in manifest["messages"][0]
+    assert "artifact_id" not in manifest["messages"][0]
+    assert "artifact_path" not in manifest["messages"][0]
+    assert "verdict" not in manifest["messages"][0]
+    assert manifest["messages"][0]["delivery_action"] == "deliver"
     assert manifest["messages"][0]["bcc"] == []
-    assert manifest["messages"][0]["artifact_path"].endswith(".eml")
-    materialized = tmp_path / manifest["messages"][0]["artifact_path"]
+    assert manifest["messages"][0]["eml_path"].endswith(".eml")
+    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     assert materialized.exists()
     assert "Bcc:" not in materialized.read_text(encoding="utf-8")
     eml_text = materialized.read_text(encoding="utf-8")
@@ -398,7 +402,7 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     manifest = json.loads(
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
-    materialized = tmp_path / manifest["messages"][0]["artifact_path"]
+    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
     assert sorted(smtp_records[0]["rcptto"]) == ["bob@corp.example", "team@corp.example"]
@@ -795,7 +799,7 @@ messages:
     manifest = json.loads(
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
-    materialized = tmp_path / manifest["messages"][0]["artifact_path"]
+    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
     plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 587)
@@ -880,7 +884,7 @@ messages:
     manifest = json.loads(
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
-    materialized = tmp_path / manifest["messages"][0]["artifact_path"]
+    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
     headers = _header_names(eml_text)
     plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 25)
@@ -1126,7 +1130,8 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     mail_conn_uids = {row["uid"] for row in conn_records if row.get("id.resp_p") in {25, 587}}
     smtp_uids = {row["uid"] for row in smtp_records}
     assert mail_conn_uids <= smtp_uids
-    assert all(not message["storyline_id"] for message in manifest["messages"])
+    leaked_fields = {"storyline_id", "artifact_id", "artifact_path", "verdict"}
+    assert all(not (leaked_fields & set(message)) for message in manifest["messages"])
     visible_subjects = [row["subject"] for row in smtp_records if row.get("subject")]
     assert len(set(visible_subjects)) >= max(4, len(visible_subjects) // 3)
     assert all(
