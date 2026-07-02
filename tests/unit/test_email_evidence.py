@@ -263,7 +263,10 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     materialized = tmp_path / manifest["messages"][0]["artifact_path"]
     assert materialized.exists()
     assert "Bcc:" not in materialized.read_text(encoding="utf-8")
-    assert "Received:" in materialized.read_text(encoding="utf-8")
+    eml_text = materialized.read_text(encoding="utf-8")
+    assert "Received:" in eml_text
+    assert "for <bob@corp.example>" in eml_text
+    assert "for <alice@corp.example>" not in eml_text
     assert ground_truth["events"][0]["kind"] == "email_message"
     assert ground_truth["events"][0]["attributes"]["artifact_path"].endswith(".eml")
 

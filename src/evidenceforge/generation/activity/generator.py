@@ -11061,7 +11061,7 @@ class ActivityGenerator:
         received_headers = self._received_headers_for_route(
             route=route,
             message_id=message_id,
-            sender=sender,
+            recipients=expanded_recipients,
             time=request.time,
         )
         email_ctx = EmailContext(
@@ -11498,10 +11498,11 @@ class ActivityGenerator:
         *,
         route: list[dict[str, Any]],
         message_id: str,
-        sender: str,
+        recipients: list[str],
         time: datetime,
     ) -> list[str]:
         headers: list[str] = []
+        recipient_clause = f" for <{recipients[0]}>" if len(recipients) == 1 else ""
         for index, hop in enumerate(route):
             by_host = self._email_server_fqdn(hop["dst_system"].hostname)
             from_host = self._email_server_fqdn(hop["src_system"].hostname)
@@ -11511,7 +11512,7 @@ class ActivityGenerator:
                 (
                     f"from {from_host} ({hop['src_system'].ip}) by {by_host} "
                     f"with ESMTP id {_stable_seed(f'received:{message_id}:{index}'):08x} "
-                    f"for <{sender}>; {hop_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+                    f"{recipient_clause}; {hop_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
                 ),
             )
         return headers
