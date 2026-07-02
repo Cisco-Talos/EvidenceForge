@@ -1237,3 +1237,59 @@ only handshake-scale byte counts, and configured ISP relay DNS was modeled as
 self-referential MX lookups. Loop 24 should size relay connections from the
 message body/attachment weight and treat ISP relays as smart-host A/AAAA
 resolution targets.
+
+## Loop 24
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: SMTP STARTTLS evidence attached to canonical network
+  connection events.
+- Invariant: SMTP STARTTLS hops should preserve the existing
+  `conn`/`smtp`/`ssl` UID contract while rendering source-native TLS
+  certificate artifacts where passive Zeek could observe them. TLS 1.2
+  STARTTLS rows should link `ssl.cert_chain_fuids` to Zeek `files.json` and
+  `x509.json`; TLS 1.3 rows remain opaque without passive cert extraction.
+- Entry paths: internal relay STARTTLS, outbound smart-host STARTTLS, inbound
+  relay STARTTLS, storyline email, background email, and Zeek files/x509
+  fanout.
+- Consumers: Zeek `smtp.json`, `conn.json`, `ssl.json`, `files.json`,
+  `x509.json`, evaluator cross-source checks, and blind network/detection
+  review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, source-native MTA logs, public SMTP peer IP role realism,
+  DNS-cache personality, MIME payload scale, STARTTLS imperfection, and
+  manifest label leakage remain separate families.
+
+Implemented fixes feeding loop 24:
+
+- Sized SMTP relay connections from deterministic body/attachment/recipient
+  weight so encrypted relays no longer look like handshake-only flows.
+- Modeled configured ISP relay routing as smart-host A-record resolution rather
+  than self-referential MX lookup.
+- Added regression coverage for smart-host DNS and STARTTLS relay byte scale.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 11 `smtp.metroline.example`
+  DNS rows, all A records and zero MX rows; 21 STARTTLS SMTP rows with
+  minimum `orig_bytes` 2,228 and mean `orig_bytes` 3,247.95.
+- Automated eval passed with score 96 over 75,327 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 78.
+- Detection Engineer: Synthetic, synthetic-confidence 78.
+- Network Forensics: Synthetic, synthetic-confidence 78.
+- Host/EDR: Inconclusive, synthetic-confidence 42.
+- Average: 69.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 25. Host/EDR dropped below the threshold individually, but Network still
+found missing certificate-chain evidence for SMTP STARTTLS rows. Loop 25 should
+attach TLS 1.2 SMTP STARTTLS certificate chains through canonical x509/files
+contexts while preserving TLS 1.3 opacity.
