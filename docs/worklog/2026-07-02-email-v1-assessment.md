@@ -1415,3 +1415,68 @@ should split outbound external routing by recipient domain, choose ISP relays
 with sender-plus-domain scope when a relay pool exists, fix direct-MX owner
 queries, and enrich manifest route metadata with FQDN/routing-mode/domain
 fields.
+
+## Loop 27
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: authoritative DNS identity for configured email topology.
+- Invariant: configured mail server FQDNs from `environment.email` should be
+  answered by the systems that own those mail server objects, even when the mail
+  accepted domain differs from the AD domain. Generic DNS/background helpers
+  must not answer a mail FQDN with unrelated DC, file-server, workstation, web,
+  or random internal IPs.
+- Entry paths: explicit email route DNS, automatic connection-prerequisite DNS,
+  baseline DNS companion/background rows, smart-host A lookups, direct MX
+  lookups, and caller-provided `DnsContext` normalization.
+- Consumers: Zeek `dns.json`, `conn.json`, `smtp.json`, `ssl.json`,
+  `EMAIL_ARTIFACTS.json`, evaluator consistency checks, and blind
+  network/detection review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, source-native MTA logs, public SMTP peer IP role realism,
+  fleet-wide mailbox-read topology, SMTP failure/retry texture, and answer-key
+  fields in blind-facing artifacts remain separate families.
+
+Implemented fixes feeding loop 27:
+
+- Split outbound external delivery by recipient domain so one message with
+  multiple external domains creates separate domain-scoped SMTP route hops.
+- Selected configured ISP relays with sender-plus-recipient-domain scope when a
+  relay pool exists, instead of choosing only by sender.
+- Fixed direct-MX route DNS so MX owner queries use the recipient domain and A
+  lookups resolve the selected MX host.
+- Added selected-host A lookups after generic companion MX answers, leaving
+  unselected alternate MX hosts unresolved.
+- Enriched `EMAIL_ARTIFACTS.json` route entries with source/destination FQDN,
+  routing mode, and recipient-domain metadata.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 10 outbound smart-host SMTP
+  sessions spread across three relay IPs and smart-host/domain route metadata
+  for the external recipient domains.
+- Companion MX unresolved selected hosts dropped substantially; remaining
+  unresolved MX names were unselected alternate targets from multi-answer MX
+  responses.
+- Automated eval passed with score 96 over 72,575 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 52.
+- Detection Engineer: Synthetic but detection-useful, synthetic-confidence 68.
+- Network Forensics: Revise before analyst-facing use, synthetic-confidence 82.
+- Host/EDR: Synthetic, synthetic-confidence 74.
+- Average: 69.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 28. The route-collapse finding improved, but Network found a stronger DNS
+identity failure: `mail.alderridge.example` answered with unrelated internal
+hosts because generic DNS paths did not treat configured email FQDNs as
+authoritative internal names. Loop 28 should make `environment.email` mail
+server hostnames authoritative for both automatic DNS lookups and normalized
+caller-provided DNS contexts.
