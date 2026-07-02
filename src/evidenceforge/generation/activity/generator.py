@@ -11435,7 +11435,7 @@ class ActivityGenerator:
                 msg_id=message_id,
                 subject=subject,
                 last_reply=last_reply,
-                path=[dst_system.ip, src_system.ip],
+                path=self._smtp_observed_path(route, index),
                 user_agent=user_agent,
                 tls=tls,
                 encrypted_message=tls,
@@ -11660,6 +11660,18 @@ class ActivityGenerator:
             f"250 2.0.0 queued as {queue_short.lower()} on {dst_hostname}",
         ]
         return replies[rng.randrange(len(replies))]
+
+    @staticmethod
+    def _smtp_observed_path(route: list[dict[str, Any]], hop_index: int) -> list[str]:
+        """Return a Received-chain-like path visible before the current SMTP hop."""
+        if hop_index <= 0:
+            return []
+        prior_hops = route[:hop_index]
+        path = [hop["dst_system"].ip for hop in reversed(prior_hops)]
+        first_source_ip = prior_hops[0]["src_system"].ip
+        if first_source_ip not in path:
+            path.append(first_source_ip)
+        return path
 
     @staticmethod
     def _base36(value: int, width: int) -> str:

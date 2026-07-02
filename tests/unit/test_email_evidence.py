@@ -411,6 +411,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
     assert "path" not in smtp_records[1]
     assert "fuids" not in smtp_records[1]
     assert smtp_records[2]["tls"] is False
+    assert smtp_records[2]["path"] != [smtp_records[2]["id.resp_h"], smtp_records[2]["id.orig_h"]]
     starttls_uids = {row["uid"] for row in smtp_records if row["tls"]}
     assert starttls_uids
     assert starttls_uids <= {row["uid"] for row in ssl_records}
@@ -949,6 +950,11 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert all(not message["storyline_id"] for message in manifest["messages"])
     visible_subjects = [row["subject"] for row in smtp_records if row.get("subject")]
     assert len(set(visible_subjects)) >= max(4, len(visible_subjects) // 3)
+    assert all(
+        row.get("path") != [row["id.resp_h"], row["id.orig_h"]]
+        for row in smtp_records
+        if row.get("path")
+    )
     delivered_replies = [
         row["last_reply"]
         for row in smtp_records
