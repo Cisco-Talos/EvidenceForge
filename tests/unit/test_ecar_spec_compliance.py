@@ -2043,6 +2043,7 @@ class TestChronologicalOutput:
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == pid
         assert emitted[0]["principal"] == "www-data"
+        assert emitted[0]["actorID"] == state.get_process_object_id("WEB-EXT-01", pid)
 
     def test_rejected_inbound_flow_does_not_claim_listener_pid(self, emitter, monkeypatch, ts):
         """Rejected inbound attempts should not be attributed to a server process."""
@@ -2764,7 +2765,7 @@ class TestChronologicalOutput:
         assert all(tid >= 3200 for tid in tids)
         assert any(tid != 3200 for tid in tids)
 
-    def test_flow_principal_visibility_is_stable_for_same_process(self, ts):
+    def test_flow_principal_visibility_is_stable_for_same_process_and_direction(self, ts):
         """FLOW principal attribution should be a process-level source decision."""
         host = HostContext(
             hostname="PROXY-01",
@@ -2811,6 +2812,43 @@ class TestChronologicalOutput:
 
         assert emitter._flow_principal_for_process(first, host, process, "OUTBOUND") == (
             emitter._flow_principal_for_process(second, host, process, "OUTBOUND")
+        )
+
+    def test_flow_principal_visibility_is_stable_across_directions(self, ts):
+        """FLOW principal attribution should not flip for the same local process."""
+        host = HostContext(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        process = ProcessContext(
+            pid=18750,
+            parent_pid=1,
+            image="/usr/sbin/squid",
+            command_line="/usr/sbin/squid --foreground -YC",
+            username="proxy",
+            start_time=ts,
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=host,
+            dst_host=host,
+            process=process,
+            network=NetworkContext(
+                src_ip="10.10.3.20",
+                src_port=40001,
+                dst_ip="10.10.3.20",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+        )
+        emitter = object.__new__(EcarEmitter)
+
+        assert emitter._flow_principal_for_process(event, host, process, "OUTBOUND") == (
+            emitter._flow_principal_for_process(event, host, process, "INBOUND")
         )
 
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):

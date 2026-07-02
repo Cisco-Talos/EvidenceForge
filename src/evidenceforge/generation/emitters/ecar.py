@@ -193,13 +193,15 @@ def _flow_principal_probability(username: str, direction: str) -> float:
     """Return the configured probability for FLOW principal attribution."""
     cfg = ecar_flow_identity_config()
     normalized = username.strip().lower()
-    if direction == "INBOUND":
-        return float(cfg.get("inbound_listener_probability", 0.36))
     if normalized == "root":
-        return float(cfg.get("root_process_probability", 0.42))
-    if normalized in _SERVICE_PRINCIPAL_NAMES:
-        return float(cfg.get("service_process_probability", 0.48))
-    return float(cfg.get("user_process_probability", 0.88))
+        probability = float(cfg.get("root_process_probability", 0.42))
+    elif normalized in _SERVICE_PRINCIPAL_NAMES:
+        probability = float(cfg.get("service_process_probability", 0.48))
+    else:
+        probability = float(cfg.get("user_process_probability", 0.88))
+    if direction == "INBOUND":
+        probability = max(probability, float(cfg.get("inbound_listener_probability", 0.36)))
+    return probability
 
 
 class EcarEmitter(HostMultiplexEmitter):
@@ -749,6 +751,10 @@ class EcarEmitter(HostMultiplexEmitter):
             if process_identity_safe:
                 self._apply_process_provenance(event_data, rendered_source_proc)
             self._apply_flow_edr_context(event_data, event, include_actor=process_identity_safe)
+            if process_identity_safe and "actorID" not in event_data:
+                actor_id = self._process_actor_id(event.src_host, rendered_source_proc)
+                if actor_id:
+                    event_data["actorID"] = actor_id
             event_data.setdefault(
                 "tid",
                 self._stable_tid(
@@ -826,6 +832,10 @@ class EcarEmitter(HostMultiplexEmitter):
                     event_data["principal"] = principal
                 if listener_observed and inbound_proc is not None:
                     self._apply_process_provenance(event_data, inbound_proc)
+                    if principal:
+                        actor_id = self._process_actor_id(event.dst_host, inbound_proc)
+                        if actor_id:
+                            event_data["actorID"] = actor_id
                 event_data.setdefault(
                     "tid",
                     self._stable_tid(
@@ -1111,10 +1121,21 @@ class EcarEmitter(HostMultiplexEmitter):
         pid = int(getattr(process, "pid", -1) or -1)
         probability = _flow_principal_probability(username, direction)
         key = (
-            f"ecar_flow_principal:{direction}:{host.hostname}:{pid}:{username}:"
-            f"{getattr(process, 'image', '')}"
+            f"ecar_flow_principal:{host.hostname}:{pid}:{username}:{getattr(process, 'image', '')}"
         )
         return username if _ecar_probability_enabled(key, probability) else ""
+
+    def _process_actor_id(self, host: HostContext | None, process: Any | None) -> str:
+        """Return the eCAR object ID for a known local process."""
+        if host is None or process is None:
+            return ""
+        pid = int(getattr(process, "pid", -1) or -1)
+        if pid <= 0:
+            return ""
+        state_manager = getattr(self, "_state_manager", None)
+        if state_manager is None:
+            return ""
+        return str(state_manager.get_process_object_id(host.hostname, pid) or "")
 
     def _lookup_running_process(self, host: HostContext, pid: int) -> Any | None:
         """Read a process from attached state when a connection only carries a PID."""
