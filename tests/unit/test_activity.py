@@ -9859,16 +9859,17 @@ def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
     ts_now = now.timestamp()
 
     activity_gen._dns_cache = {
-        (f"10.0.0.{i % 255}", f"host-{i}.example.com"): ts_now - 5 for i in range(50_100)
+        (f"10.0.0.{i % 255}", "10.0.0.1", f"host-{i}.example.com", "ADDR"): ts_now - 5
+        for i in range(50_100)
     }
-    hot_key = ("10.0.0.5", "active.example.com")
-    activity_gen._dns_cache[hot_key] = ts_now - 1
+    hot_key = ("10.0.0.5", "10.0.0.1", "active.example.com", "ADDR")
+    activity_gen._dns_cache[hot_key] = ts_now + 30
     activity_gen._dns_cache_last_prune = 0.0
 
-    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[1])
+    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[2])
 
     assert hot_key in activity_gen._dns_cache
-    assert len(activity_gen._dns_cache) <= 50_001
+    assert len(activity_gen._dns_cache) <= 2
 
 
 def test_ensure_file_event_skips_existing_linux_binaries(activity_gen):

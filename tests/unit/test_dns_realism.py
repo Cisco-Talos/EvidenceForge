@@ -57,6 +57,13 @@ def mock_emitters():
 def activity_gen(state_manager, mock_emitters):
     gen = ActivityGenerator(state_manager, mock_emitters)
     gen._dns_server_ips = ["10.0.0.1"]
+    workstation = System(
+        hostname="WS-01",
+        ip="10.0.1.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {workstation.ip: workstation}
     return gen
 
 
@@ -453,6 +460,80 @@ class TestHostnameConsistency:
         first_ttl = dns_events[0].dns.TTLs[0]
         second_ttl = dns_events[1].dns.TTLs[0]
         assert 0 <= first_ttl - second_ttl <= 15
+
+    def test_prerequisite_address_cache_uses_returned_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Client DNS suppression should last only as long as the visible returned TTL."""
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            activity_gen,
+            "_dns_observed_ttls",
+            lambda **_kwargs: [5.0],
+        )
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(seconds=20),
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].dns.TTLs == [30.0]
+
+    def test_prerequisite_address_lookup_refreshes_after_visible_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Later hostname-backed TCP activity should not rely on expired DNS answers."""
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            activity_gen,
+            "_dns_observed_ttls",
+            lambda **_kwargs: [5.0],
+        )
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(seconds=35),
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 2
+        assert [event.dns.TTLs for event in address_events] == [[30.0], [30.0]]
 
     def test_registered_a_rrset_is_stable_across_cache_expirations(
         self, activity_gen, timestamp, state_manager, mock_emitters

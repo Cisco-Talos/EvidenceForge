@@ -13136,11 +13136,11 @@ class ActivityGenerator:
             dns_cache_key = (src_ip, dst_ip, hostname, "A")
             ts_epoch = time.timestamp()
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
-            last_query = self._dns_cache.get(dns_cache_key, 0)
-            if last_query and ts_epoch - last_query < cache_ttl:
+            cached_until = self._dns_cache.get(dns_cache_key, 0)
+            if cached_until and cached_until > ts_epoch:
                 self._last_connection_effective_dst_ip = dst_ip
                 return ""
-            self._dns_cache[dns_cache_key] = ts_epoch
+            self._dns_cache[dns_cache_key] = ts_epoch + cache_ttl
 
         state_source_system = resolved_source_system.hostname if resolved_source_system else ""
         state_source_hostname = ""
@@ -16148,8 +16148,10 @@ class ActivityGenerator:
         hostname = self._dns_canonical_internal_hostname(hostname) or hostname
 
         # DNS caching: skip re-emission if this source/resolver/hostname tuple
-        # was queried recently. Real clients cache DNS responses (TTL typically
-        # 60-3600s), so not every connection is preceded by a DNS query.
+        # still has a client-visible address answer. Values are expiration
+        # epochs derived from the TTL actually returned in dns.log, not the
+        # authoritative TTL, so later TCP evidence does not depend on visibly
+        # expired DNS answers.
         if not hasattr(self, "_dns_cache"):
             self._dns_cache: dict[tuple[str, str, str, str], float] = {}
         if not hasattr(self, "_dns_cache_last_prune"):
@@ -16160,10 +16162,11 @@ class ActivityGenerator:
         # Keep the cache bounded: drop entries older than the max TTL horizon,
         # and enforce a hard cap under high-cardinality/adversarial inputs.
         if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
-            max_ttl_window = 86_400
-            cutoff = ts_epoch - max_ttl_window
+            cutoff = ts_epoch
             self._dns_cache = {
-                key: cached_at for key, cached_at in self._dns_cache.items() if cached_at >= cutoff
+                key: cached_until
+                for key, cached_until in self._dns_cache.items()
+                if cached_until >= cutoff
             }
             if len(self._dns_cache) > 50_000:
                 sorted_items = sorted(
@@ -16176,7 +16179,6 @@ class ActivityGenerator:
 
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         is_internal = _dns_is_internal_name(hostname, ad_domain)
-        authoritative_ttl = _dns_base_ttl(hostname, is_internal)
 
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies use a sticky configured resolver policy instead of rotating
@@ -16204,9 +16206,8 @@ class ActivityGenerator:
             dns_server_ip = _get_rng().choice(dns_ips)
 
         cache_key = (src_ip, dns_server_ip, hostname, "ADDR")
-        last_query = self._dns_cache.get(cache_key, 0)
-        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
-        if not request.bypass_cache and last_query and ts_epoch - last_query < cache_ttl:
+        cached_until = self._dns_cache.get(cache_key, 0)
+        if force_address and not request.bypass_cache and cached_until and cached_until > ts_epoch:
             return  # Cache hit — skip DNS emission
 
         _src_os = "windows"
@@ -16338,12 +16339,16 @@ class ActivityGenerator:
             base_ttl=base_ttl,
             time=dns_time,
         )
+        if force_address and qtype in (1, 28) and not is_internal and ttls:
+            min_client_ttl = max(30, math.ceil((time - dns_time).total_seconds()) + 1)
+            ttls = [max(float(min_client_ttl), ttl) for ttl in ttls]
 
         # Only address lookups for the requested hostname populate the client
         # DNS cache. PTR/SRV/MX companions should not hide future A/AAAA
         # evidence for high-volume proxy or browser destinations.
         if query == hostname and qtype in (1, 28):
-            self._dns_cache[cache_key] = ts_epoch
+            client_ttl = max(1.0, min(ttls) if ttls else float(base_ttl))
+            self._dns_cache[cache_key] = dns_time.timestamp() + client_ttl
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(
@@ -16359,6 +16364,7 @@ class ActivityGenerator:
             AA=is_internal,
             RD=True,
             RA=True,
+            preserve_ttls=True,
         )
         self.generate_connection(
             src_ip=src_ip,
@@ -16464,6 +16470,7 @@ class ActivityGenerator:
                 AA=companion_is_internal,
                 RD=True,
                 RA=True,
+                preserve_ttls=True,
             )
             self.generate_connection(
                 src_ip=src_ip,
