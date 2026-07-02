@@ -1713,3 +1713,63 @@ SMTP HELOs, and artifacts. Loop 32 should keep internal safe domains intact
 while rendering external public SMTP infrastructure under less glaring
 reserved-domain forms such as `*.example.net` and update the assessment
 scenario's explicit external partner names accordingly.
+
+## Loop 32
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: external SMTP public identity planning for DNS, PTR,
+  STARTTLS SNI/certificates, Received headers, and route manifests.
+- Invariant: Internet-facing SMTP identities should not render as bare reserved
+  TLDs when the same names are presented as public DNS/TLS/PTR infrastructure.
+  Internal accepted domains remain scenario-authored safe domains.
+- Entry paths: inbound external senders, outbound direct MX targets, ISP smart
+  hosts, baseline background external email domains, public mail PTR, route DNS,
+  SMTP `helo`, STARTTLS SSL/X.509, Received headers, `.eml` artifacts, and
+  `EMAIL_ARTIFACTS.json`.
+- Consumers: Zeek `dns.json`, `smtp.json`, `ssl.json`, `x509.json`,
+  `files.json`, `.eml`, `EMAIL_ARTIFACTS.json`, blind network/detection/threat
+  review, and evaluator consistency checks.
+- Residual sibling risk: V1 plaintext client submission, endpoint mail-client
+  attribution, manifest semantics in blind packets, proxy/firewall distribution
+  texture, and collection-window documentation remain separate families.
+
+Implemented fixes feeding loop 32:
+
+- Added `public_safe_mail_hostname()` for external public SMTP infrastructure,
+  mapping bare reserved suffixes such as `.example` to safe
+  `*.example.net`-style public identities while preserving authored labels.
+- Applied the helper to external source MX hosts and outbound external hops so
+  route DNS, STARTTLS SNI/certificates, Received headers, and route metadata use
+  the same public-safe hostname.
+- Shifted built-in background external mail domains from bare `.example` names
+  to `*.example.net`.
+- Updated focused tests to assert `smtp.isp.example` author input renders as
+  public-safe `smtp.isp.example.net` for public mail infrastructure.
+- Updated the assessment scenario's explicit Internet counterparties and ISP
+  relays to use `example.net`/`example.com` safe public forms.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found zero external SMTP/DNS/X.509
+  bare `.example` public identities outside internal `alderridge.example`.
+- Automated eval passed with score 97 over 69,365 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 36.
+- Detection Engineer: Inconclusive, synthetic-confidence 38.
+- Network Forensics: Inconclusive, synthetic-confidence 36.
+- Host/EDR: Inconclusive, synthetic-confidence 45.
+- Average: 38.75.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears the Zeek cross-source contracts priority. The next
+priority category for loop 33 should be endpoint mail attribution: Host/EDR
+continues to find systematic missing eCAR process/user ownership for all
+workstation SMTP/587 submissions, all mail-server mail-port flows, and overly
+regular `svchost.exe` ownership for IMAPS/993 reads.
