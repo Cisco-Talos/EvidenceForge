@@ -3351,6 +3351,24 @@ def _dns_cache_window(value: object) -> tuple[float, float]:
     return 0.0, 0.0
 
 
+def _dns_observation_cache_key(
+    src_ip: str,
+    resolver_ip: str,
+    dns: "DnsContext",
+) -> tuple[str, str, str, str] | None:
+    """Return the cache key for suppressing repeated visible DNS observations."""
+    qtype_name = (dns.query_type or str(dns.qtype)).upper()
+    if qtype_name not in {"A", "AAAA", "MX", "SRV"}:
+        return None
+    if dns.rcode != "NOERROR" or not dns.answers or not dns.TTLs:
+        return None
+    normalized_query = (dns.query or "").rstrip(".").lower()
+    if not normalized_query:
+        return None
+    normalized_answers = "|".join(sorted(str(answer) for answer in dns.answers))
+    return (src_ip, resolver_ip, normalized_query, f"{qtype_name}:{normalized_answers}")
+
+
 def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     """Return whether a DNS query belongs to the scenario's internal namespace."""
     lowered = query.rstrip(".").lower()
@@ -4007,6 +4025,7 @@ class ActivityGenerator:
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
         self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
+        self._dns_observation_cache: dict[tuple[str, str, str, str], list[tuple[float, float]]] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
         ] = {}
@@ -13799,6 +13818,14 @@ class ActivityGenerator:
                     resolver_ip=dst_ip,
                     time=time,
                 )
+                if self._dns_observation_cache_hit_or_store(
+                    src_ip=src_ip,
+                    resolver_ip=dst_ip,
+                    dns=event.dns,
+                    time=time,
+                ):
+                    self._last_connection_effective_dst_ip = dst_ip
+                    return ""
         elif (
             service == "dns"
             and proto in ("udp", "tcp")
@@ -16104,6 +16131,39 @@ class ActivityGenerator:
             base_ttl=base_ttl,
             time=time,
         )
+
+    def _dns_observation_cache_hit_or_store(
+        self,
+        *,
+        src_ip: str,
+        resolver_ip: str,
+        dns: DnsContext,
+        time: datetime,
+    ) -> bool:
+        """Return True when an identical DNS answer is already visible inside TTL."""
+        cache_key = _dns_observation_cache_key(src_ip, resolver_ip, dns)
+        if cache_key is None:
+            return False
+        if not hasattr(self, "_dns_observation_cache"):
+            self._dns_observation_cache = {}
+
+        start = time.timestamp()
+        ttl = max(1.0, min(float(value) for value in dns.TTLs))
+        end = start + ttl
+        windows = self._dns_observation_cache.setdefault(cache_key, [])
+        cutoff = start - 86_400
+        if len(windows) > 32:
+            windows[:] = [
+                (old_start, old_end) for old_start, old_end in windows if old_end >= cutoff
+            ]
+        for old_start, old_end in windows:
+            if start < old_end and end > old_start:
+                return True
+        windows.append((start, end))
+        windows.sort()
+        if len(windows) > 32:
+            del windows[:-32]
+        return False
 
     def _emit_dns_lookup(
         self,

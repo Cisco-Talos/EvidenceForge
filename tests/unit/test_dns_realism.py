@@ -573,10 +573,10 @@ class TestHostnameConsistency:
         assert len(address_events) == 2
         assert [event.dns.TTLs for event in address_events] == [[30.0], [30.0]]
 
-    def test_future_generated_lookup_does_not_suppress_earlier_timestamp(
+    def test_future_generated_lookup_does_not_duplicate_earlier_timestamp(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
     ):
-        """Generation order must not hide DNS evidence needed by earlier connections."""
+        """Generation order should not create duplicate DNS rows inside one TTL window."""
         state_manager.set_current_time(timestamp)
         monkeypatch.setattr(
             activity_gen,
@@ -587,7 +587,7 @@ class TestHostnameConsistency:
         activity_gen._emit_dns_lookup(
             src_ip="10.0.1.50",
             dst_ip="93.184.216.34",
-            time=timestamp + timedelta(minutes=5),
+            time=timestamp + timedelta(seconds=10),
             hostname="cdn.example.net",
             force_address=True,
         )
@@ -607,7 +607,83 @@ class TestHostnameConsistency:
             and call.args[0].dns.query_type == "A"
         ]
 
-        assert len(address_events) == 2
+        assert len(address_events) == 1
+
+    def test_direct_dns_observation_cache_suppresses_repeats_inside_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Direct/generated DNS rows should respect visible client cache windows."""
+        state_manager.set_current_time(timestamp)
+
+        for offset in (0, 10):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.1",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                dns=DnsContext(
+                    query="dc01.example.org",
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=["10.0.0.10"],
+                    TTLs=[300.0],
+                ),
+                duration=0.01,
+                orig_bytes=64,
+                resp_bytes=160,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "dc01.example.org"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+
+    def test_direct_dns_observation_cache_suppresses_out_of_order_repeats(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Generation order should not create duplicate visible DNS cache hits."""
+        state_manager.set_current_time(timestamp)
+
+        for offset in (10, 0):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.1",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                dns=DnsContext(
+                    query="dc01.example.org",
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=["10.0.0.10"],
+                    TTLs=[300.0],
+                ),
+                duration=0.01,
+                orig_bytes=64,
+                resp_bytes=160,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "dc01.example.org"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
 
     def test_registered_a_rrset_is_stable_across_cache_expirations(
         self, activity_gen, timestamp, state_manager, mock_emitters
