@@ -681,3 +681,54 @@ Result: average blind synthetic-confidence is `<=45`, so endpoint/host mail and
 process realism is temporarily solved under the user's special rule. Loop 14
 should move to email routing and recipient semantics. Good candidate: avoid
 mixed internal/external recipient envelopes on outbound external relay hops.
+
+## Loop 14
+
+Priority category: email routing and recipient semantics.
+
+Family contract:
+
+- Owning abstraction: email route planning plus SMTP hop context.
+- Invariant: each SMTP hop carries the envelope recipients appropriate to that
+  route segment. Submission preserves original visible aliases and Bcc envelope
+  addresses; internal relay hops carry only recipients delivered through that
+  internal server; outbound external relay/MX hops carry only external
+  recipients.
+- Entry paths: storyline email, baseline internal/outbound/inbound mail,
+  distribution groups, sender-group outbound overrides, ISP relay mode,
+  same-server collapse, and Zeek SMTP rendering.
+- Consumers: Zeek `smtp.json`, SMTP `rcptto`, artifacts/manifest route
+  summaries, evaluator cross-source checks, and blind network/detection review.
+- Residual sibling risk: DNS TTL/cache semantics and generic Zeek
+  failed-connection texture are separate Zeek contract families.
+
+Implemented fixes:
+
+- Added hop-scoped recipient lists in the email route planner.
+- SMTP rendering now uses the hop recipient scope instead of every expanded
+  recipient on every relay.
+- Submission hops restore original envelope aliases so distribution-list and
+  Bcc semantics remain realistic at the client submission boundary.
+- Added mixed internal/external recipient coverage and updated
+  distribution-group assertions for same-server collapse.
+
+Verification:
+
+- Rendered-output probe: 10 outbound external SMTP hops and 0 mixed
+  internal-recipient violations.
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_activity.py::TestActivityGenerator::test_generate_process_spaces_bare_shell_child_commands tests/unit/test_activity.py::TestActivityGenerator::test_storyline_process_preserves_bare_shell_child_timing tests/unit/test_eval_cross_source.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Automated eval passed with score 96.93 over 69,437 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 37.
+- Detection Engineer: Real, synthetic-confidence 29.
+- Network Forensics: Inconclusive, synthetic-confidence 47.
+- Host/EDR: Inconclusive, synthetic-confidence 55.
+- Average: 42.0.
+
+Result: average blind synthetic-confidence is `<=45`, so email routing and
+recipient semantics is temporarily solved under the user's special rule. Loop
+15 should move to Zeek cross-source contracts. Best next candidate: DNS answer
+TTL/cache consistency into later TLS/HTTP connections.
