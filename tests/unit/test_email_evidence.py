@@ -292,6 +292,10 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert smtp_records[1]["id.orig_h"] == "10.10.2.25"
     assert smtp_records[1]["id.resp_h"] == "10.10.2.26"
     assert smtp_records[1]["tls"] is True
+    assert "mailfrom" not in smtp_records[1]
+    assert "rcptto" not in smtp_records[1]
+    assert "last_reply" not in smtp_records[1]
+    assert "path" not in smtp_records[1]
     assert "subject" not in smtp_records[1]
     assert any(record["qtype_name"] == "A" for record in dns_records)
     assert {record["uid"] for record in smtp_records} <= {record["uid"] for record in conn_records}
@@ -358,7 +362,8 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
 
     assert sorted(smtp_records[0]["rcptto"]) == ["bob@corp.example", "team@corp.example"]
     assert smtp_records[0]["to"] == ["<team@corp.example>"]
-    assert smtp_records[1]["rcptto"] == ["bob@corp.example"]
+    assert smtp_records[1]["tls"] is True
+    assert "rcptto" not in smtp_records[1]
     assert manifest["messages"][0]["bcc"] == ["bob@corp.example"]
     assert "Bcc:" not in eml_text
     assert "To: <team@corp.example>" in eml_text
@@ -400,6 +405,10 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path) -> N
         ("10.10.2.26", smtp_records[2]["id.resp_h"], 25),
     ]
     assert smtp_records[1]["tls"] is True
+    assert "mailfrom" not in smtp_records[1]
+    assert "rcptto" not in smtp_records[1]
+    assert "last_reply" not in smtp_records[1]
+    assert "path" not in smtp_records[1]
     assert "fuids" not in smtp_records[1]
     assert smtp_records[2]["tls"] is False
     starttls_uids = {row["uid"] for row in smtp_records if row["tls"]}
@@ -453,8 +462,10 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
         ("10.10.2.26", smtp_records[3]["id.resp_h"], 25),
     ]
     assert sorted(smtp_records[0]["rcptto"]) == ["analyst@example.net", "bob@corp.example"]
-    assert smtp_records[1]["rcptto"] == ["bob@corp.example"]
-    assert smtp_records[2]["rcptto"] == ["analyst@example.net"]
+    assert smtp_records[1]["tls"] is True
+    assert "rcptto" not in smtp_records[1]
+    assert smtp_records[2]["tls"] is True
+    assert "rcptto" not in smtp_records[2]
     assert smtp_records[3]["rcptto"] == ["analyst@example.net"]
 
 

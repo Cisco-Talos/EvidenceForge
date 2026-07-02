@@ -75,10 +75,10 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
             "id.resp_p": net.dst_port,
             "trans_depth": smtp.trans_depth,
             "helo": smtp.helo,
-            "mailfrom": smtp.mailfrom,
-            "rcptto": smtp.rcptto,
-            "last_reply": smtp.last_reply,
-            "path": smtp.path or [net.dst_ip, net.src_ip],
+            "mailfrom": None if protected else smtp.mailfrom,
+            "rcptto": None if protected else smtp.rcptto,
+            "last_reply": None if protected else smtp.last_reply,
+            "path": None if protected else smtp.path or [net.dst_ip, net.src_ip],
             "tls": smtp.tls,
             "date": None if protected else smtp.date,
             "from": None if protected else smtp.from_header,
@@ -94,7 +94,19 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
-        for field in ("date", "from", "to", "msg_id", "subject", "user_agent", "fuids"):
+        for field in (
+            "mailfrom",
+            "rcptto",
+            "last_reply",
+            "path",
+            "date",
+            "from",
+            "to",
+            "msg_id",
+            "subject",
+            "user_agent",
+            "fuids",
+        ):
             event_data.setdefault(field, None)
         rendered: dict[str, Any] = {}
         for key, value in event_data.items():
