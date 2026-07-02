@@ -75,18 +75,18 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
             "id.resp_p": net.dst_port,
             "trans_depth": smtp.trans_depth,
             "helo": smtp.helo,
-            "mailfrom": None if protected else smtp.mailfrom,
-            "rcptto": None if protected else smtp.rcptto,
-            "last_reply": None if protected else smtp.last_reply,
-            "path": None if protected or not smtp.path else smtp.path,
+            "mailfrom": "" if protected else smtp.mailfrom,
+            "rcptto": [] if protected else smtp.rcptto,
+            "last_reply": "" if protected else smtp.last_reply,
+            "path": [] if protected or not smtp.path else smtp.path,
             "tls": smtp.tls,
-            "date": None if protected else smtp.date,
-            "from": None if protected else smtp.from_header,
-            "to": None if protected else smtp.to_header,
-            "msg_id": None if protected else smtp.msg_id,
-            "subject": None if protected else smtp.subject,
-            "user_agent": None if protected else smtp.user_agent,
-            "fuids": None if protected or not fuids else fuids,
+            "date": "" if protected else smtp.date,
+            "from": "" if protected else smtp.from_header,
+            "to": [] if protected else smtp.to_header,
+            "msg_id": "" if protected else smtp.msg_id,
+            "subject": "" if protected else smtp.subject,
+            "user_agent": "" if protected else smtp.user_agent,
+            "fuids": [] if protected or not fuids else fuids,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:
@@ -110,7 +110,7 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
             event_data.setdefault(field, None)
         rendered: dict[str, Any] = {}
         for key, value in event_data.items():
-            if key.startswith("_") or value is None:
+            if key.startswith("_"):
                 continue
             if key == "ts" and isinstance(value, datetime):
                 rendered[key] = round(value.timestamp(), 6)
