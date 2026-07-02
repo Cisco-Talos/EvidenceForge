@@ -932,6 +932,12 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert all(not message["storyline_id"] for message in manifest["messages"])
     visible_subjects = [row["subject"] for row in smtp_records if row.get("subject")]
     assert len(set(visible_subjects)) >= max(4, len(visible_subjects) // 3)
+    delivered_replies = [
+        row["last_reply"]
+        for row in smtp_records
+        if str(row.get("last_reply", "")).startswith("250")
+    ]
+    assert len(set(delivered_replies)) >= max(4, len(delivered_replies) // 4)
     uas_by_sender: dict[str, set[str]] = {}
     for row in smtp_records:
         if row.get("id.resp_p") != 587 or not row.get("mailfrom", "").endswith("@corp.example"):

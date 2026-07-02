@@ -11394,8 +11394,10 @@ class ActivityGenerator:
 
         self._emit_email_route_dns(route, request.time)
 
+        hop_time_offset = 1.2
         for index, hop in enumerate(route):
-            hop_time = request.time + timedelta(seconds=1.2 + index * rng.uniform(2.0, 8.0))
+            hop_time = request.time + timedelta(seconds=hop_time_offset)
+            hop_time_offset += rng.uniform(2.0, 8.0)
             src_system = hop["src_system"]
             dst_system = hop["dst_system"]
             tls = bool(
@@ -11403,10 +11405,13 @@ class ActivityGenerator:
                 and hop["src_server_attempts_starttls"]
                 and hop["dst_server_allows_starttls"]
             )
-            last_reply = (
-                "250 2.0.0 Ok: queued"
-                if spec.outcome == "delivered"
-                else "550 5.7.1 Message rejected"
+            last_reply = self._smtp_last_reply(
+                outcome=spec.outcome,
+                message_id=message_id,
+                hop_index=index,
+                src_system=src_system,
+                dst_system=dst_system,
+                submission=bool(hop["submission"]),
             )
             mime_file_transfers = (
                 self._email_mime_file_transfers(
@@ -11559,6 +11564,82 @@ class ActivityGenerator:
         left_fragment = seed_hi & 0xFFFFFFFF
         right_fragment = seed_lo & 0xFFFFFFFF
         return f"<{left_fragment:08x}{right_fragment:08x}@{mailbox_id}.{domain}>"
+
+    def _smtp_last_reply(
+        self,
+        *,
+        outcome: str,
+        message_id: str,
+        hop_index: int,
+        src_system: Any,
+        dst_system: Any,
+        submission: bool,
+    ) -> str:
+        """Return a deterministic source-native SMTP DATA completion reply."""
+        seed = _stable_seed(
+            "smtp_last_reply:"
+            f"{outcome}:{message_id}:{hop_index}:"
+            f"{getattr(src_system, 'hostname', '')}:{getattr(dst_system, 'hostname', '')}:"
+            f"{submission}"
+        )
+        rng = random.Random(seed)
+        dst_hostname = getattr(dst_system, "hostname", "mail")
+        dst_roles = set(getattr(dst_system, "roles", None) or [])
+        dst_os = str(getattr(dst_system, "os", "")).lower()
+        queue_hex = f"{seed & 0xFFFFFFFFFFFF:012X}"
+        queue_short = f"{seed & 0xFFFFFFFFFF:010X}"
+        internal_id = 100000000 + (seed % 800000000)
+        if outcome != "delivered":
+            replies = [
+                "550 5.7.1 Message rejected",
+                "550 5.7.1 Delivery not authorized",
+                "554 5.7.1 Service unavailable; message refused",
+                "550 5.1.1 Recipient address rejected",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        if "external_mail_server" in dst_roles:
+            exim_id = (
+                f"{1 + seed % 2}"
+                f"{self._base36(seed >> 8, 5)}-"
+                f"{self._base36(seed >> 24, 6)}-"
+                f"{self._base36(seed >> 40, 2)}"
+            )
+            replies = [
+                f"250 OK id={exim_id}",
+                f"250 2.0.0 Ok: queued as {queue_short}",
+                f"250 2.0.0 {queue_hex[:8]} Message accepted for delivery",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        if "windows" in dst_os or "server 20" in dst_os:
+            replies = [
+                f"250 2.6.0 {message_id} [InternalId={internal_id}] Queued mail for delivery",
+                f"250 2.0.0 {queue_hex[:10]} Message accepted for delivery",
+                f"250 2.1.5 {queue_short} queued for delivery",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        replies = [
+            f"250 2.0.0 Ok: queued as {queue_short}",
+            f"250 2.0.0 {queue_hex[:8]} Message accepted for delivery",
+            f"250 2.0.0 queued as {queue_short.lower()} on {dst_hostname}",
+        ]
+        return replies[rng.randrange(len(replies))]
+
+    @staticmethod
+    def _base36(value: int, width: int) -> str:
+        """Return an uppercase base36 token padded to width characters."""
+        alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if value <= 0:
+            token = "0"
+        else:
+            chars: list[str] = []
+            while value:
+                value, remainder = divmod(value, 36)
+                chars.append(alphabet[remainder])
+            token = "".join(reversed(chars))
+        return token[-width:].rjust(width, "0")
 
     @staticmethod
     def _email_mailer_profile(sender: str, user_agent: str) -> str:
