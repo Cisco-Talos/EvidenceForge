@@ -17007,6 +17007,72 @@ class ActivityGenerator:
                 src_port=companion_src_port,
                 dns=companion_ctx,
             )
+            if companion_kind == "MX" and companion_answers:
+                mx_hosts = [
+                    str(answer).split()[-1].rstrip(".")
+                    for answer in companion_answers
+                    if str(answer).split()[-1].rstrip(".") not in {"", "."}
+                ]
+                if mx_hosts:
+                    mx_host = mx_hosts[0]
+                    mx_a_time = companion_time + timedelta(milliseconds=rng.randint(2, 45))
+                    mx_a_src_port = self._allocate_ephemeral_port(
+                        src_ip,
+                        dns_server_ip,
+                        53,
+                        "udp",
+                        mx_a_time,
+                        _src_os,
+                    )
+                    mx_a_ip = (
+                        dst_ip
+                        if _dns_is_internal_name(mx_host, ad_domain)
+                        else _generate_random_external_ip(
+                            random.Random(_stable_seed(f"dns_mx_companion_a:{mx_host}"))
+                        )
+                    )
+                    mx_a_is_internal = _dns_is_internal_name(mx_host, ad_domain)
+                    mx_a_answers = _dns_address_rrset(
+                        mx_host,
+                        mx_a_ip,
+                        is_internal=mx_a_is_internal,
+                    )
+                    mx_a_ctx = DnsContext(
+                        query=mx_host,
+                        trans_id=rng.randint(1, 65535),
+                        qtype=1,
+                        query_type="A",
+                        rcode="NOERROR",
+                        rcode_num=0,
+                        answers=mx_a_answers,
+                        TTLs=self._dns_observed_ttls(
+                            resolver_ip=dns_server_ip,
+                            query=mx_host,
+                            qtype_name="A",
+                            answers=mx_a_answers,
+                            is_internal=mx_a_is_internal,
+                            base_ttl=_dns_base_ttl(mx_host, mx_a_is_internal),
+                            time=mx_a_time,
+                        ),
+                        rtt=_dns_rtt(rng, dns_server_ip),
+                        AA=mx_a_is_internal,
+                        RD=True,
+                        RA=True,
+                        preserve_ttls=True,
+                    )
+                    self.generate_connection(
+                        src_ip=src_ip,
+                        dst_ip=dns_server_ip,
+                        time=mx_a_time,
+                        dst_port=53,
+                        proto="udp",
+                        service="dns",
+                        duration=rng.uniform(0.001, 0.02),
+                        orig_bytes=rng.randint(40, 100),
+                        resp_bytes=rng.randint(80, 500),
+                        src_port=mx_a_src_port,
+                        dns=mx_a_ctx,
+                    )
 
         # Occasional resolver search-suffix mistakes/background discovery probes.
         # Keep this low-volume and avoid doubling an already-qualified internal name.
