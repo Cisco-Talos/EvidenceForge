@@ -1124,3 +1124,60 @@ loop 22. The MIME/body findings did not recur in the local probe, but the
 Network and Detection reviews both pointed at mail-route DNS texture and
 mechanical Received/header timing. Loop 22 should vary email DNS transaction
 IDs, TTLs, and RTTs, and avoid fixed relay gaps in generated Received headers.
+
+## Loop 22
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: explicit email topology and generic baseline traffic
+  profile boundary.
+- Invariant: when `environment.email` is configured, SMTP-looking traffic must
+  be generated through the email delivery bundle, not through generic
+  role-profile network noise. Every visible port 25/587 mail connection should
+  have the expected SMTP parser companion unless modeled as a different
+  protocol outcome with corresponding evidence.
+- Entry paths: mail-server role outbound traffic, mail-server role inbound
+  traffic, typed storyline email, background email, STARTTLS relay, plaintext
+  submission, and explicit/automatic mailbox reads.
+- Consumers: Zeek `conn.json`, `smtp.json`, `ssl.json`, `files.json`,
+  `EMAIL_ARTIFACTS.json`, evaluator cross-source checks, and blind
+  network/detection review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, external SMTP peer IP role realism, MIME payload scale,
+  DNS-cache personality, STARTTLS imperfection, and manifest label leakage
+  remain separate families.
+
+Implemented fixes feeding loop 22:
+
+- Varied email-route DNS transaction IDs, TTLs, and RTTs for explicit mail
+  route lookups.
+- Replaced fixed four-second Received-header relay spacing with deterministic
+  per-hop timing variation.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 320 mail-related DNS rows,
+  zero `trans_id: 0` rows, 311 unique DNS RTT values, and zero exact
+  four-second Received-header gaps.
+- Automated eval passed with score 96 over 72,829 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 74.
+- Detection Engineer: Inconclusive, synthetic-confidence 52.
+- Network Forensics: Synthetic, synthetic-confidence 76.
+- Host/EDR: Synthetic, synthetic-confidence 74.
+- Average: 69.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 23. The DNS transaction-ID and fixed Received-gap findings were reduced,
+but the Network review found a larger cross-source contract violation: 297
+visible SMTP-port connections but only 60 SMTP parser rows, with the orphan
+flows coming from generic mail-server role-profile traffic. Loop 23 should
+suppress profile-generated SMTP when explicit email topology exists so mail
+traffic is owned by the email bundle.
