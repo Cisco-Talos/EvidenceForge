@@ -1252,13 +1252,13 @@ class TestChronologicalOutput:
         assert emitted[0]["pid"] == -1
         assert "actorID" not in emitted[0]
 
-    def test_incomplete_flow_without_duration_stays_at_canonical_attempt_time(
+    def test_incomplete_flow_without_duration_uses_attempt_result_latency(
         self,
         emitter,
         monkeypatch,
         ts,
     ):
-        """FLOW rows without a duration should not drift after a zero-duration Zeek row."""
+        """Failed no-duration FLOW rows should not share Zeek's exact packet timestamp."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         event = SecurityEvent(
@@ -1285,7 +1285,7 @@ class TestChronologicalOutput:
 
         emitter._render_connection(event)
 
-        assert emitted[0]["timestamp"] == ts
+        assert ts < emitted[0]["timestamp"] <= ts + timedelta(milliseconds=664)
 
     def test_paired_endpoint_flows_do_not_share_exact_millisecond(
         self,
@@ -1331,7 +1331,10 @@ class TestChronologicalOutput:
         rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
         assert len(rendered_ms) == 2
         assert len(set(rendered_ms)) == 2
-        assert all(ts - timedelta(milliseconds=540) <= row["timestamp"] <= ts for row in emitted)
+        assert all(
+            ts - timedelta(milliseconds=540) <= row["timestamp"] <= ts + timedelta(milliseconds=664)
+            for row in emitted
+        )
 
     def test_paired_endpoint_success_flows_without_close_bound_get_texture(
         self,

@@ -1063,7 +1063,11 @@ class EcarEmitter(HostMultiplexEmitter):
             return None
         if net.duration is None:
             if net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
-                return event.timestamp
+                seed = _stable_seed(
+                    "ecar_failed_flow_not_after:"
+                    + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+                )
+                return event.timestamp + timedelta(milliseconds=45 + (seed % 620))
             return None
         close_time = event.timestamp + timedelta(seconds=max(0.0, net.duration))
         if close_time <= event.timestamp:
