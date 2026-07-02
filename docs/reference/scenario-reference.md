@@ -223,6 +223,7 @@ email:
     mode: storyline                   # none | storyline | selected | all
     selected_ids: []
   background_messages_per_user_per_day: 0.0
+  corpus: email_corpus.yaml           # Optional scenario-relative content corpus
 ```
 
 V1 supports on-prem/local email only. User mail clients submit plaintext SMTP on
@@ -230,6 +231,8 @@ V1 supports on-prem/local email only. User mail clients submit plaintext SMTP on
 STARTTLS is negotiated when the sending server has `attempt_outbound_starttls:
 true` and the receiving server has `allow_inbound_starttls: true`. If STARTTLS
 protects message transfer, Zeek SMTP rows omit protected header/body/file fields.
+Mailbox reads are modeled separately with `email_read`; V1 emits only opaque
+TLS access sessions using IMAPS on 993 or OWA-style HTTPS on 443.
 
 Internal mail routes from the sender's mailbox server to each recipient's mailbox
 server, collapsing same-server hops. Outbound internet mail uses the default
@@ -243,6 +246,29 @@ Email artifacts are written under `artifacts/email/` as `.eml` files plus
 `GROUND_TRUTH.json` and `GROUND_TRUTH.md`. Generation is deterministic: any
 AI-authored message bodies or corpora must be prepared during scenario creation,
 not during `eforge generate`.
+
+Optional `email_corpus.yaml` files contain deterministic content entries:
+
+```yaml
+messages:
+  - id: phishing-note
+    subject: Quarterly forecast review
+    body: |
+      Please review the attached notes.
+    user_agent: Microsoft Outlook 16.0
+    headers:
+      X-Campaign-ID: q1-finance
+    attachments:
+      - filename: forecast.txt
+        content_type: text/plain
+        content: Synthetic attachment text
+    background: false
+    storyline: true
+```
+
+`email_message.corpus_id` uses the corpus entry for content while the storyline
+event remains authoritative for routing fields such as sender, To, Cc, and Bcc.
+For V1, do not combine `corpus_id` with inline `body` or `attachments`.
 
 ### System Roles
 
@@ -698,7 +724,8 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
 | `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `profile`, `http_sequence`, `jitter` (default: 0.15) |
 | `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
-| `email_message` | SMTP route evidence: Zeek conn/dns/smtp, artifacts, ground truth | at least one of `to`/`cc`/`bcc` | `sender`, `subject`, `body`, `corpus_id`, `artifact_id`, `user_agent`, `verdict`, `mail_action`, `outcome`, `attachments` |
+| `email_message` | SMTP route evidence: Zeek conn/dns/smtp/files, artifacts, ground truth | at least one of `to`/`cc`/`bcc` | `sender`, `subject`, `body`, `corpus_id`, `artifact_id`, `user_agent`, `verdict`, `mail_action`, `outcome`, `attachments` |
+| `email_read` | Opaque TLS mailbox access: DNS + conn/ssl/x509 evidence only | | `mailbox`, `server`, `protocol` (`imaps`/`owa`), `message_ids`, `count`, `duration`, `user_agent` |
 | `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4) |
 | `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` (default: 0.5) |
 | `dga_queries` | Zeek dns.log + conn.log (bulk DGA) | `interval`, one of `end_time`/`duration`/`count` | `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`, `source_ip`, `jitter` (default: 0.3) |

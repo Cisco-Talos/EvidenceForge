@@ -244,12 +244,12 @@ events. Validation should produce actionable messages for missing
 routes, unresolved mailbox assignments, invalid distribution groups, unsupported
 nested groups, and unsupported direct workstation-to-internet SMTP.
 
-V1 includes basic parser/evaluation support for `zeek_smtp` and
-`EMAIL_ARTIFACTS.json`. Evaluation should validate core field presence and basic
-cross-source consistency for storyline messages, including message ID, sender,
-recipients, subject, artifact manifest entry, and expected SMTP visibility where
-source observation allows it. Deeper SMTP/DNS/artifact causality scoring can be
-expanded later.
+V1 includes parser/evaluation support for `zeek_smtp`, Zeek `files.log`, and
+`EMAIL_ARTIFACTS.json`. Evaluation validates core field presence and basic
+cross-source consistency: SMTP UIDs join to `conn.log`, visible SMTP FUIDs join
+to `files.log`, plaintext SMTP metadata agrees with artifact manifests when a
+message ID is visible, and STARTTLS-protected hops suppress protected SMTP
+metadata. Deeper route/DNS/artifact causality scoring can be expanded later.
 
 ### Timing
 
@@ -280,7 +280,7 @@ Full message artifacts are selective:
 
 - storyline and selected messages may produce `.eml` artifacts,
 - background messages are metadata-only by default,
-- optional sampled background artifacts may be added later.
+- `mode: all` or selected IDs can materialize background artifacts as well.
 
 Message content is created before deterministic generation, typically during
 scenario creation. `eforge generate` may stamp deterministic headers, dates,
@@ -299,7 +299,13 @@ Metadata generation uses a hybrid model:
 
 - built-in structured grammar and data-driven pools by default,
 - optional scenario-created `email_corpus.yaml` overlays for richer contacts,
-  subjects, bodies, and artifact templates.
+  subjects, bodies, headers, user agents, and MIME parts.
+
+Corpus files are scenario-relative and contain a top-level `messages` list keyed
+by stable IDs. `email_message.corpus_id` selects an entry for content while the
+storyline event remains authoritative for sender and recipients. V1 rejects
+inline `body` or `attachments` when `corpus_id` is set to avoid mixing explicit
+and corpus-authored content.
 
 ### Recipients And Distribution Groups
 
@@ -334,8 +340,8 @@ V1 attachment handling is selective:
 - storyline and selected artifact-backed messages may include real attachments
   or references to attachment files,
 - background messages carry attachment metadata only by default,
-- plaintext SMTP legs may produce Zeek `files.log` metadata and SMTP `fuids`
-  when visibility permits,
+- plaintext SMTP legs produce Zeek `files.log` metadata and SMTP `fuids` for
+  every MIME part, including the body part and attachments,
 - encrypted SMTP legs must not expose attachment/header/body details to Zeek
   after STARTTLS negotiation.
 

@@ -216,6 +216,7 @@ class EmailContext:
     user_agent: str = ""
     body: str = ""
     body_size: int = 0
+    custom_headers: dict[str, str] = field(default_factory=dict)
     attachments: list[dict[str, Any]] = field(default_factory=list)
     verdict: str = "clean"
     mail_action: str = "deliver"

@@ -617,5 +617,5 @@ class TestParserDiscovery:
     def test_all_parsers_registered(self):
         from evidenceforge.evaluation.parsers import _PARSER_CLASSES
 
-        # Original parsers + Sysmon + 13 Zeek parsers + cisco_asa + proxy_access
-        assert len(_PARSER_CLASSES) == 23
+        # Original parsers + Sysmon + 13 Zeek parsers + cisco_asa + proxy_access + email artifacts
+        assert len(_PARSER_CLASSES) == 24

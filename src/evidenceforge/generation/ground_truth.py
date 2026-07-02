@@ -450,6 +450,12 @@ class GroundTruthGenerator:
                 f"{event.get('sender', 'N/A')} -> {shown or 'N/A'}; "
                 f"subject '{event.get('subject', 'N/A')}' ({artifact})"
             )
+        if event_type == "email_read":
+            return (
+                f"Mailbox read: {event.get('mailbox', 'N/A')} via "
+                f"{event.get('protocol', 'N/A')} on {event.get('server', 'N/A')} "
+                f"(UID: {event.get('uid', 'N/A')})"
+            )
         if event_type == "web_scan":
             return (
                 f"Web scan ({event.get('preset', 'custom')}) against "

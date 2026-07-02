@@ -179,6 +179,11 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
                         if _is_safe_path(deepfile, output_root) and deepfile.is_file():
                             candidates.append(deepfile)
 
+    artifact_root = output_dir.parent.resolve()
+    email_manifest = output_dir.parent / "artifacts" / "email" / "EMAIL_ARTIFACTS.json"
+    if email_manifest.exists() and _is_safe_path(email_manifest, artifact_root):
+        candidates.append(email_manifest)
+
     for format_name, parser_cls in _PARSER_CLASSES.items():
         if format_name == "bash_history":
             continue  # Already handled above
@@ -195,6 +200,7 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
 from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.cisco_asa import CiscoAsaParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.email_artifacts import EmailArtifactsParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401

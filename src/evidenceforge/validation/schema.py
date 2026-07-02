@@ -34,9 +34,13 @@ import ipaddress
 import logging
 from dataclasses import dataclass
 from datetime import UTC
+from pathlib import Path
 from typing import Any
 
+import yaml
+
 from evidenceforge.models import Scenario
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +160,12 @@ class ValidationIssue:
 class ScenarioValidator:
     """Validates cross-references and logical consistency in scenarios."""
 
-    def __init__(self, scenario: Scenario, oob_hosts: tuple[str, ...] = ()):
+    def __init__(
+        self,
+        scenario: Scenario,
+        oob_hosts: tuple[str, ...] = (),
+        scenario_root: Path | None = None,
+    ):
         """Initialize validator with a scenario.
 
         Args:
@@ -168,6 +177,7 @@ class ScenarioValidator:
         """
         self.scenario = scenario
         self.oob_hosts = tuple(oob_hosts)
+        self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
         self.issues: list[ValidationIssue] = []
 
         # Build lookup sets for fast reference checking
@@ -682,18 +692,21 @@ class ScenarioValidator:
         """Validate explicit email topology and email_message storyline events."""
         email_config = self.scenario.environment.email
         email_specs: list[tuple[int, int, Any]] = []
+        email_read_specs: list[tuple[int, int, Any]] = []
         for idx, event in enumerate(self.scenario.storyline or []):
             for spec_idx, spec in enumerate(event.events):
                 if getattr(spec, "type", "") == "email_message":
                     email_specs.append((idx, spec_idx, spec))
+                elif getattr(spec, "type", "") == "email_read":
+                    email_read_specs.append((idx, spec_idx, spec))
 
         if email_config is None:
-            for idx, spec_idx, _spec in email_specs:
+            for idx, spec_idx, spec in [*email_specs, *email_read_specs]:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"storyline.{idx}.events.{spec_idx}",
-                        message="email_message requires environment.email to be configured",
+                        message=f"{spec.type} requires environment.email to be configured",
                         suggestion=(
                             "Add environment.email with accepted_domains, mail_servers, "
                             "default_mailbox_servers, and routes."
@@ -701,6 +714,8 @@ class ScenarioValidator:
                     )
                 )
             return
+
+        corpus_ids = self._validate_email_corpus(email_config)
 
         server_names = {server.name for server in email_config.mail_servers}
         if len(server_names) != len(email_config.mail_servers):
@@ -842,6 +857,15 @@ class ScenarioValidator:
                     )
 
         for idx, spec_idx, spec in email_specs:
+            if spec.corpus_id is not None and spec.corpus_id not in corpus_ids:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_idx}.corpus_id",
+                        message=f"email_message references unknown corpus_id '{spec.corpus_id}'",
+                        suggestion="Use an id from environment.email.corpus or remove corpus_id.",
+                    )
+                )
             event = (self.scenario.storyline or [])[idx]
             users_by_name = {user.username: user for user in self.scenario.environment.users}
             actor = users_by_name.get(event.actor)
@@ -895,6 +919,175 @@ class ScenarioValidator:
                                 suggestion="Flatten distribution groups for v1.",
                             )
                         )
+
+        users_by_name = {user.username: user for user in self.scenario.environment.users}
+        user_email_map = {user.email.lower(): user for user in self.scenario.environment.users}
+        accepted_domains = set(email_config.accepted_domains)
+        for idx, spec_idx, spec in email_read_specs:
+            event = (self.scenario.storyline or [])[idx]
+            actor = users_by_name.get(event.actor)
+            mailbox = (spec.mailbox or (actor.email if actor is not None else "")).lower()
+            if mailbox not in user_email_map:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_idx}.mailbox",
+                        message=f"email_read mailbox '{mailbox}' is not a known user email",
+                        suggestion="Use environment.users.email or omit mailbox to read actor.email.",
+                    )
+                )
+                continue
+            if mailbox.rsplit("@", 1)[-1].rstrip(".") not in accepted_domains:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_idx}.mailbox",
+                        message="email_read only supports internal accepted-domain mailboxes",
+                        suggestion="Use a mailbox in environment.email.accepted_domains.",
+                    )
+                )
+            if spec.server is not None and spec.server not in server_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_idx}.server",
+                        message=f"email_read references unknown server '{spec.server}'",
+                        suggestion=f"Use one of: {', '.join(sorted(server_names))}",
+                    )
+                )
+            elif spec.server is not None:
+                expected = self._email_mailbox_server_for_address(mailbox, email_config)
+                if spec.server != expected:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"storyline.{idx}.events.{spec_idx}.server",
+                            message=(
+                                f"email_read server '{spec.server}' does not host mailbox "
+                                f"'{mailbox}'"
+                            ),
+                            suggestion=f"Use server '{expected}' or omit server.",
+                        )
+                    )
+
+    def _validate_email_corpus(self, email_config: Any) -> set[str]:
+        """Validate optional email corpus sidecar and return known message IDs."""
+        if not email_config.corpus:
+            return set()
+        corpus_path = Path(email_config.corpus)
+        if not corpus_path.is_absolute():
+            corpus_path = self.scenario_root / corpus_path
+        if not corpus_path.exists():
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.email.corpus",
+                    message=f"Email corpus file not found: {email_config.corpus}",
+                    suggestion="Create the corpus file relative to the scenario YAML directory.",
+                )
+            )
+            return set()
+        try:
+            with corpus_path.open("r", encoding="utf-8") as handle:
+                raw = yaml.safe_load(handle) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.email.corpus",
+                    message=f"Email corpus file could not be parsed: {exc}",
+                    suggestion="Fix email_corpus.yaml so it is valid YAML.",
+                )
+            )
+            return set()
+        messages = raw.get("messages", raw if isinstance(raw, list) else [])
+        if not isinstance(messages, list):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.email.corpus",
+                    message="Email corpus must contain a top-level messages list",
+                    suggestion="Use messages: [{id, subject, body, ...}].",
+                )
+            )
+            return set()
+        ids: set[str] = set()
+        for idx, item in enumerate(messages):
+            if not isinstance(item, dict):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.corpus.messages.{idx}",
+                        message="Email corpus message entries must be mappings",
+                        suggestion="Use id, subject, body, and optional metadata fields.",
+                    )
+                )
+                continue
+            entry_id = str(item.get("id") or "").strip()
+            if not entry_id:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.corpus.messages.{idx}.id",
+                        message="Email corpus message id is required",
+                        suggestion="Add a stable id used by email_message.corpus_id.",
+                    )
+                )
+                continue
+            if entry_id in ids:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.corpus.messages.{idx}.id",
+                        message=f"Duplicate email corpus id '{entry_id}'",
+                        suggestion="Use unique ids for all corpus messages.",
+                    )
+                )
+            ids.add(entry_id)
+            for required in ("subject", "body"):
+                if not str(item.get(required) or ""):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.email.corpus.messages.{idx}.{required}",
+                            message=f"Email corpus message '{entry_id}' requires {required}",
+                            suggestion=f"Add {required} to this corpus message.",
+                        )
+                    )
+            for attachment_idx, attachment in enumerate(item.get("attachments") or []):
+                if not isinstance(attachment, dict) or not str(attachment.get("filename") or ""):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=(
+                                "environment.email.corpus.messages."
+                                f"{idx}.attachments.{attachment_idx}"
+                            ),
+                            message="Email corpus attachments require a filename",
+                            suggestion="Use filename plus optional content_type, size, and content.",
+                        )
+                    )
+        return ids
+
+    def _email_mailbox_server_for_address(self, address: str, email_config: Any) -> str:
+        """Return the configured mailbox server for a user address."""
+        user = next(
+            (
+                candidate
+                for candidate in self.scenario.environment.users
+                if candidate.email.lower() == address.lower()
+            ),
+            None,
+        )
+        if user is not None:
+            user_groups = set(user.groups or [])
+            for override in email_config.mailbox_overrides:
+                if override.group in user_groups:
+                    return override.server
+        seed = _stable_seed(f"email_mailbox_server:{address}")
+        return email_config.default_mailbox_servers[
+            seed % len(email_config.default_mailbox_servers)
+        ]
 
     def _validate_event_sequences(self) -> None:
         """Validate typed event declarations (Phase 8.4).

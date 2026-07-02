@@ -89,6 +89,8 @@ normal DNS and network-visibility layers. Generated email artifacts live outside
 - `artifacts/email/<artifact-id>.eml` — RFC 5322 message artifacts for selected
   or storyline-backed messages.
 - `<sensor>/smtp.json` — Zeek `smtp.log` NDJSON for visible SMTP transactions.
+- `<sensor>/files.json` — Zeek `files.log` rows for every MIME part on plaintext
+  SMTP hops, including the text body and attachments.
 
 Zeek SMTP rows share UIDs with `conn.json`, include envelope/header metadata for
 plaintext transfer, and honor STARTTLS visibility. If a server-to-server hop
@@ -97,6 +99,11 @@ uses STARTTLS before message transfer, protected fields such as `subject`,
 the `smtp.json` row. Client submission is plaintext on port 587 in V1; server
 relay uses port 25. Every SMTP server hop contributes a `Received` header in the
 materialized `.eml` artifact.
+
+Mailbox reads from `email_read` and automatic recipient-read behavior are opaque
+TLS sessions only: IMAPS uses port 993 and OWA-style access uses HTTPS on 443.
+Zeek can see DNS/connection/TLS evidence, not mailbox commands or message
+content.
 
 Exchange is modeled as a behavioral flavor for SMTP and HTTPS/OWA-style mailbox
 access only. Native Exchange message-tracking or IIS/Exchange logs are not
@@ -212,7 +219,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, MX, NS, and SOA query types. Automatic connection-prerequisite lookups route through the internal DNS lookup bundle so resolver choice, cache behavior, TTL observations, Zeek DNS/conn fan-out, Sysmon DNS visibility, and companion resolver questions stay consistent with connection hostnames. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length, and Zeek `trans_depth`. Only for port 80 TCP connections. Browser/page-load sessions can reuse one UID for multiple same-flow transactions; file-analyzed responses include `resp_fuids`/`resp_mime_types` vectors linked to `files.log`. |
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for port 443 connections. Certificate-chain depth is driven by `tls_realism.yaml`. |
-| files.log | `files.json` | File transfers | Extracted from HTTP responses, OCSP responses, and substantial SMB transfers. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional `filename` for SMB, MIME type, byte counts, and `md5`/`sha1`/`sha256` when the matching analyzer ran. Transfer metadata is built through the internal file-transfer bundle path so FUIDs, hashes, filenames, direction, byte counts, and optional PE analysis stay coordinated. Large/download-scale HTTP responses attach this metadata deterministically; smaller eligible HTTP bodies remain sampled. SMB thresholds, filename templates, and MIME/analyzer mix are driven by `smb_file_transfers.yaml`. |
+| files.log | `files.json` | File transfers | Extracted from HTTP responses, OCSP responses, substantial SMB transfers, and plaintext SMTP MIME parts. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional `filename`, MIME type, byte counts, and `md5`/`sha1`/`sha256` when the matching analyzer ran. Transfer metadata is built through canonical file-transfer context so FUIDs, hashes, filenames, direction, byte counts, and optional PE analysis stay coordinated. Large/download-scale HTTP responses attach this metadata deterministically; smaller eligible HTTP bodies remain sampled. SMB thresholds, filename templates, and MIME/analyzer mix are driven by `smb_file_transfers.yaml`; SMTP MIME parts are emitted only for plaintext visible hops. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Acquisition and renewal route through the internal DHCP lease bundle so Zeek DHCP/conn rows and Linux `dhclient` syslog companions share one lease identity. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
 | ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. NTP rows are emitted only when the matching UDP/123 conn row is response-bearing, so Zeek UID, conn_state/history, bytes, packets, duration, and parser timing agree. Version and poll are stable per client/server association, while stratum, ref-id, precision, root delay, and root dispersion are owned by the responding server. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info, and CA constraints. Intermediate CA certificate profiles are reused by subject/issuer so the same CA does not appear as many different certificates in one dataset. |

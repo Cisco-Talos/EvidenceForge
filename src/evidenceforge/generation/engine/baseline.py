@@ -2595,15 +2595,18 @@ class BaselineMixin:
         if len(recipients) < 2:
             return
         hourly_rate = email_config.background_messages_per_user_per_day / 24.0
+        external_domains = [
+            "vendors.example",
+            "partners.example",
+            "customer-mail.example",
+            "industry-news.example",
+        ]
         for user in recipients:
             rng = random.Random(
                 _stable_seed(f"baseline_email:{self.scenario.name}:{user.username}:{current_hour}")
             )
             if rng.random() >= min(1.0, hourly_rate):
                 continue
-            target = rng.choice(
-                [candidate for candidate in recipients if candidate.username != user.username]
-            )
             source_system = self._find_system(user.primary_system or "")
             if source_system is None:
                 source_system = next(
@@ -2617,18 +2620,46 @@ class BaselineMixin:
             if source_system is None:
                 continue
             event_time = current_hour + timedelta(seconds=rng.uniform(300, 3300))
+            corpus_entries = self.activity_generator._email_background_corpus_entries()
+            corpus_id = rng.choice(corpus_entries).entry_id if corpus_entries else None
+            hour_slot = int(current_hour.timestamp()) // 3600
+            flow = ["internal", "inbound", "outbound"][(hour_slot + recipients.index(user)) % 3]
+            sender = None
+            if flow == "internal":
+                target = rng.choice(
+                    [candidate for candidate in recipients if candidate.username != user.username]
+                )
+                recipients_to = [target.email]
+                actor = user
+                actor_system = source_system
+            elif flow == "inbound":
+                local = rng.choice(recipients)
+                sender_name = rng.choice(["billing", "alerts", "notifications", "support"])
+                sender_domain = rng.choice(external_domains)
+                sender = f"{sender_name}@{sender_domain}"
+                recipients_to = [local.email]
+                actor = local
+                actor_system = self._find_system(local.primary_system or "") or source_system
+            else:
+                target_name = rng.choice(["contact", "orders", "support", "team"])
+                target_domain = rng.choice(external_domains)
+                recipients_to = [f"{target_name}@{target_domain}"]
+                actor = user
+                actor_system = source_system
             spec = EmailMessageEventSpec(
-                to=[target.email],
+                sender=sender,
+                to=recipients_to,
                 subject=None,
                 body=None,
+                corpus_id=corpus_id,
                 verdict="clean",
                 mail_action="deliver",
                 outcome="delivered",
             )
             self.activity_generator.generate_email_message(
                 spec=spec,
-                actor=user,
-                system=source_system,
+                actor=actor,
+                system=actor_system,
                 time=event_time,
                 activity="Background email",
                 storyline_id="",

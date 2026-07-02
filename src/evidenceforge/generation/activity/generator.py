@@ -27,6 +27,7 @@ activity events (logon, logoff, process creation, network connections) and
 coordinates them across multiple log formats for consistency.
 """
 
+import hashlib
 import heapq
 import ipaddress
 import itertools
@@ -39,9 +40,12 @@ import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
 from urllib.parse import urlsplit
+
+import yaml
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
@@ -3858,6 +3862,21 @@ def _tls_signature_algorithm_for_issuer(
         fallback_type=fallback_key_type,
         fallback_length=fallback_key_length,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class EmailCorpusEntry:
+    """Scenario-authored deterministic email content."""
+
+    entry_id: str
+    subject: str
+    body: str
+    user_agent: str = ""
+    headers: dict[str, str] | None = None
+    attachments: tuple[dict[str, Any], ...] = ()
+    tags: tuple[str, ...] = ()
+    background: bool = False
+    storyline: bool = True
 
 
 class ActivityGenerator:
@@ -10872,6 +10891,7 @@ class ActivityGenerator:
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
+        file_transfers: list[FileTransferContext] | None = None,
         pe: PeContext | None = None,
         ocsp: OcspContext | None = None,
         proxy: Optional["ProxyContext"] = None,
@@ -10940,6 +10960,7 @@ class ActivityGenerator:
             ids=ids,
             http=http,
             file_transfer=file_transfer,
+            file_transfers=list(file_transfers or []),
             pe=pe,
             ocsp=ocsp,
             proxy=proxy,
@@ -10980,6 +11001,45 @@ class ActivityGenerator:
         )
         return EmailDeliveryActionBundle(executor=self, request=request).execute()
 
+    def generate_email_read(
+        self,
+        *,
+        spec: Any,
+        actor: "User",
+        system: "System",
+        time: datetime,
+        activity: str = "",
+        storyline_id: str = "",
+    ) -> dict[str, Any]:
+        """Generate opaque TLS mailbox access evidence for an email_read event."""
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("email_read requires environment.email to be configured")
+        mailbox = (spec.mailbox or actor.email).lower()
+        server_name = spec.server or self._email_server_for_user_address(mailbox)
+        server_system = self._email_system_for_server_name(server_name)
+        server_cfg = self._email_servers_by_name()[server_name]
+        protocol = spec.protocol or ("owa" if server_cfg.platform == "exchange" else "imaps")
+        uid = self.generate_email_access(
+            user=actor,
+            system=system,
+            server=server_system,
+            time=time,
+            platform=server_cfg.platform,
+            protocol=protocol,
+            duration=spec.duration,
+            user_agent=spec.user_agent or "",
+            message_ids=tuple(spec.message_ids),
+        )
+        return {
+            "mailbox": mailbox,
+            "server": server_name,
+            "protocol": protocol,
+            "message_ids": list(spec.message_ids),
+            "count": spec.count,
+            "uid": uid,
+        }
+
     def generate_email_access(
         self,
         *,
@@ -10988,6 +11048,10 @@ class ActivityGenerator:
         server: "System",
         time: datetime,
         platform: str = "generic_smtp",
+        protocol: str = "",
+        duration: float | None = None,
+        user_agent: str = "",
+        message_ids: tuple[str, ...] = (),
     ) -> str:
         """Generate an opaque TLS mailbox access session."""
         request = EmailAccessRequest(
@@ -10996,6 +11060,10 @@ class ActivityGenerator:
             server=server,
             time=time,
             platform=platform,
+            protocol=protocol,
+            duration=duration,
+            user_agent=user_agent,
+            message_ids=message_ids,
         )
         return EmailAccessActionBundle(executor=self, request=request).execute()
 
@@ -11008,7 +11076,8 @@ class ActivityGenerator:
                 f"{request.server.hostname}:{request.time.isoformat()}"
             )
         )
-        port = 443 if request.platform == "exchange" else 993
+        protocol = request.protocol or ("owa" if request.platform == "exchange" else "imaps")
+        port = 443 if protocol == "owa" else 993
         service = "ssl"
         hostname = self._email_server_fqdn(request.server.hostname)
         return self.generate_connection(
@@ -11018,14 +11087,145 @@ class ActivityGenerator:
             dst_port=port,
             proto="tcp",
             service=service,
-            duration=rng.uniform(12.0, 180.0),
+            duration=request.duration or rng.uniform(12.0, 180.0),
             orig_bytes=rng.randint(1200, 9000),
             resp_bytes=rng.randint(15_000, 450_000),
             conn_state="SF",
             emit_dns=True,
             source_system=request.system,
             hostname=hostname,
+            process_image=self._email_access_process_image(
+                request.system,
+                protocol,
+                request.user_agent,
+                rng,
+            ),
         )
+
+    def _email_access_process_image(
+        self,
+        system: "System",
+        protocol: str,
+        user_agent: str,
+        rng: random.Random,
+    ) -> str:
+        """Return lightweight client process attribution for mailbox reads."""
+        os_category = _get_os_category(system.os)
+        ua = user_agent.lower()
+        if protocol == "owa":
+            if os_category == "windows":
+                return rng.choice(
+                    [
+                        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    ]
+                )
+            return rng.choice(["/usr/bin/firefox", "/usr/bin/chromium"])
+        if "thunderbird" in ua:
+            return (
+                "/usr/bin/thunderbird"
+                if os_category == "linux"
+                else r"C:\Program Files\Mozilla Thunderbird\thunderbird.exe"
+            )
+        if os_category == "windows":
+            return r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"
+        return "/usr/bin/thunderbird"
+
+    def _load_email_corpus(self) -> dict[str, EmailCorpusEntry]:
+        """Load and cache the optional scenario-created email corpus."""
+        cached = getattr(self, "_email_corpus_cache", None)
+        if cached is not None:
+            return cached
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None or not email_config.corpus:
+            self._email_corpus_cache = {}
+            return {}
+        corpus_path = Path(email_config.corpus)
+        if not corpus_path.is_absolute():
+            corpus_path = Path(getattr(self, "_scenario_root", Path.cwd())) / corpus_path
+        with corpus_path.open("r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        messages = raw.get("messages", raw if isinstance(raw, list) else [])
+        if not isinstance(messages, list):
+            raise ValueError("email_corpus.yaml must contain a top-level messages list")
+        entries: dict[str, EmailCorpusEntry] = {}
+        for idx, item in enumerate(messages):
+            if not isinstance(item, dict):
+                raise ValueError(f"email_corpus.yaml messages.{idx} must be a mapping")
+            entry_id = str(item.get("id") or "").strip()
+            if not entry_id:
+                raise ValueError(f"email_corpus.yaml messages.{idx}.id is required")
+            if entry_id in entries:
+                raise ValueError(f"email_corpus.yaml duplicate message id: {entry_id}")
+            subject = str(item.get("subject") or "").strip()
+            body = str(item.get("body") or "")
+            if not subject:
+                raise ValueError(f"email_corpus.yaml message {entry_id!r} requires subject")
+            if not body:
+                raise ValueError(f"email_corpus.yaml message {entry_id!r} requires body")
+            attachments = tuple(
+                self._normalize_email_attachment(att, entry_id, index)
+                for index, att in enumerate(item.get("attachments") or [])
+            )
+            headers_raw = item.get("headers") or {}
+            if not isinstance(headers_raw, dict):
+                raise ValueError(
+                    f"email_corpus.yaml message {entry_id!r} headers must be a mapping"
+                )
+            entries[entry_id] = EmailCorpusEntry(
+                entry_id=entry_id,
+                subject=subject,
+                body=body,
+                user_agent=str(item.get("user_agent") or ""),
+                headers={str(key): str(value) for key, value in headers_raw.items()},
+                attachments=attachments,
+                tags=tuple(str(tag) for tag in item.get("tags") or []),
+                background=bool(item.get("background", False)),
+                storyline=bool(item.get("storyline", True)),
+            )
+        self._email_corpus_cache = entries
+        return entries
+
+    def _email_corpus_entry(self, corpus_id: str | None) -> EmailCorpusEntry | None:
+        """Return one corpus entry or fail clearly if the scenario references an unknown ID."""
+        if not corpus_id:
+            return None
+        corpus = self._load_email_corpus()
+        entry = corpus.get(corpus_id)
+        if entry is None:
+            raise ValueError(f"email_message corpus_id {corpus_id!r} was not found")
+        return entry
+
+    def _email_background_corpus_entries(self) -> list[EmailCorpusEntry]:
+        """Return corpus entries eligible for deterministic background email."""
+        return [entry for entry in self._load_email_corpus().values() if entry.background]
+
+    @staticmethod
+    def _normalize_email_attachment(
+        attachment: Any,
+        entry_id: str,
+        index: int,
+    ) -> dict[str, Any]:
+        """Normalize one corpus attachment into EmailAttachmentSpec-compatible metadata."""
+        if not isinstance(attachment, dict):
+            raise ValueError(
+                f"email_corpus.yaml message {entry_id!r} attachments.{index} must be a mapping"
+            )
+        filename = str(attachment.get("filename") or "").strip()
+        if not filename:
+            raise ValueError(
+                f"email_corpus.yaml message {entry_id!r} attachments.{index}.filename is required"
+            )
+        content = attachment.get("content")
+        size = attachment.get("size")
+        if size is None:
+            size = len(str(content or "").encode("utf-8"))
+        return {
+            "filename": filename,
+            "content_type": str(attachment.get("content_type") or "application/octet-stream"),
+            "size": int(size),
+            "content": None if content is None else str(content),
+        }
 
     def _execute_email_delivery_bundle(self, request: EmailDeliveryRequest) -> EmailDeliveryResult:
         """Expand one email message into DNS, SMTP, artifact, and manifest evidence."""
@@ -11041,13 +11241,29 @@ class ActivityGenerator:
                 f"{request.system.hostname}:{request.time.isoformat()}:{spec.subject or ''}"
             )
         )
+        corpus_entry = self._email_corpus_entry(spec.corpus_id)
         sender = (spec.sender or request.actor.email).lower()
         recipients_all = list(dict.fromkeys([*spec.to, *spec.cc, *spec.bcc]))
         expanded_recipients = self._expand_email_recipients(recipients_all)
-        subject = spec.subject or self._deterministic_email_subject(
-            sender, expanded_recipients, rng
+        subject = (
+            spec.subject
+            or (corpus_entry.subject if corpus_entry is not None else "")
+            or self._deterministic_email_subject(sender, expanded_recipients, rng)
         )
-        body = spec.body if spec.body is not None else self._deterministic_email_body(subject, rng)
+        body = (
+            spec.body
+            if spec.body is not None
+            else (
+                corpus_entry.body
+                if corpus_entry is not None
+                else self._deterministic_email_body(subject, rng)
+            )
+        )
+        attachments = (
+            [dict(attachment) for attachment in corpus_entry.attachments]
+            if corpus_entry is not None
+            else [att.model_dump() for att in spec.attachments]
+        )
         artifact_id = spec.artifact_id or self._email_artifact_id(
             request.storyline_id,
             sender,
@@ -11056,7 +11272,11 @@ class ActivityGenerator:
         )
         message_id = self._email_message_id(artifact_id, sender)
         date_header = request.time.strftime("%a, %d %b %Y %H:%M:%S +0000")
-        user_agent = spec.user_agent or self._email_user_agent(request.system, rng)
+        user_agent = (
+            spec.user_agent
+            or (corpus_entry.user_agent if corpus_entry is not None else "")
+            or self._email_user_agent(request.system, rng)
+        )
         route = self._plan_email_route(sender, expanded_recipients, request.system)
         received_headers = self._received_headers_for_route(
             route=route,
@@ -11078,7 +11298,8 @@ class ActivityGenerator:
             user_agent=user_agent,
             body=body,
             body_size=len(body.encode("utf-8")),
-            attachments=[att.model_dump() for att in spec.attachments],
+            custom_headers=dict(corpus_entry.headers or {}) if corpus_entry is not None else {},
+            attachments=attachments,
             verdict=spec.verdict,
             mail_action=spec.mail_action,
             outcome=spec.outcome,
@@ -11104,6 +11325,16 @@ class ActivityGenerator:
                 if spec.outcome == "delivered"
                 else "550 5.7.1 Message rejected"
             )
+            mime_file_transfers = (
+                self._email_mime_file_transfers(
+                    artifact_id=artifact_id,
+                    body=body,
+                    attachments=attachments,
+                    duration=rng.uniform(0.04, 0.4),
+                )
+                if not tls
+                else []
+            )
             smtp_ctx = SmtpContext(
                 helo=self._email_server_fqdn(src_system.hostname),
                 mailfrom=sender,
@@ -11118,7 +11349,7 @@ class ActivityGenerator:
                 user_agent=user_agent,
                 tls=tls,
                 encrypted_message=tls,
-                fuids=self._email_fuids(artifact_id, spec.attachments) if not tls else [],
+                fuids=[file_transfer.fuid for file_transfer in mime_file_transfers],
             )
             uid = self.generate_connection(
                 src_ip=src_system.ip,
@@ -11136,6 +11367,7 @@ class ActivityGenerator:
                 hostname=self._email_server_fqdn(dst_system.hostname),
                 email=email_ctx,
                 smtp=smtp_ctx,
+                file_transfers=mime_file_transfers,
                 suppress_application_side_effects=True,
             )
             if uid:
@@ -11155,6 +11387,11 @@ class ActivityGenerator:
             artifact_path = self._write_email_artifact(email_ctx)
             email_ctx.artifact_path = artifact_path
         self._record_email_artifact_manifest(email_ctx, route_summary, artifact_path)
+        self._maybe_generate_email_recipient_reads(
+            email_ctx=email_ctx,
+            delivery_time=request.time,
+            rng=rng,
+        )
         return EmailDeliveryResult(
             artifact_id=artifact_id,
             message_id=message_id,
@@ -11583,12 +11820,125 @@ class ActivityGenerator:
                     suppress_application_side_effects=True,
                 )
 
-    @staticmethod
-    def _email_fuids(artifact_id: str, attachments: list[Any]) -> list[str]:
-        return [
-            f"F{_stable_seed(f'email-fuid:{artifact_id}:{idx}'):017x}"[:18]
-            for idx, _ in enumerate(attachments)
+    def _email_mime_file_transfers(
+        self,
+        *,
+        artifact_id: str,
+        body: str,
+        attachments: list[dict[str, Any]],
+        duration: float,
+    ) -> list[FileTransferContext]:
+        """Return Zeek files.log metadata for all visible SMTP MIME parts."""
+        parts: list[dict[str, Any]] = [
+            {
+                "name": "",
+                "mime_type": "text/plain",
+                "content": body,
+                "size": len(body.encode("utf-8")),
+            }
         ]
+        for attachment in attachments:
+            content = str(attachment.get("content") or "")
+            size = int(attachment.get("size") or len(content.encode("utf-8")))
+            parts.append(
+                {
+                    "name": str(attachment.get("filename") or "attachment.bin"),
+                    "mime_type": str(attachment.get("content_type") or "application/octet-stream"),
+                    "content": content,
+                    "size": size,
+                }
+            )
+        transfers: list[FileTransferContext] = []
+        for depth, part in enumerate(parts):
+            seed = f"email-mime:{artifact_id}:{depth}:{part['name']}:{part['mime_type']}"
+            payload = f"{seed}:{part['content']}:{part['size']}".encode()
+            size = max(0, int(part["size"]))
+            analyzers = ["MD5", "SHA1", "SHA256"]
+            transfers.append(
+                FileTransferContext(
+                    fuid=f"F{_stable_seed(seed):017x}"[:18],
+                    source="SMTP",
+                    depth=depth,
+                    filename=str(part["name"]),
+                    analyzers=analyzers,
+                    mime_type=str(part["mime_type"]),
+                    duration=max(0.001, duration * (1.0 + depth * 0.15)),
+                    local_orig=True,
+                    is_orig=True,
+                    seen_bytes=size,
+                    total_bytes=size,
+                    missing_bytes=0,
+                    overflow_bytes=0,
+                    timedout=False,
+                    md5=hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+                    sha1=hashlib.sha1(payload, usedforsecurity=False).hexdigest(),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                )
+            )
+        return transfers
+
+    def _maybe_generate_email_recipient_reads(
+        self,
+        *,
+        email_ctx: EmailContext,
+        delivery_time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Generate low-rate opaque mailbox reads after delivered internal mail."""
+        if email_ctx.outcome != "delivered":
+            return
+        users_by_email = {
+            user.email.lower(): user for user in self._scenario_environment.users if user.email
+        }
+        for recipient in email_ctx.expanded_rcptto[:8]:
+            user = users_by_email.get(recipient.lower())
+            if user is None:
+                continue
+            if rng.random() > 0.72:
+                continue
+            system = self._system_for_email_user(user)
+            if system is None:
+                continue
+            server_name = self._email_server_for_user_address(recipient)
+            server_system = self._email_system_for_server_name(server_name)
+            server_cfg = self._email_servers_by_name()[server_name]
+            read_delay = timedelta(seconds=rng.uniform(90.0, 2700.0))
+            read_time = delivery_time + read_delay
+            if not self._is_within_scenario_window(read_time):
+                continue
+            protocol = "owa" if server_cfg.platform == "exchange" else "imaps"
+            self.generate_email_access(
+                user=user,
+                system=system,
+                server=server_system,
+                time=read_time,
+                platform=server_cfg.platform,
+                protocol=protocol,
+                user_agent=email_ctx.user_agent,
+                message_ids=(email_ctx.message_id, email_ctx.artifact_id),
+            )
+
+    def _system_for_email_user(self, user: "User") -> "System | None":
+        """Return a user's likely mailbox client system."""
+        if user.primary_system:
+            system = next(
+                (
+                    candidate
+                    for candidate in self._scenario_environment.systems
+                    if candidate.hostname == user.primary_system
+                ),
+                None,
+            )
+            if system is not None:
+                return system
+        return next(
+            (
+                candidate
+                for candidate in self._scenario_environment.systems
+                if candidate.assigned_user == user.username
+            ),
+            None,
+        )
 
     def _should_materialize_email_artifact(self, artifact_id: str, storyline_id: str) -> bool:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
@@ -11624,6 +11974,20 @@ class ActivityGenerator:
             msg["User-Agent"] = email_ctx.user_agent
         for received in email_ctx.received_headers:
             msg["Received"] = received
+        owned_headers = {
+            "message-id",
+            "date",
+            "from",
+            "to",
+            "cc",
+            "bcc",
+            "subject",
+            "user-agent",
+            "received",
+        }
+        for header, value in sorted(email_ctx.custom_headers.items()):
+            if header.lower() not in owned_headers:
+                msg[header] = value
         msg.set_content(email_ctx.body or "")
         for attachment in email_ctx.attachments:
             content = str(attachment.get("content") or "")
@@ -11715,6 +12079,7 @@ class ActivityGenerator:
         http = request.http
         caller_supplied_http = http is not None
         file_transfer = request.file_transfer
+        file_transfers = request.file_transfers
         pe = request.pe
         ocsp = request.ocsp
         proxy = request.proxy
@@ -12896,6 +13261,8 @@ class ActivityGenerator:
             event.http = http
         if file_transfer is not None:
             event.file_transfer = file_transfer
+        if file_transfers:
+            event.file_transfers = list(file_transfers)
         if pe is not None:
             event.pe = pe
         if ocsp is not None:

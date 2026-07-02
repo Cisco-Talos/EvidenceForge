@@ -48,8 +48,10 @@ class GroundTruthAttributesBase(BaseModel):
     logon_type: int | None = None
     mail_action: str | None = None
     mac_address: str | None = None
+    mailbox: str | None = None
     member_name: str | None = None
     message_id: str | None = None
+    message_ids: list[str] | None = None
     network_target: str | None = None
     network_target_ip: str | None = None
     network_target_port: int | None = None
@@ -71,6 +73,7 @@ class GroundTruthAttributesBase(BaseModel):
     rendered_sha256: str | None = None
     request_count: int | None = None
     scheme: str | None = None
+    server: str | None = None
     service_file_name: str | None = None
     service_name: str | None = None
     sender: str | None = None
@@ -390,6 +393,15 @@ class EmailMessageGroundTruthEvent(GroundTruthEventBase):
     attributes: EmailMessageAttributes = Field(default_factory=EmailMessageAttributes)
 
 
+class EmailReadAttributes(GroundTruthAttributesBase):
+    """Email read/access event attributes."""
+
+
+class EmailReadGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["email_read"]
+    attributes: EmailReadAttributes = Field(default_factory=EmailReadAttributes)
+
+
 class WebScanGroundTruthEvent(GroundTruthEventBase):
     kind: Literal["web_scan"]
     attributes: WebScanAttributes = Field(default_factory=WebScanAttributes)
@@ -498,6 +510,7 @@ GroundTruthEvent = Annotated[
     | BeaconGroundTruthEvent
     | DnsQueryGroundTruthEvent
     | EmailMessageGroundTruthEvent
+    | EmailReadGroundTruthEvent
     | WebScanGroundTruthEvent
     | CredentialSprayGroundTruthEvent
     | DgaQueriesGroundTruthEvent

@@ -118,6 +118,7 @@ class SecurityEvent:
     ssl: SslContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
+    file_transfers: list[FileTransferContext] = field(default_factory=list)
     x509: X509Context | None = None
     x509_chain: list[X509Context] = field(default_factory=list)
     dhcp: DhcpContext | None = None

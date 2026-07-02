@@ -270,7 +270,11 @@ def generate(
         from evidenceforge.validation import ScenarioValidator
 
         console.print("\n[bold]Validating cross-references...[/bold]")
-        validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
+        validator = ScenarioValidator(
+            scenario,
+            oob_hosts=oob_hosts,
+            scenario_root=scenario_file.parent,
+        )
         issues = validator.validate()
 
         if issues:
@@ -326,6 +330,7 @@ def generate(
         raise typer.Exit(EXIT_INPUT_ERROR)
 
     # Determine output directory
+    scenario_dir = scenario_file.parent
     if output:
         # Explicit --output flag: logs in data/ subdirectory, ground truth at root
         data_dir = output / "data"
@@ -333,7 +338,6 @@ def generate(
     else:
         # Default: derive from scenario file location
         # scenarios/<name>/scenario.yaml → data goes to scenarios/<name>/data/
-        scenario_dir = scenario_file.parent
         data_dir = scenario_dir / "data"
         ground_truth_dir = scenario_dir
     artifacts_dir = ground_truth_dir / "artifacts"
@@ -494,6 +498,7 @@ def generate(
                 progress_callback=progress_callback,
                 ground_truth_dir=gen_gt_dir,
                 artifact_dir=gen_artifacts_dir,
+                scenario_root=scenario_dir,
                 output_target=output_target,
                 oob_hosts=oob_hosts,
             )
@@ -734,7 +739,11 @@ def validate(
     from evidenceforge.validation import ScenarioValidator
 
     console.print("\n[bold]Validating cross-references...[/bold]")
-    validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
+    validator = ScenarioValidator(
+        scenario,
+        oob_hosts=oob_hosts,
+        scenario_root=scenario_file.parent,
+    )
     issues = validator.validate()
 
     if issues:

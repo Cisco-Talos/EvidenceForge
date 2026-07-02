@@ -81,6 +81,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         progress_callback: Callable[[str, dict], None] | None = None,
         ground_truth_dir: Path | None = None,
         artifact_dir: Path | None = None,
+        scenario_root: Path | None = None,
         output_target: str | OutputTarget | None = None,
         oob_hosts: tuple[str, ...] = (),
     ):
@@ -92,6 +93,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             progress_callback: Optional callback for progress reporting.
                 Called with (event_type: str, data: dict) at key milestones.
             ground_truth_dir: Directory for GROUND_TRUTH.md. Defaults to output_dir.
+            scenario_root: Directory used to resolve scenario-relative sidecar inputs.
             output_target: Render/layout target for generated output.
             oob_hosts: Operator-registered live-callback host(s) for adversarial_payload
                 out-of-band testing (off by default). When set, an adversarial payload's
@@ -100,6 +102,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         reset_thread_rng()
         self.scenario = scenario
         self.output_dir = Path(output_dir)
+        self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
         self.ground_truth_dir = (
             Path(ground_truth_dir) if ground_truth_dir is not None else self.output_dir
         )
@@ -319,6 +322,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self.activity_generator._network_resolver = self.network_resolver
         self.activity_generator._scenario_environment = self.scenario.environment
+        self.activity_generator._scenario_root = self.scenario_root
         self.activity_generator._email_artifact_dir = self.artifact_dir / "email"
         # Live-callback OOB host(s) for adversarial_payload (off by default).
         self.activity_generator._oob_hosts = self.oob_hosts

@@ -2647,6 +2647,17 @@ class StorylineMixin:
                 }
             )
 
+        elif spec.type == "email_read":
+            result = self.activity_generator.generate_email_read(
+                spec=spec,
+                actor=actor,
+                system=system,
+                time=time,
+                activity=activity,
+                storyline_id=getattr(dispatcher, "storyline_cluster_id", "") or "",
+            )
+            malicious_event.update(result)
+
         elif spec.type == "process":
             os_category = _get_os_category(system.os)
             if hasattr(self, "world_planner"):

@@ -119,7 +119,8 @@ text or AI-generated corpus must be authored now in the scenario or companion
 corpus files; `eforge generate` is deterministic and must not call an LLM.
 Client submission is plaintext SMTP on 587 in V1; server relay is port 25; server
 STARTTLS visibility is controlled by `allow_inbound_starttls` and
-`attempt_outbound_starttls`.
+`attempt_outbound_starttls`. Use `email_read` for opaque TLS mailbox access
+sessions; IMAPS uses 993 and OWA-style access uses 443.
 
 **Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how many top-level visitor actions web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). Human page views automatically fan out into required page assets (JS, CSS, images, fonts, same-origin API calls) without consuming additional `web` budget. If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
 
@@ -312,6 +313,7 @@ environment:
       mode: storyline             # none | storyline | selected | all
       selected_ids: []
     background_messages_per_user_per_day: 0.0
+    corpus: email_corpus.yaml     # Optional scenario-relative content corpus
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer               # Only needed for custom personas; pre-built ones resolve by name
@@ -362,8 +364,13 @@ storyline:                        # The attack events to bury in the data
       #   subject: "Quarterly forecast review"
       #   body: |
       #     Please review the attached notes.
+      #   # Or use corpus_id: phishing-note with body/attachments in email_corpus.yaml
       #   verdict: phishing       # clean | spam | phishing | malware | suspicious
       #   mail_action: deliver    # deliver | reject | quarantine | strip_attachment
+      # - type: email_read
+      #   mailbox: victim@example.com
+      #   protocol: imaps         # imaps | owa; defaults from mailbox server platform
+      #   message_ids: []         # Documentation/correlation only; reads are TLS opaque
 
 red_herrings:                     # Optional: suspicious-but-benign events
   - id: rh-afterhours

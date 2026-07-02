@@ -53,18 +53,24 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             event.event_type in self._supported_types
             and event.network is not None
             and (
-                event.file_transfer is not None or bool(event.x509_chain) or event.x509 is not None
+                event.file_transfer is not None
+                or bool(event.file_transfers)
+                or bool(event.x509_chain)
+                or event.x509 is not None
             )
         )
 
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
-        ft = event.file_transfer
+        file_transfers = list(event.file_transfers)
+        if event.file_transfer is not None:
+            file_transfers.insert(0, event.file_transfer)
         sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
-        if ft is not None:
+        for ft in file_transfers:
             file_ts, file_duration = _bounded_file_transfer_observation(
                 event,
                 min_start=_related_http_analyzer_timestamp(event),
+                file_transfer=ft,
             )
             event_data: dict[str, Any] = {
                 "ts": file_ts,
@@ -363,10 +369,11 @@ def _file_transfer_analyzer_timestamp(
 def _bounded_file_transfer_observation(
     event: SecurityEvent,
     min_start: datetime | None = None,
+    file_transfer: Any | None = None,
 ) -> tuple[datetime, float]:
     """Keep files.log observation timing inside the owning conn.log interval."""
     net = event.network
-    ft = event.file_transfer
+    ft = file_transfer or event.file_transfer
     if net is None or ft is None:
         return event.timestamp, 0.0
     conn_ts = _SOURCE_TIMING.source_time(

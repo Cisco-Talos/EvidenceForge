@@ -916,7 +916,7 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data[fuid_field] = self._derive_sensor_file_id(
                             original_fuid, hostname
                         )
-                for fuid_list_field in ("cert_chain_fuids", "resp_fuids"):
+                for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
                     fuid_values = render_data.get(fuid_list_field)
                     if isinstance(fuid_values, list):
                         render_data[fuid_list_field] = [

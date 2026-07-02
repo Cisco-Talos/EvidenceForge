@@ -438,6 +438,10 @@ the receiver-side endpoint file evidence after the SSH bundle owns transport,
 auth, and session timing. Large or download-scale HTTP responses attach the HTTP
 file-transfer bundle deterministically after canonical HTTP metadata is known,
 including caller-provided HTTP contexts from browser-session, proxy,
+and storyline paths. Email delivery uses the same canonical file-transfer
+context list for plaintext SMTP MIME parts, so `smtp.log.fuids` and `files.log`
+rows share the owning SMTP connection UID. STARTTLS-protected SMTP hops keep the
+message content opaque and do not attach MIME file contexts.
 process-command, or storyline paths. This keeps transport/session ownership
 separate from file evidence while preventing each caller from inventing transfer
 metadata independently.

@@ -64,7 +64,8 @@ level above) the data directory.
 Email artifacts are generated sidecars: use `artifacts/email/EMAIL_ARTIFACTS.json`
 and `.eml` files when investigating `email_message` ground truth. Other optional
 `artifacts/` contents may still be authored exercise collateral rather than log
-input.
+input. The evaluator discovers `artifacts/email/EMAIL_ARTIFACTS.json` as a
+sibling of the `data/` directory and parses one record per manifest message.
 
 If they don't specify, look for scenario directories under `scenarios/`. Ask if you can't find it.
 
@@ -104,7 +105,7 @@ For each pillar, explain what the score means in practical terms:
 - Value & OS Plausibility: Are field values and OS/platform combinations realistic? (bash_history from a Windows host, Linux paths in Windows process events, IPs outside expected subnets — all failures here.)
 - Co-occurrence Rules: Do field combinations make sense? (Network logons have IP addresses; TLS version matches cipher suite; no body in CONNECT tunnels.)
 - Distribution Fit: Are event-type proportions realistic for each format?
-- Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins defined in `cross_source_pairs.yaml` — pairs include Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+host → same process name), zeek_conn ↔ Cisco ASA (same 4-tuple), web_access/proxy ↔ zeek_http (same client+URI+10s bucket → same status/method), zeek_ssl ↔ zeek_x509 (cert chain fuids → server_name ∈ SAN), and email artifact metadata ↔ Zeek SMTP where plaintext visibility permits. A score below 100 means real field disagreements were found.
+- Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins defined in `cross_source_pairs.yaml` plus built-in email checks — pairs include Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+host → same process name), zeek_conn ↔ Cisco ASA (same 4-tuple), web_access/proxy ↔ zeek_http (same client+URI+10s bucket → same status/method), zeek_ssl ↔ zeek_x509 (cert chain fuids → server_name ∈ SAN), and email checks where SMTP UIDs join to conn.log, visible SMTP FUIDs join to files.log, and plaintext SMTP subject metadata agrees with `EMAIL_ARTIFACTS.json`. A score below 100 means real field disagreements were found.
 - User Behavioral Diversity: Do different users behave differently, or are they cookie-cutter clones?
 - Benign Anomaly Rate: Is there a realistic 1–5% rate of anomalous-but-benign events? Zero anomalies is as implausible as 50%.
 

@@ -1558,7 +1558,43 @@ class EmailMessageEventSpec(_EventSpecBase):
             raise ValueError("email_message requires at least one to, cc, or bcc recipient")
         if self.body is not None and self.corpus_id is not None:
             raise ValueError("email_message cannot specify both body and corpus_id")
+        if self.attachments and self.corpus_id is not None:
+            raise ValueError("email_message cannot specify both attachments and corpus_id")
         return self
+
+
+class EmailReadEventSpec(_EventSpecBase):
+    """Opaque TLS mailbox access/read event."""
+
+    type: Literal["email_read"] = "email_read"
+    mailbox: str | None = Field(
+        default=None,
+        description="Mailbox email address. Defaults to actor.email.",
+    )
+    server: str | None = Field(
+        default=None,
+        description="Optional environment.email mail server name.",
+    )
+    protocol: Literal["imaps", "owa"] | None = Field(
+        default=None,
+        description="TLS-only mailbox access protocol. Defaults from server platform.",
+    )
+    message_ids: list[str] = Field(
+        default_factory=list,
+        description="Optional message/artifact IDs documented for storyline correlation only.",
+    )
+    count: int = Field(default=1, ge=1, le=500)
+    duration: float | None = Field(default=None, gt=0.0)
+    user_agent: str | None = None
+
+    @field_validator("mailbox")
+    @classmethod
+    def validate_mailbox(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not re.match(r"^[a-zA-Z0-9._%+$-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v):
+            raise ValueError(f"Invalid mailbox email address: {v}")
+        return v.lower()
 
 
 class RawEventSpec(_EventSpecBase):
@@ -1605,6 +1641,7 @@ EventSpec = Annotated[
     | SpillageEventSpec
     | AdversarialPayloadEventSpec
     | EmailMessageEventSpec
+    | EmailReadEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

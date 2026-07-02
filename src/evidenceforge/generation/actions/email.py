@@ -49,6 +49,10 @@ class EmailAccessRequest:
     server: System
     time: datetime
     platform: str = "generic_smtp"
+    protocol: str = ""
+    duration: float | None = None
+    user_agent: str = ""
+    message_ids: tuple[str, ...] = ()
 
 
 class EmailDeliveryExecutor(Protocol):
