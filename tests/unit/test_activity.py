@@ -7102,6 +7102,96 @@ class TestActivityGenerator:
         child = process_events[-1]
         assert child.process.parent_pid != one_shot_parent_pid
 
+    def test_generate_process_spaces_bare_shell_child_commands(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Human-entered commands should not spawn immediately after an interactive shell."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x44444"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp)
+        shell_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Users\testuser\.cargo\bin\cargo.exe",
+            "cargo.exe build --release",
+            parent_pid=shell_pid,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == shell_pid
+        assert child.timestamp >= timestamp + timedelta(seconds=8)
+
+    def test_storyline_process_preserves_bare_shell_child_timing(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Explicit storyline timing remains authoritative for shell child commands."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x55555"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp)
+        shell_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        requested_time = timestamp + timedelta(seconds=1)
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            requested_time,
+            logon_id,
+            r"C:\Users\testuser\.cargo\bin\cargo.exe",
+            "cargo.exe build --release",
+            parent_pid=shell_pid,
+            from_storyline=True,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == shell_pid
+        assert child.timestamp == requested_time
+
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

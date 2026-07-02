@@ -9514,6 +9514,15 @@ class ActivityGenerator:
         repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
         if repaired_parent is not None and time <= repaired_parent.start_time:
             time = repaired_parent.start_time + timedelta(milliseconds=50)
+        if not from_storyline:
+            spaced_time = self._space_interactive_shell_child_launch(
+                system=system,
+                process_name=process_name,
+                parent_pid=parent_pid,
+                time=time,
+            )
+            if spaced_time != time:
+                time = spaced_time
         self.state_manager.set_current_time(time)
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
@@ -21434,6 +21443,43 @@ class ActivityGenerator:
         if proc is None:
             return False
         return self._is_one_shot_shell_command(proc.image, proc.command_line)
+
+    def _is_bare_interactive_windows_shell(self, process_name: str, command_line: str) -> bool:
+        """Return whether a shell is an interactive prompt rather than an inline command."""
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
+            return False
+        return not self._is_one_shot_shell_command(process_name, command_line)
+
+    def _space_interactive_shell_child_launch(
+        self,
+        *,
+        system: System,
+        process_name: str,
+        parent_pid: int,
+        time: datetime,
+    ) -> datetime:
+        """Add human-scale dwell time before visible children of bare shells."""
+        if _get_os_category(system.os) != "windows":
+            return time
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if process_exe in self._WINDOWS_SHELL_NAMES or process_exe == "conhost.exe":
+            return time
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_proc is None or parent_proc.start_time is None:
+            return time
+        if not self._is_bare_interactive_windows_shell(parent_proc.image, parent_proc.command_line):
+            return time
+        rng = random.Random(
+            _stable_seed(
+                f"interactive_shell_child_gap:{system.hostname}:{parent_pid}:"
+                f"{process_exe}:{parent_proc.start_time.isoformat()}"
+            )
+        )
+        minimum_child_time = parent_proc.start_time + timedelta(seconds=rng.uniform(8.0, 45.0))
+        if time < minimum_child_time:
+            return minimum_child_time
+        return time
 
     def _windows_remote_command_owner_pid(
         self,
