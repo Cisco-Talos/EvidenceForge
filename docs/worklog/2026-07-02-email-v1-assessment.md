@@ -1066,3 +1066,61 @@ realism: one report found MIME part timestamps out of source order, and another
 found identical tiny body hashes reused across unrelated message IDs. Loop 21
 should preserve MIME part observation order and diversify generated body
 content at the owning email body/MIME file-transfer layer.
+
+## Loop 21
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: canonical email body/MIME rendering and Zeek file
+  sibling observation for SMTP transfers.
+- Invariant: generated `.eml` body parts and Zeek `files.json` body/attachment
+  rows should vary by message context and render in plausible source order
+  within the parent SMTP connection.
+- Entry paths: storyline artifact-backed mail, corpus-backed background mail,
+  template-backed background mail, plaintext SMTP MIME extraction, encrypted
+  SMTP visibility reduction, and multi-part attachment rendering.
+- Consumers: `.eml` artifacts, `EMAIL_ARTIFACTS.json`, Zeek `smtp.json`,
+  Zeek `files.json`, evaluator consistency checks, and blind
+  detection/network review.
+- Residual sibling risk: mail-route DNS transaction texture, fixed
+  Received-header timing, SMTP byte/duration texture, external SMTP peer role
+  realism, port-587 plaintext posture, endpoint mail-client attribution, and
+  manifest label leakage remain separate families.
+
+Implemented fixes:
+
+- Added deterministic message-context lines to generated body content so
+  template-backed messages no longer produce identical small body hashes across
+  unrelated message IDs.
+- Contextualized corpus-backed background message bodies without changing
+  storyline-authored artifact content.
+- Made sibling Zeek MIME file observations monotonic within the parent SMTP
+  connection instead of allowing later MIME parts to render before earlier
+  parts.
+- Added regression coverage for cross-message body hash reuse and MIME file
+  timestamp ordering.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found zero MIME order inversions and
+  zero cross-message body hash reuse.
+- Automated eval passed with score 96 over 72,829 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 67.
+- Detection Engineer: Inconclusive, synthetic-confidence 46.
+- Network Forensics: Synthetic, synthetic-confidence 82.
+- Host/EDR: Synthetic, synthetic-confidence 84.
+- Average: 69.75.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 22. The MIME/body findings did not recur in the local probe, but the
+Network and Detection reviews both pointed at mail-route DNS texture and
+mechanical Received/header timing. Loop 22 should vary email DNS transaction
+IDs, TTLs, and RTTs, and avoid fixed relay gaps in generated Received headers.
