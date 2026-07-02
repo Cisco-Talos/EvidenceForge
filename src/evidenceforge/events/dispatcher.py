@@ -188,6 +188,16 @@ class EventDispatcher:
                 status = "delayed"
             event_to_emit._observed_formats = observed_formats
             event_to_emit = self.source_timing_planner.plan_event(event_to_emit)
+            if (
+                event_to_emit.event_type != "process_terminate"
+                and event_to_emit.process is not None
+                and event_to_emit.src_host is not None
+            ):
+                self.state_manager.update_process_activity_time(
+                    event_to_emit.src_host.hostname,
+                    event_to_emit.process.pid,
+                    event_to_emit.timestamp,
+                )
             self._record_observation(event, format_name, status)
             if event.raw is not None:
                 emitter.emit_raw(event_to_emit.raw.fields)

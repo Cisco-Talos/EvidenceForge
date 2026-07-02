@@ -224,6 +224,82 @@ class TestObservationProfiles:
         assert event.timestamp == _make_ts()
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"delayed": 1}
 
+    def test_delayed_process_source_observation_extends_process_activity(
+        self,
+        monkeypatch,
+    ):
+        """Delayed endpoint source rows should keep process lifetimes behind visible activity."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "sysmon": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 900000, "max_ms": 900000},
+                    }
+                },
+            },
+        )
+        timestamp = _make_ts()
+        sm = StateManager()
+        sm.set_current_time(timestamp)
+        pid = sm.create_process(
+            system="WS-01",
+            parent_pid=0,
+            image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line="chrome.exe",
+            username="alice",
+            integrity_level="Medium",
+            logon_id="0x100",
+        )
+        emitter = _make_mock_emitter("sysmon", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_sysmon": emitter},
+            observation_policy=ObservationPolicy("delayed_process_activity_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=timestamp + timedelta(minutes=5),
+            event_type="connection",
+            src_host=HostContext(
+                hostname="WS-01",
+                fqdn="WS-01.example.local",
+                ip="10.0.0.10",
+                os="Windows 10",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                command_line="chrome.exe",
+                username="alice",
+                logon_id="0x100",
+                start_time=timestamp,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=50123,
+                dst_ip="10.0.0.20",
+                dst_port=8080,
+                protocol="tcp",
+                initiating_pid=pid,
+            ),
+        )
+
+        dispatcher.dispatch(event)
+
+        running = sm.get_process("WS-01", pid)
+        assert running is not None
+        assert running.last_activity_time == event.timestamp + timedelta(milliseconds=900000)
+
     def test_zeek_observation_delay_is_coherent_per_uid(self, monkeypatch):
         """Zeek protocol rows for one UID should share source collection delay."""
         monkeypatch.setattr(
