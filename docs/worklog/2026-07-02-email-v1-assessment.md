@@ -732,3 +732,62 @@ Result: average blind synthetic-confidence is `<=45`, so email routing and
 recipient semantics is temporarily solved under the user's special rule. Loop
 15 should move to Zeek cross-source contracts. Best next candidate: DNS answer
 TTL/cache consistency into later TLS/HTTP connections.
+
+## Loop 15
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: DNS lookup action bundle plus client/resolver cache state.
+- Invariant: local hostname-backed TCP activity should not depend on visibly
+  expired DNS answers, and DNS cache suppression must be evaluated against the
+  event timestamp, not generation order.
+- Entry paths: causal DNS-before-TCP expansion, explicit hostname-backed local
+  TCP connections, proxy-origin connections, email access/read sessions,
+  internal service lookups, and direct DNS connection compatibility paths.
+- Consumers: Zeek `dns.json`, `conn.json`, `ssl.json`, `http.json`, proxy
+  evidence, endpoint flow rows, and evaluator/blind-review cross-source checks.
+- Residual sibling risk: DNS still repeats internal service answers inside TTL
+  through non-forced/background DNS paths; generic failed-connection scan
+  texture, SMTP submission TLS posture, and RDP endpoint ordering remain
+  separate families.
+
+Implemented fixes:
+
+- Client DNS cache now stores validity windows `(cached_at, cached_until)` based
+  on the TTL returned in visible `dns.json` rather than only a last-query
+  timestamp or authoritative TTL.
+- Cache suppression now requires the current event timestamp to fall inside the
+  cached window, making generation-order inversions safe.
+- Local hostname-backed TCP flows now route through DNS prerequisite evidence
+  even when the caller did not explicitly set `emit_dns`.
+- Connection-prerequisite external A/AAAA lookups avoid near-expired returned
+  TTLs that could expire before the dependent TCP row.
+- Added focused tests for returned-TTL cache suppression, TTL refresh,
+  hostname-backed TCP without `emit_dns`, and future-generated lookups not
+  suppressing earlier timestamped DNS evidence.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_dns_realism.py tests/unit/test_activity.py::test_emit_dns_lookup_prunes_and_bounds_dns_cache tests/unit/test_causal_engine.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after final regeneration found 0 expired DNS
+  dependencies for 1,335 SSL rows with SNI and 62 direct HTTP rows with Host.
+- Automated eval passed with score 96.44 over 86,247 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 42.
+- Detection Engineer: Inconclusive, synthetic-confidence 46.
+- Network Forensics: Synthetic, synthetic-confidence 68.
+- Host/EDR: Synthetic, synthetic-confidence 64.
+- Average: 55.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 16. The expired-DNS reuse finding was resolved, but Network found the
+sibling DNS-cache defect: repeated same-client/same-query/same-answer internal
+DNS lookups inside advertised TTL windows. Loop 16 should target DNS
+repeat-inside-TTL behavior across internal service/background DNS paths while
+preserving the loop-15 expired-answer fix.
