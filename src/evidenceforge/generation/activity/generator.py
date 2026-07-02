@@ -12232,11 +12232,11 @@ class ActivityGenerator:
         month_day = f"{event_time:%b} {event_time.day}"
         reference = f"{seed & 0xFFFF:04X}"
         variants = [
-            f"{subject} - {domain_label}",
-            f"{subject} ({month_day})",
-            f"Re: {subject}",
+            f"{subject} - {domain_label} {reference}",
+            f"{subject} ({month_day}, ref {reference})",
+            f"Re: {subject} [{reference}]",
             f"{subject} / ref {reference}",
-            f"{domain_label}: {subject}",
+            f"{domain_label}: {subject} #{reference}",
         ]
         return variants[rng.randrange(len(variants))]
 
