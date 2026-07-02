@@ -1540,3 +1540,61 @@ outbound smart hosts were still drawn from web/CDN-looking IP families with PTR
 and provider identities that did not look like mail infrastructure. Loop 29
 should add mail-specific public identity pools and use them for external SMTP
 senders, smart hosts, direct MX targets, and PTR answers.
+
+## Loop 29
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: source-native STARTTLS visibility in Zeek SMTP rows.
+- Invariant: STARTTLS-protected SMTP rows should expose only pre-encryption SMTP
+  negotiation facts such as EHLO/STARTTLS replies while keeping post-STARTTLS
+  envelope, headers, body, and file metadata opaque. TLS rows should not look
+  like perfectly blank parser placeholders when Zeek would normally see the
+  `220` reply that begins TLS negotiation.
+- Entry paths: internal STARTTLS relay, outbound smart-host STARTTLS, inbound
+  STARTTLS when modeled, Zeek SMTP rendering, Zeek SSL/X.509 linkage, and
+  evaluator parser/schema checks.
+- Consumers: Zeek `smtp.json`, `conn.json`, `ssl.json`, `files.json`,
+  `x509.json`, `EMAIL_ARTIFACTS.json`, evaluator consistency checks, and blind
+  network/detection review.
+- Residual sibling risk: client-submission TLS posture, endpoint mail-client
+  attribution, source-native MTA logs, SMTP failure/retry texture, DNS
+  causality for cached/internal first-use routes, and answer-key fields in
+  blind-facing artifacts remain separate families.
+
+Implemented fixes feeding loop 29:
+
+- Added data-driven mail-specific public SMTP identity pools under
+  `config/activity/mail_public_identities.yaml`.
+- Routed external SMTP senders, smart hosts, and direct MX targets through the
+  mail-specific public IP helper instead of generic web/CDN public IP pools.
+- Added mail-style PTR answers for mail-specific public IP ranges.
+- Added regression coverage that inbound and outbound external SMTP peers come
+  from the mail identity pool and have mail-style PTR support.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 12 unique external SMTP IPs,
+  all in the mail-specific identity pool, with mail-style PTR evidence for the
+  observed relay PTR lookup.
+- Automated eval passed with score 97 over 69,379 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 48.
+- Detection Engineer: Pass with targeted fixes, synthetic-confidence 38.
+- Network Forensics: Synthetic, synthetic-confidence 74.
+- Host/EDR: Host/EDR realism rejection, synthetic-confidence 88.
+- Average: 62.0.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 30. Detection dropped below the threshold and Threat Hunter nearly did,
+but Network still flagged STARTTLS source semantics and SMTP transaction
+texture. Loop 30 should preserve pre-STARTTLS reply metadata on encrypted SMTP
+rows while continuing to suppress post-STARTTLS envelope, header, body, and
+file metadata.
