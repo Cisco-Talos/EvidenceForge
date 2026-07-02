@@ -573,6 +573,42 @@ class TestHostnameConsistency:
         assert len(address_events) == 2
         assert [event.dns.TTLs for event in address_events] == [[30.0], [30.0]]
 
+    def test_future_generated_lookup_does_not_suppress_earlier_timestamp(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Generation order must not hide DNS evidence needed by earlier connections."""
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            activity_gen,
+            "_dns_observed_ttls",
+            lambda **_kwargs: [300.0],
+        )
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(minutes=5),
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 2
+
     def test_registered_a_rrset_is_stable_across_cache_expirations(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

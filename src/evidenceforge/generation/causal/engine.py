@@ -77,7 +77,7 @@ class ExpansionContext:
     skip_types: set[str] = field(default_factory=set)
 
     # Engine state for caching/dedup
-    dns_cache: dict[tuple[str, str, str, str], float] = field(default_factory=dict)
+    dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = field(default_factory=dict)
     kerberos_cache: dict[str, float] = field(default_factory=dict)
     dns_server_ips: list[str] = field(default_factory=lambda: ["10.0.0.1"])
     dc_hostnames: list[str] = field(default_factory=list)

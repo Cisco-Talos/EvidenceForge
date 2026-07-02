@@ -3342,6 +3342,15 @@ def _dns_base_ttl(query: str, is_internal: bool) -> int:
     return domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
 
 
+def _dns_cache_window(value: object) -> tuple[float, float]:
+    """Return a DNS client-cache validity window from current or legacy state."""
+    if isinstance(value, tuple) and len(value) == 2:
+        return float(value[0]), float(value[1])
+    if isinstance(value, (int, float)):
+        return 0.0, float(value)
+    return 0.0, 0.0
+
+
 def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     """Return whether a DNS query belongs to the scenario's internal namespace."""
     lowered = query.rstrip(".").lower()
@@ -3997,7 +4006,7 @@ class ActivityGenerator:
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
-        self._dns_cache: dict[tuple[str, str, str, str], float] = {}
+        self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
         ] = {}
@@ -7528,7 +7537,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -13141,11 +13150,11 @@ class ActivityGenerator:
             dns_cache_key = (src_ip, dst_ip, hostname, "A")
             ts_epoch = time.timestamp()
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
-            cached_until = self._dns_cache.get(dns_cache_key, 0)
-            if cached_until and cached_until > ts_epoch:
+            cached_at, cached_until = _dns_cache_window(self._dns_cache.get(dns_cache_key))
+            if cached_at <= ts_epoch < cached_until:
                 self._last_connection_effective_dst_ip = dst_ip
                 return ""
-            self._dns_cache[dns_cache_key] = ts_epoch + cache_ttl
+            self._dns_cache[dns_cache_key] = (ts_epoch, ts_epoch + cache_ttl)
 
         state_source_system = resolved_source_system.hostname if resolved_source_system else ""
         state_source_hostname = ""
@@ -16158,7 +16167,7 @@ class ActivityGenerator:
         # authoritative TTL, so later TCP evidence does not depend on visibly
         # expired DNS answers.
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
         if not hasattr(self, "_dns_cache_last_prune"):
             self._dns_cache_last_prune = 0.0
 
@@ -16169,9 +16178,9 @@ class ActivityGenerator:
         if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
             cutoff = ts_epoch
             self._dns_cache = {
-                key: cached_until
-                for key, cached_until in self._dns_cache.items()
-                if cached_until >= cutoff
+                key: cached_window
+                for key, cached_window in self._dns_cache.items()
+                if _dns_cache_window(cached_window)[1] >= cutoff
             }
             if len(self._dns_cache) > 50_000:
                 sorted_items = sorted(
@@ -16211,8 +16220,8 @@ class ActivityGenerator:
             dns_server_ip = _get_rng().choice(dns_ips)
 
         cache_key = (src_ip, dns_server_ip, hostname, "ADDR")
-        cached_until = self._dns_cache.get(cache_key, 0)
-        if force_address and not request.bypass_cache and cached_until and cached_until > ts_epoch:
+        cached_at, cached_until = _dns_cache_window(self._dns_cache.get(cache_key))
+        if force_address and not request.bypass_cache and cached_at <= ts_epoch < cached_until:
             return  # Cache hit — skip DNS emission
 
         _src_os = "windows"
@@ -16353,7 +16362,8 @@ class ActivityGenerator:
         # evidence for high-volume proxy or browser destinations.
         if query == hostname and qtype in (1, 28):
             client_ttl = max(1.0, min(ttls) if ttls else float(base_ttl))
-            self._dns_cache[cache_key] = dns_time.timestamp() + client_ttl
+            cached_at = dns_time.timestamp()
+            self._dns_cache[cache_key] = (cached_at, cached_at + client_ttl)
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(

@@ -9859,11 +9859,14 @@ def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
     ts_now = now.timestamp()
 
     activity_gen._dns_cache = {
-        (f"10.0.0.{i % 255}", "10.0.0.1", f"host-{i}.example.com", "ADDR"): ts_now - 5
+        (f"10.0.0.{i % 255}", "10.0.0.1", f"host-{i}.example.com", "ADDR"): (
+            ts_now - 35,
+            ts_now - 5,
+        )
         for i in range(50_100)
     }
     hot_key = ("10.0.0.5", "10.0.0.1", "active.example.com", "ADDR")
-    activity_gen._dns_cache[hot_key] = ts_now + 30
+    activity_gen._dns_cache[hot_key] = (ts_now - 1, ts_now + 30)
     activity_gen._dns_cache_last_prune = 0.0
 
     activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[2])
