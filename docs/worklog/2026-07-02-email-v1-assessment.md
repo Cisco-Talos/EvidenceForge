@@ -1875,3 +1875,59 @@ Verification:
   leaked exercise fields, and no broken `eml_path` references.
 - Automated eval passed with score 97 over 65,285 records and event presence
   remained 8/8.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 46.
+- Detection Engineer: Real, synthetic-confidence 28.
+- Network Forensics: Synthetic, synthetic-confidence 62.
+- Host/EDR: Inconclusive, synthetic-confidence 43.
+- Average: 44.75.
+
+Result: average blind synthetic-confidence is `<=45`, so the user's special
+rule temporarily clears blind-facing manifest semantics. The next priority
+category for loop 35 is email artifact/content texture: the user observed
+source-native but odd `.eml` header ordering, and loop-34 Threat Hunter still
+found repeated background email subjects across unrelated senders/recipients.
+
+## Loop 35
+
+Priority category: email artifact/content texture.
+
+Family contract:
+
+- Owning abstraction: email delivery bundle corpus adaptation plus `.eml`
+  source-native renderer.
+- Invariant: storyline/corpus-authored message content remains authoritative,
+  but background reuse of a corpus entry gets deterministic per-message subject
+  context so unrelated messages do not expose a tiny phrase pool. Materialized
+  `.eml` headers should use profile-appropriate ordering that resembles common
+  received Outlook, Thunderbird, Apple Mail, and automated-service messages
+  rather than technically valid but odd generic ordering.
+- Entry paths: storyline `.eml` artifacts, background corpus-backed messages,
+  metadata-only background SMTP rows, corpus custom headers, MIME artifacts,
+  Zeek SMTP subject metadata, and `EMAIL_ARTIFACTS.json`.
+- Consumers: `.eml` artifacts, Zeek `smtp.json`, Zeek `files.json`,
+  `EMAIL_ARTIFACTS.json`, evaluator consistency checks, and blind
+  threat-hunter/detection review.
+- Residual sibling risk: broader mail body semantic variety, background corpus
+  size authored by scenario creators, SMTP timestamp anchoring, non-email proxy
+  and scanner texture, and full mailbox client modeling remain separate
+  families.
+
+Implemented fixes feeding loop 35:
+
+- Background corpus-backed messages now get deterministic subject variants
+  based on sender, recipients, and event time, while explicit storyline/event
+  subjects remain unchanged.
+- `.eml` profile header order was adjusted so common original headers and
+  custom headers land in more source-native positions before `Message-ID` and
+  MIME structure where appropriate.
+- Focused tests now cover contextualized background corpus subjects and the
+  updated header-order invariants for Outlook-like and automated service
+  messages.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.

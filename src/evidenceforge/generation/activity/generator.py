@@ -11593,6 +11593,13 @@ class ActivityGenerator:
             or (corpus_entry.subject if corpus_entry is not None else "")
             or self._deterministic_email_subject(sender, expanded_recipients, rng)
         )
+        if corpus_entry is not None and not request.storyline_id and spec.subject is None:
+            subject = self._contextualize_background_email_subject(
+                subject,
+                sender=sender,
+                recipients=expanded_recipients,
+                event_time=request.time,
+            )
         if spec.body is not None:
             body = spec.body
         elif corpus_entry is not None:
@@ -12203,6 +12210,35 @@ class ActivityGenerator:
             f"{seed & 0xFFFF:04X}-{(seed >> 16) & 0xFFF:03X}\n"
         )
         return body.rstrip() + context_line
+
+    def _contextualize_background_email_subject(
+        self,
+        subject: str,
+        *,
+        sender: str,
+        recipients: list[str],
+        event_time: datetime,
+    ) -> str:
+        """Return a deterministic per-message subject variant for reused background corpus."""
+        seed = _stable_seed(
+            "background_email_corpus_subject:"
+            f"{sender}:{','.join(recipients)}:{subject}:{event_time.isoformat()}"
+        )
+        rng = random.Random(seed)
+        recipient_domain = (
+            self._email_domain(recipients[0]) if recipients else self._email_domain(sender)
+        )
+        domain_label = recipient_domain.split(".", 1)[0].replace("-", " ").title()
+        month_day = f"{event_time:%b} {event_time.day}"
+        reference = f"{seed & 0xFFFF:04X}"
+        variants = [
+            f"{subject} - {domain_label}",
+            f"{subject} ({month_day})",
+            f"Re: {subject}",
+            f"{subject} / ref {reference}",
+            f"{domain_label}: {subject}",
+        ]
+        return variants[rng.randrange(len(variants))]
 
     def _email_body_with_transport_footer(
         self,
@@ -13222,9 +13258,9 @@ class ActivityGenerator:
                 "To",
                 "Cc",
                 "Subject",
+                "_CUSTOM",
                 "Message-ID",
                 "User-Agent",
-                "_CUSTOM",
                 "MIME-Version",
                 "Content-Type",
                 "Content-Transfer-Encoding",
@@ -13232,14 +13268,14 @@ class ActivityGenerator:
         if profile == "apple_mail":
             return [
                 "Return-Path",
+                "Date",
                 "From",
                 "To",
                 "Cc",
                 "Subject",
-                "Date",
-                "Message-ID",
                 "X-Mailer",
                 "_CUSTOM",
+                "Message-ID",
                 "MIME-Version",
                 "Content-Type",
                 "Content-Transfer-Encoding",
@@ -13251,28 +13287,28 @@ class ActivityGenerator:
                 "From",
                 "To",
                 "Cc",
-                "Message-ID",
                 "Subject",
                 "Auto-Submitted",
                 "X-Auto-Response-Suppress",
                 "X-Mailer",
                 "_CUSTOM",
+                "Message-ID",
                 "MIME-Version",
                 "Content-Type",
                 "Content-Transfer-Encoding",
             ]
         return [
             "Return-Path",
+            "Date",
             "From",
             "To",
             "Cc",
             "Subject",
-            "Date",
-            "Message-ID",
             "Thread-Topic",
             "X-MS-Has-Attach",
             "X-Mailer",
             "_CUSTOM",
+            "Message-ID",
             "MIME-Version",
             "Content-Type",
             "Content-Transfer-Encoding",
