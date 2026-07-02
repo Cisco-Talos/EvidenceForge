@@ -99,7 +99,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
-from evidenceforge.models.scenario import Persona, System, User
+from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
@@ -2558,6 +2558,7 @@ class BaselineMixin:
                 )
 
         self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
+        self._generate_baseline_email(current_hour, enabled_users)
         self._generate_traffic_affinities(current_hour, local_dt, planned_logoffs)
         self._generate_stale_account_noise(current_hour)
         self._generate_baseline_failed_logons(current_hour)
@@ -2582,6 +2583,56 @@ class BaselineMixin:
 
         if flush_emitters:
             self._barrier_flush_all_emitters()
+
+    def _generate_baseline_email(self, current_hour: datetime, enabled_users: list) -> None:
+        """Generate low-volume deterministic background email when explicitly configured."""
+        email_config = self.scenario.environment.email
+        if email_config is None or email_config.background_messages_per_user_per_day <= 0:
+            return
+        if self.start_time is not None and current_hour < self.start_time:
+            return
+        recipients = [user for user in enabled_users if user.email]
+        if len(recipients) < 2:
+            return
+        hourly_rate = email_config.background_messages_per_user_per_day / 24.0
+        for user in recipients:
+            rng = random.Random(
+                _stable_seed(f"baseline_email:{self.scenario.name}:{user.username}:{current_hour}")
+            )
+            if rng.random() >= min(1.0, hourly_rate):
+                continue
+            target = rng.choice(
+                [candidate for candidate in recipients if candidate.username != user.username]
+            )
+            source_system = self._find_system(user.primary_system or "")
+            if source_system is None:
+                source_system = next(
+                    (
+                        system
+                        for system in self.scenario.environment.systems
+                        if system.assigned_user == user.username
+                    ),
+                    None,
+                )
+            if source_system is None:
+                continue
+            event_time = current_hour + timedelta(seconds=rng.uniform(300, 3300))
+            spec = EmailMessageEventSpec(
+                to=[target.email],
+                subject=None,
+                body=None,
+                verdict="clean",
+                mail_action="deliver",
+                outcome="delivered",
+            )
+            self.activity_generator.generate_email_message(
+                spec=spec,
+                actor=user,
+                system=source_system,
+                time=event_time,
+                activity="Background email",
+                storyline_id="",
+            )
 
     def _generate_traffic_affinities(
         self,

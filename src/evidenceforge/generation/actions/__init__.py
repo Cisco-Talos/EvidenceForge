@@ -56,6 +56,13 @@ from evidenceforge.generation.actions.dns_lookup import (
     DnsLookupActionBundle,
     DnsLookupRequest,
 )
+from evidenceforge.generation.actions.email import (
+    EmailAccessActionBundle,
+    EmailAccessRequest,
+    EmailDeliveryActionBundle,
+    EmailDeliveryRequest,
+    EmailDeliveryResult,
+)
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
@@ -175,6 +182,11 @@ __all__ = [
     "DhcpLeaseRequest",
     "DnsLookupActionBundle",
     "DnsLookupRequest",
+    "EmailAccessActionBundle",
+    "EmailAccessRequest",
+    "EmailDeliveryActionBundle",
+    "EmailDeliveryRequest",
+    "EmailDeliveryResult",
     "FailedLogonActionBundle",
     "FailedLogonRequest",
     "HttpResponseFileTransferActionBundle",

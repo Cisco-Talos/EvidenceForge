@@ -19,6 +19,10 @@ output/
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
   ENVIRONMENT.md                           # Optional student-facing environment description
+  artifacts/
+    email/
+      EMAIL_ARTIFACTS.json                 # Email artifact manifest
+      <artifact-id>.eml                    # Optional RFC 5322 message artifacts
   data/                                    # Generated logs for every output target
     <hostname.domain>/                     # Per-host directories (FQDN)
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
@@ -35,6 +39,7 @@ output/
       conn.json                            # Zeek conn.log (NDJSON)
       dns.json                             # Zeek dns.log
       http.json                            # Zeek http.log
+      smtp.json                            # Zeek smtp.log
       ssl.json                             # Zeek ssl.log
       files.json                           # Zeek files.log
       ...                                  # Other Zeek logs
@@ -69,6 +74,33 @@ Target-specific behavior in V1:
 | Proxy, web access, IDS, eCAR, bash history | Unchanged | Unchanged | Unchanged |
 
 ---
+
+## Email Artifacts And Zeek SMTP
+
+When `environment.email` is configured, `email_message` storyline events and
+optional deterministic background email produce SMTP route evidence through the
+normal DNS and network-visibility layers. Generated email artifacts live outside
+`data/` under `artifacts/email/`.
+
+**Files:**
+
+- `artifacts/email/EMAIL_ARTIFACTS.json` — manifest for materialized and
+  metadata-only messages.
+- `artifacts/email/<artifact-id>.eml` — RFC 5322 message artifacts for selected
+  or storyline-backed messages.
+- `<sensor>/smtp.json` — Zeek `smtp.log` NDJSON for visible SMTP transactions.
+
+Zeek SMTP rows share UIDs with `conn.json`, include envelope/header metadata for
+plaintext transfer, and honor STARTTLS visibility. If a server-to-server hop
+uses STARTTLS before message transfer, protected fields such as `subject`,
+`msg_id`, `from`, `to`, `user_agent`, and attachment `fuids` are omitted from
+the `smtp.json` row. Client submission is plaintext on port 587 in V1; server
+relay uses port 25. Every SMTP server hop contributes a `Received` header in the
+materialized `.eml` artifact.
+
+Exchange is modeled as a behavioral flavor for SMTP and HTTPS/OWA-style mailbox
+access only. Native Exchange message-tracking or IIS/Exchange logs are not
+emitted in V1.
 
 ## Windows Security Events
 

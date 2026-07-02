@@ -30,6 +30,7 @@ from typing import Protocol
 
 from evidenceforge.events.contexts import (
     DnsContext,
+    EmailContext,
     FileTransferContext,
     FirewallContext,
     HttpContext,
@@ -37,6 +38,7 @@ from evidenceforge.events.contexts import (
     OcspContext,
     PeContext,
     ProxyContext,
+    SmtpContext,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
@@ -86,6 +88,8 @@ class NetworkConnectionRequest:
     source_system: System | None = None
     conn_state: str | None = None
     dns: DnsContext | None = None
+    email: EmailContext | None = None
+    smtp: SmtpContext | None = None
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None

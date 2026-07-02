@@ -1754,6 +1754,7 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
         "zeek_conn": "zeek",
         "zeek_dns": "zeek",
         "zeek_http": "zeek",
+        "zeek_smtp": "zeek",
         "zeek_ssl": "zeek",
         "zeek_files": "zeek",
         "zeek_x509": "zeek",

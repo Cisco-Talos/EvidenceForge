@@ -10,12 +10,12 @@ Schema documentation for log format definition files in `src/evidenceforge/confi
 
 ## Overview
 
-Each format file defines the schema for one log output type. These are standalone files with no cross-file dependencies (except evaluation rules reference their field names). There are 22 format definitions covering:
+Each format file defines the schema for one log output type. These are standalone files with no cross-file dependencies (except evaluation rules reference their field names). There are 23 format definitions covering:
 
 | Category | Formats |
 |----------|---------|
 | Windows | `windows_event_security`, `windows_event_sysmon` |
-| Zeek (Network) | `zeek_conn`, `zeek_dns`, `zeek_http`, `zeek_ssl`, `zeek_x509`, `zeek_files`, `zeek_dhcp`, `zeek_ntp`, `zeek_ocsp`, `zeek_pe`, `zeek_packet_filter`, `zeek_reporter`, `zeek_weird` |
+| Zeek (Network) | `zeek_conn`, `zeek_dns`, `zeek_http`, `zeek_smtp`, `zeek_ssl`, `zeek_x509`, `zeek_files`, `zeek_dhcp`, `zeek_ntp`, `zeek_ocsp`, `zeek_pe`, `zeek_packet_filter`, `zeek_reporter`, `zeek_weird` |
 | Other Network | `snort_alert`, `cisco_asa`, `proxy_access`, `web_access` |
 | Host (Linux) | `syslog`, `bash_history` |
 | EDR | `ecar` |

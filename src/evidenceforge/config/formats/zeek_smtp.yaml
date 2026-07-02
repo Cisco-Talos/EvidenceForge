@@ -1,0 +1,98 @@
+# zeek_smtp format definition - Zeek smtp.log format (JSON output)
+#
+# Category: network
+
+name: zeek_smtp
+version: "1.0"
+description: "Zeek smtp.log format (JSON output) - SMTP transaction logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of SMTP transaction"
+  - name: uid
+    type: string
+    required: true
+    description: "Connection UID shared with conn.log"
+  - name: id.orig_h
+    type: ip_address
+    required: true
+    description: "Originator IP"
+  - name: id.orig_p
+    type: port
+    required: true
+    description: "Originator port"
+  - name: id.resp_h
+    type: ip_address
+    required: true
+    description: "Responder IP"
+  - name: id.resp_p
+    type: port
+    required: true
+    description: "Responder port"
+  - name: trans_depth
+    type: integer
+    required: true
+    description: "SMTP transaction depth"
+  - name: helo
+    type: string
+    required: true
+    description: "HELO/EHLO value"
+  - name: mailfrom
+    type: string
+    required: true
+    description: "Envelope MAIL FROM"
+  - name: rcptto
+    type: list
+    required: true
+    description: "Envelope RCPT TO values"
+  - name: last_reply
+    type: string
+    required: true
+    description: "Last SMTP reply"
+  - name: path
+    type: list
+    required: true
+    description: "Zeek SMTP path vector"
+  - name: tls
+    type: boolean
+    required: true
+    description: "Whether STARTTLS protected the message transfer"
+  - name: date
+    type: string
+    required: false
+    description: "Message Date header when visible"
+  - name: from
+    type: string
+    required: false
+    description: "Message From header when visible"
+  - name: to
+    type: list
+    required: false
+    description: "Visible To/Cc header recipients when visible"
+  - name: msg_id
+    type: string
+    required: false
+    description: "Message-ID header when visible"
+  - name: subject
+    type: string
+    required: false
+    description: "Subject header when visible"
+  - name: user_agent
+    type: string
+    required: false
+    description: "Mail client user agent when visible"
+  - name: fuids
+    type: list
+    required: false
+    description: "File UIDs for visible message parts/attachments"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  # Rendered by ZeekSmtpEmitter._render_event because Zeek field names include
+  # dotted keys and "from", which are awkward in generic Jinja templates.
+  template: "{}"

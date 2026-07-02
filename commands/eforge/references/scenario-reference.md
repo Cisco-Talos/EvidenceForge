@@ -191,6 +191,59 @@ Machine/service-account proxy usernames are not emitted routinely; set
 authenticate non-human proxy clients. `mode: legacy` preserves the older
 machine-context User-Agent behavior for compatibility datasets.
 
+### Email Topology
+
+Use `environment.email` when the scenario needs modeled on-prem SMTP delivery,
+Zeek `smtp.log`, or generated email artifacts. The email topology is explicit:
+`roles: [mail_server]` alone does not enable email-message generation.
+
+```yaml
+email:
+  accepted_domains: [corp.example]
+  mail_servers:
+    - name: eng
+      hostname: mail-eng.corp.example
+      system: MAIL-ENG
+      platform: generic_smtp          # generic_smtp | exchange
+      allow_inbound_starttls: false
+      attempt_outbound_starttls: true
+  default_mailbox_servers: [eng]
+  mailbox_overrides:
+    - group: finance
+      server: fin
+  outbound_routes:
+    - name: default
+      servers: [eng]
+  inbound_route: [eng]
+  isp_relays: []                      # Optional global ISP relay hostnames
+  distribution_groups:
+    - address: finance@corp.example
+      members: [bob@corp.example]
+  artifacts:
+    mode: storyline                   # none | storyline | selected | all
+    selected_ids: []
+  background_messages_per_user_per_day: 0.0
+```
+
+V1 supports on-prem/local email only. User mail clients submit plaintext SMTP on
+587 to the user's mailbox server; SMTP servers relay on port 25. Server-to-server
+STARTTLS is negotiated when the sending server has `attempt_outbound_starttls:
+true` and the receiving server has `allow_inbound_starttls: true`. If STARTTLS
+protects message transfer, Zeek SMTP rows omit protected header/body/file fields.
+
+Internal mail routes from the sender's mailbox server to each recipient's mailbox
+server, collapsing same-server hops. Outbound internet mail uses the default
+route plus optional sender group overrides; by default org mail servers deliver
+directly to destination MX hosts, or through `isp_relays` when configured.
+Inbound internet mail uses `inbound_route` for all accepted domains. Distribution
+groups are one-level only; nested groups are validation errors.
+
+Email artifacts are written under `artifacts/email/` as `.eml` files plus
+`EMAIL_ARTIFACTS.json`. Storyline email artifacts are also referenced from
+`GROUND_TRUTH.json` and `GROUND_TRUTH.md`. Generation is deterministic: any
+AI-authored message bodies or corpora must be prepared during scenario creation,
+not during `eforge generate`.
+
 ### System Roles
 
 The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
@@ -645,6 +698,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
 | `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `profile`, `http_sequence`, `jitter` (default: 0.15) |
 | `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
+| `email_message` | SMTP route evidence: Zeek conn/dns/smtp, artifacts, ground truth | at least one of `to`/`cc`/`bcc` | `sender`, `subject`, `body`, `corpus_id`, `artifact_id`, `user_agent`, `verdict`, `mail_action`, `outcome`, `attachments` |
 | `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4) |
 | `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` (default: 0.5) |
 | `dga_queries` | Zeek dns.log + conn.log (bulk DGA) | `interval`, one of `end_time`/`duration`/`count` | `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`, `source_ip`, `jitter` (default: 0.3) |

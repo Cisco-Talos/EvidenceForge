@@ -149,6 +149,12 @@ ZEEK_LOG_SPECS: tuple[ZeekLogSpec, ...] = (
         sof_elk_filebeat_input=True,
     ),
     ZeekLogSpec(
+        log_type="zeek_smtp",
+        staged_name="smtp.log",
+        source_names=("smtp.json", "zeek_smtp.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
         log_type="zeek_files",
         staged_name="files.log",
         source_names=("files.json", "zeek_files.json"),

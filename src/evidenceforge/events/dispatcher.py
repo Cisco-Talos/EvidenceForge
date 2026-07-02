@@ -57,6 +57,7 @@ FORMAT_GROUPS: dict[str, set[str]] = {
         "zeek_conn",
         "zeek_dns",
         "zeek_http",
+        "zeek_smtp",
         "zeek_ssl",
         "zeek_files",
         "zeek_x509",

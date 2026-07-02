@@ -200,6 +200,53 @@ class DnsContext:
 
 
 @dataclass(slots=True)
+class EmailContext:
+    """Message-level email identity shared across SMTP hops and artifacts."""
+
+    message_id: str
+    artifact_id: str
+    envelope_from: str
+    header_from: str
+    to: list[str] = field(default_factory=list)
+    cc: list[str] = field(default_factory=list)
+    bcc: list[str] = field(default_factory=list)
+    expanded_rcptto: list[str] = field(default_factory=list)
+    subject: str = ""
+    date_header: str = ""
+    user_agent: str = ""
+    body: str = ""
+    body_size: int = 0
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    verdict: str = "clean"
+    mail_action: str = "deliver"
+    outcome: str = "delivered"
+    received_headers: list[str] = field(default_factory=list)
+    artifact_path: str = ""
+    storyline_id: str = ""
+
+
+@dataclass(slots=True)
+class SmtpContext:
+    """One SMTP transaction/hop visible to Zeek smtp.log."""
+
+    helo: str
+    mailfrom: str
+    rcptto: list[str]
+    date: str
+    from_header: str
+    to_header: list[str]
+    msg_id: str
+    subject: str
+    last_reply: str
+    path: list[str] = field(default_factory=list)
+    user_agent: str = ""
+    tls: bool = False
+    trans_depth: int = 1
+    fuids: list[str] = field(default_factory=list)
+    encrypted_message: bool = False
+
+
+@dataclass(slots=True)
 class FileContext:
     """File operation details."""
 

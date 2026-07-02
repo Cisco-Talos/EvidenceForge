@@ -48,6 +48,7 @@ from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
     EdrContext,
+    EmailContext,
     FileContext,
     FileTransferContext,
     FirewallContext,
@@ -64,6 +65,7 @@ from evidenceforge.events.contexts import (
     ProxyContext,
     RegistryContext,
     RemoteThreadContext,
+    SmtpContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
@@ -81,6 +83,11 @@ from evidenceforge.generation.actions import (
     DhcpLeaseRequest,
     DnsLookupActionBundle,
     DnsLookupRequest,
+    EmailAccessActionBundle,
+    EmailAccessRequest,
+    EmailDeliveryActionBundle,
+    EmailDeliveryRequest,
+    EmailDeliveryResult,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -177,7 +184,7 @@ from evidenceforge.generation.identity import IdentityDirectory, default_linux_u
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
-from evidenceforge.models.scenario import ProxyAuthPolicyConfig, System, User
+from evidenceforge.models.scenario import EmailMessageEventSpec, ProxyAuthPolicyConfig, System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -10860,6 +10867,8 @@ class ActivityGenerator:
         source_system: Optional["System"] = None,
         conn_state: str | None = None,
         dns: Optional["DnsContext"] = None,
+        email: Optional["EmailContext"] = None,
+        smtp: Optional["SmtpContext"] = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
@@ -10926,6 +10935,8 @@ class ActivityGenerator:
             source_system=source_system,
             conn_state=conn_state,
             dns=dns,
+            email=email,
+            smtp=smtp,
             ids=ids,
             http=http,
             file_transfer=file_transfer,
@@ -10948,6 +10959,736 @@ class ActivityGenerator:
             request=request,
         ).execute()
 
+    def generate_email_message(
+        self,
+        *,
+        spec: EmailMessageEventSpec,
+        actor: "User",
+        system: "System",
+        time: datetime,
+        activity: str = "",
+        storyline_id: str = "",
+    ) -> EmailDeliveryResult:
+        """Generate SMTP delivery evidence for one modeled email message."""
+        request = EmailDeliveryRequest(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=time,
+            activity=activity,
+            storyline_id=storyline_id,
+        )
+        return EmailDeliveryActionBundle(executor=self, request=request).execute()
+
+    def generate_email_access(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        server: "System",
+        time: datetime,
+        platform: str = "generic_smtp",
+    ) -> str:
+        """Generate an opaque TLS mailbox access session."""
+        request = EmailAccessRequest(
+            user=user,
+            system=system,
+            server=server,
+            time=time,
+            platform=platform,
+        )
+        return EmailAccessActionBundle(executor=self, request=request).execute()
+
+    def _execute_email_access_bundle(self, request: EmailAccessRequest) -> str:
+        """Expand one lightweight mailbox read/access session into network evidence."""
+        rng = random.Random(
+            _stable_seed(
+                "email_access:"
+                f"{request.user.username}:{request.system.hostname}:"
+                f"{request.server.hostname}:{request.time.isoformat()}"
+            )
+        )
+        port = 443 if request.platform == "exchange" else 993
+        service = "ssl"
+        hostname = self._email_server_fqdn(request.server.hostname)
+        return self.generate_connection(
+            src_ip=request.system.ip,
+            dst_ip=request.server.ip,
+            time=request.time,
+            dst_port=port,
+            proto="tcp",
+            service=service,
+            duration=rng.uniform(12.0, 180.0),
+            orig_bytes=rng.randint(1200, 9000),
+            resp_bytes=rng.randint(15_000, 450_000),
+            conn_state="SF",
+            emit_dns=True,
+            source_system=request.system,
+            hostname=hostname,
+        )
+
+    def _execute_email_delivery_bundle(self, request: EmailDeliveryRequest) -> EmailDeliveryResult:
+        """Expand one email message into DNS, SMTP, artifact, and manifest evidence."""
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("email_message requires environment.email to be configured")
+
+        spec = request.spec
+        rng = random.Random(
+            _stable_seed(
+                "email_message:"
+                f"{request.storyline_id}:{request.actor.username}:"
+                f"{request.system.hostname}:{request.time.isoformat()}:{spec.subject or ''}"
+            )
+        )
+        sender = (spec.sender or request.actor.email).lower()
+        recipients_all = list(dict.fromkeys([*spec.to, *spec.cc, *spec.bcc]))
+        expanded_recipients = self._expand_email_recipients(recipients_all)
+        subject = spec.subject or self._deterministic_email_subject(
+            sender, expanded_recipients, rng
+        )
+        body = spec.body if spec.body is not None else self._deterministic_email_body(subject, rng)
+        artifact_id = spec.artifact_id or self._email_artifact_id(
+            request.storyline_id,
+            sender,
+            expanded_recipients,
+            request.time,
+        )
+        message_id = self._email_message_id(artifact_id, sender)
+        date_header = request.time.strftime("%a, %d %b %Y %H:%M:%S +0000")
+        user_agent = spec.user_agent or self._email_user_agent(request.system, rng)
+        route = self._plan_email_route(sender, expanded_recipients, request.system)
+        received_headers = self._received_headers_for_route(
+            route=route,
+            message_id=message_id,
+            sender=sender,
+            time=request.time,
+        )
+        email_ctx = EmailContext(
+            message_id=message_id,
+            artifact_id=artifact_id,
+            envelope_from=sender,
+            header_from=self._email_header_address(sender),
+            to=[self._email_header_address(addr) for addr in spec.to],
+            cc=[self._email_header_address(addr) for addr in spec.cc],
+            bcc=list(spec.bcc),
+            expanded_rcptto=expanded_recipients,
+            subject=subject,
+            date_header=date_header,
+            user_agent=user_agent,
+            body=body,
+            body_size=len(body.encode("utf-8")),
+            attachments=[att.model_dump() for att in spec.attachments],
+            verdict=spec.verdict,
+            mail_action=spec.mail_action,
+            outcome=spec.outcome,
+            received_headers=received_headers,
+            storyline_id=request.storyline_id,
+        )
+        smtp_uids: list[str] = []
+        route_summary: list[dict[str, str]] = []
+
+        self._emit_email_route_dns(route, request.time, request.system)
+
+        for index, hop in enumerate(route):
+            hop_time = request.time + timedelta(seconds=1.2 + index * rng.uniform(2.0, 8.0))
+            src_system = hop["src_system"]
+            dst_system = hop["dst_system"]
+            tls = bool(
+                hop["server_to_server"]
+                and hop["src_server_attempts_starttls"]
+                and hop["dst_server_allows_starttls"]
+            )
+            last_reply = (
+                "250 2.0.0 Ok: queued"
+                if spec.outcome == "delivered"
+                else "550 5.7.1 Message rejected"
+            )
+            smtp_ctx = SmtpContext(
+                helo=self._email_server_fqdn(src_system.hostname),
+                mailfrom=sender,
+                rcptto=expanded_recipients,
+                date=date_header,
+                from_header=email_ctx.header_from,
+                to_header=[*email_ctx.to, *[self._email_header_address(addr) for addr in spec.cc]],
+                msg_id=message_id,
+                subject=subject,
+                last_reply=last_reply,
+                path=[dst_system.ip, src_system.ip],
+                user_agent=user_agent,
+                tls=tls,
+                encrypted_message=tls,
+                fuids=self._email_fuids(artifact_id, spec.attachments) if not tls else [],
+            )
+            uid = self.generate_connection(
+                src_ip=src_system.ip,
+                dst_ip=dst_system.ip,
+                time=hop_time,
+                dst_port=587 if hop["submission"] else 25,
+                proto="tcp",
+                service="smtp",
+                duration=rng.uniform(0.18, 2.8),
+                orig_bytes=max(180, email_ctx.body_size + rng.randint(250, 900)),
+                resp_bytes=rng.randint(90, 450),
+                conn_state="SF",
+                emit_dns=True,
+                source_system=src_system,
+                hostname=self._email_server_fqdn(dst_system.hostname),
+                email=email_ctx,
+                smtp=smtp_ctx,
+                suppress_application_side_effects=True,
+            )
+            if uid:
+                smtp_uids.append(uid)
+            route_summary.append(
+                {
+                    "src": src_system.hostname,
+                    "dst": dst_system.hostname,
+                    "port": str(587 if hop["submission"] else 25),
+                    "tls": str(tls).lower(),
+                    "uid": uid,
+                }
+            )
+
+        artifact_path = ""
+        if self._should_materialize_email_artifact(artifact_id, request.storyline_id):
+            artifact_path = self._write_email_artifact(email_ctx)
+            email_ctx.artifact_path = artifact_path
+        self._record_email_artifact_manifest(email_ctx, route_summary, artifact_path)
+        return EmailDeliveryResult(
+            artifact_id=artifact_id,
+            message_id=message_id,
+            sender=sender,
+            recipients=expanded_recipients,
+            subject=subject,
+            outcome=spec.outcome,
+            artifact_path=artifact_path,
+            smtp_uids=smtp_uids,
+            route=route_summary,
+        )
+
+    def _email_server_fqdn(self, hostname: str) -> str:
+        """Return a stable mail host FQDN for DNS/SMTP headers."""
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is not None:
+            for server in email_config.mail_servers:
+                if (
+                    server.system == hostname
+                    or server.name == hostname
+                    or server.hostname == hostname
+                ):
+                    return server.hostname
+        ad_domain = getattr(self, "_ad_domain", "")
+        if ad_domain and "." not in hostname:
+            return f"{hostname}.{ad_domain}"
+        return hostname
+
+    @staticmethod
+    def _email_domain(address: str) -> str:
+        return address.rsplit("@", 1)[-1].lower().rstrip(".")
+
+    @staticmethod
+    def _email_header_address(address: str) -> str:
+        return f"<{address.lower()}>"
+
+    def _email_artifact_id(
+        self,
+        storyline_id: str,
+        sender: str,
+        recipients: list[str],
+        time: datetime,
+    ) -> str:
+        seed = _stable_seed(
+            f"email_artifact:{storyline_id}:{sender}:{','.join(recipients)}:{time.isoformat()}"
+        )
+        prefix = re.sub(r"[^a-zA-Z0-9_-]+", "-", storyline_id or "email").strip("-")[:40]
+        return f"{prefix or 'email'}-{seed:012x}"
+
+    def _email_message_id(self, artifact_id: str, sender: str) -> str:
+        domain = self._email_domain(sender)
+        seed = _stable_seed(f"email_message_id:{artifact_id}:{sender}")
+        return f"<{seed:016x}.{artifact_id}@{domain}>"
+
+    def _deterministic_email_subject(
+        self,
+        sender: str,
+        recipients: list[str],
+        rng: random.Random,
+    ) -> str:
+        verbs = ["Follow up", "Question", "Update", "Review", "Schedule", "Notes"]
+        nouns = ["request", "timeline", "access", "report", "meeting", "invoice"]
+        if recipients:
+            domain = self._email_domain(recipients[0])
+        else:
+            domain = self._email_domain(sender)
+        return f"{rng.choice(verbs)}: {rng.choice(nouns)} for {domain.split('.')[0]}"
+
+    def _deterministic_email_body(self, subject: str, rng: random.Random) -> str:
+        openings = ["Hi,", "Hello,", "Good morning,", "Team,"]
+        closings = ["Thanks,", "Regards,", "Best,"]
+        return (
+            f"{rng.choice(openings)}\n\n"
+            f"Please see the note below regarding {subject.lower()}. "
+            "Let me know if you have any questions.\n\n"
+            f"{rng.choice(closings)}\n"
+        )
+
+    def _email_user_agent(self, system: "System", rng: random.Random) -> str:
+        os_category = _get_os_category(system.os)
+        if os_category == "windows":
+            return rng.choice(
+                [
+                    "Microsoft Outlook 16.0",
+                    "Microsoft Office Outlook 12.0",
+                    "Microsoft Outlook 15.0",
+                ]
+            )
+        return rng.choice(["Thunderbird 115.0", "Evolution 3.44", "Apple Mail (2.3608.120.23.2.7)"])
+
+    def _email_servers_by_name(self) -> dict[str, Any]:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return {}
+        return {server.name: server for server in email_config.mail_servers}
+
+    def _email_system_for_server_name(self, server_name: str) -> "System":
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        servers = self._email_servers_by_name()
+        if server_name == "default" and email_config is not None:
+            server_name = email_config.default_mailbox_servers[0]
+        server = servers[server_name]
+        for system in self._scenario_environment.systems:
+            if system.hostname == server.system:
+                return system
+        raise ValueError(
+            f"Email server {server_name!r} references unknown system {server.system!r}"
+        )
+
+    def _email_server_for_user_address(self, address: str) -> str:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        user = next(
+            (
+                candidate
+                for candidate in self._scenario_environment.users
+                if candidate.email.lower() == address.lower()
+            ),
+            None,
+        )
+        if user is not None:
+            user_groups = set(user.groups or [])
+            for override in email_config.mailbox_overrides:
+                if override.group in user_groups:
+                    return override.server
+        seed = _stable_seed(f"email_mailbox_server:{address}")
+        return email_config.default_mailbox_servers[
+            seed % len(email_config.default_mailbox_servers)
+        ]
+
+    def _expand_email_recipients(self, recipients: list[str]) -> list[str]:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return recipients
+        groups = {group.address.lower(): group for group in email_config.distribution_groups}
+        expanded: list[str] = []
+        for recipient in recipients:
+            group = groups.get(recipient.lower())
+            if group is None:
+                expanded.append(recipient.lower())
+            else:
+                expanded.extend(member.lower() for member in group.members)
+        return list(dict.fromkeys(expanded))
+
+    def _plan_email_route(
+        self,
+        sender: str,
+        recipients: list[str],
+        client_system: "System",
+    ) -> list[dict[str, Any]]:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        accepted_domains = set(email_config.accepted_domains)
+        internal_recipients = [
+            address for address in recipients if self._email_domain(address) in accepted_domains
+        ]
+        external_recipients = [
+            address for address in recipients if self._email_domain(address) not in accepted_domains
+        ]
+        sender_is_internal = self._email_domain(sender) in accepted_domains
+        if not sender_is_internal:
+            inbound_server_name = (
+                email_config.inbound_route[0]
+                if email_config.inbound_route
+                else self._email_server_for_user_address(internal_recipients[0])
+            )
+            inbound_system = self._email_system_for_server_name(inbound_server_name)
+            external_mx = self._external_source_mail_system(sender)
+            route = [
+                self._email_hop(
+                    external_mx,
+                    inbound_system,
+                    submission=False,
+                    server_to_server=True,
+                    src_server_name="",
+                    dst_server_name=inbound_server_name,
+                )
+            ]
+            sender_server_name = inbound_server_name
+            sender_server_system = inbound_system
+        else:
+            sender_server_name = self._email_server_for_user_address(sender)
+            sender_server_system = self._email_system_for_server_name(sender_server_name)
+            route: list[dict[str, Any]] = [
+                self._email_hop(
+                    client_system,
+                    sender_server_system,
+                    submission=True,
+                    server_to_server=False,
+                    src_server_name="",
+                    dst_server_name=sender_server_name,
+                )
+            ]
+        for server_name in sorted(
+            {self._email_server_for_user_address(addr) for addr in internal_recipients}
+        ):
+            dst_system = self._email_system_for_server_name(server_name)
+            if dst_system.ip != sender_server_system.ip:
+                route.append(
+                    self._email_hop(
+                        sender_server_system,
+                        dst_system,
+                        submission=False,
+                        server_to_server=True,
+                        src_server_name=sender_server_name,
+                        dst_server_name=server_name,
+                    )
+                )
+        if external_recipients:
+            outbound_server_name = self._select_outbound_email_server(sender)
+            outbound_system = self._email_system_for_server_name(outbound_server_name)
+            if outbound_system.ip != sender_server_system.ip:
+                route.append(
+                    self._email_hop(
+                        sender_server_system,
+                        outbound_system,
+                        submission=False,
+                        server_to_server=True,
+                        src_server_name=sender_server_name,
+                        dst_server_name=outbound_server_name,
+                    )
+                )
+            if email_config.isp_relays:
+                relay_host = email_config.isp_relays[
+                    _stable_seed(f"email_isp_relay:{sender}") % len(email_config.isp_relays)
+                ]
+                route.append(
+                    self._external_email_hop(outbound_system, relay_host, outbound_server_name)
+                )
+            else:
+                mx_host = self._external_mx_for_domain(self._email_domain(external_recipients[0]))
+                route.append(
+                    self._external_email_hop(outbound_system, mx_host, outbound_server_name)
+                )
+        return route
+
+    def _email_hop(
+        self,
+        src_system: "System",
+        dst_system: "System",
+        *,
+        submission: bool,
+        server_to_server: bool,
+        src_server_name: str,
+        dst_server_name: str,
+    ) -> dict[str, Any]:
+        servers = self._email_servers_by_name()
+        src_cfg = servers.get(src_server_name)
+        dst_cfg = servers.get(dst_server_name)
+        return {
+            "src_system": src_system,
+            "dst_system": dst_system,
+            "submission": submission,
+            "server_to_server": server_to_server,
+            "src_server_attempts_starttls": bool(
+                src_cfg is not None and src_cfg.attempt_outbound_starttls
+            ),
+            "dst_server_allows_starttls": bool(
+                dst_cfg is not None and dst_cfg.allow_inbound_starttls
+            ),
+            "external_hostname": "",
+        }
+
+    def _external_email_hop(
+        self,
+        src_system: "System",
+        dst_hostname: str,
+        src_server_name: str,
+    ) -> dict[str, Any]:
+        servers = self._email_servers_by_name()
+        src_cfg = servers.get(src_server_name)
+        seed = _stable_seed(f"email_external_mx:{dst_hostname}")
+        dst_ip = f"203.0.113.{10 + seed % 180}"
+        dst_system = type(src_system)(
+            hostname=dst_hostname,
+            ip=dst_ip,
+            os="Internet SMTP Server",
+            type="server",
+            services=["smtp"],
+            roles=["external_mail_server"],
+        )
+        return {
+            "src_system": src_system,
+            "dst_system": dst_system,
+            "submission": False,
+            "server_to_server": True,
+            "src_server_attempts_starttls": bool(
+                src_cfg is not None and src_cfg.attempt_outbound_starttls
+            ),
+            "dst_server_allows_starttls": True,
+            "external_hostname": dst_hostname,
+        }
+
+    def _external_source_mail_system(self, sender: str) -> "System":
+        domain = self._email_domain(sender)
+        hostname = self._external_mx_for_domain(domain)
+        seed = _stable_seed(f"email_external_sender:{sender}")
+        return type(next(iter(self._scenario_environment.systems)))(
+            hostname=hostname,
+            ip=f"198.51.100.{10 + seed % 180}",
+            os="Internet SMTP Server",
+            type="server",
+            services=["smtp"],
+            roles=["external_mail_server"],
+        )
+
+    def _select_outbound_email_server(self, sender: str) -> str:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        user = next(
+            (
+                candidate
+                for candidate in self._scenario_environment.users
+                if candidate.email.lower() == sender.lower()
+            ),
+            None,
+        )
+        user_groups = set(user.groups if user is not None else [])
+        selected = email_config.outbound_routes[0]
+        for route in email_config.outbound_routes:
+            if route.sender_groups and user_groups.intersection(route.sender_groups):
+                selected = route
+                break
+            if route.name == "default" and not selected.sender_groups:
+                selected = route
+        servers = selected.servers
+        if servers == ["default"]:
+            servers = email_config.default_mailbox_servers
+        return servers[_stable_seed(f"email_outbound:{sender}") % len(servers)]
+
+    @staticmethod
+    def _external_mx_for_domain(domain: str) -> str:
+        safe = re.sub(r"[^a-z0-9.-]+", "", domain.lower()).strip(".")
+        return f"mx1.{safe}"
+
+    def _received_headers_for_route(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        message_id: str,
+        sender: str,
+        time: datetime,
+    ) -> list[str]:
+        headers: list[str] = []
+        for index, hop in enumerate(route):
+            by_host = self._email_server_fqdn(hop["dst_system"].hostname)
+            from_host = self._email_server_fqdn(hop["src_system"].hostname)
+            hop_time = time + timedelta(seconds=index * 4)
+            headers.insert(
+                0,
+                (
+                    f"from {from_host} ({hop['src_system'].ip}) by {by_host} "
+                    f"with ESMTP id {_stable_seed(f'received:{message_id}:{index}'):08x} "
+                    f"for <{sender}>; {hop_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+                ),
+            )
+        return headers
+
+    def _emit_email_route_dns(
+        self,
+        route: list[dict[str, Any]],
+        time: datetime,
+        source_system: "System",
+    ) -> None:
+        resolver_ips = getattr(self, "_dns_server_ips", []) or ["10.0.0.1"]
+        resolver_ip = resolver_ips[0]
+        for index, hop in enumerate(route):
+            dst_host = hop.get("external_hostname") or self._email_server_fqdn(
+                hop["dst_system"].hostname
+            )
+            qtype = "MX" if hop.get("external_hostname") else "A"
+            answer = dst_host if qtype == "MX" else hop["dst_system"].ip
+            dns_ctx = DnsContext(
+                query=self._email_domain(dst_host) if qtype == "MX" else dst_host,
+                query_type=qtype,
+                qtype=15 if qtype == "MX" else 1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=[f"10 {answer}" if qtype == "MX" else answer],
+                TTLs=[300.0],
+                rtt=0.003 + index * 0.0005,
+            )
+            self.generate_connection(
+                src_ip=source_system.ip,
+                dst_ip=resolver_ip,
+                time=time - timedelta(seconds=max(0.1, 2.0 - index * 0.1)),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                duration=dns_ctx.rtt,
+                orig_bytes=60,
+                resp_bytes=120,
+                conn_state="SF",
+                dns=dns_ctx,
+                source_system=source_system,
+                suppress_application_side_effects=True,
+            )
+            if qtype == "MX":
+                a_ctx = DnsContext(
+                    query=answer,
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=[hop["dst_system"].ip],
+                    TTLs=[300.0],
+                    rtt=0.004 + index * 0.0005,
+                )
+                self.generate_connection(
+                    src_ip=source_system.ip,
+                    dst_ip=resolver_ip,
+                    time=time - timedelta(seconds=max(0.05, 1.0 - index * 0.1)),
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    duration=a_ctx.rtt,
+                    orig_bytes=60,
+                    resp_bytes=120,
+                    conn_state="SF",
+                    dns=a_ctx,
+                    source_system=source_system,
+                    suppress_application_side_effects=True,
+                )
+
+    @staticmethod
+    def _email_fuids(artifact_id: str, attachments: list[Any]) -> list[str]:
+        return [
+            f"F{_stable_seed(f'email-fuid:{artifact_id}:{idx}'):017x}"[:18]
+            for idx, _ in enumerate(attachments)
+        ]
+
+    def _should_materialize_email_artifact(self, artifact_id: str, storyline_id: str) -> bool:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return False
+        mode = email_config.artifacts.mode
+        if mode == "none":
+            return False
+        if mode in {"storyline", "all"}:
+            return bool(storyline_id) or mode == "all"
+        return artifact_id in set(email_config.artifacts.selected_ids) or storyline_id in set(
+            email_config.artifacts.selected_ids
+        )
+
+    def _write_email_artifact(self, email_ctx: EmailContext) -> str:
+        from email.message import EmailMessage
+        from email.utils import formatdate
+
+        artifact_dir = getattr(self, "_email_artifact_dir", None)
+        if artifact_dir is None:
+            return ""
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        msg = EmailMessage()
+        msg["Message-ID"] = email_ctx.message_id
+        msg["Date"] = email_ctx.date_header or formatdate(localtime=False)
+        msg["From"] = email_ctx.header_from
+        if email_ctx.to:
+            msg["To"] = ", ".join(email_ctx.to)
+        if email_ctx.cc:
+            msg["Cc"] = ", ".join(email_ctx.cc)
+        msg["Subject"] = email_ctx.subject
+        if email_ctx.user_agent:
+            msg["User-Agent"] = email_ctx.user_agent
+        for received in email_ctx.received_headers:
+            msg["Received"] = received
+        msg.set_content(email_ctx.body or "")
+        for attachment in email_ctx.attachments:
+            content = str(attachment.get("content") or "")
+            maintype, _, subtype = str(
+                attachment.get("content_type") or "application/octet-stream"
+            ).partition("/")
+            msg.add_attachment(
+                content.encode("utf-8"),
+                maintype=maintype or "application",
+                subtype=subtype or "octet-stream",
+                filename=str(attachment.get("filename") or "attachment.bin"),
+            )
+        path = artifact_dir / f"{email_ctx.artifact_id}.eml"
+        path.write_text(msg.as_string(), encoding="utf-8")
+        return path.relative_to(artifact_dir.parent.parent).as_posix()
+
+    def _record_email_artifact_manifest(
+        self,
+        email_ctx: EmailContext,
+        route: list[dict[str, str]],
+        artifact_path: str,
+    ) -> None:
+        manifest = getattr(self, "_email_artifact_manifest", None)
+        if manifest is None:
+            self._email_artifact_manifest = []
+            manifest = self._email_artifact_manifest
+        manifest.append(
+            {
+                "artifact_id": email_ctx.artifact_id,
+                "message_id": email_ctx.message_id,
+                "sender": email_ctx.envelope_from,
+                "to": email_ctx.to,
+                "cc": email_ctx.cc,
+                "bcc": email_ctx.bcc,
+                "expanded_rcptto": email_ctx.expanded_rcptto,
+                "subject": email_ctx.subject,
+                "date": email_ctx.date_header,
+                "outcome": email_ctx.outcome,
+                "verdict": email_ctx.verdict,
+                "mail_action": email_ctx.mail_action,
+                "artifact_path": artifact_path,
+                "route": route,
+                "received_headers": email_ctx.received_headers,
+                "storyline_id": email_ctx.storyline_id,
+            }
+        )
+
+    def write_email_artifact_manifest(self) -> None:
+        """Write EMAIL_ARTIFACTS.json when email artifact metadata exists."""
+        manifest = getattr(self, "_email_artifact_manifest", None)
+        artifact_dir = getattr(self, "_email_artifact_dir", None)
+        if artifact_dir is None or manifest is None:
+            return
+        import json
+
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / "EMAIL_ARTIFACTS.json"
+        payload = {
+            "schema_version": "1.0",
+            "messages": sorted(
+                manifest,
+                key=lambda item: (item.get("storyline_id") or "", item.get("artifact_id") or ""),
+            ),
+        }
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     def _execute_network_connection_bundle(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
         src_ip = request.src_ip
@@ -10967,6 +11708,8 @@ class ActivityGenerator:
         source_system = request.source_system
         conn_state = request.conn_state
         dns = request.dns
+        email = request.email
+        smtp = request.smtp
         ids = request.ids
         http = request.http
         caller_supplied_http = http is not None
@@ -12144,6 +12887,10 @@ class ActivityGenerator:
         # Caller-provided context overrides
         if ids is not None:
             event.ids = ids
+        if email is not None:
+            event.email = email
+        if smtp is not None:
+            event.smtp = smtp
         if http is not None:
             event.http = http
         if file_transfer is not None:
@@ -15906,6 +16653,8 @@ class ActivityGenerator:
                         purpose_tags=(tag,),
                     )
             elif activity_type == "connection_email":
+                if getattr(getattr(self, "_scenario_environment", None), "email", None) is not None:
+                    return
                 service = "smtp"
                 # Route through internal Exchange if detected (P1-15)
                 exchange_ip = getattr(self, "_exchange_ip", None)

@@ -215,6 +215,7 @@ from evidenceforge.evaluation.parsers.zeek_packet_filter import (  # noqa: E402
 )
 from evidenceforge.evaluation.parsers.zeek_pe import ZeekPeParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_reporter import ZeekReporterParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_smtp import ZeekSmtpParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_weird import ZeekWeirdParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_x509 import ZeekX509Parser  # noqa: E402,F401

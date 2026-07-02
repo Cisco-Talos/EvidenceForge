@@ -114,9 +114,13 @@ bundle represents a real-world activity that can produce several coordinated
 `SecurityEvent`s. For example, an SSH session may produce transport connection
 evidence, SSH auth syslog messages, endpoint `USER_SESSION` login/logout rows,
 sshd/bash process evidence, bash history commands, and close/teardown evidence.
-The bundle owns lifecycle, timing constraints, observation intent, and durable
-anchors across those events; each `SecurityEvent` remains the canonical evidence
-unit dispatched to state and emitters.
+An email delivery similarly routes through the email action bundle, which owns
+message identity, SMTP hop sequence, route-aware `Received` headers, artifacts,
+and TLS visibility while delegating DNS and TCP evidence to the existing DNS and
+network-connection bundles. The bundle owns lifecycle, timing constraints,
+observation intent, and durable anchors across those events; each
+`SecurityEvent` remains the canonical evidence unit dispatched to state and
+emitters.
 
 Bundle contracts compose only through canonical semantic layers. A higher-level
 bundle may call a lower-level bundle or generator entrypoint when that lower
@@ -550,7 +554,7 @@ SecurityEvent
     Matching emitters receive the event
 ```
 
-**Format groups** expand shorthand names: `"zeek"` expands to 13 individual emitters (zeek_conn, zeek_dns, zeek_http, etc.).
+**Format groups** expand shorthand names: `"zeek"` expands to 14 individual emitters (zeek_conn, zeek_dns, zeek_http, zeek_smtp, etc.).
 
 ### StateManager
 

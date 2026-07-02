@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
     DhcpContext,
     DnsContext,
     EdrContext,
+    EmailContext,
     FileContext,
     FileTransferContext,
     FirewallContext,
@@ -61,6 +62,7 @@ from evidenceforge.events.contexts import (
     ScheduledTaskContext,
     ServiceContext,
     ShellContext,
+    SmtpContext,
     SslContext,
     SyslogContext,
     WeirdContext,
@@ -95,6 +97,8 @@ class SecurityEvent:
     process: ProcessContext | None = None
     network: NetworkContext | None = None
     dns: DnsContext | None = None
+    email: EmailContext | None = None
+    smtp: SmtpContext | None = None
     file: FileContext | None = None
     registry: RegistryContext | None = None
     remote_thread: RemoteThreadContext | None = None

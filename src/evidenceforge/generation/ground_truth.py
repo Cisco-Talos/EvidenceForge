@@ -439,6 +439,17 @@ class GroundTruthGenerator:
                 f"DNS query: {event.get('query', 'N/A')} "
                 f"({event.get('qtype', 'A')}, {event.get('rcode', 'NOERROR')})"
             )
+        if event_type == "email_message":
+            recipients = event.get("recipients", [])
+            shown = ", ".join(recipients[:3])
+            if len(recipients) > 3:
+                shown += f", +{len(recipients) - 3} more"
+            artifact = event.get("artifact_path") or "metadata-only"
+            return (
+                f"Email {event.get('outcome', 'delivered')}: "
+                f"{event.get('sender', 'N/A')} -> {shown or 'N/A'}; "
+                f"subject '{event.get('subject', 'N/A')}' ({artifact})"
+            )
         if event_type == "web_scan":
             return (
                 f"Web scan ({event.get('preset', 'custom')}) against "
@@ -586,8 +597,16 @@ class GroundTruthGenerator:
                         f"{dst_ip}:{dst_port} ({label})" if dst_port else f"{dst_ip} ({label})"
                     )
                     uid = event.get("uid", "")
+                if uid and uid != "(filtered by sensor placement)":
+                    iocs["network"].add(f"Zeek UID: {uid}")
+            elif event["type"] == "email_message":
+                if event.get("message_id"):
+                    iocs["network"].add(f"Message-ID: {event['message_id']}")
+                if event.get("artifact_path"):
+                    iocs["files"].add(event["artifact_path"])
+                for uid in event.get("smtp_uids", []) or []:
                     if uid and uid != "(filtered by sensor placement)":
-                        iocs["network"].add(f"Zeek UID: {uid}")
+                        iocs["network"].add(f"SMTP Zeek UID: {uid}")
             elif event["type"] in ("rdp_session", "ssh_session"):
                 dst_ip = event.get("dst_ip", "")
                 dst_port = event.get("dst_port", "")

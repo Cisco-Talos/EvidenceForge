@@ -40,6 +40,15 @@ Requesting `zeek`, concrete `zeek_*`, `snort_alert`, or `cisco_asa` without a
 matching sensor/firewall is an error. `proxy_access` comes from
 `forward_proxy` systems and does not need a placeholder Zeek sensor.
 
+Email validation is explicit. `email_message` events require
+`environment.email`; `roles: [mail_server]` is not enough. Common blocking
+errors include unknown mail server names in `default_mailbox_servers`,
+`mailbox_overrides`, `outbound_routes`, or `inbound_route`; distribution groups
+that contain nested groups; group members that are not known user email
+addresses; and mailbox overrides that reference unknown `environment.groups`.
+Fix these by adding the explicit mail topology or by changing the storyline to
+use non-email evidence.
+
 Network identity warnings are advisory unless they describe an actual conflict.
 Custom hostnames in storyline/red-herring/domain-aware fields should normally be
 declared under `environment.network_identities`; undeclared custom domains warn

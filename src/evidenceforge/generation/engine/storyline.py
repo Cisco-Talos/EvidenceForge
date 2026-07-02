@@ -2624,6 +2624,29 @@ class StorylineMixin:
                     actor, system, time, target_session.logon_id, from_storyline=True
                 )
 
+        elif spec.type == "email_message":
+            result = self.activity_generator.generate_email_message(
+                spec=spec,
+                actor=actor,
+                system=system,
+                time=time,
+                activity=activity,
+                storyline_id=getattr(dispatcher, "storyline_cluster_id", "") or "",
+            )
+            malicious_event.update(
+                {
+                    "artifact_id": result.artifact_id,
+                    "message_id": result.message_id,
+                    "sender": result.sender,
+                    "recipients": result.recipients,
+                    "subject": result.subject,
+                    "outcome": result.outcome,
+                    "artifact_path": result.artifact_path,
+                    "smtp_uids": result.smtp_uids,
+                    "route": result.route,
+                }
+            )
+
         elif spec.type == "process":
             os_category = _get_os_category(system.os)
             if hasattr(self, "world_planner"):

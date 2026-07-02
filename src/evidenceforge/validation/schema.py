@@ -34,6 +34,7 @@ import ipaddress
 import logging
 from dataclasses import dataclass
 from datetime import UTC
+from typing import Any
 
 from evidenceforge.models import Scenario
 
@@ -234,6 +235,7 @@ class ScenarioValidator:
         self._validate_storyline_os_plausibility()
         self._validate_spillage_events()
         self._validate_adversarial_payload_events()
+        self._validate_email_config()
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
@@ -676,6 +678,224 @@ class ScenarioValidator:
                         )
                     )
 
+    def _validate_email_config(self) -> None:
+        """Validate explicit email topology and email_message storyline events."""
+        email_config = self.scenario.environment.email
+        email_specs: list[tuple[int, int, Any]] = []
+        for idx, event in enumerate(self.scenario.storyline or []):
+            for spec_idx, spec in enumerate(event.events):
+                if getattr(spec, "type", "") == "email_message":
+                    email_specs.append((idx, spec_idx, spec))
+
+        if email_config is None:
+            for idx, spec_idx, _spec in email_specs:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_idx}",
+                        message="email_message requires environment.email to be configured",
+                        suggestion=(
+                            "Add environment.email with accepted_domains, mail_servers, "
+                            "default_mailbox_servers, and routes."
+                        ),
+                    )
+                )
+            return
+
+        server_names = {server.name for server in email_config.mail_servers}
+        if len(server_names) != len(email_config.mail_servers):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.email.mail_servers",
+                    message="Duplicate email mail_server names are not allowed",
+                    suggestion="Give each mail server a unique name.",
+                )
+            )
+        for idx, server in enumerate(email_config.mail_servers):
+            if server.system not in self.hostnames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.mail_servers.{idx}.system",
+                        message=(
+                            f"Email server '{server.name}' references unknown system "
+                            f"'{server.system}'"
+                        ),
+                        suggestion="Set system to a hostname from environment.systems.",
+                    )
+                )
+
+        for idx, server_name in enumerate(email_config.default_mailbox_servers):
+            if server_name not in server_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.default_mailbox_servers.{idx}",
+                        message=f"Unknown default mailbox server '{server_name}'",
+                        suggestion=f"Use one of: {', '.join(sorted(server_names))}",
+                    )
+                )
+
+        for idx, override in enumerate(email_config.mailbox_overrides):
+            if override.group not in self.group_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.mailbox_overrides.{idx}.group",
+                        message=f"Mailbox override references unknown group '{override.group}'",
+                        suggestion="Use a group defined under environment.groups.",
+                    )
+                )
+            if override.server not in server_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.mailbox_overrides.{idx}.server",
+                        message=f"Mailbox override references unknown server '{override.server}'",
+                        suggestion=f"Use one of: {', '.join(sorted(server_names))}",
+                    )
+                )
+
+        for idx, route in enumerate(email_config.outbound_routes):
+            if route.name != "default" and not route.sender_groups:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.outbound_routes.{idx}.sender_groups",
+                        message="Non-default outbound email routes require sender_groups",
+                        suggestion="Add sender_groups or name this route 'default'.",
+                    )
+                )
+            for group_name in route.sender_groups:
+                if group_name not in self.group_names:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.email.outbound_routes.{idx}.sender_groups",
+                            message=f"Outbound route references unknown group '{group_name}'",
+                            suggestion="Use a group defined under environment.groups.",
+                        )
+                    )
+            for server_name in route.servers:
+                if server_name != "default" and server_name not in server_names:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.email.outbound_routes.{idx}.servers",
+                            message=f"Outbound route references unknown server '{server_name}'",
+                            suggestion=f"Use one of: {', '.join(sorted(server_names))}",
+                        )
+                    )
+
+        for idx, server_name in enumerate(email_config.inbound_route):
+            if server_name not in server_names:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.email.inbound_route.{idx}",
+                        message=f"Inbound route references unknown server '{server_name}'",
+                        suggestion=f"Use one of: {', '.join(sorted(server_names))}",
+                    )
+                )
+
+        group_addresses = {
+            group.address.lower(): group for group in email_config.distribution_groups
+        }
+        if len(group_addresses) != len(email_config.distribution_groups):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.email.distribution_groups",
+                    message="Duplicate email distribution group addresses are not allowed",
+                    suggestion="Use one unique address per distribution group.",
+                )
+            )
+        user_emails = {user.email.lower() for user in self.scenario.environment.users}
+        for idx, group in enumerate(email_config.distribution_groups):
+            for member_idx, member in enumerate(group.members):
+                member_lower = member.lower()
+                if member_lower in group_addresses:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=(
+                                f"environment.email.distribution_groups.{idx}.members.{member_idx}"
+                            ),
+                            message=(
+                                "Nested distribution groups are not supported in email v1 "
+                                f"({member})"
+                            ),
+                            suggestion="Expand the nested group into direct member addresses.",
+                        )
+                    )
+                elif member_lower not in user_emails:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=(
+                                f"environment.email.distribution_groups.{idx}.members.{member_idx}"
+                            ),
+                            message=f"Distribution group member '{member}' is not a known user email",
+                            suggestion="Use environment.users.email values as v1 group members.",
+                        )
+                    )
+
+        for idx, spec_idx, spec in email_specs:
+            event = (self.scenario.storyline or [])[idx]
+            users_by_name = {user.username: user for user in self.scenario.environment.users}
+            actor = users_by_name.get(event.actor)
+            sender = (spec.sender or (actor.email if actor is not None else "")).lower()
+            accepted_domains = set(email_config.accepted_domains)
+            recipients: list[str] = []
+            for field_name in ("to", "cc", "bcc"):
+                for address in getattr(spec, field_name, []) or []:
+                    group = group_addresses.get(address.lower())
+                    if group is None:
+                        recipients.append(address.lower())
+                    else:
+                        recipients.extend(member.lower() for member in group.members)
+
+            sender_is_internal = (
+                sender.rsplit("@", 1)[-1].rstrip(".") in accepted_domains if sender else False
+            )
+            has_internal_recipient = any(
+                recipient.rsplit("@", 1)[-1].rstrip(".") in accepted_domains
+                for recipient in recipients
+            )
+            if not sender_is_internal and not has_internal_recipient:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.events.{spec_idx}",
+                        message=(
+                            "email_message must involve at least one accepted domain; "
+                            "external-to-external SMTP relay is out of scope for email v1"
+                        ),
+                        suggestion=(
+                            "Use an internal sender or at least one recipient in "
+                            "environment.email.accepted_domains."
+                        ),
+                    )
+                )
+            for field_name in ("to", "cc", "bcc"):
+                for address in getattr(spec, field_name, []) or []:
+                    if address.lower() in group_addresses and any(
+                        member.lower() in group_addresses
+                        for member in group_addresses[address.lower()].members
+                    ):
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.{field_name}",
+                                message=(
+                                    "email_message references a distribution group that contains "
+                                    "another distribution group"
+                                ),
+                                suggestion="Flatten distribution groups for v1.",
+                            )
+                        )
+
     def _validate_event_sequences(self) -> None:
         """Validate typed event declarations (Phase 8.4).
 
@@ -691,6 +911,7 @@ class ScenarioValidator:
             "zeek_conn",
             "zeek_dns",
             "zeek_http",
+            "zeek_smtp",
             "zeek_ssl",
             "zeek_files",
             "zeek_dhcp",
