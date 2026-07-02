@@ -645,6 +645,9 @@ messages:
     assert {row["mime_type"] for row in file_records if row["fuid"] in plaintext_smtp["fuids"]} == {
         "text/plain"
     }
+    file_by_fuid = {row["fuid"]: row for row in file_records}
+    fuid_file_times = [file_by_fuid[fuid]["ts"] for fuid in plaintext_smtp["fuids"]]
+    assert fuid_file_times == sorted(fuid_file_times)
     assert "X-Campaign-ID: ai-vendor-1" in eml_text
     assert "prompt.txt" in eml_text
     headers = _header_names(eml_text)
@@ -926,6 +929,7 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
+    file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
     manifest = json.loads(
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
@@ -955,6 +959,16 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
         for row in smtp_records
         if row.get("path")
     )
+    msg_id_by_uid = {row["uid"]: row.get("msg_id", "") for row in smtp_records if row.get("msg_id")}
+    body_hash_messages: dict[str, set[str]] = {}
+    for row in file_records:
+        if row.get("source") != "SMTP" or row.get("depth") != 0 or row.get("md5") is None:
+            continue
+        for uid in row.get("conn_uids", []):
+            msg_id = msg_id_by_uid.get(uid)
+            if msg_id:
+                body_hash_messages.setdefault(row["md5"], set()).add(msg_id)
+    assert all(len(message_ids) == 1 for message_ids in body_hash_messages.values())
     delivered_replies = [
         row["last_reply"]
         for row in smtp_records

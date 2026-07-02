@@ -11335,7 +11335,12 @@ class ActivityGenerator:
             else (
                 corpus_entry.body
                 if corpus_entry is not None
-                else self._deterministic_email_body(subject, rng)
+                else self._deterministic_email_body(
+                    subject,
+                    rng,
+                    sender=sender,
+                    recipients=expanded_recipients,
+                )
             )
         )
         attachments = (
@@ -11770,7 +11775,14 @@ class ActivityGenerator:
             return f"{rng.choice(verbs)} {rng.choice(nouns)} - {rng.choice(qualifiers)}"
         return f"{domain.split('.')[0].title()} {rng.choice(nouns)} notes"
 
-    def _deterministic_email_body(self, subject: str, rng: random.Random) -> str:
+    def _deterministic_email_body(
+        self,
+        subject: str,
+        rng: random.Random,
+        *,
+        sender: str = "",
+        recipients: list[str] | None = None,
+    ) -> str:
         openings = ["Hi,", "Hello,", "Good morning,", "Team,", "Good afternoon,", "All,"]
         closings = ["Thanks,", "Regards,", "Best,", "Thank you,", "Appreciate it,"]
         details = [
@@ -11791,10 +11803,36 @@ class ActivityGenerator:
             "Please send changes directly to the group thread.",
             "I will archive the old copy once the update is approved.",
         ]
+        recipient_domains = sorted({self._email_domain(address) for address in recipients or []})
+        sender_domain = self._email_domain(sender) if sender else ""
+        context_seed = _stable_seed(
+            "email_body_context:"
+            f"{sender}:{','.join(recipients or [])}:{subject}:{rng.random():.12f}"
+        )
+        context_rng = random.Random(context_seed)
+        reference_terms = [
+            "tracker",
+            "handoff",
+            "thread",
+            "packet",
+            "review",
+            "queue",
+            "folder",
+            "ticket",
+        ]
+        reference = context_rng.choice(reference_terms)
+        context_line = ""
+        if sender_domain or recipient_domains:
+            domain_hint = recipient_domains[0] if recipient_domains else sender_domain
+            context_line = (
+                f"I marked the {reference} with ref "
+                f"{context_seed & 0xFFFF:04X}-{(context_seed >> 16) & 0xFFF:03X} "
+                f"for the {domain_hint.split('.')[0]} follow-up."
+            )
         return (
             f"{rng.choice(openings)}\n\n"
             f"Please see the note below regarding {subject.lower()}. "
-            f"{rng.choice(details)} {rng.choice(followups)}\n\n"
+            f"{rng.choice(details)} {context_line} {rng.choice(followups)}\n\n"
             f"{rng.choice(closings)}\n"
         )
 

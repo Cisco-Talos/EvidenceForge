@@ -65,12 +65,20 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         if event.file_transfer is not None:
             file_transfers.insert(0, event.file_transfer)
         sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
+        previous_file_ts: datetime | None = None
         for ft in file_transfers:
+            min_start = _related_http_analyzer_timestamp(event)
+            if previous_file_ts is not None:
+                next_min_start = previous_file_ts + timedelta(microseconds=100)
+                min_start = (
+                    max(min_start, next_min_start) if min_start is not None else next_min_start
+                )
             file_ts, file_duration = _bounded_file_transfer_observation(
                 event,
-                min_start=_related_http_analyzer_timestamp(event),
+                min_start=min_start,
                 file_transfer=ft,
             )
+            previous_file_ts = file_ts
             event_data: dict[str, Any] = {
                 "ts": file_ts,
                 "fuid": ft.fuid,
@@ -400,7 +408,8 @@ def _bounded_file_transfer_observation(
     bounded_duration = min(max(0.0, file_duration), max_duration)
     latest_start = conn_end - timedelta(seconds=bounded_duration + epsilon)
     if lower_bound > latest_start:
-        lower_bound = latest_start
+        bounded_duration = max(0.0, (conn_end - lower_bound).total_seconds() - epsilon)
+        latest_start = lower_bound
     if file_ts > latest_start and lower_bound <= latest_start:
         file_ts = latest_start
     if file_ts < lower_bound:
