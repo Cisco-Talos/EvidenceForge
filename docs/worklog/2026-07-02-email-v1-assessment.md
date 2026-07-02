@@ -1012,3 +1012,57 @@ but did not solve the category. The next highest-signal Zeek SMTP issue is
 plaintext `path` rendering: all visible `path` values still look mechanically
 derived as `[destination, source]`. Loop 20 should derive SMTP paths from
 prior route/Received-chain context or omit them when no prior path is visible.
+
+## Loop 20
+
+Priority category: Zeek cross-source contracts.
+
+Family contract:
+
+- Owning abstraction: email delivery route context and Zeek SMTP `path`
+  rendering.
+- Invariant: Zeek SMTP `path` must not be mechanically derived from the
+  current network tuple as `[id.resp_h, id.orig_h]`; it should use prior
+  route/Received-chain context when visible, or be omitted when no prior path
+  is available.
+- Entry paths: client submission, inbound SMTP, internal relay, outbound relay,
+  ISP relay, STARTTLS-protected hops, and plaintext multi-hop delivery.
+- Consumers: Zeek `smtp.json`, email artifacts/Received headers, evaluator
+  checks, and blind network/detection review.
+- Residual sibling risk: MIME body hash reuse, MIME file timestamp ordering,
+  SMTP byte/duration texture, DNS cache repeats, port-587 plaintext posture,
+  external SMTP peer role realism, endpoint mail-client attribution, and
+  manifest label leakage remain separate families.
+
+Implemented fixes:
+
+- Added Received-chain-like SMTP path selection from prior route hops.
+- Removed the Zeek SMTP emitter fallback that rendered missing paths as the
+  reversed current tuple.
+- Added regression coverage that visible SMTP `path` values are not the
+  reversed current tuple.
+
+Verification:
+
+- Focused tests passed: `uv run pytest --no-cov tests/unit/test_email_evidence.py -q`.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe after regeneration found 60 SMTP rows, 5 rows with
+  `path`, and 0 paths equal to `[id.resp_h, id.orig_h]`.
+- Automated eval passed with score 96 over 71,212 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 72.
+- Detection Engineer: Synthetic, synthetic-confidence 74.
+- Network Forensics: Synthetic, synthetic-confidence 68.
+- Host/EDR: Synthetic, synthetic-confidence 72.
+- Average: 71.5.
+
+Result: average blind synthetic-confidence is above the user's `<=45`
+temporary-solve threshold, so Zeek cross-source contracts remain active for
+loop 21. The SMTP `path` finding improved the Network score but did not solve
+the category. The next highest-signal cross-source issue is MIME/files
+realism: one report found MIME part timestamps out of source order, and another
+found identical tiny body hashes reused across unrelated message IDs. Loop 21
+should preserve MIME part observation order and diversify generated body
+content at the owning email body/MIME file-transfer layer.
