@@ -32,6 +32,7 @@ from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
     EmailArtifactsConfig,
+    EmailAttachmentSpec,
     EmailConfig,
     EmailDistributionGroup,
     EmailMailboxOverride,
@@ -1348,6 +1349,95 @@ messages:
         and str(row.get("properties", {}).get("file_path", "")).endswith("prompt.txt")
         for row in ecar_records
     )
+
+
+def test_office_email_attachment_payload_is_openxml_container(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.mail_servers[0].attempt_outbound_starttls = False
+    scenario.environment.email.mail_servers[1].allow_inbound_starttls = False
+    scenario = _with_email_storyline(
+        scenario,
+        EmailMessageEventSpec(
+            to=["bob@corp.example"],
+            subject="Invoice workbook",
+            body="Please review the attached workbook.\n",
+            attachments=[
+                EmailAttachmentSpec(
+                    filename="invoice_77821.xlsm",
+                    content_type="application/vnd.ms-excel.sheet.macroEnabled.12",
+                    size=32768,
+                )
+            ],
+        ),
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    manifest = json.loads(
+        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
+    )
+    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
+    message = BytesParser(policy=policy.default).parsebytes(materialized.read_bytes())
+    attachment = next(message.iter_attachments())
+    payload = attachment.get_payload(decode=True)
+    assert payload.startswith(b"PK\x03\x04")
+    assert b"email-attachment:" not in payload
+    assert attachment.get_filename() == "invoice_77821.xlsm"
+
+
+def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.artifacts = EmailArtifactsConfig(mode="all")
+    scenario.environment.email.mail_servers[1].allow_inbound_starttls = False
+    scenario = _with_email_storyline(
+        scenario,
+        EmailMessageEventSpec(
+            sender="billing@vendorpost.net",
+            to=["bob@corp.example"],
+            subject="Rejected invoice",
+            body="Invoice attached.\n",
+            verdict="malware",
+            mail_action="reject",
+            outcome="rejected",
+            attachments=[
+                EmailAttachmentSpec(
+                    filename="invoice_77821.xlsm",
+                    content_type="application/vnd.ms-excel.sheet.macroEnabled.12",
+                    size=32768,
+                )
+            ],
+        ),
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+    assert len(smtp_records) == 1
+    assert smtp_records[0]["last_reply"].startswith(("550", "554"))
+    assert smtp_records[0]["fuids"] == []
+    assert smtp_records[0]["id.resp_h"] == "10.10.2.26"
+    files_path = tmp_path / "data" / "zeek-core" / "files.json"
+    file_records = _read_ndjson(files_path) if files_path.exists() else []
+    assert not any(row.get("source") == "SMTP" for row in file_records)
+    assert not any(row.get("filename") == "invoice_77821.xlsm" for row in file_records)
+    email_dir = tmp_path / "artifacts" / "email"
+    assert not list(email_dir.glob("*.eml"))
+    manifest = json.loads((email_dir / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8"))
+    assert manifest["messages"][0]["eml_path"] == ""
 
 
 def test_service_email_artifact_uses_service_header_profile(tmp_path: Path) -> None:

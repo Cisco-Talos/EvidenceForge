@@ -840,38 +840,46 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["id.resp_h"] = swaps["dst_ip"]
                     if "dst_port" in swaps:
                         render_data["id.resp_p"] = swaps["dst_port"]
-                    if "local_orig" in swaps:
+                    if "local_orig" in swaps and "local_orig" in render_data:
                         render_data["local_orig"] = swaps["local_orig"]
-                    if "local_resp" in swaps:
+                    if "local_resp" in swaps and "local_resp" in render_data:
                         render_data["local_resp"] = swaps["local_resp"]
-                    if "src_ip" in swaps:
+                    if "src_ip" in swaps and (
+                        "tx_hosts" in render_data or "rx_hosts" in render_data
+                    ):
                         original_src_ip = event_data.get("id.orig_h") or event_data.get(
                             "_id.orig_h"
                         )
-                        render_data["tx_hosts"] = _swap_host_list_value(
-                            render_data.get("tx_hosts"),
-                            original_src_ip,
-                            swaps["src_ip"],
-                        )
-                        render_data["rx_hosts"] = _swap_host_list_value(
-                            render_data.get("rx_hosts"),
-                            original_src_ip,
-                            swaps["src_ip"],
-                        )
-                    if "dst_ip" in swaps:
+                        if "tx_hosts" in render_data:
+                            render_data["tx_hosts"] = _swap_host_list_value(
+                                render_data.get("tx_hosts"),
+                                original_src_ip,
+                                swaps["src_ip"],
+                            )
+                        if "rx_hosts" in render_data:
+                            render_data["rx_hosts"] = _swap_host_list_value(
+                                render_data.get("rx_hosts"),
+                                original_src_ip,
+                                swaps["src_ip"],
+                            )
+                    if "dst_ip" in swaps and (
+                        "tx_hosts" in render_data or "rx_hosts" in render_data
+                    ):
                         original_dst_ip = event_data.get("id.resp_h") or event_data.get(
                             "_id.resp_h"
                         )
-                        render_data["tx_hosts"] = _swap_host_list_value(
-                            render_data.get("tx_hosts"),
-                            original_dst_ip,
-                            swaps["dst_ip"],
-                        )
-                        render_data["rx_hosts"] = _swap_host_list_value(
-                            render_data.get("rx_hosts"),
-                            original_dst_ip,
-                            swaps["dst_ip"],
-                        )
+                        if "tx_hosts" in render_data:
+                            render_data["tx_hosts"] = _swap_host_list_value(
+                                render_data.get("tx_hosts"),
+                                original_dst_ip,
+                                swaps["dst_ip"],
+                            )
+                        if "rx_hosts" in render_data:
+                            render_data["rx_hosts"] = _swap_host_list_value(
+                                render_data.get("rx_hosts"),
+                                original_dst_ip,
+                                swaps["dst_ip"],
+                            )
                 # Each sensor has independent clock skew/drift plus stable
                 # capture timing. Apply it to every sensor in a multi-sensor
                 # observation so cross-sensor deltas are sensor/path-shaped

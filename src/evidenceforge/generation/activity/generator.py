@@ -30,6 +30,7 @@ coordinates them across multiple log formats for consistency.
 import base64
 import hashlib
 import heapq
+import io
 import ipaddress
 import itertools
 import logging
@@ -40,6 +41,7 @@ import random
 import re
 import shlex
 import uuid
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -12290,12 +12292,17 @@ class ActivityGenerator:
         )
         message_id = self._email_message_id(artifact_id, sender, user_agent)
         route = self._plan_email_route(sender, expanded_recipients, request.system)
+        delivery_succeeded = spec.outcome == "delivered"
+        if route and not delivery_succeeded:
+            route = route[:1]
         if route and route[0].get("submission"):
             route[0]["recipients"] = envelope_recipients
+        transport_body = body if delivery_succeeded else ""
+        transport_attachments = attachments if delivery_succeeded else []
         transfer_sizes = self._smtp_transfer_sizes(
             message_id=message_id,
-            body=body,
-            attachments=attachments,
+            body=transport_body,
+            attachments=transport_attachments,
             route=route,
         )
         hop_times = self._email_smtp_hop_times(
@@ -12383,7 +12390,7 @@ class ActivityGenerator:
                     attachments=attachments,
                     duration=rng.uniform(0.04, 0.4),
                 )
-                if not tls
+                if delivery_succeeded and not tls
                 else []
             )
             smtp_ctx = SmtpContext(
@@ -12484,19 +12491,28 @@ class ActivityGenerator:
             )
             if uid:
                 smtp_uids.append(visible_uid or uid)
-            self._emit_email_mta_syslog(
-                route=route,
-                hop_index=index,
-                hop=hop,
-                time=hop_time,
-                duration=float(transfer_sizes[index]["duration"]),
-                message_id=message_id,
-                sender=sender,
-                actor=request.actor,
-                smtp=smtp_ctx,
-                size=int(transfer_sizes[index]["message_size"]),
-                source_pid=source_pid,
-            )
+            if delivery_succeeded:
+                self._emit_email_mta_syslog(
+                    route=route,
+                    hop_index=index,
+                    hop=hop,
+                    time=hop_time,
+                    duration=float(transfer_sizes[index]["duration"]),
+                    message_id=message_id,
+                    sender=sender,
+                    actor=request.actor,
+                    smtp=smtp_ctx,
+                    size=int(transfer_sizes[index]["message_size"]),
+                    source_pid=source_pid,
+                )
+            else:
+                self._emit_email_mta_reject_syslog(
+                    hop=hop,
+                    time=hop_time,
+                    duration=float(transfer_sizes[index]["duration"]),
+                    sender=sender,
+                    smtp=smtp_ctx,
+                )
             recipient_domains = sorted(
                 {self._email_domain(address) for address in hop.get("recipients", [])}
             )
@@ -12515,7 +12531,9 @@ class ActivityGenerator:
             )
 
         artifact_path = ""
-        if self._should_materialize_email_artifact(artifact_id, request.storyline_id):
+        if delivery_succeeded and self._should_materialize_email_artifact(
+            artifact_id, request.storyline_id
+        ):
             artifact_path = self._write_email_artifact(email_ctx)
             email_ctx.artifact_path = artifact_path
         self._record_email_artifact_manifest(email_ctx, artifact_path)
@@ -13449,6 +13467,49 @@ class ActivityGenerator:
                 port=25,
                 delivery_pid=source_pid if source_pid > 0 else None,
             )
+
+    def _emit_email_mta_reject_syslog(
+        self,
+        *,
+        hop: dict[str, Any],
+        time: datetime,
+        duration: float,
+        sender: str,
+        smtp: SmtpContext,
+    ) -> None:
+        """Emit receive-side MTA evidence for an SMTP transaction rejected before DATA."""
+        dst_system = hop["dst_system"]
+        if not self._is_linux_mail_server(dst_system):
+            return
+        src_system = hop["src_system"]
+        smtpd_pid = self._email_responding_process_pid(
+            dst_system,
+            time=time,
+            port=587 if hop["submission"] else 25,
+        )
+        peer_name = self._postfix_peer_name(src_system)
+        connect_time = self._smtp_lifecycle_time(time, duration, 0.08)
+        reject_time = self._smtp_lifecycle_time(time, duration, 0.42)
+        recipient = self._postfix_recipient_list(smtp.rcptto)[:1]
+        to_address = recipient[0] if recipient else "undisclosed-recipients"
+        reply = smtp.last_reply or "550 5.7.1 Message rejected"
+        self.generate_syslog_event(
+            dst_system,
+            connect_time,
+            "postfix/smtpd",
+            f"connect from {peer_name}[{src_system.ip}]",
+            pid=smtpd_pid,
+        )
+        self.generate_syslog_event(
+            dst_system,
+            reject_time,
+            "postfix/smtpd",
+            (
+                f"NOQUEUE: reject: RCPT from {peer_name}[{src_system.ip}]: {reply}; "
+                f"from=<{sender}> to=<{to_address}> proto=ESMTP helo=<{smtp.helo}>"
+            ),
+            pid=smtpd_pid,
+        )
 
     def _emit_postfix_receive_syslog(
         self,
@@ -14607,6 +14668,8 @@ class ActivityGenerator:
         size = max(0, int(attachment.get("size") or 0))
         if size == 0:
             return b""
+        if ActivityGenerator._email_attachment_is_openxml_office(attachment):
+            return ActivityGenerator._openxml_office_attachment_bytes(attachment, artifact_id, size)
         seed = (
             f"email-attachment:{artifact_id}:"
             f"{attachment.get('filename') or 'attachment.bin'}:"
@@ -14614,6 +14677,125 @@ class ActivityGenerator:
         ).encode()
         repeats = (size // len(seed)) + 1
         return (seed * repeats)[:size]
+
+    @staticmethod
+    def _email_attachment_is_openxml_office(attachment: dict[str, Any]) -> bool:
+        """Return whether attachment metadata claims an OpenXML Office container."""
+        filename = str(attachment.get("filename") or "").lower()
+        content_type = str(attachment.get("content_type") or "").lower()
+        return filename.endswith((".docx", ".pptx", ".xlsx", ".xlsm")) or any(
+            marker in content_type
+            for marker in (
+                "openxmlformats-officedocument",
+                "application/vnd.ms-excel.sheet.macroenabled",
+            )
+        )
+
+    @staticmethod
+    def _openxml_office_attachment_bytes(
+        attachment: dict[str, Any],
+        artifact_id: str,
+        requested_size: int,
+    ) -> bytes:
+        """Return deterministic Office-like OOXML bytes for generated binary attachments."""
+        filename = str(attachment.get("filename") or "attachment.xlsx").lower()
+        is_macro_workbook = (
+            filename.endswith(".xlsm")
+            or "macroenabled" in str(attachment.get("content_type") or "").lower()
+        )
+        payload_seed = (
+            f"office-attachment:{artifact_id}:{filename}:"
+            f"{attachment.get('content_type') or 'application/octet-stream'}"
+        )
+        binary_size = max(1024, requested_size - 2200)
+        if not is_macro_workbook:
+            binary_size = max(256, min(binary_size, 8192))
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "[Content_Types].xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    b'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                    b'<Default Extension="xml" ContentType="application/xml"/>'
+                    b'<Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/>'
+                    b'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    b"</Types>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "_rels/.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                    b"</Relationships>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/workbook.xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    b'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    b'<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>'
+                    b"</workbook>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/_rels/workbook.xml.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    b"</Relationships>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/worksheets/sheet1.xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    b'<sheetData><row r="1"><c r="A1" t="str"><v>Invoice reference</v></c></row></sheetData>'
+                    b"</worksheet>"
+                ),
+            )
+            if is_macro_workbook:
+                ActivityGenerator._write_deterministic_zip_member(
+                    archive,
+                    "xl/vbaProject.bin",
+                    ActivityGenerator._deterministic_binary_bytes(payload_seed, binary_size),
+                )
+        return buffer.getvalue()
+
+    @staticmethod
+    def _write_deterministic_zip_member(
+        archive: zipfile.ZipFile,
+        name: str,
+        payload: bytes,
+    ) -> None:
+        """Write a ZIP member with stable metadata."""
+        info = zipfile.ZipInfo(name, (2024, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED
+        info.external_attr = 0o600 << 16
+        archive.writestr(info, payload)
+
+    @staticmethod
+    def _deterministic_binary_bytes(seed: str, size: int) -> bytes:
+        """Return deterministic binary-looking bytes for source-native container members."""
+        chunks: list[bytes] = []
+        counter = 0
+        while sum(len(chunk) for chunk in chunks) < size:
+            chunks.append(hashlib.sha256(f"{seed}:{counter}".encode()).digest())
+            counter += 1
+        return b"".join(chunks)[:size]
 
     def _maybe_generate_email_recipient_reads(
         self,
