@@ -10117,6 +10117,92 @@ def test_tls_key_metadata_follows_rsa_named_intermediates():
     ) == ("rsa", 2048)
 
 
+def test_public_sni_on_private_destination_uses_public_ca(activity_gen, monkeypatch):
+    """Public SNI observed through private listener addresses should not use internal CA."""
+    monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (100, 0))
+    activity_gen._ad_domain = "corp.local"
+    event = SecurityEvent(
+        timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        event_type="connection",
+        network=NetworkContext(
+            src_ip="198.51.100.44",
+            src_port=49152,
+            dst_ip="10.0.3.10",
+            dst_port=443,
+            protocol="tcp",
+            service="ssl",
+            zeek_uid="Cpublicsni",
+            duration=2.0,
+            orig_bytes=900,
+            resp_bytes=9000,
+            orig_pkts=4,
+            resp_pkts=10,
+            orig_ip_bytes=1200,
+            resp_ip_bytes=9500,
+            conn_state="SF",
+            history="ShADadfF",
+            initiating_pid=-1,
+        ),
+    )
+
+    activity_gen._attach_ssl_context(
+        event,
+        hostname="portal.example.com",
+        dns=None,
+        dst_ip="10.0.3.10",
+        rng=random.Random(7),
+        allow_failure=False,
+    )
+
+    assert event.x509 is not None
+    assert event.x509.certificate_subject == "CN=portal.example.com"
+    assert "Enterprise Issuing CA" not in event.x509.certificate_issuer
+
+
+def test_internal_sni_on_private_destination_uses_enterprise_ca(activity_gen, monkeypatch):
+    """Internal SNI on private addresses should keep enterprise certificate semantics."""
+    monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (100, 0))
+    activity_gen._ad_domain = "corp.local"
+    event = SecurityEvent(
+        timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        event_type="connection",
+        network=NetworkContext(
+            src_ip="10.0.1.10",
+            src_port=49152,
+            dst_ip="10.0.3.10",
+            dst_port=443,
+            protocol="tcp",
+            service="ssl",
+            zeek_uid="Cinternalsni",
+            duration=2.0,
+            orig_bytes=900,
+            resp_bytes=9000,
+            orig_pkts=4,
+            resp_pkts=10,
+            orig_ip_bytes=1200,
+            resp_ip_bytes=9500,
+            conn_state="SF",
+            history="ShADadfF",
+            initiating_pid=-1,
+        ),
+    )
+
+    activity_gen._attach_ssl_context(
+        event,
+        hostname="portal.corp.local",
+        dns=None,
+        dst_ip="10.0.3.10",
+        rng=random.Random(7),
+        allow_failure=False,
+    )
+
+    assert event.x509 is not None
+    assert event.x509.certificate_subject == "CN=portal.corp.local"
+    assert (
+        event.x509.certificate_issuer == "CN=Enterprise Enterprise Issuing CA, O=Enterprise, C=US"
+    )
+
+
 def test_tcp_success_history_uses_varied_completed_flow_shapes():
     """Explicit successful TCP connections should not collapse to one Zeek history."""
     histories = {generator_module._tcp_success_history(random.Random(seed)) for seed in range(40)}

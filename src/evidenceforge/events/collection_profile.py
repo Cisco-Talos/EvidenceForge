@@ -74,7 +74,7 @@ def build_collection_profile(
                     "boundary-spanning connections may close just outside the query horizon."
                 ),
                 ordering=(
-                    "JSON exports are timestamp-normalized for stable replay and ingestion; "
+                    "JSON exports are timestamp-normalized for consistent downstream analysis; "
                     "connection rows use the observed connection start timestamp."
                 ),
                 notes=[
@@ -146,8 +146,8 @@ def build_collection_profile(
                 ),
                 ordering="The manifest is sorted by message date, message id, and sender.",
                 notes=[
-                    "The manifest excludes storyline IDs, local filesystem paths, verdict "
-                    "labels, and route-hop metadata.",
+                    "The manifest excludes internal case identifiers, local filesystem paths, "
+                    "classification labels, and transport route internals.",
                 ],
             ),
         ],

@@ -982,6 +982,10 @@ class TestGenerationEngine:
         profile = json.loads(collection_profile.read_text(encoding="utf-8"))
         assert "storyline_events" not in profile
         assert "red_herring_events" not in profile
+        profile_text = json.dumps(profile)
+        assert "stable replay" not in profile_text
+        assert "storyline" not in profile_text.lower()
+        assert "verdict" not in profile_text.lower()
         assert profile["output_target"] == "default"
         endpoint_family = next(
             family

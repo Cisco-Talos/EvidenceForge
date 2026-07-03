@@ -7140,10 +7140,15 @@ class ActivityGenerator:
         # issued to private IPs. If explicit internal SNI exists, it remains
         # the certificate identity and SAN source of truth.
         internal_cert_name = ""
+        ad_domain = getattr(self, "_ad_domain", "")
+        server_name_is_internal = bool(server_name) and _dns_is_internal_name(
+            server_name,
+            ad_domain,
+        )
         if _is_private_ip(dst_ip):
-            if server_name:
+            if server_name_is_internal:
                 internal_cert_name = server_name
-            else:
+            elif not server_name:
                 dst_host = event.dst_host
                 if dst_host is None and hasattr(self, "_ip_to_system"):
                     dst_system = self._ip_to_system.get(dst_ip)

@@ -66,7 +66,7 @@ For practical ingestion and validation guidance by target, see
 `COLLECTION_PROFILE.json` inside `data/` is a blind-safe source collection
 sidecar. It records the primary collection window, selected observation profile,
 source-family tail policies, and export ordering semantics without storyline
-IDs, exercise labels, ground-truth events, or scenario narrative details.
+identifiers, exercise labels, ground-truth events, or scenario narrative details.
 
 Target-specific behavior in V1:
 
@@ -95,8 +95,8 @@ normal DNS and network-visibility layers. Generated email artifacts live outside
   sender/recipient metadata, subject/date, optional `eml_path`, and explicit
   `artifact_export_status` / `artifact_export_reason` fields explaining whether
   an `.eml` was materialized or the row is metadata-only. It does not include
-  storyline IDs, exercise verdict labels, local filesystem artifact paths,
-  expanded delivery recipients, or SMTP route-hop metadata.
+  internal case identifiers, classification labels, local filesystem artifact
+  paths, expanded delivery recipients, or SMTP transport-route internals.
 - `artifacts/email/<artifact-id>.eml` — RFC 5322 message artifacts for selected
   or storyline-backed messages.
 - `<sensor>/smtp.json` — Zeek `smtp.log` NDJSON for visible SMTP transactions.
