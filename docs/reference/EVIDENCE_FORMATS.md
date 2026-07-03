@@ -24,6 +24,7 @@ output/
       EMAIL_ARTIFACTS.json                 # Email artifact manifest
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
   data/                                    # Generated logs for every output target
+    COLLECTION_PROFILE.json                # Blind-safe collection/export semantics
     <hostname.domain>/                     # Per-host directories (FQDN)
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
@@ -61,6 +62,11 @@ When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
 legacy/default output.
 For practical ingestion and validation guidance by target, see
 [Output Target Ingest Guides](../output-targets/README.md).
+
+`COLLECTION_PROFILE.json` inside `data/` is a blind-safe source collection
+sidecar. It records the primary collection window, selected observation profile,
+source-family tail policies, and export ordering semantics without storyline
+IDs, exercise labels, ground-truth events, or scenario narrative details.
 
 Target-specific behavior in V1:
 
