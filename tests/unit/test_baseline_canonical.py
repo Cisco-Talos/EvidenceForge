@@ -200,6 +200,126 @@ def test_interactive_startup_activity_pacing_respects_hour_and_logoff_boundaries
     )
 
 
+def test_locked_workstation_activity_defers_until_after_unlock():
+    """Foreground baseline activity should not occur while the workstation is visibly locked."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 9, 0, 0, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    current_hour = datetime(2026, 4, 13, 10, 0, 0, tzinfo=UTC)
+    lock_time = current_hour + timedelta(minutes=15)
+    unlock_time = current_hour + timedelta(minutes=25)
+
+    engine._remember_workstation_locked_interval(
+        hostname="WS-01",
+        logon_id="0x12345",
+        lock_time=lock_time,
+        unlock_time=unlock_time,
+    )
+
+    outside = engine._activity_time_outside_locked_session(
+        session=session,
+        candidate_time=current_hour + timedelta(minutes=10),
+        activity_key="user_activity:connection_web",
+        current_hour=current_hour,
+        planned_logoffs=None,
+    )
+    adjusted = engine._activity_time_outside_locked_session(
+        session=session,
+        candidate_time=current_hour + timedelta(minutes=20),
+        activity_key="user_activity:connection_web",
+        current_hour=current_hour,
+        planned_logoffs=None,
+    )
+
+    assert outside == current_hour + timedelta(minutes=10)
+    assert adjusted is not None
+    assert unlock_time + timedelta(seconds=3) <= adjusted <= unlock_time + timedelta(seconds=90)
+
+
+def test_locked_workstation_activity_skips_when_unlock_window_does_not_fit():
+    """Locked-session activity should be dropped if deferral would miss the active window."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 9, 0, 0, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    current_hour = datetime(2026, 4, 13, 10, 0, 0, tzinfo=UTC)
+
+    engine._remember_workstation_locked_interval(
+        hostname="WS-01",
+        logon_id="0x12345",
+        lock_time=current_hour + timedelta(minutes=15),
+        unlock_time=current_hour + timedelta(hours=1, minutes=2),
+    )
+
+    assert (
+        engine._activity_time_outside_locked_session(
+            session=session,
+            candidate_time=current_hour + timedelta(minutes=20),
+            activity_key="user_activity:connection_web",
+            current_hour=current_hour,
+            planned_logoffs=None,
+        )
+        is None
+    )
+
+    engine = object.__new__(BaselineMixin)
+    engine._remember_workstation_locked_interval(
+        hostname="WS-01",
+        logon_id="0x12345",
+        lock_time=current_hour + timedelta(minutes=15),
+        unlock_time=current_hour + timedelta(minutes=50),
+    )
+
+    assert (
+        engine._activity_time_outside_locked_session(
+            session=session,
+            candidate_time=current_hour + timedelta(minutes=20),
+            activity_key="user_activity:connection_web",
+            current_hour=current_hour,
+            planned_logoffs={("WS-01", "0x12345"): 3002},
+        )
+        is None
+    )
+
+
+def test_pending_workstation_unlock_emits_independent_of_new_lock_path():
+    """Deferred unlock lifecycle should not depend on later user activity scheduling."""
+    engine = object.__new__(BaselineMixin)
+    user = User(username="analyst", full_name="Analyst User", email="analyst@example.com")
+    system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    unlock_time = current_hour + timedelta(minutes=5)
+    logon_id = "0x12345"
+    session = SimpleNamespace(
+        username=user.username,
+        system=system.hostname,
+        logon_id=logon_id,
+        start_time=current_hour - timedelta(hours=2),
+        network_close_time=None,
+    )
+
+    engine._pending_unlocks = {user.username: (unlock_time, logon_id)}
+    engine.state_manager = SimpleNamespace(get_session=Mock(return_value=session))
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+    engine._emit_unlock = Mock()
+
+    engine._emit_pending_workstation_unlock(user, current_hour, planned_logoffs=None)
+
+    assert engine._pending_unlocks == {}
+    engine._emit_unlock.assert_called_once()
+    args = engine._emit_unlock.call_args.args
+    assert args[:4] == (user, system, unlock_time, logon_id)
+
+
 def test_linux_baseline_session_initiator_creates_pam_session_message():
     """Ambient logind session noise should have a concrete PAM initiator."""
     samples = [
@@ -1290,10 +1410,11 @@ class TestSyslogContext:
 
         syslog = mock_emitters["syslog"]
         assert syslog.emit.called
-        event = syslog.emit.call_args[0][0]
-        assert event.syslog is not None
-        assert "Failed password" in event.syslog.message
-        assert event.syslog.severity == 4  # Warning level
+        syslog_events = [
+            call.args[0] for call in syslog.emit.call_args_list if call.args[0].syslog is not None
+        ]
+        assert any("Failed password" in event.syslog.message for event in syslog_events)
+        assert any(event.syslog.severity == 4 for event in syslog_events)
 
     def test_remote_linux_failed_logon_reuses_ssh_source_port_for_zeek_tuple(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1311,7 +1432,14 @@ class TestSyslogContext:
             source_ip=source_ip,
         )
 
-        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None
+        ]
+        syslog_event = next(
+            event for event in syslog_events if "Failed password" in event.syslog.message
+        )
         match = re.search(r"from (?P<src>\S+) port (?P<port>\d+) ssh2", syslog_event.syslog.message)
         assert match is not None
         ssh_source_port = int(match.group("port"))
@@ -1333,6 +1461,41 @@ class TestSyslogContext:
 
         assert matching_ssh_events
         assert syslog_event.syslog.pid == matching_ssh_events[0].network.responding_pid
+
+    def test_remote_linux_failed_logon_syslog_orders_connection_before_failure(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Remote failed sshd auth should render one ordered tuple-scoped lifecycle."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        source_ip = "10.0.10.99"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(
+            user=User(username="attacker", full_name="Attacker", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+        )
+
+        syslog_events = sorted(
+            [
+                call.args[0]
+                for call in mock_emitters["syslog"].emit.call_args_list
+                if call.args[0].syslog is not None and call.args[0].syslog.app_name == "sshd"
+            ],
+            key=lambda event: event.timestamp,
+        )
+        messages = [event.syslog.message for event in syslog_events]
+        assert messages[0].startswith(f"Connection from {source_ip} port ")
+        assert any(message.startswith("Failed password for attacker ") for message in messages)
+        assert not any("invalid user unknown" in message for message in messages)
+        failure_index = next(
+            index for index, message in enumerate(messages) if message.startswith("Failed password")
+        )
+        assert failure_index > 0
+        assert messages[-1].startswith("Connection closed by authenticating user attacker ")
+        assert len({event.syslog.pid for event in syslog_events}) == 1
 
     def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
         self, activity_gen, state_manager, mock_emitters, timestamp

@@ -1320,10 +1320,44 @@ class ScheduledStaleCredentialsConfig(BaseModel, extra="forbid"):
         return self
 
 
+class ServiceAccountDelegationProcessConfig(BaseModel, extra="forbid"):
+    """One caller-process choice for service-account explicit-credential noise."""
+
+    image: str = Field(min_length=1)
+    command_line: str = Field(min_length=1)
+    parent_key: str = Field(default="services", min_length=1)
+    weight: int = Field(gt=0)
+
+
+class ServiceAccountDelegationProfileConfig(BaseModel, extra="forbid"):
+    """Role-specific service-account delegation caller profile."""
+
+    name: str = Field(min_length=1)
+    account_terms: list[str] = Field(min_length=1)
+    weight: int = Field(gt=0)
+    processes: list[ServiceAccountDelegationProcessConfig] = Field(min_length=1)
+
+    @field_validator("account_terms")
+    @classmethod
+    def account_terms_are_non_empty(cls, v: list[str]) -> list[str]:
+        for term in v:
+            if not term.strip():
+                raise ValueError("account_terms entries must be non-empty")
+        return v
+
+
+class ServiceAccountDelegationConfig(BaseModel, extra="forbid"):
+    """Service-account explicit-credential baseline profile."""
+
+    hourly_probability: float = Field(ge=0.0, le=0.95)
+    caller_profiles: list[ServiceAccountDelegationProfileConfig] = Field(min_length=1)
+
+
 class AuthNoiseConfig(BaseModel, extra="forbid"):
     """Root schema for auth_noise.yaml."""
 
     scheduled_stale_credentials: ScheduledStaleCredentialsConfig
+    service_account_delegation: ServiceAccountDelegationConfig
 
 
 # --- Network Params ---

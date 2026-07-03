@@ -1831,6 +1831,80 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @classmethod
+    def _normalize_user_session_lifecycle_order(cls, lines: list[str]) -> list[str]:
+        """Keep USER_SESSION LOGOUT rows after matching successful LOGIN rows."""
+        records: list[dict[str, Any] | None] = []
+        sessions: dict[tuple[str, str], dict[str, list[int]]] = {}
+        for index, line in enumerate(lines):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "USER_SESSION":
+                continue
+            action = str(record.get("action") or "")
+            if action not in {"LOGIN", "LOGOUT"}:
+                continue
+            props = record.get("properties") or {}
+            if action == "LOGIN" and str(props.get("outcome") or "success") == "failure":
+                continue
+            session_id = str(
+                props.get("logon_id") or props.get("session_id") or record.get("objectID") or ""
+            )
+            if not session_id:
+                continue
+            key = (str(record.get("hostname") or ""), session_id)
+            sessions.setdefault(key, {"LOGIN": [], "LOGOUT": []})[action].append(index)
+
+        for key, session_indexes in sessions.items():
+            login_indexes = session_indexes["LOGIN"]
+            logout_indexes = session_indexes["LOGOUT"]
+            if not login_indexes or not logout_indexes:
+                continue
+            latest_login_ms = max(
+                cls._ecar_int(records[index].get("timestamp_ms"), 0)
+                for index in login_indexes
+                if records[index] is not None
+            )
+            next_logout_ms = latest_login_ms + 1
+            for index in sorted(
+                logout_indexes,
+                key=lambda idx: (
+                    cls._ecar_int(records[idx].get("timestamp_ms"), 0)
+                    if records[idx] is not None
+                    else 0
+                ),
+            ):
+                record = records[index]
+                if record is None:
+                    continue
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                if timestamp_ms <= latest_login_ms:
+                    seed_text = ":".join(
+                        [
+                            key[0],
+                            key[1],
+                            str(record.get("id") or ""),
+                            str(record.get("objectID") or ""),
+                            str(timestamp_ms),
+                        ]
+                    )
+                    stable_delay_ms = 25 + (sum(ord(ch) for ch in seed_text) % 175)
+                    timestamp_ms = max(next_logout_ms, latest_login_ms + stable_delay_ms)
+                    record["timestamp_ms"] = timestamp_ms
+                next_logout_ms = max(next_logout_ms, timestamp_ms + 1)
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
     _LINUX_SHELL_FOREGROUND_EXES = {
         "cargo",
         "cat",
@@ -2342,6 +2416,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
+                    writer.buffer = self._normalize_user_session_lifecycle_order(writer.buffer)
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)

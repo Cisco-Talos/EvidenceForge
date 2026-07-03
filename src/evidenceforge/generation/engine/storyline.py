@@ -4335,6 +4335,7 @@ class StorylineMixin:
                                 user_agent=proxy_user_agent,
                                 cache_result="DENIED",
                                 hostname=beacon_host,
+                                time=tick_time,
                             ),
                             method=proxy_method,
                             url=proxy_url,

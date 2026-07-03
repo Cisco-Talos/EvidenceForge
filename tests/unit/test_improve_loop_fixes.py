@@ -201,6 +201,14 @@ class TestDbServiceFiltering:
             ip, _ = wm.resolve_destination("database", src, rng, service="mssql")
             assert ip == "10.0.2.11", f"Expected MSSQL host, got {ip}"
 
+    def test_sql_alias_request_gets_ms_host(self):
+        wm = self._make_world_model_mixed_db()
+        rng = random.Random(42)
+        src = next(s for s in wm.scenario.environment.systems if s.hostname == "WS-01")
+        for _ in range(20):
+            ip, _ = wm.resolve_destination("database", src, rng, service="sql")
+            assert ip == "10.0.2.11", f"Expected MSSQL host for sql alias, got {ip}"
+
     def test_no_compatible_db_returns_none(self):
         """When only PG exists and mysql is requested, return None."""
         scenario = Scenario(

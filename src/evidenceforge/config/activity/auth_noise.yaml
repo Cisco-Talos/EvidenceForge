@@ -44,3 +44,83 @@ scheduled_stale_credentials:
   backoff_probability: 0.10
   backoff_seconds_min: 900
   backoff_seconds_max: 3600
+
+service_account_delegation:
+  hourly_probability: 0.30
+  caller_profiles:
+    - name: backup_agents
+      account_terms: ["backup", "sync", "jobs", "batch"]
+      weight: 36
+      processes:
+        - image: "C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe"
+          command_line: "\"C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe\""
+          parent_key: "services"
+          weight: 5
+        - image: "C:\\Program Files\\Commvault\\ContentStore\\Base\\GxCVD.exe"
+          command_line: "\"C:\\Program Files\\Commvault\\ContentStore\\Base\\GxCVD.exe\" -service"
+          parent_key: "services"
+          weight: 3
+        - image: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          command_line: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\backup-check.ps1"
+          parent_key: "taskeng"
+          weight: 1
+
+    - name: monitoring_agents
+      account_terms: ["monitor", "scan"]
+      weight: 30
+      processes:
+        - image: "C:\\Program Files\\Microsoft Monitoring Agent\\Agent\\MonitoringHost.exe"
+          command_line: "\"C:\\Program Files\\Microsoft Monitoring Agent\\Agent\\MonitoringHost.exe\" -Embedding"
+          parent_key: "services"
+          weight: 5
+        - image: "C:\\Program Files\\osquery\\osqueryd\\osqueryd.exe"
+          command_line: "\"C:\\Program Files\\osquery\\osqueryd\\osqueryd.exe\" --flagfile C:\\ProgramData\\osquery\\osquery.flags"
+          parent_key: "services"
+          weight: 3
+        - image: "C:\\Program Files\\Wazuh Agent\\wazuh-agent.exe"
+          command_line: "\"C:\\Program Files\\Wazuh Agent\\wazuh-agent.exe\""
+          parent_key: "services"
+          weight: 2
+
+    - name: deployment_agents
+      account_terms: ["deploy", "patch", "build"]
+      weight: 24
+      processes:
+        - image: "C:\\Windows\\CCM\\CcmExec.exe"
+          command_line: "C:\\Windows\\CCM\\CcmExec.exe"
+          parent_key: "services"
+          weight: 5
+        - image: "C:\\Program Files\\GitLab-Runner\\gitlab-runner.exe"
+          command_line: "\"C:\\Program Files\\GitLab-Runner\\gitlab-runner.exe\" run --working-directory C:\\GitLab-Runner"
+          parent_key: "services"
+          weight: 2
+        - image: "C:\\Program Files\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe"
+          command_line: "\"C:\\Program Files\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe\" /svc"
+          parent_key: "services"
+          weight: 1
+
+    - name: reporting_tasks
+      account_terms: ["report"]
+      weight: 18
+      processes:
+        - image: "C:\\Windows\\System32\\taskhostw.exe"
+          command_line: "taskhostw.exe /Run"
+          parent_key: "svchost_netsvcs"
+          weight: 4
+        - image: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          command_line: "powershell.exe -NoProfile -File C:\\Scripts\\report-rollup.ps1"
+          parent_key: "taskeng"
+          weight: 2
+
+    - name: default_service_tasks
+      account_terms: ["svc"]
+      weight: 12
+      processes:
+        - image: "C:\\Windows\\System32\\taskhostw.exe"
+          command_line: "taskhostw.exe /Run"
+          parent_key: "svchost_netsvcs"
+          weight: 3
+        - image: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          command_line: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\service-health.ps1"
+          parent_key: "taskeng"
+          weight: 2

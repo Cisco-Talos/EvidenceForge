@@ -292,6 +292,7 @@ class ProxyTransactionActionBundle:
             proxy_sys=proxy_sys,
             http=request.http,
             explicit_mode=True,
+            time=request.time,
         )
         tunnel_key = (
             request.src_ip,
@@ -486,9 +487,10 @@ class ProxyTransactionActionBundle:
             executor._emit_dns_lookup(
                 proxy_sys.ip,
                 dst_ip,
-                egress_time,
+                egress_time - timedelta(seconds=2),
                 hostname=proxy_context.host,
                 force_address=True,
+                bypass_cache=True,
             )
 
         egress_conn_state = request.conn_state

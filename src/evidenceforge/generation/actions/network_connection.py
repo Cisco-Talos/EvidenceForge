@@ -114,6 +114,7 @@ class NetworkConnectionRequest:
     suppress_prereq_dns: bool = False
     packet_overhead_bytes: int | None = None
     responding_pid: int = -1
+    ssh_attempted_username: str | None = None
     source: str = "activity_generator"
 
     @property
@@ -138,7 +139,7 @@ class NetworkConnectionRequest:
             f"{self.preserve_http_outcome}:{self.suppress_application_side_effects}:"
             f"{self.suppress_source_pid_inference}:{self.preserve_explicit_payload}:"
             f"{self.suppress_prereq_dns}:{self.packet_overhead_bytes or ''}:"
-            f"{self.responding_pid}:{self.source}"
+            f"{self.responding_pid}:{self.ssh_attempted_username or ''}:{self.source}"
         )
         return f"network-connection-{seed:016x}"
 

@@ -778,10 +778,12 @@ class TestSessionManagement:
 
         logon_id = sm.create_session("jdoe", "WS-01", 2, "192.168.1.1")
         assert sm.get_session(logon_id) is not None
+        object_id = sm.get_session_object_id(logon_id)
 
         result = sm.end_session(logon_id)
         assert result is True
         assert sm.get_session(logon_id) is None
+        assert sm.get_session_object_id(logon_id) == object_id
 
     def test_end_nonexistent_session(self):
         """Test ending a non-existent session returns False."""

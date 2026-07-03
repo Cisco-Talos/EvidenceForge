@@ -36,3 +36,9 @@ def scheduled_stale_credentials_config() -> dict[str, Any]:
     """Return stale scheduled-credential failure settings."""
     config = load_auth_noise_config().get("scheduled_stale_credentials", {})
     return config if isinstance(config, dict) else {}
+
+
+def service_account_delegation_config() -> dict[str, Any]:
+    """Return service-account explicit-credential delegation settings."""
+    config = load_auth_noise_config().get("service_account_delegation", {})
+    return config if isinstance(config, dict) else {}

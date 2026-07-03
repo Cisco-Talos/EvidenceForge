@@ -588,6 +588,26 @@ def _is_tool_http_user_agent(user_agent: str) -> bool:
     )
 
 
+_BROWSER_HTTP_USER_AGENT_FAMILY_TOKENS = (
+    "chrome/",
+    "chromium/",
+    "firefox/",
+    "edg/",
+    "opr/",
+    "opera/",
+    "version/",
+    "safari/",
+)
+
+
+def _is_browser_family_http_user_agent(user_agent: str) -> bool:
+    """Return true when the UA looks like a full browser-family string."""
+    ua = user_agent.strip().lower()
+    if not ua.startswith("mozilla/"):
+        return False
+    return any(token in ua for token in _BROWSER_HTTP_USER_AGENT_FAMILY_TOKENS)
+
+
 def _source_native_http_referrer(
     user_agent: str,
     referrer: str,
@@ -1255,6 +1275,50 @@ def _extract_network_command_target(command_line: str, service: str) -> str | No
             if candidate:
                 return _normalize_database_command_target(candidate)
         return None
+    return None
+
+
+def _extract_ssh_attempted_username(command_line: str) -> str | None:
+    """Extract the username a source-native SSH client command attempted."""
+
+    tokens = _command_tokens(command_line)
+    if not tokens:
+        return None
+    option_args = {
+        "-b",
+        "-c",
+        "-e",
+        "-f",
+        "-i",
+        "-j",
+        "-l",
+        "-m",
+        "-o",
+        "-p",
+        "-s",
+        "-w",
+    }
+    skip_next = False
+    for idx, token in enumerate(tokens[1:], start=1):
+        lower = token.lower()
+        if skip_next:
+            skip_next = False
+            continue
+        if lower == "-l" and idx + 1 < len(tokens):
+            candidate = tokens[idx + 1].strip()
+            return candidate or None
+        if lower.startswith("-l") and len(token) > 2:
+            candidate = token[2:].strip()
+            return candidate or None
+        if lower in option_args:
+            skip_next = True
+            continue
+        if lower.startswith("-"):
+            continue
+        if "@" not in token:
+            continue
+        candidate = token.rsplit("@", 1)[0].rsplit("\\", 1)[-1].strip()
+        return candidate or None
     return None
 
 
@@ -4034,6 +4098,7 @@ class ActivityGenerator:
         self._proxy_listener_port = 8080
         self._proxy_auth_policy = ProxyAuthPolicyConfig()
         self._proxy_service_accounts: list[str] = []
+        self._proxy_auth_session_deadlines: dict[tuple[str, str], datetime] = {}
         self._explicit_proxy_tunnels: dict[
             tuple[str, str, str, str, int, str], tuple[datetime, str]
         ] = {}
@@ -4790,6 +4855,12 @@ class ActivityGenerator:
                 and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
                 and session.session_kind not in {"network", "service"}
                 and _session_started_by(session, time)
+                and not self._workstation_logon_locked_at(
+                    system,
+                    session.username,
+                    session.logon_id,
+                    time,
+                )
             )
         ]
         if not candidates:
@@ -4822,6 +4893,7 @@ class ActivityGenerator:
                 and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
                 and session.session_kind not in {"network", "service"}
                 and _session_started_by(session, time)
+                and not self._workstation_session_locked_at(session, user, system, time)
             )
         ]
         if not candidates:
@@ -4911,6 +4983,31 @@ class ActivityGenerator:
         if not candidates:
             return None
         return max(candidates, key=lambda candidate: candidate[0])
+
+    def _workstation_session_locked_at(
+        self,
+        session: ActiveSession,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> bool:
+        """Return whether a local workstation session is visibly locked at ``time``."""
+        if not _is_windows_workstation_session(session):
+            return False
+        return self._workstation_logon_locked_at(system, user.username, session.logon_id, time)
+
+    def _workstation_logon_locked_at(
+        self,
+        system: System,
+        username: str,
+        logon_id: str,
+        time: datetime,
+    ) -> bool:
+        """Return whether a workstation logon ID is visibly locked at ``time``."""
+        lock_time = getattr(self, "_last_workstation_lock_time", {}).get(
+            (system.hostname, username, logon_id)
+        )
+        return lock_time is not None and ensure_utc(lock_time) <= ensure_utc(time)
 
     def _near_future_user_interactive_windows_session(
         self,
@@ -5546,6 +5643,16 @@ class ActivityGenerator:
             proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
         return proxy_fqdn
 
+    def set_proxy_auth_session_deadlines(
+        self,
+        deadlines: dict[tuple[str, str], datetime],
+    ) -> None:
+        """Publish planned visible session-end times for proxy username attribution."""
+
+        self._proxy_auth_session_deadlines = {
+            key: ensure_utc(value) for key, value in deadlines.items()
+        }
+
     def _proxy_username_for_source(
         self,
         *,
@@ -5553,6 +5660,7 @@ class ActivityGenerator:
         user_agent: str,
         cache_result: str,
         hostname: str | None = None,
+        time: datetime | None = None,
     ) -> str:
         """Return the source-native authenticated proxy username for a client request."""
         if source_system is None or cache_result.upper() == "AUTH_REQUIRED":
@@ -5605,6 +5713,33 @@ class ActivityGenerator:
         if system_type != "workstation":
             return ""
 
+        if time is not None:
+            current_time = ensure_utc(time)
+            source_hostname = getattr(source_system, "hostname", "")
+            sessions_at_time = self.state_manager.get_sessions_for_user_at(
+                assigned_user,
+                current_time,
+            )
+            has_active_user_session = any(
+                session.system == source_hostname
+                and session.logon_type in {2, 7, 10, 11}
+                and ensure_utc(session.start_time) <= current_time
+                for session in sessions_at_time
+            )
+            if not has_active_user_session:
+                return ""
+
+            deadline = self._proxy_auth_session_deadlines.get((source_hostname, assigned_user))
+            if deadline is not None and ensure_utc(time) >= deadline:
+                newer_session_started = any(
+                    session.system == source_hostname
+                    and ensure_utc(session.start_time) > deadline
+                    and ensure_utc(session.start_time) <= current_time
+                    for session in sessions_at_time
+                )
+                if not newer_session_started:
+                    return ""
+
         if os_category == "windows":
             if _is_machine_context_proxy_user_agent(user_agent):
                 if auth_policy.mode == "realistic" and not auth_policy.non_human_principals:
@@ -5633,6 +5768,107 @@ class ActivityGenerator:
             return f"{assigned_user}@{ad_domain}"
         return assigned_user
 
+    def _proxy_user_agent_for_context(
+        self,
+        rng: random.Random,
+        source_system: Optional["System"],
+        *,
+        hostname: str | None,
+        domain_tags: list[str] | None,
+        existing_user_agent: str = "",
+        override_user_agent: str | None = None,
+        apply_domain_override: bool = True,
+    ) -> str:
+        """Return a source-sticky proxy User-Agent for one logical client context."""
+
+        host = hostname or ""
+        host_is_browser_like = is_browser_like_proxy_domain(host, domain_tags=domain_tags)
+        existing_is_browser_family = _is_browser_family_http_user_agent(existing_user_agent)
+        browser_identity_scope = host_is_browser_like or existing_is_browser_family
+        if apply_domain_override:
+            domain_user_agent = pick_proxy_domain_user_agent(
+                rng,
+                source_system,
+                hostname=hostname,
+            )
+            if domain_user_agent:
+                return normalize_proxy_user_agent_for_os(
+                    rng,
+                    source_system,
+                    domain_user_agent,
+                    hostname=hostname,
+                    domain_tags=domain_tags,
+                )
+
+        if override_user_agent:
+            return normalize_proxy_user_agent_for_os(
+                rng,
+                source_system,
+                override_user_agent,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+
+        if existing_user_agent and not existing_is_browser_family:
+            return normalize_proxy_user_agent_for_os(
+                rng,
+                source_system,
+                existing_user_agent,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+
+        domain_class = get_proxy_domain_class(host) or ""
+        source_key = "unknown"
+        os_category = ""
+        if source_system is not None:
+            os_category = _get_os_category(getattr(source_system, "os", ""))
+            roles = ",".join(sorted(str(role) for role in (source_system.roles or [])))
+            source_key = (
+                f"{getattr(source_system, 'hostname', '')}:"
+                f"{getattr(source_system, 'ip', '')}:"
+                f"{getattr(source_system, 'os', '')}:"
+                f"{getattr(source_system, 'type', '')}:{roles}"
+            )
+
+        if self._is_proxy_server_like_source(source_system):
+            scope = "server:generic"
+        elif browser_identity_scope:
+            scope = f"{os_category or 'unknown'}:browser"
+        elif domain_class:
+            scope = f"class:{domain_class}"
+        else:
+            scope = f"{os_category or 'unknown'}:tooling"
+
+        stable_rng = random.Random(_stable_seed(f"proxy_ua_context:{source_key}:{scope}"))
+        user_agent = pick_proxy_user_agent(
+            stable_rng,
+            source_system,
+            hostname=host,
+            domain_tags=domain_tags,
+        )
+        if (
+            source_system is not None
+            and str(getattr(source_system, "type", "") or "").lower() == "workstation"
+            and browser_identity_scope
+        ):
+            for _ in range(12):
+                if not _is_tool_http_user_agent(user_agent):
+                    break
+                user_agent = pick_proxy_user_agent(
+                    stable_rng,
+                    source_system,
+                    hostname=host,
+                    domain_tags=domain_tags,
+                )
+        return normalize_proxy_user_agent_for_os(
+            stable_rng,
+            source_system,
+            user_agent,
+            hostname=host,
+            domain_tags=domain_tags,
+        )
+
     def _build_proxy_context(
         self,
         *,
@@ -5648,6 +5884,7 @@ class ActivityGenerator:
         proxy_sys: "System",
         http: Optional["HttpContext"] = None,
         explicit_mode: bool = False,
+        time: datetime | None = None,
     ) -> ProxyContext:
         """Build a proxy access context from the logical origin request."""
         rng = _get_rng()
@@ -5727,33 +5964,14 @@ class ActivityGenerator:
             not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
-        domain_user_agent = (
-            pick_proxy_domain_user_agent(
-                rng,
-                source_system,
-                hostname=proxy_hostname,
-            )
-            if apply_domain_user_agent
-            else None
-        )
-        if domain_user_agent:
-            user_agent = domain_user_agent
-        elif not user_agent:
-            if proxy_ua_override:
-                user_agent = proxy_ua_override
-            else:
-                user_agent = pick_proxy_user_agent(
-                    rng,
-                    source_system,
-                    hostname=proxy_hostname,
-                    domain_tags=domain_tags,
-                )
-        user_agent = normalize_proxy_user_agent_for_os(
+        user_agent = self._proxy_user_agent_for_context(
             rng,
             source_system,
-            user_agent,
             hostname=proxy_hostname,
             domain_tags=domain_tags,
+            existing_user_agent=user_agent,
+            override_user_agent=proxy_ua_override,
+            apply_domain_override=apply_domain_user_agent,
         )
         proxy_referrer = _source_native_http_referrer(
             user_agent,
@@ -5878,6 +6096,7 @@ class ActivityGenerator:
                 user_agent=user_agent,
                 cache_result=cache_result,
                 hostname=proxy_hostname,
+                time=time,
             ),
             method=proxy_method,
             url=url,
@@ -6292,6 +6511,12 @@ class ActivityGenerator:
             and not session.username.endswith("$")
             and session.logon_type in {2, 7, 10, 11}
             and _session_started_by(session, time)
+            and not self._workstation_logon_locked_at(
+                source_system,
+                session.username,
+                session.logon_id,
+                time,
+            )
         ]
         if not sessions:
             return None
@@ -8471,11 +8696,15 @@ class ActivityGenerator:
             ),
         )
 
-        # Attach SyslogContext for Linux hosts (sshd failed logon)
+        # Attach SyslogContext for Linux local auth failures. Remote SSH failures
+        # emit a tuple-scoped sshd lifecycle below so "Connection from" can
+        # precede authentication results and share the transport responder PID.
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            if source_ip and source_ip != "-":
+            if remote_linux_source:
+                pass
+            elif source_ip and source_ip != "-":
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
@@ -8506,13 +8735,24 @@ class ActivityGenerator:
                 )
 
         if remote_linux_source and source_ip is not None and linux_ssh_source_port is not None:
-            self._emit_failed_linux_ssh_network_connection(
+            connection_time, connection_duration = self._emit_failed_linux_ssh_network_connection(
                 system=system,
                 time=time,
                 source_ip=source_ip,
                 source_port=linux_ssh_source_port,
                 responding_pid=linux_ssh_responder_pid,
                 rng=rng,
+            )
+            self._emit_failed_linux_ssh_auth_syslog(
+                system=system,
+                connection_time=connection_time,
+                failure_time=time,
+                source_ip=source_ip,
+                source_port=linux_ssh_source_port,
+                responder_pid=linux_ssh_responder_pid,
+                attempted_username=effective_username,
+                known_account=known_account,
+                duration=connection_duration,
             )
 
         self.dispatcher.dispatch(event)
@@ -8724,9 +8964,13 @@ class ActivityGenerator:
         source_port: int,
         responding_pid: int | None,
         rng: random.Random,
-    ) -> None:
+    ) -> tuple[datetime, float]:
         """Emit source-matched Zeek SSH evidence for a failed Linux sshd logon."""
-        conn_time = time - timedelta(milliseconds=rng.randint(35, 450))
+        conn_time = time - timedelta(milliseconds=rng.randint(320, 950))
+        duration = max(
+            rng.uniform(0.9, 3.5),
+            (time - conn_time).total_seconds() + rng.uniform(0.2, 0.85),
+        )
         self.generate_connection(
             src_ip=source_ip,
             dst_ip=system.ip,
@@ -8734,13 +8978,100 @@ class ActivityGenerator:
             dst_port=22,
             proto="tcp",
             service="ssh",
-            duration=rng.uniform(0.12, 3.5),
+            duration=duration,
             orig_bytes=rng.randint(260, 1800),
             resp_bytes=rng.randint(240, 2600),
             src_port=source_port,
             conn_state=rng.choices(["SF", "RSTR"], weights=[78, 22], k=1)[0],
             responding_pid=responding_pid or -1,
         )
+        return conn_time, duration
+
+    def _emit_failed_linux_ssh_auth_syslog(
+        self,
+        *,
+        system: System,
+        connection_time: datetime,
+        failure_time: datetime,
+        source_ip: str,
+        source_port: int,
+        responder_pid: int | None,
+        attempted_username: str,
+        known_account: bool,
+        duration: float,
+    ) -> None:
+        """Emit source-native sshd failure rows for one remote auth tuple."""
+        if not source_ip or source_ip == "-" or source_port <= 0 or responder_pid is None:
+            return
+
+        seed = _stable_seed(
+            "failed_linux_ssh_auth_syslog:"
+            f"{system.hostname}:{source_ip}:{source_port}:{system.ip}:"
+            f"{attempted_username}:{failure_time.isoformat()}"
+        )
+        latest_connection_time = failure_time - timedelta(milliseconds=120 + (seed % 180))
+        connection_message_time = min(
+            connection_time + timedelta(milliseconds=45 + ((seed >> 8) % 120)),
+            latest_connection_time,
+        )
+        invalid_user_time = failure_time - timedelta(milliseconds=45 + ((seed >> 16) % 110))
+        close_time = max(
+            failure_time + timedelta(milliseconds=70 + ((seed >> 24) % 240)),
+            connection_time + timedelta(seconds=duration),
+        )
+
+        rows: list[tuple[datetime, int, str]] = [
+            (
+                connection_message_time,
+                6,
+                f"Connection from {source_ip} port {source_port} on {system.ip} port 22",
+            )
+        ]
+        if known_account:
+            rows.append(
+                (
+                    failure_time,
+                    4,
+                    f"Failed password for {attempted_username} "
+                    f"from {source_ip} port {source_port} ssh2",
+                )
+            )
+            close_subject = f"authenticating user {attempted_username}"
+        else:
+            rows.extend(
+                [
+                    (
+                        invalid_user_time,
+                        5,
+                        f"Invalid user {attempted_username} from {source_ip} port {source_port}",
+                    ),
+                    (
+                        failure_time,
+                        4,
+                        f"Failed password for invalid user {attempted_username} "
+                        f"from {source_ip} port {source_port} ssh2",
+                    ),
+                ]
+            )
+            close_subject = f"invalid user {attempted_username}"
+
+        rows.append(
+            (
+                close_time,
+                6,
+                f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
+            )
+        )
+        for row_time, severity, message in sorted(rows, key=lambda row: row[0]):
+            self.generate_syslog_event(
+                system,
+                row_time,
+                "sshd",
+                message,
+                pid=responder_pid,
+                facility=10,
+                severity=severity,
+            )
 
     def _maybe_emit_failed_logon_network_connection(
         self,
@@ -10464,6 +10795,7 @@ class ActivityGenerator:
         source_ip: str,
         source_port: int,
         sshd_pid: int,
+        attempted_username: str | None,
         duration: float | None,
     ) -> None:
         """Emit source-native sshd auth companions for generic preauth transport."""
@@ -10475,7 +10807,7 @@ class ActivityGenerator:
             f"{target_system.hostname}:{source_ip}:{source_port}:{target_system.ip}:"
             f"{sshd_pid}:{time.isoformat()}"
         )
-        connection_delta_ms = 45 + (seed % 90)
+        connection_delta_ms = 5 + (seed % 10)
         invalid_delta_ms = connection_delta_ms + 40 + ((seed >> 8) % 180)
         failed_delta_ms = invalid_delta_ms + 120 + ((seed >> 16) % 600)
         close_delta_ms = max(
@@ -10487,23 +10819,66 @@ class ActivityGenerator:
                 connection_delta_ms,
                 6,
                 f"Connection from {source_ip} port {source_port} on {target_system.ip} port 22",
-            ),
-            (
-                invalid_delta_ms,
-                5,
-                f"Invalid user unknown from {source_ip} port {source_port}",
-            ),
-            (
-                failed_delta_ms,
-                4,
-                f"Failed password for invalid user unknown from {source_ip} port {source_port} ssh2",
-            ),
+            )
+        ]
+        attempted_username = (attempted_username or "").strip()
+        if attempted_username:
+            known_account = (
+                attempted_username in getattr(self, "sid_registry", {})
+                or attempted_username in getattr(self, "_users_by_username", {})
+                or attempted_username in {"root", "admin", "apache"}
+            )
+            if known_account:
+                rows.append(
+                    (
+                        failed_delta_ms,
+                        4,
+                        f"Failed password for {attempted_username} "
+                        f"from {source_ip} port {source_port} ssh2",
+                    )
+                )
+                close_subject = f"authenticating user {attempted_username}"
+            else:
+                rows.extend(
+                    [
+                        (
+                            invalid_delta_ms,
+                            5,
+                            f"Invalid user {attempted_username} from {source_ip} port {source_port}",
+                        ),
+                        (
+                            failed_delta_ms,
+                            4,
+                            f"Failed password for invalid user {attempted_username} "
+                            f"from {source_ip} port {source_port} ssh2",
+                        ),
+                    ]
+                )
+                close_subject = f"invalid user {attempted_username}"
+        else:
+            rows.extend(
+                [
+                    (
+                        invalid_delta_ms,
+                        5,
+                        f"Invalid user unknown from {source_ip} port {source_port}",
+                    ),
+                    (
+                        failed_delta_ms,
+                        4,
+                        f"Failed password for invalid user unknown "
+                        f"from {source_ip} port {source_port} ssh2",
+                    ),
+                ]
+            )
+            close_subject = "invalid user unknown"
+        rows.append(
             (
                 close_delta_ms,
                 6,
-                f"Connection closed by invalid user unknown {source_ip} port {source_port} [preauth]",
-            ),
-        ]
+                f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
+            )
+        )
         for delta_ms, severity, message in rows:
             self.generate_syslog_event(
                 target_system,
@@ -11113,6 +11488,7 @@ class ActivityGenerator:
         suppress_prereq_dns: bool = False,
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
+        ssh_attempted_username: str | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -11187,6 +11563,7 @@ class ActivityGenerator:
             suppress_prereq_dns=suppress_prereq_dns,
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
+            ssh_attempted_username=ssh_attempted_username,
         )
         return NetworkConnectionActionBundle(
             executor=self,
@@ -14009,6 +14386,7 @@ class ActivityGenerator:
         """Return upstream public SMTP hops ordered newest to oldest."""
         sender_domain = public_safe_mail_hostname(self._email_domain(sender))
         local_part = sender.split("@", 1)[0].lower()
+        preserve_app_host = self._email_mailer_profile(sender, "") == "service"
         rng = random.Random(_stable_seed(f"email_external_received:{sender_domain}:{message_id}"))
         app_prefixes = (
             ["notify", "worker", "app", "mailer"]
@@ -14064,7 +14442,11 @@ class ActivityGenerator:
             )
         for hop in hops:
             ptr_name = public_mail_ptr_name(hop["ip"], hop["host"])
-            if ptr_name and rng.random() < 0.62:
+            if (
+                ptr_name
+                and not (preserve_app_host and hop["host"] == app_host)
+                and rng.random() < 0.62
+            ):
                 hop["host"] = ptr_name
         return hops
 
@@ -14877,6 +15259,7 @@ class ActivityGenerator:
         suppress_prereq_dns = request.suppress_prereq_dns
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
+        ssh_attempted_username = request.ssh_attempted_username
 
         from evidenceforge.events.contexts import NetworkContext
 
@@ -15185,9 +15568,10 @@ class ActivityGenerator:
             self._emit_dns_lookup(
                 src_ip,
                 dst_ip,
-                time,
+                time - timedelta(seconds=2),
                 hostname=hostname,
                 force_address=True,
+                bypass_cache=True,
             )
         elif (
             (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
@@ -15387,6 +15771,14 @@ class ActivityGenerator:
                     dst_port,
                 )
                 pid = -1
+
+        if (
+            ssh_attempted_username is None
+            and proto == "tcp"
+            and dst_port == 22
+            and resolved_process is not None
+        ):
+            ssh_attempted_username = _extract_ssh_attempted_username(resolved_process.command_line)
 
         if pid > 0 and resolved_source_system is not None and resolved_process is not None:
             time = self._clamp_after_visible_process_create(
@@ -15872,6 +16264,23 @@ class ActivityGenerator:
                 time,
                 duration=duration,
             )
+        if (
+            dns is None
+            and resolved_source_system is not None
+            and "forward_proxy" in (resolved_source_system.roles or [])
+            and hostname_is_external
+            and proto == "tcp"
+            and dst_port in (80, 443)
+            and src_ip_is_local
+        ):
+            self._emit_dns_lookup(
+                src_ip,
+                dst_ip,
+                time - timedelta(seconds=2),
+                hostname=hostname,
+                force_address=True,
+                bypass_cache=True,
+            )
         self.state_manager.update_connection_interval(
             conn_id,
             time,
@@ -16003,6 +16412,7 @@ class ActivityGenerator:
                     time=time,
                     source_ip=src_ip,
                     source_port=src_port,
+                    target_user=ssh_attempted_username,
                 )
                 generic_ssh_preauth_pid = responding_pid
             else:
@@ -16224,6 +16634,7 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
                 domain_tags = get_domain_tags(proxy_hostname)
+                user_agent = ""
 
                 # When a pre-built HttpContext exists (from browsing session
                 # generator), derive proxy fields from it.  The proxy emitter
@@ -16297,40 +16708,20 @@ class ActivityGenerator:
                         if referrer_policy == "none"
                         else pick_referrer(rng, proxy_hostname, context="general", port=80)
                     )
-                # OS-aware proxy User-Agent selection (skip when session set it)
-                if event.http is None:
-                    if proxy_ua_override:
-                        user_agent = proxy_ua_override
-                    else:
-                        user_agent = pick_proxy_user_agent(
-                            rng,
-                            source_system,
-                            hostname=proxy_hostname,
-                            domain_tags=domain_tags,
-                        )
                 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
                 apply_domain_user_agent = event.http is None or (
                     not _is_tool_http_user_agent(event.http.user_agent)
                     and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
                 )
-                domain_user_agent = (
-                    pick_proxy_domain_user_agent(
-                        rng,
-                        source_system,
-                        hostname=proxy_hostname,
-                    )
-                    if apply_domain_user_agent
-                    else None
-                )
-                if domain_user_agent:
-                    user_agent = domain_user_agent
-                user_agent = normalize_proxy_user_agent_for_os(
+                user_agent = self._proxy_user_agent_for_context(
                     rng,
                     source_system,
-                    user_agent,
                     hostname=proxy_hostname,
                     domain_tags=domain_tags,
+                    existing_user_agent=user_agent,
+                    override_user_agent=proxy_ua_override,
+                    apply_domain_override=apply_domain_user_agent,
                 )
                 proxy_referrer = _source_native_http_referrer(
                     user_agent,
@@ -16395,6 +16786,7 @@ class ActivityGenerator:
                         user_agent=user_agent,
                         cache_result=cache_result,
                         hostname=proxy_hostname,
+                        time=event.timestamp,
                     ),
                     method=proxy_method,
                     url=url,
@@ -16498,7 +16890,6 @@ class ActivityGenerator:
                 response_size_for_status,
             )
             from evidenceforge.generation.activity.proxy_uri import (
-                is_browser_like_proxy_domain,
                 pick_proxy_uri,
                 plaintext_http_redirect_status,
             )
@@ -16515,24 +16906,15 @@ class ActivityGenerator:
                 source_os=_src_os_http,
                 source_system_type=getattr(source_system, "type", None),
             )
-            domain_user_agent = pick_proxy_domain_user_agent(
+            ua = self._proxy_user_agent_for_context(
                 rng,
                 source_system,
                 hostname=web_host,
+                domain_tags=web_domain_tags,
+                existing_user_agent="",
+                override_user_agent=http_ua_override,
+                apply_domain_override=True,
             )
-            if domain_user_agent:
-                ua = domain_user_agent
-            elif http_ua_override:
-                ua = http_ua_override
-            elif self._is_proxy_server_like_source(
-                source_system
-            ) or not is_browser_like_proxy_domain(web_host, domain_tags=web_domain_tags):
-                ua = pick_proxy_user_agent(
-                    rng,
-                    source_system,
-                    hostname=web_host,
-                    domain_tags=web_domain_tags,
-                )
             redirect_status = plaintext_http_redirect_status(
                 web_host,
                 port=dst_port,
@@ -16891,6 +17273,7 @@ class ActivityGenerator:
                 source_ip=src_ip,
                 source_port=src_port,
                 sshd_pid=generic_ssh_preauth_pid,
+                attempted_username=ssh_attempted_username,
                 duration=event.network.duration,
             )
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
@@ -17133,15 +17516,21 @@ class ActivityGenerator:
         if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
             sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
 
-        session_sshd_pid = self.generate_system_process(
-            system=target_system,
-            time=sshd_time,
-            process_name="/usr/sbin/sshd",
-            command_line=f"sshd: {user.username} [priv]",
-            parent_pid=global_sshd,
-            username="root",
-            emit_linux_syslog=False,
+        session_sshd_pid = self._ssh_session_transport_process_parent(
+            session,
+            target_system,
+            user,
         )
+        if session_sshd_pid is None:
+            session_sshd_pid = self.generate_system_process(
+                system=target_system,
+                time=sshd_time,
+                process_name="/usr/sbin/sshd",
+                command_line=f"sshd: {user.username} [priv]",
+                parent_pid=global_sshd,
+                username="root",
+                emit_linux_syslog=False,
+            )
 
         bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
         effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
@@ -17164,6 +17553,26 @@ class ActivityGenerator:
         session.session_shell_pid = bash_pid
         session.process_tree_root = session_sshd_pid
         return bash_pid
+
+    def _ssh_session_transport_process_parent(
+        self,
+        session: ActiveSession,
+        target_system: System,
+        user: User,
+    ) -> int | None:
+        """Return the tuple-scoped sshd child when it can parent a login shell."""
+
+        transport_pid = session.transport_pid
+        if transport_pid is None or transport_pid <= 0:
+            return None
+        running = self.state_manager.get_process(target_system.hostname, transport_pid)
+        if running is None:
+            return None
+        if running.image != "/usr/sbin/sshd":
+            return None
+        if running.command_line != f"sshd: {user.username} [priv]":
+            return None
+        return transport_pid
 
     def _ensure_linux_local_session_shell_parent(
         self,
@@ -18457,6 +18866,8 @@ class ActivityGenerator:
         cache_key = _dns_observation_cache_key(src_ip, resolver_ip, dns)
         if cache_key is None:
             return False
+        if not self._dns_observation_time_is_visible(time):
+            return False
         if not hasattr(self, "_dns_observation_cache"):
             self._dns_observation_cache = {}
 
@@ -18477,6 +18888,29 @@ class ActivityGenerator:
         if len(windows) > 32:
             del windows[:-32]
         return False
+
+    def _dns_observation_time_is_visible(self, time: datetime) -> bool:
+        """Return whether DNS evidence at time can reach source emitters."""
+        dispatcher = getattr(self, "dispatcher", None)
+        gate = getattr(dispatcher, "output_start_time", None)
+        if gate is None:
+            return True
+        ts = time
+        if ts.tzinfo is not None and gate.tzinfo is None:
+            ts = ts.replace(tzinfo=None)
+        elif ts.tzinfo is None and gate.tzinfo is not None:
+            gate = gate.replace(tzinfo=None)
+        return ts >= gate
+
+    def _dns_observation_epoch_is_visible(self, epoch: float) -> bool:
+        """Return whether a cached DNS observation epoch was inside the output window."""
+        dispatcher = getattr(self, "dispatcher", None)
+        gate = getattr(dispatcher, "output_start_time", None)
+        if gate is None:
+            return True
+        if gate.tzinfo is None:
+            return datetime.fromtimestamp(epoch) >= gate
+        return datetime.fromtimestamp(epoch, tz=gate.tzinfo) >= gate
 
     def _emit_dns_lookup(
         self,
@@ -18598,7 +19032,10 @@ class ActivityGenerator:
         cache_key = (src_ip, dns_server_ip, hostname, "ADDR")
         cached_at, cached_until = _dns_cache_window(self._dns_cache.get(cache_key))
         if force_address and not request.bypass_cache and cached_at <= ts_epoch < cached_until:
-            return  # Cache hit — skip DNS emission
+            if not self._dns_observation_time_is_visible(
+                time
+            ) or self._dns_observation_epoch_is_visible(cached_at):
+                return  # Cache hit — skip DNS emission
 
         _src_os = "windows"
         if src_system is not None:
@@ -19184,6 +19621,9 @@ class ActivityGenerator:
         dst_port = conn_info["dst_port"]
         service = conn_info["service"]
         command_target = _extract_network_command_target(command_line, service)
+        ssh_attempted_username = (
+            _extract_ssh_attempted_username(command_line) if service == "ssh" else None
+        )
         command_http_url = _extract_http_url_from_command(command_line)
 
         # Only emit ~60% of ambient app launches. Commands that name a concrete
@@ -19343,6 +19783,7 @@ class ActivityGenerator:
             hostname=ext_hostname,
             source_system=system,
             conn_state=failure_conn_state,
+            ssh_attempted_username=ssh_attempted_username,
         )
 
     def _baseline_type3_source_ip(
@@ -19559,6 +20000,11 @@ class ActivityGenerator:
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
             os_category = _get_os_category(system.os)
+            if (
+                os_category == "windows"
+                and self._locked_user_interactive_windows_session(user, system, time) is not None
+            ):
+                return
             # Get or create session for this user (with login cooldown)
             if os_category == "windows":
                 active_session = self._active_user_interactive_windows_session(

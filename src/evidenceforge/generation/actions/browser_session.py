@@ -41,6 +41,7 @@ from evidenceforge.generation.activity.http_content import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 _HttpGroupKey = tuple[str, int]
 _HttpPlanValue = tuple[_HttpGroupKey, int, bool, int]
@@ -68,6 +69,7 @@ class BrowserSessionRequest:
     route_profile: Any | None = None
     same_host_only: bool = False
     page_load_budget: int | None = None
+    latest_request_time: datetime | None = None
     request_body_floor: int = 0
     secondary_duration_min: float = 0.05
     emit_dns_on_page_load: bool = True
@@ -88,6 +90,7 @@ class BrowserSessionRequest:
             f"{self.require_browser_like_domain}:{self.transfer_variant_key or ''}:"
             f"{self.user_agent or ''}:{bool(self.route_profile)}:"
             f"{self.same_host_only}:{self.page_load_budget or ''}:"
+            f"{ensure_utc(self.latest_request_time).isoformat() if self.latest_request_time else ''}:"
             f"{self.request_body_floor}:{self.time.isoformat()}:{self.source}:"
             f"{','.join(self.domain_tags)}"
         )
@@ -155,6 +158,8 @@ class BrowserSessionActionBundle:
                 transfer_variant_key=request.transfer_variant_key,
             )
         visible_requests, page_load_count = self._visible_requests(session_requests)
+        visible_requests = self._requests_before_deadline(visible_requests)
+        page_load_count = sum(1 for req in visible_requests if req.is_page_load)
         if not visible_requests:
             return BrowserSessionResult()
 
@@ -188,6 +193,37 @@ class BrowserSessionActionBundle:
             request_count=request_count,
             page_load_count=page_load_count,
         )
+
+    def _requests_before_deadline(
+        self,
+        requests: list[browsing_session.BrowsingRequest],
+    ) -> list[browsing_session.BrowsingRequest]:
+        """Drop browser requests that would render after a visible session close."""
+
+        if self.request.latest_request_time is None or not requests:
+            return requests
+
+        request_plan, _request_groups = _plan_http_request_groups(
+            requests,
+            request_body_floor=self.request.request_body_floor,
+        )
+        base_time = ensure_utc(self.request.time)
+        deadline = ensure_utc(self.request.latest_request_time)
+        visible: list[browsing_session.BrowsingRequest] = []
+        current_page_allowed = False
+        for index, req in enumerate(requests):
+            _group_key, _trans_depth, _first_in_group, emit_offset_ms = request_plan[index]
+            req_ts = base_time + timedelta(milliseconds=emit_offset_ms)
+            if req_ts >= deadline:
+                if req.is_page_load:
+                    current_page_allowed = False
+                continue
+            if req.is_page_load:
+                current_page_allowed = True
+            elif not current_page_allowed:
+                continue
+            visible.append(req)
+        return visible
 
     def _generate_route_profile_session(self) -> list[browsing_session.BrowsingRequest]:
         """Generate route-owned HTTP requests for an authored web affinity."""

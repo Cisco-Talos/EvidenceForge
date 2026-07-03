@@ -1077,8 +1077,14 @@ class StateManager:
     def get_session_object_id(self, logon_id: str) -> str:
         """Get the eCAR objectID for a session."""
         with self._lock:
-            session = self.state.active_sessions.get(logon_id)
-            return session.ecar_object_id if session else ""
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if session is not None:
+                return session.ecar_object_id
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
+            return ended[0].ecar_object_id if ended is not None else ""
 
     def get_process_object_id(self, system: str, pid: int) -> str:
         """Get the eCAR objectID for a running or recently ended process."""

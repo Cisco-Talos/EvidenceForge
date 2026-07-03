@@ -48,6 +48,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
+from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -1765,6 +1766,52 @@ class TestChronologicalOutput:
 
         assert "principal" not in emitted[0]
 
+    def test_service_flow_default_policy_keeps_known_principal_visible(self, emitter, ts):
+        """Default service FLOW policy should not create high-volume principal flips."""
+        cfg = ecar_flow_identity_config()
+        assert cfg["service_process_probability"] >= 0.98
+        assert cfg["root_process_probability"] >= 0.96
+        assert cfg["inbound_listener_probability"] >= 0.92
+
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="dc01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc01.example.org",
+            ),
+            process=ProcessContext(
+                pid=444,
+                parent_pid=4,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe -k netsvcs",
+                username="SYSTEM",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49153,
+                dst_ip="10.0.0.20",
+                dst_port=88,
+                protocol="tcp",
+                initiating_pid=444,
+            ),
+        )
+
+        assert (
+            emitter._flow_principal_for_process(
+                event,
+                event.src_host,
+                event.process,
+                "OUTBOUND",
+            )
+            == "SYSTEM"
+        )
+
     def test_actor_linked_user_flow_preserves_principal(self, emitter, monkeypatch, ts):
         """Actor-linked user FLOW rows should not drop a known user principal."""
         monkeypatch.setattr(
@@ -1857,6 +1904,9 @@ class TestChronologicalOutput:
             (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
             (445, "tcp", {"system": 4, "lsass": 700}, 4),
             (8080, "tcp", {"squid": 3128, "apache2": 24118}, 3128),
+            (1433, "tcp", {"sqlservr": 14330}, 14330),
+            (3306, "tcp", {"mysqld": 33060}, 33060),
+            (5432, "tcp", {"postgres": 54320}, 54320),
         ],
     )
     def test_inbound_infrastructure_flow_uses_destination_service_pid(
@@ -1869,7 +1919,7 @@ class TestChronologicalOutput:
         system_pids,
         expected_pid,
     ):
-        """DC DNS/auth/SMB listener FLOW rows should use destination-local owners."""
+        """Infrastructure listener FLOW rows should use destination-local owners."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         emitter._system_pids = {"DC-01": system_pids}
@@ -2886,6 +2936,116 @@ class TestChronologicalOutput:
 
         rows = [json.loads(line) for line in normalized]
         assert [row["timestamp_ms"] for row in rows] == [1000, 1000]
+
+    def test_user_session_logout_shifted_after_login(self):
+        """Short network sessions must not render USER_SESSION LOGOUT before LOGIN."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1710768759642,
+                    "object": "USER_SESSION",
+                    "action": "LOGOUT",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "principal": "evelyn.brooks",
+                    "properties": {
+                        "logon_id": "0xa445274",
+                        "logon_type": "3",
+                        "src_ip": "10.10.1.34",
+                        "src_port": "60409",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1710768760347,
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "objectID": "flow-object",
+                    "hostname": "WS-01",
+                    "properties": {
+                        "src_ip": "10.10.1.34",
+                        "src_port": "60409",
+                        "dst_ip": "10.10.1.33",
+                        "dst_port": "445",
+                        "direction": "INBOUND",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1710768760419,
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "principal": "evelyn.brooks",
+                    "properties": {
+                        "outcome": "success",
+                        "logon_id": "0xa445274",
+                        "logon_type": "3",
+                        "src_ip": "10.10.1.34",
+                        "src_port": "60409",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_user_session_lifecycle_order(lines)
+        ]
+        login = next(
+            row
+            for row in normalized
+            if row["object"] == "USER_SESSION" and row["action"] == "LOGIN"
+        )
+        logout = next(
+            row
+            for row in normalized
+            if row["object"] == "USER_SESSION" and row["action"] == "LOGOUT"
+        )
+        flow = next(row for row in normalized if row["object"] == "FLOW")
+
+        assert flow["timestamp_ms"] == 1710768760347
+        assert login["timestamp_ms"] == 1710768760419
+        assert logout["timestamp_ms"] > login["timestamp_ms"]
+
+    def test_failed_user_session_login_does_not_anchor_logout_order(self):
+        """Failed USER_SESSION LOGIN attempts should not become session start anchors."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "USER_SESSION",
+                    "action": "LOGOUT",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "properties": {"logon_id": "0x999"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 3000,
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "properties": {"logon_id": "0x999", "outcome": "failure"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_user_session_lifecycle_order(lines)
+        ]
+
+        logout = next(row for row in normalized if row["action"] == "LOGOUT")
+        assert logout["timestamp_ms"] == 2000
 
 
 class TestTidEmission:

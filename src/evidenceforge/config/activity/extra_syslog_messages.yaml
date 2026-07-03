@@ -27,7 +27,8 @@ programs:
       - "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL"
 
   - app: dbus-daemon
-    weight: 2
+    weight: 1
+    max_per_host_window: 8
     messages:
       - "[system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.{}'"
       - "[system] Successfully activated service 'org.freedesktop.resolve1' for ':1.{}'"

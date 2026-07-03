@@ -38,6 +38,7 @@ class TestLoadEdrPools:
         assert "dll_pool" in pools
         assert "runmru_commands" in pools
         assert "installed_software_products" in pools
+        assert "group_policy_extension_guids" in pools
 
     def test_all_sections_non_empty(self):
         pools = load_edr_pools()
@@ -50,6 +51,7 @@ class TestLoadEdrPools:
             "runmru_commands",
             "file_side_effect_profiles",
             "installed_software_products",
+            "group_policy_extension_guids",
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
 
@@ -611,6 +613,58 @@ class TestTemplateMaterialization:
         assert first != other
         assert first[2] == "10.10.2.20"
 
+    def test_materializes_group_policy_extension_guid_from_pool(self):
+        pool = {
+            str(guid).strip().strip("{}").upper()
+            for guid in load_edr_pools()["group_policy_extension_guids"]
+        }
+        template = (
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy"
+            r"\State\Machine\Extension-List\{{{group_policy_extension_guid}}}"
+        )
+
+        values = {
+            materialize_edr_template(template, random.Random(seed), host_key="WS-EBROOKS-01")
+            for seed in range(40)
+        }
+        observed = {
+            match.group(1).upper()
+            for value in values
+            if (
+                match := re.search(
+                    r"Extension-List\\\{([0-9A-Fa-f-]{36})\}$",
+                    value,
+                )
+            )
+        }
+
+        assert observed
+        assert observed <= pool
+        assert len(observed) <= min(len(pool), 5)
+
+    def test_materializes_group_policy_extension_guid_once_per_group(self):
+        templates = (
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy"
+                r"\State\Machine\Extension-List\{{{group_policy_extension_guid}}}"
+            ),
+            "EndTimeHi",
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\History"
+            r"\{{{group_policy_extension_guid}}}",
+        )
+
+        key, _value_name, details = materialize_edr_template_group(
+            templates,
+            random.Random(13),
+            host_key="WS-EBROOKS-01",
+        )
+
+        key_guid = re.search(r"Extension-List\\\{([0-9A-Fa-f-]{36})\}$", key)
+        details_guid = re.search(r"History\\\{([0-9A-Fa-f-]{36})\}$", details)
+        assert key_guid is not None
+        assert details_guid is not None
+        assert key_guid.group(1) == details_guid.group(1)
+
     def test_materializes_group_dns_server_ip_context(self):
         import random
 
@@ -946,3 +1000,19 @@ class TestOverlayValidation:
         sanitized = _sanitize_edr_pools(defaults, merged)
 
         assert sanitized["registry_keys_hkcu"] == defaults["registry_keys_hkcu"]
+
+    def test_sanitize_malformed_group_policy_guid_pool_falls_back_to_defaults(self):
+        defaults = {
+            "file_paths_windows": [r"C:\\Windows\\Temp\\x.tmp"],
+            "file_paths_linux": ["/tmp/x.tmp"],
+            "dll_pool": [r"C:\\Windows\\System32\\kernel32.dll"],
+            "runmru_commands": ["cmd.exe /k dir"],
+            "registry_keys_hkcu": [["HKCU\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
+            "registry_keys_hklm": [["HKLM\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
+            "group_policy_extension_guids": ["35378EAC-683F-11D2-A89A-00C04FBBCFA2"],
+        }
+        merged = {**defaults, "group_policy_extension_guids": ["not-a-guid"]}
+
+        sanitized = _sanitize_edr_pools(defaults, merged)
+
+        assert sanitized["group_policy_extension_guids"] == defaults["group_policy_extension_guids"]

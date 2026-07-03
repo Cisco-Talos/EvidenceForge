@@ -170,7 +170,7 @@ def apply_transfer_size_variance(
         return body_size
 
     mime_type = content_type or normalize_mime_type_for_path(uri, "text/html")
-    if is_stable_resource_path(uri) or is_download_scale_mime(mime_type):
+    if is_transfer_static_resource_path(uri, mime_type) or is_download_scale_mime(mime_type):
         return body_size
 
     rng = random.Random(
@@ -282,6 +282,19 @@ def is_stable_resource_path(uri: str) -> bool:
         ".xml",
         ".zip",
     }
+
+
+def is_transfer_static_resource_path(uri: str, content_type: str) -> bool:
+    """Return whether wire-visible transfer bytes should stay exact."""
+    clean_path = uri.split("?", 1)[0].split("#", 1)[0].lower()
+    suffix = PurePosixPath(clean_path).suffix.lower()
+    if is_health_endpoint_path(uri):
+        return True
+    if clean_path in {"/robots.txt", "/sitemap.xml", "/favicon.ico"}:
+        return True
+    if suffix in {".html", ".htm"} or content_type in {"text/html", "application/xhtml+xml"}:
+        return False
+    return is_stable_resource_path(uri)
 
 
 def _uses_shared_static_response_seed(uri: str) -> bool:

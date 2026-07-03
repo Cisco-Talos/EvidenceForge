@@ -435,7 +435,7 @@ def validate_config() -> ValidationResult:
             "list_fields": {"baseline_pairs": None},
         },
         "activity/auth_noise.yaml": {
-            "dict_fields": {"scheduled_stale_credentials"},
+            "dict_fields": {"scheduled_stale_credentials", "service_account_delegation"},
         },
         "activity/create_remote_thread_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},

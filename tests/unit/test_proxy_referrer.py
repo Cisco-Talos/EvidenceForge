@@ -429,8 +429,49 @@ class TestProxyActionSemantics:
         inspected_fields = _parse_proxy_fields(rendered_lines[1])
         assert inspected_fields["method"] == "GET"
         assert inspected_fields["url"] == "https://example.com/page"
-        assert "tunnel-setup" not in rendered_lines[0]
-        assert "ssl-inspect" not in rendered_lines[1]
+        assert fields["proxy_action"] == "tunnel-setup"
+        assert fields["ssl_bump_action"] == "peek"
+        assert inspected_fields["proxy_action"] == "ssl-inspect"
+        assert inspected_fields["ssl_bump_action"] == "bump"
+
+    def test_sof_elk_proxy_combined_output_omits_extended_metadata(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+        emitter.configure_output_target("sof-elk")
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="GET",
+                url="https://example.com/page",
+                host="example.com",
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 2
+        assert "proxy_action=" not in rendered_lines[0]
+        assert "proxy_action=" not in rendered_lines[1]
+        assert "ssl_bump=" not in rendered_lines[0]
+        assert "ssl_bump=" not in rendered_lines[1]
 
     def test_reused_https_tunnel_logs_each_request_but_one_connect(self):
         from pathlib import Path
@@ -528,6 +569,7 @@ class TestProxyActionSemantics:
         assert connect["dest_port"] == 443
         assert connect["uri_path"] == "/"
         assert connect["proxy_action"] == "tunnel-setup"
+        assert connect["ssl_bump_action"] == "peek"
         assert inspected["http_method"] == "GET"
         assert inspected["user"] == r"NORTHSTAR-BRANCH\alice"
         assert inspected["uri_path"] == "/page"
@@ -535,6 +577,8 @@ class TestProxyActionSemantics:
         assert inspected["bytes_in"] == 700
         assert inspected["bytes_out"] == 4096
         assert inspected["response_time_microseconds"] == 23000
+        assert inspected["proxy_action"] == "ssl-inspect"
+        assert inspected["ssl_bump_action"] == "bump"
         assert inspected["url_category"] == "Software/Updates"
 
     def test_splunk_url_parts_falls_back_for_malformed_url(self):
@@ -594,6 +638,10 @@ class TestProxyActionSemantics:
         assert inspected_fields["method"] == "GET"
         assert connect_fields["status_code"] == 200
         assert connect_fields["sc_bytes"] < inspected_fields["sc_bytes"]
+        assert connect_fields["proxy_action"] == "tunnel-setup"
+        assert connect_fields["ssl_bump_action"] == "peek"
+        assert inspected_fields["proxy_action"] == "ssl-inspect"
+        assert inspected_fields["ssl_bump_action"] == "bump"
 
     def test_inspected_https_denial_has_successful_connect_setup(self):
         from pathlib import Path
@@ -640,6 +688,10 @@ class TestProxyActionSemantics:
         assert connect_fields["status_code"] == 200
         assert denied_fields["method"] == "GET"
         assert denied_fields["status_code"] == 403
+        assert connect_fields["proxy_action"] == "tunnel-setup"
+        assert connect_fields["ssl_bump_action"] == "peek"
+        assert denied_fields["proxy_action"] == "deny"
+        assert denied_fields["ssl_bump_action"] == "bump"
 
     def test_denied_connect_does_not_emit_inspected_request(self):
         from pathlib import Path
@@ -683,6 +735,8 @@ class TestProxyActionSemantics:
         denied_fields = _parse_proxy_fields(rendered_lines[0])
         assert denied_fields["method"] == "CONNECT"
         assert denied_fields["status_code"] == 403
+        assert denied_fields["proxy_action"] == "deny"
+        assert denied_fields["ssl_bump_action"] == "terminate"
 
     def test_tunnel_reuse_within_timeout(self):
         """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""
@@ -724,6 +778,44 @@ class TestProxyActionSemantics:
 
         assert connect_count == 1, f"Expected 1 CONNECT, got {connect_count}"
         assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"
+
+    def test_future_tunnel_state_does_not_suppress_earlier_connect_setup(self):
+        """Out-of-order emission should not create inspected rows before setup."""
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        all_lines: list[str] = []
+        emitter.emit_to_host = lambda line, fqdn: all_lines.append(line)
+
+        base_ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        for ts in [base_ts + timedelta(minutes=30), base_ts]:
+            event = SecurityEvent(
+                timestamp=ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=443,
+                    protocol="tcp",
+                ),
+                proxy=ProxyContext(
+                    client_ip="10.0.10.50",
+                    method="GET",
+                    url="https://example.com/page",
+                    host="example.com",
+                    proxy_fqdn="PROXY-01",
+                ),
+            )
+            emitter.emit(event)
+
+        connect_count = sum(1 for line in all_lines if "CONNECT example.com:443" in line)
+        assert connect_count == 2
 
     def test_tunnel_expires_after_timeout(self):
         """CONNECT re-emitted after tunnel timeout expires."""

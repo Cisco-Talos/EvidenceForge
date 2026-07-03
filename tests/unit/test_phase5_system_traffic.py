@@ -323,6 +323,34 @@ def test_polkit_action_messages_pair_action_with_source_native_program(linux_sys
             assert path.group(1) in allowed_paths[action]
 
 
+def test_polkit_action_messages_materialize_companion_process(linux_system, state_manager):
+    """Polkit action rows should reference endpoint-visible command processes."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.activity_generator = Mock()
+    engine.activity_generator.generate_system_process.return_value = 4242
+    entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
+    template = next(message for message in entry["messages"] if "action {action_id}" in message)
+    rng = random.Random(29)
+    timestamp = datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC)
+
+    message = engine._render_polkit_syslog_message(
+        {**entry, "messages": [template]},
+        rng,
+        system=linux_system,
+        timestamp=timestamp,
+        sys_pids={"systemd": 1, "dbus": 412},
+    )
+
+    assert "unix-process:4242:" in message
+    call = engine.activity_generator.generate_system_process.call_args.kwargs
+    assert call["system"] is linux_system
+    assert call["process_name"] in message
+    assert call["emit_linux_syslog"] is False
+    assert call["time"] < timestamp
+
+
 def test_windows_scheduled_task_selector_honors_per_host_window_caps(win_system):
     """Capped maintenance tasks should not repeat after one visible-window selection."""
     engine = type("FakeEngine", (BaselineMixin,), {})()
@@ -394,6 +422,14 @@ def test_dbus_bus_state_stays_source_native(linux_system):
     assert min(bus_ids) >= 12
     assert max(bus_ids) < 1000
     assert bus_ids == sorted(bus_ids)
+
+
+def test_dbus_extra_syslog_is_window_capped():
+    """Generic D-Bus activation noise should stay sparse per host window."""
+    dbus = next(entry for entry in load_extra_syslog_messages() if entry["app"] == "dbus-daemon")
+
+    assert dbus["max_per_host_window"] <= 8
+    assert dbus["weight"] <= 1
 
 
 def test_anacron_lifecycle_emits_once_per_host_day(linux_system):

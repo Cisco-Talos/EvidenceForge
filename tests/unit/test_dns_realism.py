@@ -870,6 +870,147 @@ class TestHostnameConsistency:
         assert address_events[0].network.src_ip == proxy.ip
         assert address_events[0].network.dst_ip == "10.0.0.10"
 
+    def test_pre_window_proxy_dns_does_not_suppress_visible_origin_prerequisite(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Warm-up resolver cache should not hide the first visible proxy-origin A row."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.dispatcher.output_start_time = timestamp
+        hostname = "packages.microsoft.com"
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="13.107.246.52",
+            time=timestamp - timedelta(seconds=5),
+            hostname=hostname,
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="13.107.246.52",
+            time=timestamp + timedelta(seconds=10),
+            hostname=hostname,
+            force_address=True,
+            bypass_cache=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp >= timestamp
+        assert "13.107.246.52" in address_events[0].dns.answers
+
+    def test_invisible_forced_dns_cache_does_not_suppress_visible_refresh(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Forced address cache hits must be based on visible DNS evidence."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.dispatcher.output_start_time = timestamp
+        hostname = "changelogs.ubuntu.com"
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="91.189.91.39",
+            time=timestamp - timedelta(seconds=5),
+            hostname=hostname,
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="91.189.91.39",
+            time=timestamp + timedelta(seconds=10),
+            hostname=hostname,
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp >= timestamp
+        assert "91.189.91.39" in address_events[0].dns.answers
+
+    def test_forward_proxy_direct_tls_refreshes_pre_window_dns_cache(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Proxy-host HTTPS traffic should refresh invisible warm-up DNS before visible TLS."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.dispatcher.output_start_time = timestamp
+        hostname = "secure-client-updates.cisco.com"
+
+        for event_time in (timestamp - timedelta(seconds=5), timestamp + timedelta(seconds=10)):
+            activity_gen.generate_connection(
+                src_ip=proxy.ip,
+                dst_ip="72.163.4.185",
+                time=event_time,
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                emit_dns=False,
+                hostname=hostname,
+                conn_state="SF",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=1000,
+                source_system=proxy,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp >= timestamp
+        assert "72.163.4.185" in address_events[0].dns.answers
+        ssl_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_ssl"].emit.call_args_list
+            if call.args[0].ssl and call.args[0].ssl.server_name == hostname
+        )
+        assert address_events[0].timestamp < ssl_event.timestamp
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""
