@@ -71,7 +71,11 @@ fields:
   - name: to
     type: list
     required: false
-    description: "Visible To/Cc header recipients when visible"
+    description: "Visible To header recipients when visible"
+  - name: cc
+    type: list
+    required: false
+    description: "Visible Cc header recipients when visible"
   - name: msg_id
     type: string
     required: false

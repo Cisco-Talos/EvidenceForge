@@ -2371,3 +2371,260 @@ Top remaining blind findings for the next resumed loop:
 - Threat/Detection/Network `contract_gap` and `distribution_texture`: source-side
   SSH attribution gaps, exact same-millisecond paired eCAR FLOW observations,
   and uneven eCAR principal attribution remain visible.
+
+## Loop 44
+
+Priority category: blind-facing email artifact manifest semantics.
+
+Implemented fixes feeding loop 44:
+
+- Removed route/delivery internals from the blind-facing `EMAIL_ARTIFACTS.json`
+  manifest. The manifest now acts as a message artifact index and no longer
+  exposes `delivery_action`, `outcome`, `expanded_rcptto`, `route`, or
+  `received_headers`.
+- Preserved route metadata in internal ground truth/evaluator paths and updated
+  email docs/tests to assert route behavior from SMTP/DNS evidence rather than
+  the manifest.
+
+Verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`
+  passed: 84 tests.
+- Focused ruff check/format passed for touched files.
+- Rendered manifest probe found 34 messages and zero forbidden transport fields.
+- Automated eval passed with score 95.915 over 62,778 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 48.
+- Detection Engineer: Real, synthetic-confidence 32.
+- Network Forensics: Inconclusive, synthetic-confidence 42.
+- Host/EDR: Synthetic, synthetic-confidence 64.
+- Average: 46.5.
+- Deliberation triggered by verdict disagreement and ended with final scores
+  56/43/47/66, average 53.0.
+
+Result: the prior manifest finding did not recur. The next highest-leverage
+email-owned family is SMTP client identity and submission policy: SMTP
+`user_agent` values drift from endpoint mail-client binaries, all client
+submission on TCP/587 is plaintext, and external `.eml` Date headers can land
+after early external Received hops.
+
+## Loop 45
+
+Priority category: SMTP submission privacy, mailer identity, and external
+`.eml` chronology.
+
+Implemented fixes feeding loop 45:
+
+- Moved port-587 client submission to STARTTLS by default, with Zeek SMTP rows
+  showing TLS negotiation instead of cleartext envelope/message fields.
+- Normalized scenario/corpus mailer identities so `.eml` headers and endpoint
+  process attribution agree.
+- Ensured external sender `Date` headers precede the first visible Received hop.
+
+Verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`
+  passed: 84 tests.
+- Focused ruff check/format passed for touched files.
+- Rendered-output probe found 23/23 submission rows using STARTTLS, 23/23 SSL
+  sidecars, zero cleartext submission leaks, zero old Outlook user-agent leaks,
+  and zero `.eml` Date inversions.
+- Automated eval passed with score 95.090 over 62,320 records.
+
+Blind panel:
+
+- Threat Hunter: Inconclusive, synthetic-confidence 43.
+- Detection Engineer: Real, synthetic-confidence 32.
+- Network Forensics: Inconclusive, synthetic-confidence 55.
+- Host/EDR: Synthetic, synthetic-confidence 66.
+- Initial average: 49.0; deliberated average: 49.25.
+
+Result: the STARTTLS, mailer identity, and Date-header fixes held. The next
+highest-leverage email root cause was missing Linux/Postfix MTA-native syslog
+lifecycle evidence for SMTP handling on MAIL-ENG.
+
+## Loop 46
+
+Priority category: Linux/Postfix MTA-native syslog lifecycle for SMTP hops.
+
+Implemented fixes feeding loop 46:
+
+- Added Postfix-style `smtpd`, `cleanup`, `qmgr`, delivery, and `removed`
+  syslog lifecycle rows for Linux mail-server SMTP hops.
+- Preserved loop-45 STARTTLS, manifest, mailer identity, and `.eml` chronology
+  improvements.
+- Added unit coverage for the new Postfix syslog lifecycle behavior.
+
+Verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`
+  passed: 85 tests.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe found 96 Postfix rows, 16 queue IDs, zero missing
+  receive chains, zero missing removed rows, and one stable qmgr PID.
+- Automated eval passed with score 95.040 over 62,416 records.
+
+Blind panel:
+
+- Threat Hunter: Synthetic, synthetic-confidence 72.
+- Detection Engineer: Synthetic, synthetic-confidence 76.
+- Network Forensics: Real, synthetic-confidence 24.
+- Host/EDR: Real, synthetic-confidence 32.
+- Average: 51.0.
+
+Result: adding Postfix lifecycle improved source coverage but exposed
+source-native contradictions. The next loop targeted root-cause queue state:
+`delay=` values shorter than visible queue elapsed time, `nrcpt=2` queues
+removed after one delivery row, and outbound MAIL-ENG SMTP flows owned by the
+inbound `postfix/smtpd` listener.
+
+## Loop 47
+
+Priority category: Linux MTA queue lifecycle consistency and outbound process
+ownership.
+
+Implemented fixes feeding loop 47:
+
+- Added per-queue lifecycle state so Postfix delays derive from queue active,
+  cleanup, and delivery timestamps rather than independent short jitter.
+- Tracked expected local and relayed recipients and emitted `removed` only after
+  all visible delivery rows land.
+- Changed Linux server-to-server outbound SMTP source ownership from
+  `/usr/lib/postfix/sbin/smtpd` to `/usr/lib/postfix/sbin/smtp`.
+
+Verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`
+  passed: 85 tests.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe found zero Postfix delay shortfalls, zero queues removed
+  before all deliveries, zero under-delivered queues, zero eCAR SMTP PID/syslog
+  mismatches, and 7/7 MAIL-ENG outbound SMTP eCAR FLOW rows owned by
+  `/usr/lib/postfix/sbin/smtp`.
+- Automated eval passed with score 95.040 over 62,418 records.
+
+Blind panel:
+
+- Threat Hunter: Real, synthetic-confidence 32.
+- Detection Engineer: Real, synthetic-confidence 28.
+- Network Forensics: Synthetic, synthetic-confidence 67.
+- Host/EDR: Inconclusive, synthetic-confidence 36.
+- Average: 40.75.
+
+Result: the Postfix lifecycle contradictions and outbound-process ownership
+findings did not recur. Network found a new email-owned byte-accounting issue:
+Postfix `size=` values matched Zeek `conn.orig_bytes` on MAIL-ENG SMTP hops,
+collapsing queued message size and wire-level transfer accounting.
+
+## Loop 48
+
+Priority category: SMTP queued message size versus transport wire byte
+accounting.
+
+Implemented fixes feeding loop 48:
+
+- Split SMTP transfer sizing into queued message bytes and transport wire bytes.
+- Kept Zeek `conn.orig_bytes` as the SMTP/TLS/relay wire observation.
+- Passed the source-native queued message size into Postfix `size=` fields.
+- Updated email tests to assert Postfix `size=` differs from matching STARTTLS
+  submission and outbound relay `conn.orig_bytes`.
+- Fixed a stale Zeek format-count assertion from 22 to 23 formats.
+
+Verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`
+  passed: 85 tests.
+- `uv run pytest --no-cov tests/unit/test_zeek_format_accuracy.py::TestSampleDataFieldValidation::test_all_formats_load tests/unit/test_email_evidence.py tests/unit/test_eval_cross_source.py -q`
+  passed: 86 tests.
+- `uv run ruff check .` and `uv run ruff format --check .` passed.
+- Rendered-output probe found 23 MAIL-ENG Postfix-size/Zeek-wire comparisons,
+  zero Postfix size values equal to matching `conn.orig_bytes`, 23/23 STARTTLS
+  submission rows with SSL sidecars, zero cleartext submission leaks, zero
+  Postfix delay/recipient/removal gaps, and 7/7 outbound MAIL-ENG SMTP eCAR
+  FLOW rows owned by `/usr/lib/postfix/sbin/smtp`.
+- Automated eval passed with score 95.040 over 62,418 records.
+- A full default `uv run pytest --no-cov` was run before the stale format-count
+  assertion fix and failed only that 22-vs-23 expectation; the targeted failing
+  test and email-focused suites passed afterward.
+
+Blind panel:
+
+- Threat Hunter: Real, synthetic-confidence 34.
+- Detection Engineer: Real, synthetic-confidence 34.
+- Network Forensics: Real, synthetic-confidence 31.
+- Host/EDR: Inconclusive, synthetic-confidence 46.
+- Average: 36.25.
+
+Result: the loop-47 byte-accounting finding did not recur, and the panel
+shifted from SMTP transport/lifecycle correctness to higher-order texture. The
+top email-owned next priorities are Message-ID/queue-ID/Received-token
+diversity, Dovecot/IMAP auth and session syslog companions for observed IMAPS
+mailbox access, and tighter Received timestamp/protocol alignment for STARTTLS
+hops. A separate non-email finding remains around early MAIL-ENG SSH eCAR
+process trees without matching syslog/Zeek session evidence.
+
+## Loops 49-58
+
+Priority category: new email functionality introduced on the branch, with
+root-cause fixes at the canonical email/SMTP/TLS context layer where possible.
+
+Implemented fixes across this batch:
+
+- Added Cc ownership to `SmtpContext`, Zeek SMTP rendering, and the Zeek SMTP
+  schema so visible SMTP rows preserve Cc without folding it into To.
+- Added endpoint mail-cache and named attachment file artifacts for rendered
+  email attachments.
+- Improved Message-ID, Received-header, Exchange version, queue-ID, and Postfix
+  source-native texture.
+- Added Dovecot IMAPS syslog companions and Linux MTA Postfix process ownership
+  for outbound relay flows.
+- Changed STARTTLS replies to server-family-specific palettes so TLS rows no
+  longer render generic non-TLS replies.
+- Consolidated external inbound SMTP Received-path and Zeek `path` construction
+  through one public-hop model with provider/PTR-like relays.
+- Added SMTP STARTTLS SNI policy: port 587 client submissions keep SNI, while a
+  realistic subset of port 25 MTA-to-MTA STARTTLS sessions omit SNI.
+
+Verification:
+
+- `uv run pytest --no-cov tests/unit/test_email_evidence.py -q` passed with 26
+  tests after the final SNI-policy fix.
+- `uv run pytest --no-cov tests/unit/test_zeek_format_accuracy.py -q` passed
+  with 27 tests.
+- Loop 58 probe found `16` port-25 STARTTLS rows with SNI and `12` without SNI,
+  while port 587 had `23` with SNI and `0` without.
+- Loop 58 probe found zero non-STARTTLS TLS replies, zero invalid Exchange
+  Received versions, zero generic ESMTPS version-like IDs, zero leading-zero or
+  UUID-like Message-ID issues, zero TLS 1.2 cert/cipher mismatches, and three
+  endpoint named-attachment file events.
+
+Blind panel summary:
+
+| Loop | Automated | Threat | Detection | Network | Host/EDR | Blind avg | Notes |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 49 | 94.668 PASS | 72 | 24 | 76 | 63 | 58.75 | Identifier/IMAPS fixes held; STARTTLS opacity and non-email gaps dominated. |
+| 50 | 91.985 FAIL | 59 | 38 | 28 | 65 | 47.50 | Automated event-presence gate failed; later loops restored coverage. |
+| 51 | 94.996 PASS | 34 | 48 | 90 | 72 | 61.00 | Network flagged SMTP STARTTLS TLS/cert mismatch. |
+| 52 | 94.965 PASS | 56 | 38 | 86 | 78 | 64.50 | Zeek SMTP correlation improved; endpoint/artifact gaps remained. |
+| 53 | 94.965 PASS | 68 | 34 | 68 | 68 | 59.50 | STARTTLS replies and Exchange Received syntax improved but ID/artifact texture remained. |
+| 54 | 94.465 PASS | 38 | 34 | 34 | 55 | 40.25 | Most email correctness defects cleared; broader host-role texture remained. |
+| 55 | 94.465 PASS | 30 | 46 | 44 | 34 | 38.50 | Exchange Received version morphology fixed; STARTTLS reply texture became next target. |
+| 56 | 94.465 PASS | 30 | 38 | 38 | 49 | 38.75 | STARTTLS replies fixed; MTA-to-MTA all-SNI behavior became next target. |
+| 57 | 94.465 PASS | 36 | 42 | 36 | 38 | 38.00 | External public-hop model held; universal SMTP STARTTLS SNI remained. |
+| 58 | 94.465 PASS | 48 | 33 | 43 | 66 | 47.50 | SMTP STARTTLS SNI fixed; host/SSH/endpoint issues drove regression. |
+
+Result: the new batch improved the email-specific defects reviewers were
+calling out: Message-ID/Received morphology, Cc/path separation, attachment
+artifacts, Postfix/Dovecot lifecycle, STARTTLS replies, external hop paths, and
+MTA-to-MTA no-SNI policy all now have focused probe coverage. The late loop-58
+regression is primarily non-email endpoint realism: Group Policy extension data,
+SSH shell/session ordering, Linux package-manager process ancestry, and Windows
+service/network logon closure.
+
+Chart artifact:
+
+- `scenarios/email-v1-assessment/blind-test/assessment-effectiveness-dashboard-last-20-email-loops.svg`
+  shows loops 39-58, including reviewer score lines, trailing five-loop blind
+  average, loop-to-loop deltas, and reviewer disagreement band (#6).

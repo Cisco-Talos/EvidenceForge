@@ -240,6 +240,7 @@ class SmtpContext:
     subject: str
     last_reply: str
     path: list[str] = field(default_factory=list)
+    cc_header: list[str] = field(default_factory=list)
     user_agent: str = ""
     tls: bool = False
     trans_depth: int = 1

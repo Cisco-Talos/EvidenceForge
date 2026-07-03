@@ -1421,6 +1421,16 @@ _WINDOWS_ONE_SHOT_CLI_EXES = {
 _WINDOWS_BROWSER_EXES = frozenset(
     {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe", "opera.exe"}
 )
+_PERSISTENT_USER_APP_EXES = frozenset(
+    {
+        "evolution",
+        "outlook.exe",
+        "onedrive.exe",
+        "teams.exe",
+        "thunderbird",
+        "thunderbird.exe",
+    }
+)
 _WINDOWS_BROWSER_CHILD_MARKERS = (
     "--type=",
     "--utility-sub-type=",
@@ -9212,6 +9222,49 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
         return chosen.pid
 
+    def _existing_persistent_user_app_pid(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> int | None:
+        """Reuse already-open desktop apps that normally stay resident."""
+        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if requested_exe not in _PERSISTENT_USER_APP_EXES:
+            return None
+        command = f" {command_line.lower()} "
+        if requested_exe == "teams.exe" and any(
+            marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS
+        ):
+            return None
+
+        candidates: list[RunningProcess] = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            if proc.username != username:
+                continue
+            if proc.logon_id and logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            if self._foreground_process_expired_for_attribution(system, proc, time):
+                continue
+            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if proc_exe == requested_exe:
+                candidates.append(proc)
+
+        if not candidates:
+            return None
+        chosen = max(
+            candidates,
+            key=lambda candidate: candidate.last_activity_time or candidate.start_time,
+        )
+        self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
+        return chosen.pid
+
     def _process_effect_context(
         self,
         system: System,
@@ -9542,6 +9595,18 @@ class ActivityGenerator:
                 ):
                     running_proc.last_activity_time = time
             return singleton_pid
+
+        if not from_storyline:
+            persistent_app_pid = self._existing_persistent_user_app_pid(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if persistent_app_pid is not None:
+                return persistent_app_pid
 
         if not from_storyline and allow_existing_browser_reuse:
             browser_pid = self._existing_user_browser_pid(
@@ -11245,16 +11310,24 @@ class ActivityGenerator:
                 server_hostname=hostname,
             ),
         )
-        return self.generate_connection(
+        duration = request.duration or rng.uniform(12.0, 180.0)
+        orig_bytes = rng.randint(1200, 9000)
+        resp_bytes = rng.randint(15_000, 450_000)
+        responding_pid = self._email_responding_process_pid(
+            request.server,
+            time=request.time,
+            port=port,
+        )
+        uid = self.generate_connection(
             src_ip=request.system.ip,
             dst_ip=request.server.ip,
             time=request.time,
             dst_port=port,
             proto="tcp",
             service=service,
-            duration=request.duration or rng.uniform(12.0, 180.0),
-            orig_bytes=rng.randint(1200, 9000),
-            resp_bytes=rng.randint(15_000, 450_000),
+            duration=duration,
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
             conn_state="SF",
             emit_dns=True,
             source_system=request.system,
@@ -11262,12 +11335,90 @@ class ActivityGenerator:
             hostname=hostname,
             process_image=resolved_process_image or process_image,
             suppress_source_pid_inference=process_pid <= 0,
-            responding_pid=self._email_responding_process_pid(
-                request.server,
-                time=request.time,
-                port=port,
-            ),
+            responding_pid=responding_pid,
         )
+        if protocol == "imaps" and self._is_linux_mail_server(request.server):
+            self._emit_dovecot_imap_syslog(
+                user=request.user,
+                client_system=request.system,
+                server=request.server,
+                time=request.time,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                message_ids=request.message_ids,
+                master_pid=responding_pid,
+            )
+        return uid
+
+    def _emit_dovecot_imap_syslog(
+        self,
+        *,
+        user: "User",
+        client_system: "System",
+        server: "System",
+        time: datetime,
+        duration: float,
+        orig_bytes: int,
+        resp_bytes: int,
+        message_ids: tuple[str, ...],
+        master_pid: int,
+    ) -> None:
+        """Emit Dovecot auth/session companions for an observed IMAPS read."""
+        seed = _stable_seed(
+            "dovecot_imap:"
+            f"{server.hostname}:{client_system.hostname}:{user.username}:{time.isoformat()}"
+        )
+        rng = random.Random(seed)
+        worker_pid = self.state_manager.allocate_transient_linux_pid(
+            server.hostname,
+            time + timedelta(milliseconds=rng.randint(35, 140)),
+        )
+        session_token = self._dovecot_session_token(seed)
+        message_count = max(1, len(message_ids) or rng.randint(1, 6))
+        hdr_count = max(message_count, rng.randint(message_count, message_count + 4))
+        body_count = rng.randint(0, message_count)
+        hdr_bytes = min(resp_bytes, hdr_count * rng.randint(650, 2200))
+        body_bytes = max(0, resp_bytes - hdr_bytes - rng.randint(1200, 9000))
+        login_time = self._smtp_lifecycle_time(time, duration, rng.uniform(0.03, 0.12))
+        logout_time = self._smtp_lifecycle_time(time, duration, rng.uniform(0.84, 0.98))
+        login_pid = master_pid if master_pid > 0 else None
+
+        self.generate_syslog_event(
+            server,
+            login_time,
+            "dovecot",
+            (
+                f"imap-login: Login: user=<{user.username}>, method=PLAIN, "
+                f"rip={client_system.ip}, lip={server.ip}, mpid={worker_pid}, TLS, "
+                f"session=<{session_token}>"
+            ),
+            pid=login_pid,
+        )
+        self.generate_syslog_event(
+            server,
+            logout_time,
+            "dovecot",
+            (
+                f"imap({user.username})<{worker_pid}><{session_token}>: "
+                f"Disconnected: Logged out in={orig_bytes} out={resp_bytes} "
+                "deleted=0 expunged=0 trashed=0 "
+                f"hdr_count={hdr_count} hdr_bytes={hdr_bytes} "
+                f"body_count={body_count} body_bytes={body_bytes}"
+            ),
+            pid=worker_pid,
+        )
+
+    def _dovecot_session_token(self, seed: int) -> str:
+        """Return a compact deterministic Dovecot-style session token."""
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        value = seed
+        chars: list[str] = []
+        while value and len(chars) < 11:
+            value, remainder = divmod(value, len(alphabet))
+            chars.append(alphabet[remainder])
+        token = "".join(reversed(chars)).rjust(10, "A")
+        return token[-11:]
 
     def _email_access_process_image(
         self,
@@ -11429,6 +11580,10 @@ class ActivityGenerator:
                 command_line=command_line,
             )
         if hop.get("server_to_server"):
+            if _get_os_category(src_system.os) == "linux":
+                pid = self._ensure_email_mta_outbound_process(src_system, time=time)
+                image = self._email_mta_outbound_process_image(src_system)
+                return pid, image if pid > 0 else None
             pid = self._ensure_email_server_process(src_system, time=time, port=25)
             image = self._email_server_process_image(src_system, port=25)
             return pid, image if pid > 0 else None
@@ -11470,6 +11625,8 @@ class ActivityGenerator:
             return f'"{image}"'
         if exe_name == "w3wp.exe":
             return f'{image} -ap "MSExchangeOWAAppPool"'
+        if exe_name == "smtp" and "postfix" in image:
+            return f"{image} -t unix -u -c"
         if "postfix" in image:
             return f"{image} -n smtpd"
         if exe_name == "dovecot":
@@ -11521,6 +11678,59 @@ class ActivityGenerator:
             command_line=self._email_server_command_line(image, port=port),
             parent_pid=parent_pid,
             username=username,
+            emit_linux_syslog=False,
+        )
+        if pid > 0:
+            self.state_manager.update_process_activity_time(system.hostname, pid, time)
+            self.state_manager.set_current_time(time)
+        return pid
+
+    def _email_mta_outbound_process_image(self, system: "System") -> str:
+        """Return the process image that owns outbound SMTP relay connections."""
+        if _get_os_category(system.os) == "windows":
+            return self._email_server_process_image(system, port=25)
+        return "/usr/lib/postfix/sbin/smtp"
+
+    def _ensure_email_mta_outbound_process(
+        self,
+        system: "System",
+        *,
+        time: datetime,
+    ) -> int:
+        """Create or reuse the local MTA delivery process for outbound flow ownership."""
+        image = self._email_mta_outbound_process_image(system)
+        if image == self._email_server_process_image(system, port=25):
+            return self._ensure_email_server_process(system, time=time, port=25)
+
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and self._is_pid_active_at(system, proc.pid, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+            return proc.pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        parent_pid = sys_pids.get("systemd", sys_pids.get("init", 1))
+        rng = random.Random(
+            _stable_seed(f"email_mta_outbound_process:{system.hostname}:{image}:{time.isoformat()}")
+        )
+        process_time = time - timedelta(milliseconds=rng.randint(180, 850))
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=50)
+        pid = self.generate_system_process(
+            system=system,
+            time=process_time,
+            process_name=image,
+            command_line=self._email_server_command_line(image, port=25),
+            parent_pid=parent_pid,
+            username="postfix",
             emit_linux_syslog=False,
         )
         if pid > 0:
@@ -11690,24 +11900,48 @@ class ActivityGenerator:
             sender=sender,
             recipients=expanded_recipients,
         )
-        date_header = request.time.strftime("%a, %d %b %Y %H:%M:%S +0000")
         corpus_user_agent = (
             corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
         )
-        user_agent = spec.user_agent or self._email_effective_user_agent(
+        raw_user_agent = (
+            spec.user_agent or corpus_user_agent or self._email_user_agent(request.system, rng)
+        )
+        user_agent = self._email_effective_user_agent(
             sender,
-            corpus_user_agent or self._email_user_agent(request.system, rng),
+            raw_user_agent,
+            system=request.system,
         )
         message_id = self._email_message_id(artifact_id, sender, user_agent)
         route = self._plan_email_route(sender, expanded_recipients, request.system)
         if route and route[0].get("submission"):
             route[0]["recipients"] = envelope_recipients
+        transfer_sizes = self._smtp_transfer_sizes(
+            message_id=message_id,
+            body=body,
+            attachments=attachments,
+            route=route,
+        )
+        hop_times = self._email_smtp_hop_times(
+            route=route,
+            message_id=message_id,
+            time=request.time,
+            transfer_sizes=transfer_sizes,
+        )
+        date_header = self._email_date_header_for_route(
+            route=route,
+            sender=sender,
+            message_id=message_id,
+            time=request.time,
+        )
         received_headers = self._received_headers_for_route(
             route=route,
             sender=sender,
             message_id=message_id,
             recipients=expanded_recipients,
             time=request.time,
+            user_agent=user_agent,
+            transfer_sizes=transfer_sizes,
+            hop_times=hop_times,
         )
         email_ctx = EmailContext(
             message_id=message_id,
@@ -11733,25 +11967,21 @@ class ActivityGenerator:
         )
         smtp_uids: list[str] = []
         route_summary: list[dict[str, str]] = []
-        transfer_sizes = self._smtp_transfer_sizes(
-            message_id=message_id,
-            body=body,
-            attachments=attachments,
-            route=route,
-        )
+        sender_client_pid = -1
 
         self._emit_email_route_dns(route, request.time)
 
-        hop_time_offset = 1.2
         for index, hop in enumerate(route):
-            hop_time = request.time + timedelta(seconds=hop_time_offset)
-            hop_time_offset += rng.uniform(2.0, 8.0)
+            hop_time = hop_times[index]
             src_system = hop["src_system"]
             dst_system = hop["dst_system"]
-            tls = bool(
-                hop["server_to_server"]
-                and hop["src_server_attempts_starttls"]
-                and hop["dst_server_allows_starttls"]
+            tls = self._smtp_hop_uses_starttls(
+                hop=hop,
+                src_system=src_system,
+                dst_system=dst_system,
+                message_id=message_id,
+                hop_index=index,
+                user_agent=user_agent,
             )
             last_reply = self._smtp_last_reply(
                 outcome=spec.outcome,
@@ -11786,11 +12016,17 @@ class ActivityGenerator:
                 or (envelope_recipients if index == 0 else expanded_recipients),
                 date=date_header,
                 from_header=email_ctx.header_from,
-                to_header=[*email_ctx.to, *[self._email_header_address(addr) for addr in spec.cc]],
+                to_header=email_ctx.to,
+                cc_header=email_ctx.cc,
                 msg_id=message_id,
                 subject=subject,
                 last_reply=last_reply,
-                path=self._smtp_observed_path(route, index),
+                path=self._smtp_observed_path(
+                    route,
+                    index,
+                    sender=sender,
+                    message_id=message_id,
+                ),
                 user_agent=user_agent,
                 tls=tls,
                 encrypted_message=tls,
@@ -11802,6 +12038,9 @@ class ActivityGenerator:
                     dst_system=dst_system,
                     message_id=message_id,
                     hop_index=index,
+                    event_time=hop_time,
+                    submission=bool(hop.get("submission")),
+                    server_to_server=bool(hop.get("server_to_server")),
                 )
                 if tls
                 else None
@@ -11826,6 +12065,8 @@ class ActivityGenerator:
                 time=hop_time,
                 user_agent=user_agent,
             )
+            if hop.get("submission") and source_pid > 0:
+                sender_client_pid = source_pid
             responding_pid = self._email_responding_process_pid(
                 dst_system,
                 time=hop_time,
@@ -11866,6 +12107,19 @@ class ActivityGenerator:
             )
             if uid:
                 smtp_uids.append(visible_uid or uid)
+            self._emit_email_mta_syslog(
+                route=route,
+                hop_index=index,
+                hop=hop,
+                time=hop_time,
+                duration=float(transfer_sizes[index]["duration"]),
+                message_id=message_id,
+                sender=sender,
+                actor=request.actor,
+                smtp=smtp_ctx,
+                size=int(transfer_sizes[index]["message_size"]),
+                source_pid=source_pid,
+            )
             recipient_domains = sorted(
                 {self._email_domain(address) for address in hop.get("recipients", [])}
             )
@@ -11887,7 +12141,14 @@ class ActivityGenerator:
         if self._should_materialize_email_artifact(artifact_id, request.storyline_id):
             artifact_path = self._write_email_artifact(email_ctx)
             email_ctx.artifact_path = artifact_path
-        self._record_email_artifact_manifest(email_ctx, route_summary, artifact_path)
+        self._record_email_artifact_manifest(email_ctx, artifact_path)
+        self._emit_sender_email_endpoint_artifacts(
+            email_ctx=email_ctx,
+            user=request.actor,
+            system=request.system,
+            time=request.time,
+            pid=sender_client_pid,
+        )
         self._maybe_generate_email_recipient_reads(
             email_ctx=email_ctx,
             delivery_time=request.time,
@@ -11978,7 +12239,11 @@ class ActivityGenerator:
         if profile == "thunderbird":
             return f"<{seed_hi}.{seed_lo % 1_000_000}.{seed_lo:08x}@{domain}>"
         if profile == "apple_mail":
-            uuid_like = uuid.UUID(int=((seed_hi << 64) | seed_lo) & ((1 << 128) - 1))
+            uuid_like = uuid.UUID(
+                bytes=hashlib.sha256(
+                    f"email-message-id:{artifact_id}:{sender}:{user_agent}:apple".encode()
+                ).digest()[:16]
+            )
             return f"<{str(uuid_like).upper()}@{domain}>"
         if profile == "service":
             token = re.sub(r"[^a-z0-9]+", "-", sender.split("@", 1)[0].lower()).strip("-")
@@ -11986,10 +12251,23 @@ class ActivityGenerator:
             queue_fragment = seed_hi & 0xFFFFFFFF
             sequence_fragment = seed_lo % 10_000_000
             return f"<{token}-{queue_fragment:08x}-{sequence_fragment:07d}@{domain}>"
-        mailbox_id = f"{seed_hi & 0xFFFF:04X}{seed_lo & 0xFFFF:04X}"
-        left_fragment = seed_hi & 0xFFFFFFFF
-        right_fragment = seed_lo & 0xFFFFFFFF
-        return f"<{left_fragment:08x}{right_fragment:08x}@{mailbox_id}.{domain}>"
+        rng = random.Random(_stable_seed(f"email_message_id_profile:{artifact_id}:{sender}"))
+        local_label = re.sub(r"[^a-z0-9-]+", "-", sender.split("@", 1)[0].lower()).strip("-")
+        local_label = (local_label or "mail")[:16]
+        style = rng.randrange(3)
+        if style == 0:
+            uuid_like = uuid.UUID(
+                bytes=hashlib.sha256(
+                    f"email-message-id:{artifact_id}:{sender}:{user_agent}:outlook".encode()
+                ).digest()[:16]
+            )
+            return f"<{str(uuid_like).upper()}@{domain}>"
+        if style == 1:
+            mailbox_id = 1000 + (seed_lo % 9000)
+            left = self._base36_nonzero(seed_hi, 10)
+            right = self._base36_nonzero(seed_lo >> 8, 7)
+            return f"<{left}.{right}.{mailbox_id}@{local_label}.{domain}>"
+        return f"<{self._base36_nonzero(seed_hi, 12)}.{self._base36_nonzero(seed_lo, 10)}@{domain}>"
 
     def _smtp_last_reply(
         self,
@@ -12062,24 +12340,76 @@ class ActivityGenerator:
         dst_system: Any,
     ) -> str:
         """Return a deterministic pre-encryption STARTTLS server reply."""
-        seed = _stable_seed(
+        dst_hostname = getattr(dst_system, "hostname", "")
+        dst_fqdn = self._email_server_fqdn(dst_hostname) if dst_hostname else "mail.local"
+        dst_os = _get_os_category(getattr(dst_system, "os", ""))
+        dst_roles = set(getattr(dst_system, "roles", ()) or ())
+        server_seed = _stable_seed(
+            f"smtp_starttls_server_profile:{dst_hostname}:{dst_os}:{','.join(sorted(dst_roles))}"
+        )
+        message_seed = _stable_seed(
             "smtp_starttls_reply:"
             f"{message_id}:{hop_index}:"
-            f"{getattr(src_system, 'hostname', '')}:{getattr(dst_system, 'hostname', '')}"
+            f"{getattr(src_system, 'hostname', '')}:{dst_hostname}"
         )
-        rng = random.Random(seed)
-        replies = [
-            "220 2.0.0 Ready to start TLS",
-            "220 2.0.0 SMTP server ready",
-            "220 2.0.0 Begin TLS negotiation now",
-            "220 2.0.0 Go ahead with STARTTLS",
-        ]
-        return replies[rng.randrange(len(replies))]
+        if "external_mail_server" in dst_roles:
+            replies = [
+                f"220 2.0.0 {dst_fqdn} ready for TLS",
+                "220 2.0.0 TLS go ahead",
+                "220 Go ahead with TLS",
+                "220 2.0.0 Begin TLS negotiation",
+                "220 2.0.0 STARTTLS command accepted",
+                "220 Ready to negotiate TLS",
+            ]
+        elif dst_os == "linux":
+            replies = [
+                "220 2.0.0 Ready to start TLS",
+                "220 2.0.0 TLS go ahead",
+                f"220 2.0.0 {dst_fqdn} ready for TLS",
+                "220 2.0.0 Begin TLS negotiation now",
+                "220 2.0.0 STARTTLS accepted",
+                "220 Ready to start TLS",
+            ]
+        elif dst_os == "windows":
+            replies = [
+                f"220 2.0.0 {dst_fqdn} Microsoft ESMTP MAIL Service ready for TLS",
+                f"220 2.0.0 {dst_fqdn} Ready to start TLS",
+                "220 2.0.0 STARTTLS accepted; continue",
+                "220 2.0.0 TLS negotiation accepted",
+                "220 2.0.0 Begin TLS negotiation",
+                "220 2.0.0 Ready for TLS",
+            ]
+        else:
+            replies = [
+                "220 2.0.0 Ready to start TLS",
+                "220 2.0.0 TLS go ahead",
+                "220 2.0.0 STARTTLS accepted",
+                "220 Ready to negotiate TLS",
+            ]
 
-    @staticmethod
-    def _smtp_observed_path(route: list[dict[str, Any]], hop_index: int) -> list[str]:
+        primary_index = server_seed % len(replies)
+        if message_seed % 100 < 70:
+            return replies[primary_index]
+        alternate_offset = 1 + ((message_seed >> 8) % (len(replies) - 1))
+        return replies[(primary_index + alternate_offset) % len(replies)]
+
+    def _smtp_observed_path(
+        self,
+        route: list[dict[str, Any]],
+        hop_index: int,
+        *,
+        sender: str = "",
+        message_id: str = "",
+    ) -> list[str]:
         """Return a Received-chain-like path visible before the current SMTP hop."""
         if hop_index <= 0:
+            external_path = self._external_sender_observed_path(
+                route=route,
+                sender=sender,
+                message_id=message_id,
+            )
+            if external_path:
+                return external_path
             return []
         prior_hops = route[:hop_index]
         path = [hop["dst_system"].ip for hop in reversed(prior_hops)]
@@ -12101,6 +12431,15 @@ class ActivityGenerator:
                 chars.append(alphabet[remainder])
             token = "".join(reversed(chars))
         return token[-width:].rjust(width, "0")
+
+    @staticmethod
+    def _base36_nonzero(value: int, width: int) -> str:
+        """Return a fixed-width base36 token that does not start with zero."""
+        if width <= 1:
+            return ActivityGenerator._base36(value or 1, max(width, 1))
+        floor = 36 ** (width - 1)
+        span = (36**width) - floor
+        return ActivityGenerator._base36(floor + (value % span), width)
 
     @staticmethod
     def _email_mailer_profile(sender: str, user_agent: str) -> str:
@@ -12359,9 +12698,21 @@ class ActivityGenerator:
             ["Thunderbird 115.0", "Evolution 3.44", "Apple Mail (2.3608.120.23.2.7)"]
         )
 
-    def _email_effective_user_agent(self, sender: str, user_agent: str) -> str:
+    def _email_effective_user_agent(
+        self,
+        sender: str,
+        user_agent: str,
+        *,
+        system: Any | None = None,
+    ) -> str:
         """Return a profile-compatible mailer fingerprint for generated/corpus mail."""
         profile = self._email_mailer_profile(sender, user_agent)
+        if system is not None and profile in {"outlook", "apple_mail"}:
+            os_category = _get_os_category(system.os)
+            if os_category == "windows":
+                return "Microsoft Outlook 16.0"
+            if os_category == "linux":
+                return "Thunderbird 115.0"
         if profile != "service":
             return user_agent
         agent = user_agent.lower()
@@ -12374,6 +12725,57 @@ class ActivityGenerator:
         seed = _stable_seed(f"email_service_user_agent:{sender}")
         return f"{label} Mailer {2 + seed % 4}.{seed % 10}"
 
+    def _smtp_hop_uses_starttls(
+        self,
+        *,
+        hop: dict[str, Any],
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        user_agent: str,
+    ) -> bool:
+        """Return whether a modeled SMTP hop upgrades to STARTTLS."""
+        if hop["submission"]:
+            return self._smtp_submission_uses_starttls(
+                src_system=src_system,
+                dst_system=dst_system,
+                message_id=message_id,
+                hop_index=hop_index,
+                user_agent=user_agent,
+            )
+        return bool(
+            hop["server_to_server"]
+            and hop["src_server_attempts_starttls"]
+            and hop["dst_server_allows_starttls"]
+        )
+
+    def _smtp_submission_uses_starttls(
+        self,
+        *,
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        user_agent: str,
+    ) -> bool:
+        """Return realistic client-submission STARTTLS behavior."""
+        if "external_mail_server" in (src_system.roles or []):
+            return False
+        os_category = _get_os_category(src_system.os)
+        if os_category not in {"windows", "linux"}:
+            return False
+        agent = user_agent.lower()
+        if any(marker in agent for marker in ("outlook", "thunderbird", "apple mail")):
+            return True
+        rng = random.Random(
+            _stable_seed(
+                "smtp_submission_starttls:"
+                f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
+            )
+        )
+        return rng.random() >= 0.08
+
     def _smtp_starttls_ssl_context(
         self,
         *,
@@ -12381,6 +12783,9 @@ class ActivityGenerator:
         dst_system: "System",
         message_id: str,
         hop_index: int,
+        event_time: datetime,
+        submission: bool = False,
+        server_to_server: bool = True,
     ) -> SslContext:
         """Return Zeek SSL metadata for a successful SMTP STARTTLS upgrade."""
         rng = random.Random(
@@ -12389,16 +12794,33 @@ class ActivityGenerator:
                 f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
             )
         )
+        ssl_server_name = self._smtp_starttls_server_name(
+            src_system=src_system,
+            dst_system=dst_system,
+            message_id=message_id,
+            hop_index=hop_index,
+            submission=submission,
+            server_to_server=server_to_server,
+        )
+        cert_server_name = self._email_server_fqdn(dst_system.hostname)
         version = rng.choices(_TLS_VERSION_VALUES, weights=(70, 30), k=1)[0]
         if version == "TLSv13":
             cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
         else:
-            cipher = rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+            cert_profile = self._smtp_starttls_certificate_profile(
+                ssl_server_name=cert_server_name,
+                dst_system=dst_system,
+                event_time=event_time,
+            )
+            cipher_values, cipher_weights = self._tls12_cipher_pool_for_key_type(
+                str(cert_profile["key_type"])
+            )
+            cipher = rng.choices(cipher_values, weights=cipher_weights, k=1)[0]
         resumed = rng.random() < 0.12
         return SslContext(
             version=version,
             cipher=cipher,
-            server_name=self._email_server_fqdn(dst_system.hostname),
+            server_name=ssl_server_name,
             resumed=resumed,
             established=True,
             ssl_history=_choose_ssl_history(
@@ -12408,6 +12830,36 @@ class ActivityGenerator:
                 resumed=resumed,
             ),
         )
+
+    def _smtp_starttls_server_name(
+        self,
+        *,
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        submission: bool,
+        server_to_server: bool,
+    ) -> str:
+        """Return the client-advertised SNI for SMTP STARTTLS, if any."""
+        server_name = self._email_server_fqdn(dst_system.hostname)
+        if submission:
+            return server_name
+        if not server_to_server:
+            return server_name
+
+        seed = _stable_seed(
+            "smtp_starttls_sni:"
+            f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
+        )
+        rng = random.Random(seed)
+        src_roles = set(getattr(src_system, "roles", ()) or ())
+        dst_roles = set(getattr(dst_system, "roles", ()) or ())
+        if "external_mail_server" in src_roles or "external_mail_server" in dst_roles:
+            include_probability = 0.46
+        else:
+            include_probability = 0.72
+        return server_name if rng.random() < include_probability else ""
 
     def _smtp_starttls_certificate_chain(
         self,
@@ -12421,23 +12873,17 @@ class ActivityGenerator:
         """Return passive Zeek certificate evidence for visible SMTP STARTTLS handshakes."""
         if ssl.version == "TLSv13" or ssl.resumed:
             return []
-
-        import hashlib
-
-        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
-
-        server_name = ssl.server_name or self._email_server_fqdn(dst_system.hostname)
-        internal_cert_name = server_name if _is_private_ip(dst_system.ip) else ""
-        cert_name = server_name or internal_cert_name or dst_system.ip
+        cert_profile = self._smtp_starttls_certificate_profile(
+            ssl_server_name=ssl.server_name,
+            dst_system=dst_system,
+            event_time=event_time,
+        )
+        cert_name = str(cert_profile["cert_name"])
+        issuer_cfg = cert_profile["issuer_cfg"]
+        key_type = str(cert_profile["key_type"])
+        key_length = int(cert_profile["key_length"])
+        internal_cert_name = str(cert_profile["internal_cert_name"])
         cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
-        if internal_cert_name:
-            issuer_cfg = _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
-        elif _is_ip_literal(cert_name):
-            issuer_cfg = _raw_ip_tls_issuer(cert_name)
-        else:
-            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name, event_time=event_time)
-        key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
-        key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
         is_ecdsa = key_type == "ecdsa"
 
         validity = self._tls_cert_validity.get(cert_name)
@@ -12520,6 +12966,443 @@ class ActivityGenerator:
             rng=cert_rng,
         )
 
+    def _smtp_starttls_certificate_profile(
+        self,
+        *,
+        ssl_server_name: str,
+        dst_system: "System",
+        event_time: datetime,
+    ) -> dict[str, Any]:
+        """Return the stable SMTP certificate profile used by SSL and X.509 evidence."""
+        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+        server_name = ssl_server_name or self._email_server_fqdn(dst_system.hostname)
+        internal_cert_name = server_name if _is_private_ip(dst_system.ip) else ""
+        cert_name = server_name or internal_cert_name or dst_system.ip
+        cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
+        if internal_cert_name:
+            issuer_cfg = _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
+        elif _is_ip_literal(cert_name):
+            issuer_cfg = _raw_ip_tls_issuer(cert_name)
+        else:
+            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name, event_time=event_time)
+        key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
+        key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
+        return {
+            "cert_name": cert_name,
+            "internal_cert_name": internal_cert_name,
+            "issuer_cfg": issuer_cfg,
+            "key_type": key_type,
+            "key_length": key_length,
+        }
+
+    @staticmethod
+    def _tls12_cipher_pool_for_key_type(key_type: str) -> tuple[tuple[str, ...], tuple[int, ...]]:
+        """Return TLS 1.2 ciphers whose authentication algorithm matches the cert key."""
+        needs_ecdsa = key_type == "ecdsa"
+        matching = [
+            (cipher, weight)
+            for cipher, weight in _TLS12_CIPHER_DIST
+            if ("_ECDSA_" in cipher) == needs_ecdsa
+        ]
+        if not matching:
+            matching = list(_TLS12_CIPHER_DIST)
+        return (
+            tuple(cipher for cipher, _weight in matching),
+            tuple(weight for _cipher, weight in matching),
+        )
+
+    def _emit_email_mta_syslog(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        hop_index: int,
+        hop: dict[str, Any],
+        time: datetime,
+        duration: float,
+        message_id: str,
+        sender: str,
+        actor: "User",
+        smtp: SmtpContext,
+        size: int,
+        source_pid: int,
+    ) -> None:
+        """Emit source-native MTA lifecycle syslog companions for Linux mail hops."""
+        src_system = hop["src_system"]
+        dst_system = hop["dst_system"]
+        if self._is_linux_mail_server(dst_system):
+            downstream_recipients = self._email_route_future_recipients_from_system(
+                route,
+                hop_index,
+                dst_system,
+            )
+            downstream_set = set(downstream_recipients)
+            hop_recipients = self._postfix_recipient_list(hop.get("recipients") or smtp.rcptto)
+            local_recipients = [
+                recipient for recipient in hop_recipients if recipient not in downstream_set
+            ]
+            if not downstream_recipients and not local_recipients:
+                local_recipients = hop_recipients
+            queue_recipients = list(dict.fromkeys([*local_recipients, *downstream_recipients]))
+            if not queue_recipients:
+                queue_recipients = hop_recipients
+            self._emit_postfix_receive_syslog(
+                system=dst_system,
+                peer_system=src_system,
+                time=time,
+                duration=duration,
+                message_id=message_id,
+                sender=sender,
+                actor=actor,
+                smtp=smtp,
+                size=size,
+                submission=bool(hop["submission"]),
+                queue_recipients=queue_recipients,
+                local_recipients=local_recipients,
+                remove_after_local=not downstream_recipients,
+            )
+        if hop["server_to_server"] and self._is_linux_mail_server(src_system):
+            self._emit_postfix_delivery_syslog(
+                system=src_system,
+                peer_system=dst_system,
+                time=time,
+                duration=duration,
+                message_id=message_id,
+                smtp=smtp,
+                port=25,
+                delivery_pid=source_pid if source_pid > 0 else None,
+            )
+
+    def _emit_postfix_receive_syslog(
+        self,
+        *,
+        system: "System",
+        peer_system: "System",
+        time: datetime,
+        duration: float,
+        message_id: str,
+        sender: str,
+        actor: "User",
+        smtp: SmtpContext,
+        size: int,
+        submission: bool,
+        queue_recipients: list[str],
+        local_recipients: list[str],
+        remove_after_local: bool,
+    ) -> None:
+        """Emit Postfix receive-side syslog rows for one accepted SMTP hop."""
+        queue_id = self._postfix_queue_id(message_id, system)
+        smtpd_pid = self._email_responding_process_pid(
+            system, time=time, port=587 if submission else 25
+        )
+        cleanup_pid = self._postfix_component_pid(system, "cleanup", time)
+        qmgr_pid = self._postfix_component_pid(system, "qmgr", time)
+        peer_name = self._postfix_peer_name(peer_system)
+        recipients = self._postfix_recipient_list(queue_recipients or smtp.rcptto)
+        connect_time = self._smtp_lifecycle_time(time, duration, 0.08)
+        client_time = self._smtp_lifecycle_time(time, duration, 0.16)
+        cleanup_time = self._smtp_lifecycle_time(time, duration, 0.28)
+        active_time = self._smtp_lifecycle_time(time, duration, 0.38)
+        queue_state = self._postfix_queue_state(system, queue_id)
+        queue_state["client_time"] = client_time
+        queue_state["active_time"] = active_time
+        queue_state["recipients"] = recipients
+        queue_state.setdefault("delivered_recipients", set())
+        queue_state["qmgr_pid"] = qmgr_pid
+
+        self.generate_syslog_event(
+            system,
+            connect_time,
+            "postfix/smtpd",
+            f"connect from {peer_name}[{peer_system.ip}]",
+            pid=smtpd_pid,
+        )
+        client_suffix = f", sasl_method=LOGIN, sasl_username={actor.username}" if submission else ""
+        self.generate_syslog_event(
+            system,
+            client_time,
+            "postfix/smtpd",
+            f"{queue_id}: client={peer_name}[{peer_system.ip}]{client_suffix}",
+            pid=smtpd_pid,
+        )
+        self.generate_syslog_event(
+            system,
+            cleanup_time,
+            "postfix/cleanup",
+            f"{queue_id}: message-id={message_id}",
+            pid=cleanup_pid,
+        )
+        self.generate_syslog_event(
+            system,
+            active_time,
+            "postfix/qmgr",
+            (
+                f"{queue_id}: from=<{sender}>, size={max(size, smtp.trans_depth)}, "
+                f"nrcpt={len(recipients)} (queue active)"
+            ),
+            pid=qmgr_pid,
+        )
+        if local_recipients:
+            local_pid = self._postfix_component_pid(system, "local", time)
+            latest_delivery_time = active_time
+            for offset, recipient in enumerate(local_recipients):
+                delivery_time = self._smtp_lifecycle_time(time, duration, 0.58 + 0.05 * offset)
+                delay = self._postfix_delay_between(client_time, delivery_time)
+                self.generate_syslog_event(
+                    system,
+                    delivery_time,
+                    "postfix/local",
+                    (
+                        f"{queue_id}: to=<{recipient}>, relay=local, delay={delay}, "
+                        f"delays={self._postfix_delays(delay)}, dsn=2.0.0, "
+                        "status=sent (delivered to maildir)"
+                    ),
+                    pid=local_pid,
+                )
+                self._postfix_mark_queue_recipient_delivered(queue_state, recipient)
+                latest_delivery_time = delivery_time
+            if remove_after_local:
+                self._emit_postfix_removed(
+                    system=system,
+                    queue_id=queue_id,
+                    qmgr_pid=qmgr_pid,
+                    time=max(
+                        self._smtp_lifecycle_time(time, duration, 0.88),
+                        latest_delivery_time + timedelta(milliseconds=12),
+                    ),
+                    queue_state=queue_state,
+                )
+        elif remove_after_local:
+            self.generate_syslog_event(
+                system,
+                self._smtp_lifecycle_time(time, duration, 0.88),
+                "postfix/qmgr",
+                f"{queue_id}: removed",
+                pid=qmgr_pid,
+            )
+            queue_state["removed"] = True
+
+    def _emit_postfix_delivery_syslog(
+        self,
+        *,
+        system: "System",
+        peer_system: "System",
+        time: datetime,
+        duration: float,
+        message_id: str,
+        smtp: SmtpContext,
+        port: int,
+        delivery_pid: int | None = None,
+    ) -> None:
+        """Emit Postfix outbound delivery rows for one Linux relay hop."""
+        queue_id = self._postfix_queue_id(message_id, system)
+        smtp_pid = delivery_pid or self._postfix_component_pid(system, "smtp", time)
+        qmgr_pid = self._postfix_component_pid(system, "qmgr", time)
+        peer_name = self._email_server_fqdn(peer_system.hostname)
+        relay_queue = self._postfix_queue_id(f"{message_id}:{peer_system.hostname}", peer_system)
+        recipients = self._postfix_recipient_list(smtp.rcptto)
+        queue_state = self._postfix_queue_state(system, queue_id)
+        queue_state.setdefault("recipients", recipients)
+        queue_state.setdefault("delivered_recipients", set())
+        start_time = queue_state.get("client_time")
+        if not isinstance(start_time, datetime):
+            start_time = time
+        latest_delivery_time = time
+        for offset, recipient in enumerate(recipients):
+            delivery_time = self._smtp_lifecycle_time(time, duration, 0.70 + 0.04 * offset)
+            delay = self._postfix_delay_between(start_time, delivery_time)
+            self.generate_syslog_event(
+                system,
+                delivery_time,
+                "postfix/smtp",
+                (
+                    f"{queue_id}: to=<{recipient}>, relay={peer_name}[{peer_system.ip}]:{port}, "
+                    f"delay={delay}, delays={self._postfix_delays(delay)}, dsn=2.0.0, "
+                    f"status=sent (250 2.0.0 Ok: queued as {relay_queue})"
+                ),
+                pid=smtp_pid,
+            )
+            self._postfix_mark_queue_recipient_delivered(queue_state, recipient)
+            latest_delivery_time = delivery_time
+        expected_recipients = set(queue_state.get("recipients") or recipients)
+        delivered_recipients = set(queue_state.get("delivered_recipients") or set())
+        if expected_recipients <= delivered_recipients:
+            self._emit_postfix_removed(
+                system=system,
+                queue_id=queue_id,
+                qmgr_pid=qmgr_pid,
+                time=max(
+                    self._smtp_lifecycle_time(time, duration, 0.92),
+                    latest_delivery_time + timedelta(milliseconds=12),
+                ),
+                queue_state=queue_state,
+            )
+
+    @staticmethod
+    def _email_route_future_recipients_from_system(
+        route: list[dict[str, Any]],
+        hop_index: int,
+        system: "System",
+    ) -> list[str]:
+        """Return later recipients relayed by the same mail server queue."""
+        hostname = str(system.hostname).lower()
+        recipients: list[str] = []
+        for future_hop in route[hop_index + 1 :]:
+            future_src = future_hop.get("src_system")
+            if str(getattr(future_src, "hostname", "")).lower() != hostname:
+                continue
+            recipients.extend(
+                str(recipient).lower() for recipient in future_hop.get("recipients", [])
+            )
+        return list(dict.fromkeys(recipients))
+
+    @staticmethod
+    def _postfix_recipient_list(recipients: list[str] | tuple[str, ...] | None) -> list[str]:
+        """Return a non-empty, source-normalized recipient list for queue accounting."""
+        normalized = [
+            str(recipient).lower() for recipient in (recipients or []) if str(recipient).strip()
+        ]
+        return list(dict.fromkeys(normalized)) or ["unknown"]
+
+    def _postfix_queue_state(self, system: "System", queue_id: str) -> dict[str, Any]:
+        """Return mutable lifecycle state for one Postfix queue on one host."""
+        states: dict[tuple[str, str], dict[str, Any]] | None = getattr(
+            self,
+            "_postfix_queue_states",
+            None,
+        )
+        if states is None:
+            states = {}
+            self._postfix_queue_states = states
+        return states.setdefault((system.hostname, queue_id), {})
+
+    @staticmethod
+    def _postfix_mark_queue_recipient_delivered(
+        queue_state: dict[str, Any],
+        recipient: str,
+    ) -> None:
+        """Record that a queue recipient has a visible delivery row."""
+        delivered = queue_state.setdefault("delivered_recipients", set())
+        if not isinstance(delivered, set):
+            delivered = set(delivered)
+            queue_state["delivered_recipients"] = delivered
+        delivered.add(recipient.lower())
+
+    def _emit_postfix_removed(
+        self,
+        *,
+        system: "System",
+        queue_id: str,
+        qmgr_pid: int,
+        time: datetime,
+        queue_state: dict[str, Any],
+    ) -> None:
+        """Emit a queue removal once all visible recipient deliveries have landed."""
+        if queue_state.get("removed"):
+            return
+        self.generate_syslog_event(
+            system,
+            time,
+            "postfix/qmgr",
+            f"{queue_id}: removed",
+            pid=qmgr_pid,
+        )
+        queue_state["removed"] = True
+
+    @staticmethod
+    def _is_linux_mail_server(system: "System") -> bool:
+        """Return whether a system should produce Linux MTA syslog evidence."""
+        return _get_os_category(system.os) == "linux" and (
+            "mail_server" in (system.roles or []) or "smtp" in (system.services or [])
+        )
+
+    def _postfix_component_pid(self, system: "System", component: str, time: datetime) -> int:
+        """Return a transient source-native PID for a Postfix helper process."""
+        if component == "qmgr":
+            cache = getattr(self, "_postfix_qmgr_pid_cache", None)
+            if cache is None:
+                cache = {}
+                self._postfix_qmgr_pid_cache = cache
+            cached_pid = cache.get(system.hostname)
+            if cached_pid is not None:
+                return cached_pid
+            event_time = time + timedelta(
+                milliseconds=_stable_seed(f"postfix_qmgr_pid:{system.hostname}") % 40
+            )
+            pid = self.state_manager.allocate_transient_linux_pid(system.hostname, event_time)
+            cache[system.hostname] = pid
+            return pid
+        seed = _stable_seed(f"postfix_component_pid:{system.hostname}:{component}:{time.date()}")
+        event_time = time + timedelta(milliseconds=seed % 40)
+        return self.state_manager.allocate_transient_linux_pid(system.hostname, event_time)
+
+    def _postfix_queue_id(self, message_id: str, system: "System") -> str:
+        """Return a stable Postfix-like queue identifier for a message on one server."""
+        seed = _stable_seed(f"postfix_queue:{system.hostname}:{message_id}")
+        width = 9 + (seed % 3)
+        token = f"{seed:X}"
+        if len(token) < width:
+            token = token.rjust(width, "0")
+        return token[-width:]
+
+    def _postfix_peer_name(self, system: "System") -> str:
+        """Return the peer label Postfix would show for an SMTP client/server."""
+        return self._email_server_fqdn(system.hostname)
+
+    @staticmethod
+    def _smtp_lifecycle_time(time: datetime, duration: float, fraction: float) -> datetime:
+        """Return a syslog timestamp bounded inside the SMTP hop interval."""
+        bounded_duration = max(0.25, duration)
+        offset = max(0.015, min(bounded_duration - 0.015, bounded_duration * fraction))
+        return time + timedelta(seconds=offset)
+
+    @staticmethod
+    def _postfix_delay(duration: float, offset: int = 0) -> str:
+        """Return a compact Postfix delay value."""
+        value = max(0.08, duration * 0.72 + offset * 0.04)
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _postfix_delay_between(start_time: datetime, end_time: datetime) -> str:
+        """Return a Postfix delay value derived from visible queue lifecycle time."""
+        value = max(0.01, (end_time - start_time).total_seconds())
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _postfix_delays(delay: str) -> str:
+        """Return a plausible Postfix delays tuple that sums near delay."""
+        total = float(delay)
+        before_qmgr = max(0.01, total * 0.18)
+        qmgr = max(0.01, total * 0.08)
+        connection = max(0.01, total * 0.22)
+        delivery = max(0.01, total - before_qmgr - qmgr - connection)
+        return f"{before_qmgr:.2f}/{qmgr:.2f}/{connection:.2f}/{delivery:.2f}"
+
+    def _email_smtp_hop_times(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        message_id: str,
+        time: datetime,
+        transfer_sizes: list[dict[str, float | int]],
+    ) -> list[datetime]:
+        """Return canonical SMTP hop start times shared by transport and headers."""
+        if not route:
+            return []
+        schedule_rng = random.Random(_stable_seed(f"email_smtp_hop_schedule:{message_id}"))
+        current = time + timedelta(seconds=schedule_rng.uniform(1.05, 1.75))
+        hop_times: list[datetime] = []
+        for index, _hop in enumerate(route):
+            hop_times.append(current)
+            duration = (
+                float(transfer_sizes[index]["duration"])
+                if index < len(transfer_sizes)
+                else schedule_rng.uniform(0.8, 3.5)
+            )
+            gap_rng = random.Random(_stable_seed(f"email_smtp_hop_gap:{message_id}:{index}"))
+            current = current + timedelta(seconds=max(0.15, duration) + gap_rng.uniform(0.65, 4.8))
+        return hop_times
+
     def _smtp_transfer_sizes(
         self,
         *,
@@ -12534,11 +13417,14 @@ class ActivityGenerator:
             len(self._email_attachment_payload_bytes(attachment, message_id))
             for attachment in attachments
         )
-        message_weight = max(
+        unique_recipients = list(
+            dict.fromkeys(address for hop in route for address in hop["recipients"])
+        )
+        queued_message_base = max(
             600,
             body_size
             + attachment_size
-            + sum(len(address) + 12 for hop in route for address in hop["recipients"])
+            + sum(len(address) + 12 for address in unique_recipients)
             + 520,
         )
         sizes: list[dict[str, float | int]] = []
@@ -12547,17 +13433,20 @@ class ActivityGenerator:
             is_submission = bool(hop["submission"])
             is_external = bool(hop.get("external_hostname"))
             control_overhead = rng.randint(360, 920) + 70 * len(hop["recipients"])
+            message_size = queued_message_base + rng.randint(80, 420) + index * rng.randint(18, 95)
             if is_submission:
-                orig_bytes = message_weight + control_overhead + rng.randint(450, 1600)
+                smtp_tls_overhead = rng.randint(700, 2600)
+                orig_bytes = message_size + control_overhead + smtp_tls_overhead
                 resp_bytes = rng.randint(260, 1300)
                 duration = rng.uniform(0.45, 4.2)
             else:
                 relay_overhead = rng.randint(900, 2600) if is_external else rng.randint(650, 1800)
-                orig_bytes = message_weight + control_overhead + relay_overhead
+                orig_bytes = message_size + control_overhead + relay_overhead
                 resp_bytes = rng.randint(420, 2400)
                 duration = rng.uniform(1.2, 8.5 if is_external else 5.5)
             sizes.append(
                 {
+                    "message_size": int(message_size),
                     "orig_bytes": int(orig_bytes),
                     "resp_bytes": int(resp_bytes),
                     "duration": round(float(duration), 6),
@@ -12673,6 +13562,11 @@ class ActivityGenerator:
                 recipients=internal_recipients,
             )
             inbound_hop["external_routing_mode"] = "inbound"
+            inbound_hop["src_server_attempts_starttls"] = self._external_sender_attempts_starttls(
+                sender=sender,
+                src_system=external_mx,
+                dst_system=inbound_system,
+            )
             route = [inbound_hop]
             sender_server_name = inbound_server_name
             sender_server_system = inbound_system
@@ -12826,6 +13720,29 @@ class ActivityGenerator:
             "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
         }
 
+    def _external_sender_attempts_starttls(
+        self,
+        *,
+        sender: str,
+        src_system: "System",
+        dst_system: "System",
+    ) -> bool:
+        """Return realistic inbound STARTTLS policy for an external sender MTA."""
+        seed = _stable_seed(
+            "external_sender_starttls:"
+            f"{sender}:{getattr(src_system, 'hostname', '')}:{getattr(dst_system, 'hostname', '')}"
+        )
+        rng = random.Random(seed)
+        domain = self._email_domain(sender)
+        local_part = sender.split("@", 1)[0].lower()
+        if any(marker in local_part for marker in ("notice", "workspace", "support", "alert")):
+            return rng.random() < 0.48
+        if any(marker in domain for marker in ("serviceportal", "docflow", "vendorpost")):
+            return rng.random() < 0.46
+        if any(marker in domain for marker in ("partner", "benefits", "customermail")):
+            return rng.random() < 0.38
+        return rng.random() < 0.32
+
     def _external_source_mail_system(self, sender: str) -> "System":
         domain = self._email_domain(sender)
         hostname = self._external_mx_for_domain(domain)
@@ -12881,6 +13798,22 @@ class ActivityGenerator:
             email_config,
         )
 
+    def _email_date_header_for_route(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+        time: datetime,
+    ) -> str:
+        """Return a source-plausible Date header for the modeled sender."""
+        if route and "external_mail_server" in (route[0]["src_system"].roles or []):
+            sender_domain = public_safe_mail_hostname(self._email_domain(sender))
+            rng = random.Random(_stable_seed(f"email_external_date:{sender_domain}:{message_id}"))
+            date_time = time - timedelta(seconds=rng.uniform(95.0, 210.0))
+            return date_time.strftime("%a, %d %b %Y %H:%M:%S +0000")
+        return time.strftime("%a, %d %b %Y %H:%M:%S +0000")
+
     @staticmethod
     def _external_mx_for_domain(domain: str) -> str:
         safe = re.sub(r"[^a-z0-9.-]+", "", domain.lower()).strip(".")
@@ -12900,22 +13833,43 @@ class ActivityGenerator:
         message_id: str,
         recipients: list[str],
         time: datetime,
+        user_agent: str,
+        transfer_sizes: list[dict[str, float | int]],
+        hop_times: list[datetime],
     ) -> list[str]:
         headers: list[str] = []
         recipient_clause = f" for <{recipients[0]}>" if len(recipients) == 1 else ""
-        hop_offset = 1.4
         for index, hop in enumerate(route):
+            src_system = hop["src_system"]
+            dst_system = hop["dst_system"]
             by_host = self._email_server_fqdn(hop["dst_system"].hostname)
             from_host = self._email_server_fqdn(hop["src_system"].hostname)
-            hop_time = time + timedelta(seconds=hop_offset)
-            hop_rng = random.Random(_stable_seed(f"email_received_hop:{message_id}:{index}"))
-            hop_offset += hop_rng.uniform(3.0, 14.0)
+            duration = (
+                float(transfer_sizes[index]["duration"]) if index < len(transfer_sizes) else 1.0
+            )
+            hop_time = hop_times[index] if index < len(hop_times) else time
+            received_time = self._smtp_lifecycle_time(hop_time, duration, 0.86)
+            tls = self._smtp_hop_uses_starttls(
+                hop=hop,
+                src_system=src_system,
+                dst_system=dst_system,
+                message_id=message_id,
+                hop_index=index,
+                user_agent=user_agent,
+            )
+            transport_clause = self._received_header_transport_clause(
+                hop,
+                tls=tls,
+                message_id=message_id,
+                hop_index=index,
+                dst_system=dst_system,
+            )
             headers.insert(
                 0,
                 (
-                    f"from {from_host} ({hop['src_system'].ip}) by {by_host} "
-                    f"with ESMTP id {_stable_seed(f'received:{message_id}:{index}'):08x} "
-                    f"{recipient_clause}; {hop_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+                    f"from {from_host} ({src_system.ip}) by {by_host} "
+                    f"{transport_clause}{recipient_clause}; "
+                    f"{received_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
                 ),
             )
         headers.extend(
@@ -12927,6 +13881,60 @@ class ActivityGenerator:
             )
         )
         return headers
+
+    @staticmethod
+    def _received_header_protocol(hop: dict[str, Any], *, tls: bool) -> str:
+        """Return the source-native SMTP protocol label for a Received hop."""
+        if hop.get("submission"):
+            return "ESMTPSA" if tls else "ESMTPA"
+        return "ESMTPS" if tls else "ESMTP"
+
+    def _received_header_transport_clause(
+        self,
+        hop: dict[str, Any],
+        *,
+        tls: bool,
+        message_id: str,
+        hop_index: int,
+        dst_system: "System",
+    ) -> str:
+        """Return the MTA-native transport clause for a Received header."""
+        relay_id = self._received_header_relay_id(
+            message_id=message_id,
+            hop_index=hop_index,
+            dst_system=dst_system,
+        )
+        if _get_os_category(dst_system.os) == "windows":
+            return f"with Microsoft SMTP Server id {relay_id}"
+        protocol = self._received_header_protocol(hop, tls=tls)
+        return f"with {protocol} id {relay_id}"
+
+    def _received_header_relay_id(
+        self,
+        *,
+        message_id: str,
+        hop_index: int,
+        dst_system: "System",
+    ) -> str:
+        """Return a relay token shaped by the receiving MTA family."""
+        os_category = _get_os_category(dst_system.os)
+        if os_category == "linux":
+            return self._postfix_queue_id(message_id, dst_system)
+        seed = _stable_seed(f"received:{message_id}:{hop_index}:{dst_system.hostname}")
+        if os_category == "windows":
+            exchange_builds = (
+                (15, 2, 1118, 7),
+                (15, 2, 1258, 12),
+                (15, 2, 1544, 4),
+                (15, 2, 1748, 10),
+                (15, 2, 2214, 13),
+                (15, 1, 2507, 6),
+                (15, 1, 2686, 8),
+            )
+            major, minor, build, revision_base = exchange_builds[seed % len(exchange_builds)]
+            revision = revision_base + ((seed >> 24) % 12)
+            return f"{major}.{minor}.{build}.{revision}"
+        return self._base36(seed, 10)
 
     def _external_sender_received_headers(
         self,
@@ -12944,9 +13952,62 @@ class ActivityGenerator:
         if "external_mail_server" not in (src_system.roles or []):
             return []
 
-        sender_domain = public_safe_mail_hostname(self._email_domain(sender))
         edge_host = self._email_server_fqdn(src_system.hostname)
         edge_ip = src_system.ip
+        sender_domain = public_safe_mail_hostname(self._email_domain(sender))
+        rng = random.Random(_stable_seed(f"email_external_received:{sender_domain}:{message_id}"))
+        upstream_hops = self._external_sender_public_hops(
+            sender=sender,
+            message_id=message_id,
+        )
+
+        edge_time = time - timedelta(seconds=rng.uniform(14.0, 55.0))
+        headers: list[str] = []
+        receiver_host = edge_host
+        receiver_ip = edge_ip
+        received_time = edge_time
+        for index, hop in enumerate(upstream_hops):
+            relay_id = _stable_seed(f"received-external-hop:{message_id}:{index}") & 0xFFFFFFFF
+            protocol = (
+                "ESMTPSA" if index == len(upstream_hops) - 1 and rng.random() < 0.18 else "ESMTPS"
+            )
+            headers.append(
+                f"from {hop['host']} ({hop['ip']}) by {receiver_host} ({receiver_ip}) "
+                f"with {protocol} id {relay_id:08x}; "
+                f"{received_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+            )
+            receiver_host = str(hop["host"])
+            receiver_ip = str(hop["ip"])
+            received_time -= timedelta(seconds=rng.uniform(4.0, 26.0))
+        return headers
+
+    def _external_sender_observed_path(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+    ) -> list[str]:
+        """Return the visible upstream public relay path for an inbound SMTP hop."""
+        if not route:
+            return []
+        first_hop = route[0]
+        src_system = first_hop["src_system"]
+        if "external_mail_server" not in (src_system.roles or []):
+            return []
+        return [
+            str(hop["ip"])
+            for hop in self._external_sender_public_hops(sender=sender, message_id=message_id)
+        ]
+
+    def _external_sender_public_hops(
+        self,
+        *,
+        sender: str,
+        message_id: str,
+    ) -> list[dict[str, str]]:
+        """Return upstream public SMTP hops ordered newest to oldest."""
+        sender_domain = public_safe_mail_hostname(self._email_domain(sender))
         local_part = sender.split("@", 1)[0].lower()
         rng = random.Random(_stable_seed(f"email_external_received:{sender_domain}:{message_id}"))
         app_prefixes = (
@@ -12954,33 +14015,58 @@ class ActivityGenerator:
             if any(marker in local_part for marker in ("notice", "workspace", "alert", "support"))
             else ["smtp", "mail", "relay", "outbound"]
         )
-        app_host = f"{rng.choice(app_prefixes)}-{1 + rng.randrange(6):02d}.{sender_domain}"
+        app_label = re.sub(r"[^a-z0-9-]+", "-", local_part).strip("-")[:18] or "mailer"
+        app_host = rng.choice(
+            [
+                f"{rng.choice(app_prefixes)}-{1 + rng.randrange(6):02d}.{sender_domain}",
+                f"{app_label}-app-{1 + rng.randrange(8):02d}.{sender_domain}",
+                f"worker{1 + rng.randrange(8)}.{sender_domain}",
+            ]
+        )
         mta_host = rng.choice(
             [
                 f"mailout-{1 + rng.randrange(4):02d}.{sender_domain}",
                 f"smtp-out-{1 + rng.randrange(4):02d}.{sender_domain}",
                 f"mta{1 + rng.randrange(4)}.{sender_domain}",
+                f"mx-relay-{1 + rng.randrange(6):02d}.{sender_domain}",
             ]
         )
-        app_ip = generate_public_mail_ip(f"email_external_received_app:{sender_domain}:{app_host}")
-        mta_ip = generate_public_mail_ip(f"email_external_received_mta:{sender_domain}:{mta_host}")
-
-        edge_time = time - timedelta(seconds=rng.uniform(14.0, 55.0))
-        mta_time = edge_time - timedelta(seconds=rng.uniform(5.0, 24.0))
-        mta_id = _stable_seed(f"received-external-mta:{message_id}") & 0xFFFFFFFF
-        edge_id = _stable_seed(f"received-external-edge:{message_id}") & 0xFFFFFFFF
-        return [
-            (
-                f"from {mta_host} ({mta_ip}) by {edge_host} ({edge_ip}) "
-                f"with ESMTPS id {edge_id:08x}; "
-                f"{edge_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
-            ),
-            (
-                f"from {app_host} ({app_ip}) by {mta_host} ({mta_ip}) "
-                f"with ESMTPS id {mta_id:08x}; "
-                f"{mta_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
-            ),
+        hops = [
+            {
+                "host": mta_host,
+                "ip": generate_public_mail_ip(
+                    f"email_external_received_mta:{sender_domain}:{message_id}"
+                ),
+            },
+            {
+                "host": app_host,
+                "ip": generate_public_mail_ip(
+                    f"email_external_received_app:{sender_domain}:{message_id}"
+                ),
+            },
         ]
+        if rng.random() < 0.42:
+            transit_host = rng.choice(
+                [
+                    f"inbound-{1 + rng.randrange(6):02d}.{sender_domain}",
+                    f"edge-mta-{1 + rng.randrange(5):02d}.{sender_domain}",
+                    f"relaypool-{1 + rng.randrange(7):02d}.{sender_domain}",
+                ]
+            )
+            hops.insert(
+                0,
+                {
+                    "host": transit_host,
+                    "ip": generate_public_mail_ip(
+                        f"email_external_received_transit:{sender_domain}:{message_id}"
+                    ),
+                },
+            )
+        for hop in hops:
+            ptr_name = public_mail_ptr_name(hop["ip"], hop["host"])
+            if ptr_name and rng.random() < 0.62:
+                hop["host"] = ptr_name
+        return hops
 
     def _emit_email_route_dns(
         self,
@@ -13164,7 +14250,8 @@ class ActivityGenerator:
             user = users_by_email.get(recipient.lower())
             if user is None:
                 continue
-            if rng.random() > 0.72:
+            read_probability = 0.92 if email_ctx.attachments else 0.72
+            if rng.random() > read_probability:
                 continue
             system = self._system_for_email_user(user)
             if system is None:
@@ -13187,6 +14274,228 @@ class ActivityGenerator:
                 user_agent=email_ctx.user_agent,
                 message_ids=(email_ctx.message_id, email_ctx.artifact_id),
             )
+            self._emit_recipient_email_endpoint_artifacts(
+                email_ctx=email_ctx,
+                user=user,
+                system=system,
+                server_system=server_system,
+                protocol=protocol,
+                time=read_time,
+                rng=rng,
+            )
+
+    def _emit_sender_email_endpoint_artifacts(
+        self,
+        *,
+        email_ctx: EmailContext,
+        user: "User",
+        system: "System",
+        time: datetime,
+        pid: int,
+    ) -> None:
+        """Emit sender-side attachment reads owned by the mail client process."""
+        if pid <= 0 or not email_ctx.attachments:
+            return
+        rng = random.Random(_stable_seed(f"email_sender_files:{email_ctx.message_id}"))
+        for index, attachment in enumerate(email_ctx.attachments[:4]):
+            filename = self._safe_email_attachment_filename(attachment)
+            file_time = time - timedelta(seconds=rng.uniform(1.5, 18.0))
+            self._emit_email_endpoint_file_event(
+                email_ctx=email_ctx,
+                user=user,
+                system=system,
+                time=file_time,
+                pid=pid,
+                path=self._email_sender_attachment_path(user, system, filename),
+                action="read",
+                sequence=f"sender:{index}",
+            )
+
+    def _emit_recipient_email_endpoint_artifacts(
+        self,
+        *,
+        email_ctx: EmailContext,
+        user: "User",
+        system: "System",
+        server_system: "System",
+        protocol: str,
+        time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Emit recipient-side mail cache and attachment file traces."""
+        access_rng = random.Random(
+            _stable_seed(
+                "email_access:"
+                f"{user.username}:{system.hostname}:{server_system.hostname}:{time.isoformat()}"
+            )
+        )
+        process_image = self._email_access_process_image(
+            system,
+            protocol,
+            email_ctx.user_agent,
+            access_rng,
+        )
+        command_line = self._email_access_process_command_line(
+            process_image,
+            protocol=protocol,
+            server_hostname=self._email_server_fqdn(server_system.hostname),
+        )
+        pid, _image = self._ensure_email_client_process(
+            user=user,
+            system=system,
+            time=time + timedelta(milliseconds=350),
+            image=process_image,
+            command_line=command_line,
+        )
+        if pid <= 0:
+            return
+        cache_time = time + timedelta(seconds=rng.uniform(1.5, 9.0))
+        self._emit_email_endpoint_file_event(
+            email_ctx=email_ctx,
+            user=user,
+            system=system,
+            time=cache_time,
+            pid=pid,
+            path=self._email_message_cache_path(user, system, email_ctx, process_image),
+            action="create",
+            sequence="message-cache",
+        )
+        for index, attachment in enumerate(email_ctx.attachments[:4]):
+            filename = self._safe_email_attachment_filename(attachment)
+            attachment_time = cache_time + timedelta(milliseconds=650 + index * 420)
+            self._emit_email_endpoint_file_event(
+                email_ctx=email_ctx,
+                user=user,
+                system=system,
+                time=attachment_time,
+                pid=pid,
+                path=self._email_recipient_attachment_path(
+                    user,
+                    system,
+                    filename,
+                    process_image,
+                    email_ctx.artifact_id,
+                ),
+                action="create",
+                sequence=f"recipient:{index}",
+            )
+
+    def _emit_email_endpoint_file_event(
+        self,
+        *,
+        email_ctx: EmailContext,
+        user: "User",
+        system: "System",
+        time: datetime,
+        pid: int,
+        path: str,
+        action: str,
+        sequence: str,
+    ) -> None:
+        """Emit one canonical endpoint file event associated with an email message."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None:
+            return
+        actor_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        action_name = action if action in _FILE_ACTION_EVENT_TYPES else "create"
+        self.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=time,
+                event_type=_FILE_ACTION_EVENT_TYPES[action_name],
+                src_host=self._build_host_context(system),
+                auth=AuthContext(
+                    username=user.username,
+                    user_sid=self._get_sid(user.username),
+                    logon_id=proc.logon_id,
+                ),
+                process=ProcessContext(
+                    pid=proc.pid,
+                    parent_pid=proc.parent_pid,
+                    image=proc.image,
+                    command_line=proc.command_line,
+                    username=proc.username,
+                    integrity_level=proc.integrity_level,
+                    logon_id=proc.logon_id,
+                    parent_image=self._lookup_process_name(
+                        system.hostname,
+                        proc.parent_pid,
+                        _get_os_category(system.os),
+                    ),
+                    start_time=proc.start_time,
+                ),
+                file=FileContext(path=path, action=action_name, pid=proc.pid),
+                edr=EdrContext(
+                    object_id=stable_uuid(
+                        "email-endpoint-file",
+                        system.hostname,
+                        proc.pid,
+                        email_ctx.message_id,
+                        path,
+                        action_name,
+                        sequence,
+                    ),
+                    actor_id=actor_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _safe_email_attachment_filename(attachment: dict[str, Any]) -> str:
+        """Return a source-safe attachment filename."""
+        raw = str(attachment.get("filename") or "attachment.bin")
+        name = re.sub(r'[<>:"/\\|?*]+', "-", raw)
+        name = re.sub(r"[\x00-\x1f]+", "-", name).strip(". ")
+        return name[:96] or "attachment.bin"
+
+    def _email_sender_attachment_path(self, user: "User", system: "System", filename: str) -> str:
+        """Return a plausible sender-side attachment source path."""
+        if _get_os_category(system.os) == "windows":
+            return rf"{self._user_profile_directory(user.username)}\Documents\{filename}"
+        return f"/home/{user.username}/Documents/{filename}"
+
+    def _email_message_cache_path(
+        self,
+        user: "User",
+        system: "System",
+        email_ctx: EmailContext,
+        process_image: str,
+    ) -> str:
+        """Return a source-native mail message cache path."""
+        token = self._base36_nonzero(_stable_seed(f"email-cache:{email_ctx.message_id}"), 10)
+        if _get_os_category(system.os) == "windows":
+            profile = self._user_profile_directory(user.username)
+            exe_name = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if "thunderbird" in exe_name:
+                return (
+                    rf"{profile}\AppData\Roaming\Thunderbird\Profiles\{token.lower()}.default-release"
+                    rf"\ImapMail\{self._email_domain(user.email)}\INBOX"
+                )
+            return rf"{profile}\AppData\Local\Microsoft\Outlook\RoamCache\{token}.dat"
+        return f"/home/{user.username}/.thunderbird/{token.lower()}.default-release/ImapMail/INBOX"
+
+    def _email_recipient_attachment_path(
+        self,
+        user: "User",
+        system: "System",
+        filename: str,
+        process_image: str,
+        artifact_id: str,
+    ) -> str:
+        """Return a recipient-side attachment/cache path with the original filename."""
+        token = self._base36_nonzero(_stable_seed(f"email-attachment-cache:{artifact_id}"), 8)
+        if _get_os_category(system.os) == "windows":
+            profile = self._user_profile_directory(user.username)
+            exe_name = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if "thunderbird" in exe_name:
+                return (
+                    rf"{profile}\AppData\Local\Thunderbird\Profiles\{token.lower()}.default-release"
+                    rf"\cache2\entries\{filename}"
+                )
+            return (
+                rf"{profile}\AppData\Local\Microsoft\Windows\INetCache"
+                rf"\Content.Outlook\{token}\{filename}"
+            )
+        return f"/home/{user.username}/.cache/thunderbird/{token.lower()}/{filename}"
 
     def _system_for_email_user(self, user: "User") -> "System | None":
         """Return a user's likely mailbox client system."""
@@ -13482,7 +14791,6 @@ class ActivityGenerator:
     def _record_email_artifact_manifest(
         self,
         email_ctx: EmailContext,
-        route: list[dict[str, str]],
         artifact_path: str,
     ) -> None:
         manifest = getattr(self, "_email_artifact_manifest", None)
@@ -13497,14 +14805,9 @@ class ActivityGenerator:
                 "to": email_ctx.to,
                 "cc": email_ctx.cc,
                 "bcc": email_ctx.bcc,
-                "expanded_rcptto": email_ctx.expanded_rcptto,
                 "subject": email_ctx.subject,
                 "date": email_ctx.date_header,
-                "outcome": email_ctx.outcome,
-                "delivery_action": email_ctx.mail_action,
                 "eml_path": eml_path,
-                "route": route,
-                "received_headers": email_ctx.received_headers,
             }
         )
 

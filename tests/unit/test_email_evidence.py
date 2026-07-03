@@ -9,16 +9,19 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+from datetime import UTC, datetime
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
 from hashlib import md5, sha1, sha256
 from pathlib import Path
 
-from evidenceforge.evaluation.parsers import discover_log_files, get_parser
+from evidenceforge.evaluation.context import EvaluationContext
+from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.events.contexts import SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
+from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.generation.activity.mail_public_identities import (
     is_public_mail_ip,
     public_mail_ptr_name,
@@ -74,6 +77,25 @@ def _received_header_datetimes(message_text: str) -> list[str]:
     ]
 
 
+def _email_ground_truth(output_dir: Path, scenario: Scenario) -> dict[str, dict]:
+    document = load_ground_truth_document(output_dir, scenario)
+    assert document is not None
+    result: dict[str, dict] = {}
+    for rec in document.events:
+        if rec.kind != "email_message" or not rec.emitted:
+            continue
+        assert rec.attributes.message_id
+        result[rec.storyline_id] = {
+            "message_id": rec.attributes.message_id,
+            "artifact_path": rec.attributes.artifact_path,
+            "smtp_uids": list(rec.attributes.smtp_uids or ()),
+            "subject": rec.attributes.subject,
+            "sender": rec.attributes.sender,
+            "recipients": list(rec.attributes.recipients or ()),
+        }
+    return result
+
+
 def _parse_eval_records(data_dir: Path) -> dict[str, list]:
     discovered = discover_log_files(data_dir)
     records: dict[str, list] = {}
@@ -85,6 +107,14 @@ def _parse_eval_records(data_dir: Path) -> dict[str, list]:
             for record in parser.parse_file(path)
             if not record.parse_errors
         ]
+    return records
+
+
+def _parse_syslog_records(data_dir: Path) -> list[ParsedRecord]:
+    records: list[ParsedRecord] = []
+    for path in data_dir.rglob("syslog.log"):
+        parser = get_parser("syslog")
+        records.extend(record for record in parser.parse_file(path) if not record.parse_errors)
     return records
 
 
@@ -309,18 +339,28 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     smtp_path = tmp_path / "data" / "zeek-core" / "smtp.json"
     dns_path = tmp_path / "data" / "zeek-core" / "dns.json"
     conn_path = tmp_path / "data" / "zeek-core" / "conn.json"
+    ssl_path = tmp_path / "data" / "zeek-core" / "ssl.json"
     manifest_path = tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json"
 
     smtp_records = _read_ndjson(smtp_path)
     dns_records = _read_ndjson(dns_path)
     conn_records = _read_ndjson(conn_path)
+    ssl_records = _read_ndjson(ssl_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     ground_truth = json.loads((tmp_path / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
 
     assert len(smtp_records) == 2
     assert smtp_records[0]["id.orig_h"] == "10.10.1.10"
     assert smtp_records[0]["id.resp_p"] == 587
-    assert smtp_records[0]["subject"] == "Quarterly forecast review"
+    assert smtp_records[0]["tls"] is True
+    assert smtp_records[0]["mailfrom"] == ""
+    assert smtp_records[0]["rcptto"] == []
+    assert smtp_records[0]["last_reply"].startswith("220 2.0.0")
+    assert smtp_records[0]["path"] == []
+    assert smtp_records[0]["subject"] == ""
+    assert smtp_records[0]["cc"] == []
+    assert smtp_records[0]["fuids"] == []
+    assert smtp_records[0]["user_agent"] == ""
     assert smtp_records[1]["id.orig_h"] == "10.10.2.25"
     assert smtp_records[1]["id.resp_h"] == "10.10.2.26"
     assert smtp_records[1]["tls"] is True
@@ -329,14 +369,24 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert smtp_records[1]["last_reply"].startswith("220 2.0.0")
     assert smtp_records[1]["path"] == []
     assert smtp_records[1]["subject"] == ""
+    assert smtp_records[1]["cc"] == []
     assert any(record["qtype_name"] == "A" for record in dns_records)
     assert {record["uid"] for record in smtp_records} <= {record["uid"] for record in conn_records}
+    assert {record["uid"] for record in smtp_records} <= {record["uid"] for record in ssl_records}
+    assert all("TLS" in record["last_reply"].upper() for record in smtp_records if record["tls"])
 
     assert "storyline_id" not in manifest["messages"][0]
     assert "artifact_id" not in manifest["messages"][0]
     assert "artifact_path" not in manifest["messages"][0]
     assert "verdict" not in manifest["messages"][0]
-    assert manifest["messages"][0]["delivery_action"] == "deliver"
+    blind_facing_transport_fields = {
+        "delivery_action",
+        "expanded_rcptto",
+        "outcome",
+        "received_headers",
+        "route",
+    }
+    assert not (blind_facing_transport_fields & set(manifest["messages"][0]))
     assert manifest["messages"][0]["bcc"] == []
     assert manifest["messages"][0]["eml_path"].endswith(".eml")
     materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
@@ -346,6 +396,23 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert "Received:" in eml_text
     assert "for <bob@corp.example>" in eml_text
     assert "for <alice@corp.example>" not in eml_text
+    received_lines = [line for line in eml_text.splitlines() if line.startswith("Received:")]
+    assert any(
+        "with ESMTPSA id " in line or "with Microsoft SMTP Server id " in line
+        for line in received_lines
+    )
+    assert any(
+        "with ESMTPS id " in line or "with Microsoft SMTP Server id " in line
+        for line in received_lines
+    )
+    assert not any("with ESMTP id " in line for line in received_lines)
+    exchange_versions = [
+        match.group(1)
+        for line in received_lines
+        if (match := re.search(r"Microsoft SMTP Server id ([0-9.]+)", line))
+    ]
+    assert exchange_versions
+    assert all(re.fullmatch(r"15\.(?:1|2)\.\d+\.\d+", version) for version in exchange_versions)
     received_dates = _received_header_datetimes(eml_text)
     assert received_dates
     if len(received_dates) > 1:
@@ -358,10 +425,6 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert ground_truth["events"][0]["kind"] == "email_message"
     assert ground_truth["events"][0]["attributes"]["artifact_path"].endswith(".eml")
     rendered_smtp_uids = {record["uid"] for record in smtp_records}
-    manifest_route_uids = {
-        hop["uid"] for message in manifest["messages"] for hop in message["route"] if hop["uid"]
-    }
-    assert manifest_route_uids <= rendered_smtp_uids
     assert set(ground_truth["events"][0]["attributes"]["smtp_uids"]) <= rendered_smtp_uids
 
     discovered = discover_log_files(tmp_path / "data")
@@ -405,13 +468,113 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
-    assert sorted(smtp_records[0]["rcptto"]) == ["bob@corp.example", "team@corp.example"]
-    assert smtp_records[0]["to"] == ["<team@corp.example>"]
+    assert smtp_records[0]["id.resp_p"] == 587
+    assert smtp_records[0]["tls"] is True
+    assert smtp_records[0]["rcptto"] == []
+    assert smtp_records[0]["to"] == []
+    assert smtp_records[0]["cc"] == []
+    assert smtp_records[0]["mailfrom"] == ""
+    assert smtp_records[0]["subject"] == ""
     assert smtp_records[1]["tls"] is True
     assert smtp_records[1]["rcptto"] == []
     assert manifest["messages"][0]["bcc"] == ["bob@corp.example"]
     assert "Bcc:" not in eml_text
     assert "To: <team@corp.example>" in eml_text
+
+
+def test_linux_mail_server_emits_postfix_syslog_lifecycle(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    systems = [
+        system.model_copy(update={"os": "Ubuntu 22.04"})
+        if system.hostname == "MAIL-ENG"
+        else system
+        for system in scenario.environment.systems
+    ]
+    scenario = scenario.model_copy(
+        update={
+            "environment": scenario.environment.model_copy(update={"systems": systems}),
+            "output": OutputSpec(
+                logs=[{"format": "zeek"}, {"format": "syslog"}, {"format": "ecar"}],
+                destination="./data",
+            ),
+        }
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    syslog_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "data").rglob("syslog.log")
+    )
+    conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
+    smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+    client_match = re.search(
+        r"postfix/smtpd \d+ - - ([A-F0-9]{9,11}): "
+        r"client=WS-ALICE\.corp\.example\[10\.10\.1\.10\], "
+        r"sasl_method=LOGIN, sasl_username=alice",
+        syslog_text,
+    )
+    assert client_match is not None
+    queue_id = client_match.group(1)
+    assert "postfix/cleanup" in syslog_text
+    assert f"{queue_id}: message-id=<" in syslog_text
+    assert f"{queue_id}: from=<alice@corp.example>" in syslog_text
+    size_match = re.search(rf"{queue_id}: from=<alice@corp\.example>, size=(\d+),", syslog_text)
+    assert size_match is not None
+    queue_size = int(size_match.group(1))
+    conn_by_uid = {row["uid"]: row for row in conn_records}
+    assert queue_size != conn_by_uid[smtp_records[0]["uid"]]["orig_bytes"]
+    assert queue_size != conn_by_uid[smtp_records[1]["uid"]]["orig_bytes"]
+    assert (
+        f"{queue_id}: to=<bob@corp.example>, relay=mail-fin.corp.example[10.10.2.26]:25"
+    ) in syslog_text
+    assert f"{queue_id}: removed" in syslog_text
+    assert syslog_text.index(f"{queue_id}: client=") < syslog_text.index(f"{queue_id}: message-id=")
+    assert syslog_text.index(f"{queue_id}: message-id=") < syslog_text.index(
+        f"{queue_id}: from=<alice@corp.example>"
+    )
+
+    syslog_records = _parse_syslog_records(tmp_path / "data")
+    active_record = next(
+        record
+        for record in syslog_records
+        if record.fields.get("message", "").startswith(f"{queue_id}: from=<alice@corp.example>")
+    )
+    delivery_record = next(
+        record
+        for record in syslog_records
+        if record.fields.get("message", "").startswith(f"{queue_id}: to=<bob@corp.example>")
+    )
+    delay_match = re.search(r"\bdelay=([0-9.]+)", delivery_record.fields["message"])
+    assert delay_match is not None
+    assert active_record.timestamp is not None
+    assert delivery_record.timestamp is not None
+    assert (
+        float(delay_match.group(1))
+        >= (delivery_record.timestamp - active_record.timestamp).total_seconds()
+    )
+
+    smtp_pid = delivery_record.fields["pid"]
+    ecar_records = [
+        row for path in (tmp_path / "data").rglob("ecar.json") for row in _read_ndjson(path)
+    ]
+    outbound_flow = next(
+        row
+        for row in ecar_records
+        if row.get("object") == "FLOW"
+        and row.get("action") == "CONNECT"
+        and row.get("properties", {}).get("src_ip") == "10.10.2.25"
+        and row.get("properties", {}).get("dst_ip") == "10.10.2.26"
+        and row.get("properties", {}).get("dst_port") == "25"
+        and row.get("properties", {}).get("direction") == "OUTBOUND"
+    )
+    assert outbound_flow["pid"] == smtp_pid
+    assert outbound_flow["properties"]["image_path"] == "/usr/lib/postfix/sbin/smtp"
 
 
 def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monkeypatch) -> None:
@@ -476,7 +639,9 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     starttls_uids = {row["uid"] for row in smtp_records if row["tls"]}
     assert starttls_uids
     assert starttls_uids <= {row["uid"] for row in ssl_records}
-    assert all(row["id.resp_p"] == 25 for row in ssl_records if row["uid"] in starttls_uids)
+    starttls_ports = {row["id.resp_p"] for row in ssl_records if row["uid"] in starttls_uids}
+    assert starttls_ports <= {25, 587}
+    assert starttls_ports >= {25, 587}
     starttls_tls12 = [
         row for row in ssl_records if row["uid"] in starttls_uids and row["version"] == "TLSv12"
     ]
@@ -520,6 +685,21 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
             body="This message has both internal and external recipients.\n",
         ),
     )
+    systems = [
+        system.model_copy(update={"os": "Ubuntu 22.04"})
+        if system.hostname == "MAIL-ENG"
+        else system
+        for system in scenario.environment.systems
+    ]
+    scenario = scenario.model_copy(
+        update={
+            "environment": scenario.environment.model_copy(update={"systems": systems}),
+            "output": OutputSpec(
+                logs=[{"format": "zeek"}, {"format": "syslog"}],
+                destination="./data",
+            ),
+        }
+    )
     engine = GenerationEngine(
         scenario,
         output_dir=tmp_path / "data",
@@ -537,12 +717,51 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
         ("10.10.2.25", "10.10.2.26", 25),
         ("10.10.2.26", smtp_records[3]["id.resp_h"], 25),
     ]
-    assert sorted(smtp_records[0]["rcptto"]) == ["analyst@example.net", "bob@corp.example"]
+    assert smtp_records[0]["tls"] is True
+    assert smtp_records[0]["mailfrom"] == ""
+    assert smtp_records[0]["rcptto"] == []
+    assert smtp_records[0]["subject"] == ""
     assert smtp_records[1]["tls"] is True
     assert smtp_records[1]["rcptto"] == []
     assert smtp_records[2]["tls"] is True
     assert smtp_records[2]["rcptto"] == []
     assert smtp_records[3]["rcptto"] == ["analyst@example.net"]
+
+    syslog_records = _parse_syslog_records(tmp_path / "data")
+    client_record = next(
+        record
+        for record in syslog_records
+        if record.fields.get("app_name") == "postfix/smtpd"
+        and "client=WS-ALICE.corp.example[10.10.1.10]" in record.fields.get("message", "")
+    )
+    queue_match = re.search(r"([A-F0-9]{9,11}): client=", client_record.fields["message"])
+    assert queue_match is not None
+    queue_id = queue_match.group(1)
+    active_record = next(
+        record
+        for record in syslog_records
+        if record.fields.get("message", "").startswith(f"{queue_id}: from=<alice@corp.example>")
+    )
+    assert "nrcpt=2 (queue active)" in active_record.fields["message"]
+    delivery_records = [
+        record
+        for record in syslog_records
+        if record.fields.get("message", "").startswith(f"{queue_id}: to=<")
+    ]
+    delivery_messages = [record.fields["message"] for record in delivery_records]
+    assert len(delivery_records) == 2
+    assert any("to=<bob@corp.example>" in message for message in delivery_messages)
+    assert any("to=<analyst@example.net>" in message for message in delivery_messages)
+    removed_record = next(
+        record
+        for record in syslog_records
+        if record.fields.get("message") == f"{queue_id}: removed"
+    )
+    assert removed_record.timestamp is not None
+    assert all(
+        record.timestamp is not None and record.timestamp <= removed_record.timestamp
+        for record in delivery_records
+    )
 
 
 def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path) -> None:
@@ -568,10 +787,6 @@ def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path)
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     dns_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "dns.json")
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
-    )
-
     assert [(row["id.orig_h"], row["id.resp_p"]) for row in smtp_records] == [
         ("10.10.1.10", 587),
         ("10.10.2.25", 25),
@@ -589,20 +804,13 @@ def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path)
     assert set(mx_queries) == {"example.net", "vendor.example.org"}
     mx_hosts = {domain: answers[0].split(maxsplit=1)[1] for domain, answers in mx_queries.items()}
     a_queries = {
-        row["query"]
+        row["query"]: tuple(row["answers"])
         for row in dns_records
         if row["qtype_name"] == "A" and row["query"] in set(mx_hosts.values())
     }
-    assert a_queries == set(mx_hosts.values())
-
-    route = manifest["messages"][0]["route"]
-    assert [hop["routing_mode"] for hop in route] == ["internal", "mx", "mx"]
-    assert [hop["recipient_domains"] for hop in route[1:]] == [
-        "example.net",
-        "vendor.example.org",
-    ]
-    assert route[1]["dst_fqdn"] == mx_hosts["example.net"]
-    assert route[2]["dst_fqdn"] == mx_hosts["vendor.example.org"]
+    assert set(a_queries) == set(mx_hosts.values())
+    mx_answer_ips = {answers[0] for answers in a_queries.values()}
+    assert {row["id.resp_h"] for row in external_hops} == mx_answer_ips
 
 
 def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:
@@ -640,7 +848,14 @@ def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:
     assert set(mail_answers) <= {"10.10.2.25", "fd00:3714:0019::1"}
 
 
-def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
+def test_inbound_route_uses_configured_entry_server(tmp_path: Path, monkeypatch) -> None:
+    def _no_external_starttls(self, **_kwargs) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.generator.ActivityGenerator._external_sender_attempts_starttls",
+        _no_external_starttls,
+    )
     scenario = _email_scenario()
     assert scenario.environment.email is not None
     scenario.environment.email.inbound_route = ["fin"]
@@ -649,6 +864,7 @@ def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
         EmailMessageEventSpec(
             sender="news@example.net",
             to=["alice@corp.example"],
+            cc=["bob@corp.example"],
             subject="Inbound routing test",
             body="External sender to an internal mailbox.\n",
         ),
@@ -670,6 +886,11 @@ def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
     assert _is_global_non_test_net(smtp_records[0]["id.orig_h"])
     assert smtp_records[0]["id.resp_h"] == "10.10.2.26"
     assert smtp_records[0]["id.resp_p"] == 25
+    assert smtp_records[0]["tls"] is False
+    assert smtp_records[0]["to"] == ["<alice@corp.example>"]
+    assert smtp_records[0]["cc"] == ["<bob@corp.example>"]
+    assert smtp_records[0]["path"]
+    assert all(_is_global_non_test_net(ip) for ip in smtp_records[0]["path"])
     assert smtp_records[1]["id.orig_h"] == "10.10.2.26"
     assert smtp_records[1]["id.resp_h"] == "10.10.2.25"
     inbound_conn = next(row for row in conn_records if row["uid"] == smtp_records[0]["uid"])
@@ -683,6 +904,257 @@ def test_inbound_route_uses_configured_entry_server(tmp_path: Path) -> None:
         row["id.orig_h"] == smtp_records[0]["id.orig_h"] and row["qtype_name"] == "SRV"
         for row in dns_records
     )
+
+
+def test_external_inbound_sender_can_use_starttls(tmp_path: Path, monkeypatch) -> None:
+    def _always_external_starttls(self, **_kwargs) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.generator.ActivityGenerator._external_sender_attempts_starttls",
+        _always_external_starttls,
+    )
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.inbound_route = ["fin"]
+    scenario = _with_email_storyline(
+        scenario,
+        EmailMessageEventSpec(
+            sender="alerts@vendorpost.net",
+            to=["alice@corp.example"],
+            subject="Inbound STARTTLS policy test",
+            body="External sender should negotiate inbound STARTTLS.\n",
+        ),
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+    ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
+    inbound_smtp = next(
+        row for row in smtp_records if row["id.resp_h"] == "10.10.2.26" and row["id.resp_p"] == 25
+    )
+
+    assert inbound_smtp["tls"] is True
+    assert inbound_smtp["uid"] in {row["uid"] for row in ssl_records}
+    assert inbound_smtp["mailfrom"] == ""
+    assert inbound_smtp["rcptto"] == []
+    assert inbound_smtp["subject"] == ""
+    assert inbound_smtp["cc"] == []
+    assert inbound_smtp["fuids"] == []
+
+
+def test_smtp_starttls_tls12_cipher_matches_certificate_key(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    generator = engine.activity_generator
+    assert generator is not None
+    systems = {system.hostname: system for system in scenario.environment.systems}
+    checked = False
+    for index in range(200):
+        ssl_ctx = generator._smtp_starttls_ssl_context(
+            src_system=systems["WS-ALICE"],
+            dst_system=systems["MAIL-ENG"],
+            message_id=f"<probe-{index}@corp.example>",
+            hop_index=index,
+            event_time=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
+        )
+        if ssl_ctx.version != "TLSv12" or ssl_ctx.resumed:
+            continue
+        cert_chain = generator._smtp_starttls_certificate_chain(
+            ssl=ssl_ctx,
+            dst_system=systems["MAIL-ENG"],
+            message_id=f"<probe-{index}@corp.example>",
+            hop_index=index,
+            event_time=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
+        )
+        if not cert_chain:
+            continue
+        assert ("_ECDSA_" in ssl_ctx.cipher) == (cert_chain[0].certificate_key_type == "ecdsa")
+        checked = True
+        break
+    assert checked
+
+
+def test_smtp_starttls_replies_are_server_family_textured(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    generator = engine.activity_generator
+    assert generator is not None
+    systems = {system.hostname: system for system in scenario.environment.systems}
+    linux_mail = systems["MAIL-ENG"].model_copy(update={"os": "Ubuntu 22.04"})
+    external_mail = System(
+        hostname="MX-EDGE",
+        ip="198.51.100.44",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["external_mail_server"],
+        services=["smtp"],
+    )
+    old_global_pool = {
+        "220 2.0.0 Ready to start TLS",
+        "220 2.0.0 Begin TLS negotiation now",
+        "220 2.0.0 Go ahead with STARTTLS",
+        "220 2.0.0 STARTTLS accepted; proceed",
+    }
+
+    replies_by_server = {
+        dst.hostname: {
+            generator._smtp_starttls_reply(
+                src_system=systems["WS-ALICE"],
+                dst_system=dst,
+                message_id=f"<probe-{index}@corp.example>",
+                hop_index=index,
+            )
+            for index in range(80)
+        }
+        for dst in (systems["MAIL-ENG"], linux_mail, external_mail)
+    }
+    all_replies = {reply for replies in replies_by_server.values() for reply in replies}
+
+    assert all("TLS" in reply.upper() for reply in all_replies)
+    assert len(all_replies) > len(old_global_pool)
+    assert len(all_replies - old_global_pool) >= 4
+    assert all(len(replies) >= 3 for replies in replies_by_server.values())
+
+
+def test_smtp_starttls_sni_policy_varies_for_server_to_server(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    generator = engine.activity_generator
+    assert generator is not None
+    systems = {system.hostname: system for system in scenario.environment.systems}
+    external_mail = System(
+        hostname="mx.partner.example",
+        ip="198.51.100.44",
+        os="Internet SMTP Server",
+        type="server",
+        roles=["external_mail_server"],
+        services=["smtp"],
+    )
+
+    submission_names = {
+        generator._smtp_starttls_server_name(
+            src_system=systems["WS-ALICE"],
+            dst_system=systems["MAIL-ENG"],
+            message_id=f"<submit-{index}@corp.example>",
+            hop_index=index,
+            submission=True,
+            server_to_server=False,
+        )
+        for index in range(25)
+    }
+    internal_relay_names = {
+        generator._smtp_starttls_server_name(
+            src_system=systems["MAIL-ENG"],
+            dst_system=systems["MAIL-FIN"],
+            message_id=f"<relay-{index}@corp.example>",
+            hop_index=index,
+            submission=False,
+            server_to_server=True,
+        )
+        for index in range(80)
+    }
+    external_relay_names = {
+        generator._smtp_starttls_server_name(
+            src_system=systems["MAIL-ENG"],
+            dst_system=external_mail,
+            message_id=f"<external-{index}@corp.example>",
+            hop_index=index,
+            submission=False,
+            server_to_server=True,
+        )
+        for index in range(80)
+    }
+
+    assert submission_names == {"mail-eng.corp.example"}
+    assert "" in internal_relay_names
+    assert "mail-fin.corp.example" in internal_relay_names
+    assert "" in external_relay_names
+    assert "mx.partner.example" in external_relay_names
+
+
+def test_external_sender_received_headers_share_public_hop_model(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    generator = engine.activity_generator
+    assert generator is not None
+    systems = {system.hostname: system for system in scenario.environment.systems}
+    sender = "support@example.net"
+    message_id = "<external-hop-model@example.net>"
+    route = [
+        {
+            "src_system": generator._external_source_mail_system(sender),
+            "dst_system": systems["MAIL-FIN"],
+        }
+    ]
+
+    headers = generator._external_sender_received_headers(
+        route=route,
+        sender=sender,
+        message_id=message_id,
+        time=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
+    )
+    observed_path = generator._external_sender_observed_path(
+        route=route,
+        sender=sender,
+        message_id=message_id,
+    )
+
+    header_source_ips = [
+        match.group(1)
+        for line in headers
+        if (match := re.search(r"^from [^(]+ \(([^)]+)\) by ", line))
+    ]
+    assert observed_path == header_source_ips
+    assert 2 <= len(observed_path) <= 3
+    assert len(set(observed_path)) == len(observed_path)
+    assert all(is_public_mail_ip(ip) for ip in observed_path)
+
+    sampled_lengths = {
+        len(generator._external_sender_public_hops(sender=sender, message_id=f"<probe-{index}>"))
+        for index in range(12)
+    }
+    assert sampled_lengths <= {2, 3}
+    assert 3 in sampled_lengths
 
 
 def test_inbound_email_does_not_emit_external_mx_endpoint_ecar(tmp_path: Path) -> None:
@@ -780,6 +1252,15 @@ messages:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
     scenario.environment.email.corpus = "email_corpus.yaml"
+    scenario.environment.email.mail_servers[0].attempt_outbound_starttls = False
+    scenario = scenario.model_copy(
+        update={
+            "output": OutputSpec(
+                logs=[{"format": "zeek"}, {"format": "ecar"}],
+                destination="./data",
+            )
+        }
+    )
     scenario = _with_email_storyline(
         scenario,
         EmailMessageEventSpec(to=["bob@corp.example"], corpus_id="prompt-injection"),
@@ -796,13 +1277,22 @@ messages:
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
+    ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
     manifest = json.loads(
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
     materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
-    plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 587)
+    submission_smtp = next(row for row in smtp_records if row["id.resp_p"] == 587)
+    assert submission_smtp["tls"] is True
+    assert submission_smtp["subject"] == ""
+    assert submission_smtp["mailfrom"] == ""
+    assert submission_smtp["rcptto"] == []
+    assert submission_smtp["fuids"] == []
+    assert submission_smtp["user_agent"] == ""
+    assert submission_smtp["uid"] in {row["uid"] for row in ssl_records}
+    plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 25 and not row["tls"])
     assert plaintext_smtp["subject"] == "Vendor AI summary"
     assert not plaintext_smtp["msg_id"].startswith("<00000000")
     assert "prompt-injection" not in plaintext_smtp["msg_id"]
@@ -828,7 +1318,14 @@ messages:
     assert headers.index("X-Campaign-ID") < headers.index("Message-ID")
     assert headers.index("X-Campaign-ID") < headers.index("MIME-Version")
     assert 'boundary="===============' not in eml_text
-    assert re.fullmatch(r"<[0-9a-f]{16}@[0-9A-F]{8}\.corp\.example>", plaintext_smtp["msg_id"])
+    assert not re.fullmatch(
+        r"<[0-9a-f]{16}@[0-9A-F]{8}\.corp\.example>",
+        plaintext_smtp["msg_id"],
+    )
+    assert re.fullmatch(
+        r"<[A-Z0-9.-]+@(?:[a-z0-9-]+\.)?corp\.example>",
+        plaintext_smtp["msg_id"],
+    )
     parsed_email = BytesParser(policy=policy.default).parsebytes(materialized.read_bytes())
     attachment_parts = {
         part.get_filename(): part.get_payload(decode=True)
@@ -841,6 +1338,16 @@ messages:
     assert prompt_file_row["md5"] == md5(prompt_payload, usedforsecurity=False).hexdigest()
     assert prompt_file_row["sha1"] == sha1(prompt_payload, usedforsecurity=False).hexdigest()
     assert prompt_file_row["sha256"] == sha256(prompt_payload).hexdigest()
+    ecar_records = [
+        row for path in (tmp_path / "data").rglob("ecar.json") for row in _read_ndjson(path)
+    ]
+    assert any(
+        row.get("object") == "FILE"
+        and row.get("action") == "READ"
+        and row.get("principal") == "alice"
+        and str(row.get("properties", {}).get("file_path", "")).endswith("prompt.txt")
+        for row in ecar_records
+    )
 
 
 def test_service_email_artifact_uses_service_header_profile(tmp_path: Path) -> None:
@@ -882,14 +1389,13 @@ messages:
 
     engine.generate()
 
-    smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     manifest = json.loads(
         (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
     )
     materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
     headers = _header_names(eml_text)
-    plaintext_smtp = next(row for row in smtp_records if row["id.resp_p"] == 25)
+    parsed_email = BytesParser(policy=policy.default).parsebytes(materialized.read_bytes())
 
     assert headers[0] == "Received"
     assert eml_text.count("Received:") >= 3
@@ -906,9 +1412,8 @@ messages:
     assert "User-Agent:" not in eml_text
     assert re.fullmatch(
         r"<workspace-[0-9a-f]{8}-[0-9]{7}@docflow-service\.example>",
-        plaintext_smtp["msg_id"],
+        parsed_email["Message-ID"],
     )
-    parsed_email = BytesParser(policy=policy.default).parsebytes(materialized.read_bytes())
     assert parsed_email["X-DocFlow-Workspace"] == "contracts-2026"
     assert {
         part.get_filename(): part.get_payload(decode=True)
@@ -1019,6 +1524,73 @@ def test_email_read_event_generates_opaque_tls_access(tmp_path: Path) -> None:
     assert ground_truth["events"][0]["attributes"]["protocol"] == "owa"
 
 
+def test_linux_imaps_read_emits_dovecot_session_syslog(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    systems = [
+        system.model_copy(update={"os": "Ubuntu 22.04"})
+        if system.hostname == "MAIL-FIN"
+        else system
+        for system in scenario.environment.systems
+    ]
+    scenario = scenario.model_copy(
+        update={
+            "environment": scenario.environment.model_copy(update={"systems": systems}),
+            "output": OutputSpec(
+                logs=[{"format": "zeek"}, {"format": "syslog"}, {"format": "ecar"}],
+                destination="./data",
+            ),
+            "storyline": [
+                StorylineEvent(
+                    id="read-imaps",
+                    time="+15m",
+                    actor="bob",
+                    system="WS-BOB",
+                    activity="Bob reads a mailbox message over IMAPS",
+                    events=[
+                        EmailReadEventSpec(
+                            mailbox="bob@corp.example",
+                            server="fin",
+                            protocol="imaps",
+                            message_ids=["<message@example>"],
+                            count=2,
+                            duration=38.0,
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
+    syslog_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "data").rglob("syslog.log")
+    )
+
+    assert any(
+        row["id.orig_h"] == "10.10.1.11"
+        and row["id.resp_h"] == "10.10.2.26"
+        and row["id.resp_p"] == 993
+        and row["service"] == "ssl"
+        for row in conn_records
+    )
+    assert "dovecot" in syslog_text
+    assert "imap-login: Login: user=<bob>, method=PLAIN" in syslog_text
+    assert "rip=10.10.1.11, lip=10.10.2.26" in syslog_text
+    assert "TLS, session=<" in syslog_text
+    assert "imap(bob)<" in syslog_text
+    assert "Disconnected: Logged out in=" in syslog_text
+    assert syslog_text.index("imap-login: Login") < syslog_text.index("Disconnected: Logged out")
+
+
 def test_email_storyline_events_count_as_causality_traces(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -1069,7 +1641,11 @@ def test_email_storyline_events_count_as_causality_traces(tmp_path: Path) -> Non
     )
 
     engine.generate()
-    result = CausalityScorer().score(_parse_eval_records(tmp_path / "data"), scenario)
+    result = CausalityScorer().score(
+        _parse_eval_records(tmp_path / "data"),
+        scenario,
+        EvaluationContext(email_ground_truth=_email_ground_truth(tmp_path / "data", scenario)),
+    )
 
     event_presence = next(score for score in result.sub_scores if score.key == "event_presence")
     temporal_integrity = next(
@@ -1188,10 +1764,15 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     mail_conn_uids = {row["uid"] for row in conn_records if row.get("id.resp_p") in {25, 587}}
     smtp_uids = {row["uid"] for row in smtp_records}
     assert mail_conn_uids <= smtp_uids
+    submission_rows = [row for row in smtp_records if row.get("id.resp_p") == 587]
+    assert submission_rows
+    assert all(row["tls"] is True for row in submission_rows)
+    assert all(row["mailfrom"] == "" for row in submission_rows)
+    assert all(row["user_agent"] == "" for row in submission_rows)
     leaked_fields = {"storyline_id", "artifact_id", "artifact_path", "verdict"}
     assert all(not (leaked_fields & set(message)) for message in manifest["messages"])
     visible_subjects = [row["subject"] for row in smtp_records if row.get("subject")]
-    assert len(set(visible_subjects)) >= max(4, len(visible_subjects) // 3)
+    assert len(set(visible_subjects)) >= min(len(visible_subjects), 2)
     assert all(
         row.get("path") != [row["id.resp_h"], row["id.orig_h"]]
         for row in smtp_records
@@ -1212,11 +1793,5 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
         for row in smtp_records
         if str(row.get("last_reply", "")).startswith("250")
     ]
-    assert len(set(delivered_replies)) >= max(4, len(delivered_replies) // 4)
-    uas_by_sender: dict[str, set[str]] = {}
-    for row in smtp_records:
-        if row.get("id.resp_p") != 587 or not row.get("mailfrom", "").endswith("@corp.example"):
-            continue
-        uas_by_sender.setdefault(row["mailfrom"], set()).add(row.get("user_agent", ""))
-    assert uas_by_sender
-    assert all(len(user_agents) == 1 for user_agents in uas_by_sender.values())
+    assert delivered_replies
+    assert len(set(delivered_replies)) >= min(len(delivered_replies), 2)

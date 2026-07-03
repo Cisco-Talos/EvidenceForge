@@ -367,10 +367,11 @@ output/
 
 `.eml` is the V1 per-message artifact format. Mbox-style mailbox/container
 artifacts may be added later. `EMAIL_ARTIFACTS.json` is the production-facing
-mapping between message IDs, sender/recipient metadata, delivery action,
-optional `eml_path`, and route-hop metadata. It deliberately omits storyline IDs,
-exercise verdict labels, and local filesystem paths; `GROUND_TRUTH.json` is the
-canonical identity source for scenario/storyline correlation.
+message artifact index: message IDs, sender/recipient metadata, subject/date,
+and optional `eml_path`. It deliberately omits storyline IDs, exercise verdict
+labels, local filesystem paths, expanded delivery recipients, and route-hop
+metadata; `GROUND_TRUTH.json` is the canonical identity source for
+scenario/storyline correlation.
 
 Storyline email artifacts are referenced in both `GROUND_TRUTH.json` and
 `GROUND_TRUTH.md` in addition to `EMAIL_ARTIFACTS.json`. Non-storyline artifacts

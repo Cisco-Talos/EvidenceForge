@@ -715,4 +715,4 @@ class TestSampleDataFieldValidation:
         from evidenceforge.formats import load_all_formats
 
         formats = load_all_formats()
-        assert len(formats) == 22
+        assert len(formats) == 23
