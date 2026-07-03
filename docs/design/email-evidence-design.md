@@ -7,7 +7,8 @@ It intentionally avoids cloud email sources such as M365/Graph/Azure audit logs.
 
 The implemented V1 surfaces are `environment.email`, typed `email_message`
 storyline events, canonical `EmailContext`/`SmtpContext`, `zeek_smtp`, and
-`artifacts/email/EMAIL_ARTIFACTS.json` plus optional `.eml` files.
+top-level `ARTIFACTS_MANIFEST.json` email records plus optional `.eml` files
+under `artifacts/email/`.
 
 ## Scope
 
@@ -245,11 +246,12 @@ routes, unresolved mailbox assignments, invalid distribution groups, unsupported
 nested groups, and unsupported direct workstation-to-internet SMTP.
 
 V1 includes parser/evaluation support for `zeek_smtp`, Zeek `files.log`, and
-`EMAIL_ARTIFACTS.json`. Evaluation validates core field presence and basic
-cross-source consistency: SMTP UIDs join to `conn.log`, visible SMTP FUIDs join
-to `files.log`, plaintext SMTP metadata agrees with artifact manifests when a
-message ID is visible, and STARTTLS-protected hops suppress protected SMTP
-metadata. Deeper route/DNS/artifact causality scoring can be expanded later.
+the email section of `ARTIFACTS_MANIFEST.json`. Evaluation validates core field
+presence and basic cross-source consistency: SMTP UIDs join to `conn.log`,
+visible SMTP FUIDs join to `files.log`, plaintext SMTP metadata agrees with
+artifact manifests when a message ID is visible, and STARTTLS-protected hops
+suppress protected SMTP metadata. Deeper route/DNS/artifact causality scoring can
+be expanded later.
 
 ### Timing
 
@@ -327,8 +329,8 @@ V1 supports distribution groups:
 - the group address remains visible in headers when it was addressed in `to` or
   `cc`,
 - expanded concrete recipients are used for envelope delivery,
-- `EMAIL_ARTIFACTS.json` and storyline ground truth record both original
-  addressed groups and expanded recipients.
+- `ARTIFACTS_MANIFEST.json` records visible addressed groups only; storyline
+  ground truth can carry delivery expansion details for instructor correlation.
 
 V1 distribution groups are one-level only. Nested groups and recursive expansion
 are future work. Validation must emit actionable errors for unsupported group
@@ -358,24 +360,25 @@ Generated artifacts live under an `artifacts` directory that is a peer of
 
 ```text
 output/
+  ARTIFACTS_MANIFEST.json
   data/
   artifacts/
     email/
-      EMAIL_ARTIFACTS.json
       <safe-message-token>-<storyline-or-event-id>.eml
 ```
 
 `.eml` is the V1 per-message artifact format. Mbox-style mailbox/container
-artifacts may be added later. `EMAIL_ARTIFACTS.json` is the production-facing
-message artifact index: message IDs, sender/recipient metadata, subject/date,
-and optional `eml_path`. It deliberately omits storyline IDs, exercise verdict
-labels, local filesystem paths, expanded delivery recipients, and route-hop
-metadata; `GROUND_TRUTH.json` is the canonical identity source for
+artifacts and other artifact families may be added later. `ARTIFACTS_MANIFEST.json`
+is the production-facing artifact index with schema version `1.0`; email records
+live under `email.messages` and contain message IDs, sender/recipient metadata,
+subject/date, and optional `eml_path`. It deliberately omits storyline IDs,
+exercise verdict labels, local filesystem paths, expanded delivery recipients,
+and route-hop metadata; `GROUND_TRUTH.json` is the canonical identity source for
 scenario/storyline correlation.
 
 Storyline email artifacts are referenced in both `GROUND_TRUTH.json` and
-`GROUND_TRUTH.md` in addition to `EMAIL_ARTIFACTS.json`. Non-storyline artifacts
-are indexed only in `EMAIL_ARTIFACTS.json`.
+`GROUND_TRUTH.md` in addition to `ARTIFACTS_MANIFEST.json`. Non-storyline
+artifacts are indexed only in `ARTIFACTS_MANIFEST.json`.
 
 Email artifact generation is controlled under `environment.email.artifacts`, not
 through `output.logs`, because artifacts are not ingestable log sources and do

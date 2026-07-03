@@ -34,6 +34,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.generation.activity import ActivityGenerator
@@ -324,6 +325,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator._scenario_environment = self.scenario.environment
         self.activity_generator._scenario_root = self.scenario_root
         self.activity_generator._email_artifact_dir = self.artifact_dir / "email"
+        self.activity_generator._artifacts_manifest_path = (
+            self.ground_truth_dir / ARTIFACTS_MANIFEST_FILENAME
+        )
         # Live-callback OOB host(s) for adversarial_payload (off by default).
         self.activity_generator._oob_hosts = self.oob_hosts
         # Build IP->System lookup for HostContext resolution on connection events
@@ -511,7 +515,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             emitter.close()
 
         if self.activity_generator is not None:
-            self.activity_generator.write_email_artifact_manifest()
+            self.activity_generator.write_artifacts_manifest()
 
         logger.info("All emitters closed")
 

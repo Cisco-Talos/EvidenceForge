@@ -34,6 +34,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+
 logger = logging.getLogger(__name__)
 
 
@@ -180,9 +182,9 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
                             candidates.append(deepfile)
 
     artifact_root = output_dir.parent.resolve()
-    email_manifest = output_dir.parent / "artifacts" / "email" / "EMAIL_ARTIFACTS.json"
-    if email_manifest.exists() and _is_safe_path(email_manifest, artifact_root):
-        candidates.append(email_manifest)
+    artifacts_manifest = output_dir.parent / ARTIFACTS_MANIFEST_FILENAME
+    if artifacts_manifest.exists() and _is_safe_path(artifacts_manifest, artifact_root):
+        candidates.append(artifacts_manifest)
 
     for format_name, parser_cls in _PARSER_CLASSES.items():
         if format_name == "bash_history":

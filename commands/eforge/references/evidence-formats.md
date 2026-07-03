@@ -17,11 +17,11 @@ output/
   GROUND_TRUTH.json                        # Canonical machine-readable ground-truth document
   GROUND_TRUTH.md                          # Human-readable answer key rendered from the JSON document
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
+  ARTIFACTS_MANIFEST.json                  # Generated artifact manifest, when artifacts exist
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
   ENVIRONMENT.md                           # Optional student-facing environment description
   artifacts/
     email/
-      EMAIL_ARTIFACTS.json                 # Email artifact manifest
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
   data/                                    # Generated logs for every output target
     <hostname.domain>/                     # Per-host directories (FQDN)
@@ -79,16 +79,18 @@ Target-specific behavior in V1:
 
 When `environment.email` is configured, `email_message` storyline events and
 optional deterministic background email produce SMTP route evidence through the
-normal DNS and network-visibility layers. Generated email artifacts live outside
+normal DNS and network-visibility layers. Generated artifact metadata lives in
+top-level `ARTIFACTS_MANIFEST.json`; materialized email messages live outside
 `data/` under `artifacts/email/`.
 
 **Files:**
 
-- `artifacts/email/EMAIL_ARTIFACTS.json` — production-facing manifest for
-  materialized and metadata-only messages. It records message IDs,
-  sender/recipient metadata, delivery action, optional `eml_path`, and route
-  metadata, but does not include storyline IDs, exercise verdict labels, or
-  local filesystem artifact paths.
+- `ARTIFACTS_MANIFEST.json` — production-facing generated artifact manifest.
+  Email records live under `email.messages` for materialized and metadata-only
+  messages. They record message IDs, sender/recipient metadata, subject/date,
+  and optional `eml_path`, but do not include storyline IDs, exercise verdict
+  labels, local filesystem artifact paths, expanded delivery recipients, or SMTP
+  route-hop metadata.
 - `artifacts/email/<artifact-id>.eml` — RFC 5322 message artifacts for selected
   or storyline-backed messages.
 - `<sensor>/smtp.json` — Zeek `smtp.log` NDJSON for visible SMTP transactions.

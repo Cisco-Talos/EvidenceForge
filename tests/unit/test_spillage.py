@@ -542,7 +542,25 @@ class TestDocsSync:
     def test_skill_docs_reference_ground_truth_json_and_config(self):
         assert "GROUND_TRUTH.json" in self._read("commands/eforge/generate.md")
         assert "GROUND_TRUTH.json" in self._read("commands/eforge/evaluate.md")
+        assert "ARTIFACTS_MANIFEST.json" in self._read("commands/eforge/generate.md")
+        assert "ARTIFACTS_MANIFEST.json" in self._read("commands/eforge/evaluate.md")
         assert "secret_families.yaml" in self._read("commands/eforge/config.md")
+
+    def test_docs_reference_artifacts_manifest_not_legacy_email_manifest(self):
+        active_docs = [
+            "docs/reference/EVIDENCE_FORMATS.md",
+            "docs/reference/scenario-reference.md",
+            "docs/design/email-evidence-design.md",
+            "commands/eforge/scenario.md",
+            "commands/eforge/generate.md",
+            "commands/eforge/evaluate.md",
+            "commands/eforge/references/evidence-formats.md",
+            "commands/eforge/references/scenario-reference.md",
+        ]
+        for rel in active_docs:
+            text = self._read(rel)
+            assert "ARTIFACTS_MANIFEST.json" in text
+            assert "EMAIL_ARTIFACTS.json" not in text
 
     def test_validate_skill_documents_spillage_errors(self):
         # AGENTS.md convention: validate.md must carry error-handling guidance for

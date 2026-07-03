@@ -28,6 +28,90 @@ red_herrings: [...]          # Optional: suspicious-but-benign events for analys
 output: ...
 ```
 
+## Includes
+
+Large scenarios can be split across multiple YAML files with a top-level
+`includes` key. Include paths are resolved relative to the YAML file that
+declares them, not relative to the current shell directory.
+
+```yaml
+includes:
+  - common/environment.yaml
+  - common/personas.yaml
+
+version: "1.0"
+name: credential-access-lab
+description: Scenario-specific attack narrative
+time_window: ...
+baseline_activity: ...
+storyline: ...
+output: ...
+```
+
+Included files contain ordinary scenario YAML fragments, usually with the same
+top-level section wrapper they would have in `scenario.yaml`:
+
+```yaml
+# common/environment.yaml
+environment:
+  description: Shared branch-office environment
+  users: [...]
+  systems: [...]
+```
+
+Includes are expanded before schema validation. Mappings are merged recursively
+only when fields are disjoint, so this is composition rather than override
+inheritance. If `scenario.yaml` and an included file both define
+`environment.users`, or two included files both define `time_window.duration`,
+EvidenceForge reports a validation-time input error that names the conflicting
+field and source files. Lists such as `storyline`, `users`, and `systems` are
+owned as whole fields and are not automatically concatenated.
+
+Nested includes are allowed and are resolved relative to the file that declares
+them:
+
+```yaml
+# common/environment.yaml
+includes:
+  - network.yaml
+
+environment:
+  users: [...]
+  systems: [...]
+```
+
+The singular `include` key is accepted as a convenience for one file, but
+`includes` is the preferred form for new scenarios.
+
+For larger exercise families, keep reusable organization context separate from
+scenario-specific narrative files:
+
+```text
+scenarios/
+  organizations/<org>/
+    ENVIRONMENT.md
+    includes/
+      environment.yaml
+      personas.yaml
+      baseline.yaml
+      observation.yaml
+
+  <scenario>/
+    scenario.yaml
+    includes/
+      storyline.yaml
+      red_herrings.yaml
+      # optional local override copies of org include files
+```
+
+In this layout, `scenario.yaml` can include files from the organization directory
+using paths relative to the scenario file, such as
+`../organizations/<org>/includes/environment.yaml`. If a scenario needs to
+change a shared organization section, copy that organization include into the
+scenario's local `includes/` directory and include the local copy instead of the
+shared one. Do not include both copies of the same section, because duplicate
+fields are validation errors rather than overrides.
+
 ## Environment
 
 ```yaml
@@ -241,8 +325,9 @@ directly to destination MX hosts, or through `isp_relays` when configured.
 Inbound internet mail uses `inbound_route` for all accepted domains. Distribution
 groups are one-level only; nested groups are validation errors.
 
-Email artifacts are written under `artifacts/email/` as `.eml` files plus
-`EMAIL_ARTIFACTS.json`. Storyline email artifacts are also referenced from
+Email artifact metadata is written to top-level `ARTIFACTS_MANIFEST.json` under
+`email.messages`; selected materialized messages are written as `.eml` files
+under `artifacts/email/`. Storyline email artifacts are also referenced from
 `GROUND_TRUTH.json` and `GROUND_TRUTH.md`. Generation is deterministic: any
 AI-authored message bodies or corpora must be prepared during scenario creation,
 not during `eforge generate`.

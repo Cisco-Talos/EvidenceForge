@@ -128,9 +128,9 @@ Generation writes log files to a `data/` subdirectory alongside the scenario fil
 scenarios/<scenario-name>/
   scenario.yaml          ← input
   ENVIRONMENT.md         ← created by /eforge scenario
+  ARTIFACTS_MANIFEST.json ← generated artifact manifest, when artifacts exist
   artifacts/             ← generated sidecar artifacts and optional authored collateral
     email/
-      EMAIL_ARTIFACTS.json
       <artifact-id>.eml
   GROUND_TRUTH.md        ← generated human-readable answer key (baseline-only runs
                            still include the standard "no malicious events" report)
@@ -156,16 +156,16 @@ scenarios/<scenario-name>/
     ...
 ```
 
-If generated output (`data/`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, or `artifacts/email/`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
+If generated output (`data/`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, or `artifacts/`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
 
 ### 3. Post-Generation
 
 After successful generation:
 - List the generated files and their sizes
 - Check that expected formats were produced
-- Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
+- Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, optional `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
-- Email artifacts under `artifacts/email/` are generated sidecars when `environment.email.artifacts` enables them; `EMAIL_ARTIFACTS.json` is written for modeled messages, `.eml` files are written according to artifact mode, and plaintext SMTP MIME parts can also appear in Zeek `files.json`. The manifest is production-facing and omits storyline IDs, exercise verdict labels, and local filesystem paths; use `GROUND_TRUTH.json` for scenario correlation.
+- Email artifact metadata is written to top-level `ARTIFACTS_MANIFEST.json` under `email.messages` when `environment.email.artifacts` enables modeled message metadata; `.eml` files are written under `artifacts/email/` according to artifact mode, and plaintext SMTP MIME parts can also appear in Zeek `files.json`. The manifest is production-facing and omits storyline IDs, exercise verdict labels, and local filesystem paths; use `GROUND_TRUTH.json` for scenario correlation.
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, auth/session-bundle validation, Kerberos/DC-bundle TGT/TGS evidence before domain logons, Windows-audit-bundle events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
 

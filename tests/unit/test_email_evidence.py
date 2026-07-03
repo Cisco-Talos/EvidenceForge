@@ -19,6 +19,7 @@ from pathlib import Path
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
+from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.contexts import SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.events.ground_truth import load_ground_truth_document
@@ -56,6 +57,10 @@ from evidenceforge.validation.schema import ScenarioValidator
 
 def _read_ndjson(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _load_artifacts_manifest(output_root: Path) -> dict:
+    return json.loads((output_root / ARTIFACTS_MANIFEST_FILENAME).read_text(encoding="utf-8"))
 
 
 def _header_names(message_text: str) -> list[str]:
@@ -340,13 +345,15 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     dns_path = tmp_path / "data" / "zeek-core" / "dns.json"
     conn_path = tmp_path / "data" / "zeek-core" / "conn.json"
     ssl_path = tmp_path / "data" / "zeek-core" / "ssl.json"
-    manifest_path = tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json"
+    manifest_path = tmp_path / ARTIFACTS_MANIFEST_FILENAME
+    legacy_manifest_path = tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json"
 
     smtp_records = _read_ndjson(smtp_path)
     dns_records = _read_ndjson(dns_path)
     conn_records = _read_ndjson(conn_path)
     ssl_records = _read_ndjson(ssl_path)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = _load_artifacts_manifest(tmp_path)
+    messages = manifest["email"]["messages"]
     ground_truth = json.loads((tmp_path / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
 
     assert len(smtp_records) == 2
@@ -375,10 +382,13 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert {record["uid"] for record in smtp_records} <= {record["uid"] for record in ssl_records}
     assert all("TLS" in record["last_reply"].upper() for record in smtp_records if record["tls"])
 
-    assert "storyline_id" not in manifest["messages"][0]
-    assert "artifact_id" not in manifest["messages"][0]
-    assert "artifact_path" not in manifest["messages"][0]
-    assert "verdict" not in manifest["messages"][0]
+    assert manifest_path.exists()
+    assert not legacy_manifest_path.exists()
+    assert manifest["schema_version"] == "1.0"
+    assert "storyline_id" not in messages[0]
+    assert "artifact_id" not in messages[0]
+    assert "artifact_path" not in messages[0]
+    assert "verdict" not in messages[0]
     blind_facing_transport_fields = {
         "delivery_action",
         "expanded_rcptto",
@@ -386,10 +396,10 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
         "received_headers",
         "route",
     }
-    assert not (blind_facing_transport_fields & set(manifest["messages"][0]))
-    assert manifest["messages"][0]["bcc"] == []
-    assert manifest["messages"][0]["eml_path"].endswith(".eml")
-    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
+    assert not (blind_facing_transport_fields & set(messages[0]))
+    assert messages[0]["bcc"] == []
+    assert messages[0]["eml_path"].endswith(".eml")
+    materialized = tmp_path / "artifacts" / "email" / messages[0]["eml_path"]
     assert materialized.exists()
     assert "Bcc:" not in materialized.read_text(encoding="utf-8")
     eml_text = materialized.read_text(encoding="utf-8")
@@ -431,7 +441,25 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert smtp_path in discovered["zeek_smtp"]
     assert manifest_path in discovered["email_artifacts"]
     artifact_records = list(get_parser("email_artifacts").parse_file(manifest_path))
-    assert artifact_records[0].fields["message_id"] == manifest["messages"][0]["message_id"]
+    assert artifact_records[0].fields["message_id"] == messages[0]["message_id"]
+
+
+def test_email_artifacts_mode_none_skips_artifact_manifest(tmp_path: Path) -> None:
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.artifacts = EmailArtifactsConfig(mode="none")
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    assert (tmp_path / "data" / "zeek-core" / "smtp.json").exists()
+    assert not (tmp_path / ARTIFACTS_MANIFEST_FILENAME).exists()
+    assert not (tmp_path / "artifacts").exists()
 
 
 def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: Path) -> None:
@@ -462,10 +490,9 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     engine.generate()
 
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
-    )
-    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
+    manifest = _load_artifacts_manifest(tmp_path)
+    messages = manifest["email"]["messages"]
+    materialized = tmp_path / "artifacts" / "email" / messages[0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
     assert smtp_records[0]["id.resp_p"] == 587
@@ -477,7 +504,7 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     assert smtp_records[0]["subject"] == ""
     assert smtp_records[1]["tls"] is True
     assert smtp_records[1]["rcptto"] == []
-    assert manifest["messages"][0]["bcc"] == ["bob@corp.example"]
+    assert messages[0]["bcc"] == ["bob@corp.example"]
     assert "Bcc:" not in eml_text
     assert "To: <team@corp.example>" in eml_text
 
@@ -1278,10 +1305,9 @@ messages:
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
     ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
-    )
-    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
+    manifest = _load_artifacts_manifest(tmp_path)
+    messages = manifest["email"]["messages"]
+    materialized = tmp_path / "artifacts" / "email" / messages[0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
 
     submission_smtp = next(row for row in smtp_records if row["id.resp_p"] == 587)
@@ -1389,10 +1415,9 @@ messages:
 
     engine.generate()
 
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
-    )
-    materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
+    manifest = _load_artifacts_manifest(tmp_path)
+    messages = manifest["email"]["messages"]
+    materialized = tmp_path / "artifacts" / "email" / messages[0]["eml_path"]
     eml_text = materialized.read_text(encoding="utf-8")
     headers = _header_names(eml_text)
     parsed_email = BytesParser(policy=policy.default).parsebytes(materialized.read_bytes())
@@ -1731,9 +1756,8 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     smtp_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
     conn_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
     file_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8")
-    )
+    manifest = _load_artifacts_manifest(tmp_path)
+    messages = manifest["email"]["messages"]
 
     inbound_external_ips = [
         row["id.orig_h"]
@@ -1770,7 +1794,7 @@ def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -
     assert all(row["mailfrom"] == "" for row in submission_rows)
     assert all(row["user_agent"] == "" for row in submission_rows)
     leaked_fields = {"storyline_id", "artifact_id", "artifact_path", "verdict"}
-    assert all(not (leaked_fields & set(message)) for message in manifest["messages"])
+    assert all(not (leaked_fields & set(message)) for message in messages)
     visible_subjects = [row["subject"] for row in smtp_records if row.get("subject")]
     assert len(set(visible_subjects)) >= min(len(visible_subjects), 2)
     assert all(

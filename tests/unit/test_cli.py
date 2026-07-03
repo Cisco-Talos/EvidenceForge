@@ -36,10 +36,75 @@ from evidenceforge.cli.commands import (
     EXIT_SUCCESS,
     app,
 )
+from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
+
+
+def _write_included_minimal_scenario(tmp_path, *, name="include-cli-test"):
+    """Write a valid minimal scenario that includes its environment section."""
+    (tmp_path / "environment.yaml").write_text(
+        """
+environment:
+  description: Included test environment
+  users:
+    - username: test_user
+      full_name: Test User
+      email: test.user@example.com
+      primary_system: TEST-01
+      enabled: true
+  systems:
+    - hostname: TEST-01
+      ip: 10.0.0.1
+      os: Windows 10
+      type: workstation
+"""
+    )
+    scenario_file = tmp_path / "scenario.yaml"
+    scenario_file.write_text(
+        f"""
+includes:
+  - environment.yaml
+version: "1.0"
+name: {name}
+description: Scenario with an included environment
+time_window:
+  start: "2024-01-15T10:00:00Z"
+  duration: "1h"
+baseline_activity:
+  description: Minimal baseline activity
+  intensity: low
+  variation: low
+output:
+  logs:
+    - format: windows
+  destination: ./output
+  compression: false
+"""
+    )
+    return scenario_file
+
+
+def _write_conflicting_include_scenario(tmp_path):
+    """Write a scenario whose local fields conflict with an included partial."""
+    (tmp_path / "environment.yaml").write_text(
+        """
+environment:
+  description: Included environment
+"""
+    )
+    scenario_file = tmp_path / "scenario.yaml"
+    scenario_file.write_text(
+        """
+includes:
+  - environment.yaml
+environment:
+  description: Local environment
+"""
+    )
+    return scenario_file
 
 
 class TestHelpAliases:
@@ -77,8 +142,114 @@ class TestVersionCommand:
         assert f"EvidenceForge v{__version__}" in result.stdout
 
 
+class TestValidateCommand:
+    """Tests for 'eforge validate' command."""
+
+    def test_validate_accepts_included_environment(self, tmp_path):
+        """eforge validate should expand scenario includes before schema validation."""
+        scenario_file = _write_included_minimal_scenario(tmp_path)
+
+        result = runner.invoke(app, ["validate", str(scenario_file)])
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Schema valid: include-cli-test" in result.stdout
+
+    def test_validate_reports_include_conflict_as_schema_validation(self, tmp_path):
+        """eforge validate should treat include conflicts as validation errors."""
+        scenario_file = _write_conflicting_include_scenario(tmp_path)
+
+        result = runner.invoke(app, ["validate", str(scenario_file)])
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        assert "Scenario include validation failed" in result.stdout
+        assert "environment.description" in result.stdout
+
+
+class TestEvalCommand:
+    """Tests for 'eforge eval' command."""
+
+    def test_eval_accepts_included_environment(self, tmp_path):
+        """eforge eval should expand scenario includes before constructing the evaluator."""
+        output_dir = tmp_path / "data"
+        output_dir.mkdir()
+        scenario_file = _write_included_minimal_scenario(tmp_path, name="include-eval-test")
+
+        with (
+            patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine_class,
+            patch("evidenceforge.evaluation.report.format_text_report") as mock_format_text,
+        ):
+            mock_report = Mock()
+            mock_engine_class.return_value.run.return_value = mock_report
+
+            result = runner.invoke(
+                app,
+                [
+                    "eval",
+                    str(output_dir),
+                    "--scenario",
+                    str(scenario_file),
+                ],
+            )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert mock_engine_class.called
+        assert mock_engine_class.call_args.kwargs["scenario"].name == "include-eval-test"
+        mock_format_text.assert_called_once()
+        assert mock_format_text.call_args.args[0] is mock_report
+
+    def test_eval_reports_include_conflict_as_schema_validation(self, tmp_path):
+        """eforge eval should treat include conflicts as scenario validation errors."""
+        output_dir = tmp_path / "data"
+        output_dir.mkdir()
+        scenario_file = _write_conflicting_include_scenario(tmp_path)
+
+        result = runner.invoke(app, ["eval", str(output_dir), "--scenario", str(scenario_file)])
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        assert "Scenario include validation failed" in result.stdout
+        assert "environment.description" in result.stdout
+
+
 class TestGenerateCommand:
     """Tests for 'eforge generate' command."""
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_accepts_included_environment(self, mock_engine_class, tmp_path):
+        """eforge generate should expand scenario includes before constructing the engine."""
+        scenario_file = _write_included_minimal_scenario(tmp_path, name="include-generate-test")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenario_file),
+                "--output",
+                str(tmp_path / "out"),
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert mock_engine_class.called
+        assert mock_engine_class.call_args.kwargs["scenario"].name == "include-generate-test"
+        assert mock_engine_class.return_value.generate.called
+
+    def test_generate_reports_include_conflict_as_schema_validation(self, tmp_path):
+        """eforge generate should treat include conflicts as scenario validation errors."""
+        scenario_file = _write_conflicting_include_scenario(tmp_path)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenario_file),
+                "--output",
+                str(tmp_path / "out"),
+            ],
+        )
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        assert "Scenario include validation failed" in result.stdout
+        assert "environment.description" in result.stdout
 
     def test_generate_file_not_found(self):
         """eforge generate with non-existent file should handle gracefully."""
@@ -327,6 +498,9 @@ output:
                 (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+                (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
+                    '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
+                )
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -375,6 +549,28 @@ output:
         # Files should NOT have been deleted
         assert (tmp_path / "data").exists()
         assert (tmp_path / "GROUND_TRUTH.md").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_prompts_on_existing_artifacts_manifest(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """A root artifact manifest is generated output and should be overwrite-protected."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+        (tmp_path / ARTIFACTS_MANIFEST_FILENAME).write_text(
+            '{"schema_version": "1.0", "email": {"messages": []}}'
+        )
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="n\n",
+        )
+
+        assert result.exit_code == EXIT_ABORTED
+        assert ARTIFACTS_MANIFEST_FILENAME in result.stdout
+        assert not mock_engine.generate.called
+        assert (tmp_path / ARTIFACTS_MANIFEST_FILENAME).exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_skips_prompt(self, mock_engine_class, scenarios_dir, tmp_path):
@@ -492,6 +688,11 @@ output:
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text(
                     '{"schema_version": 1, "scenario_name": "baseline-only"}'
                 )
+                (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
+                    '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
+                )
+                (sd / "artifacts" / "email").mkdir(parents=True)
+                (sd / "artifacts" / "email" / "new.eml").write_text("new artifact")
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -501,6 +702,9 @@ output:
         (tmp_path / "data" / "old.log").write_text("old data")
         (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
         (tmp_path / OBSERVATION_MANIFEST_FILENAME).write_text("old manifest")
+        (tmp_path / ARTIFACTS_MANIFEST_FILENAME).write_text("old artifacts manifest")
+        (tmp_path / "artifacts" / "email").mkdir(parents=True)
+        (tmp_path / "artifacts" / "email" / "old.eml").write_text("old artifact")
         (tmp_path / "ENVIRONMENT.md").write_text("scenario-authored")
 
         result = runner.invoke(
@@ -520,6 +724,9 @@ output:
         assert "baseline-only" in (tmp_path / "GROUND_TRUTH.json").read_text()
         assert "No malicious activities" in (tmp_path / "GROUND_TRUTH.md").read_text()
         assert "baseline-only" in (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text()
+        assert "message_id" in (tmp_path / ARTIFACTS_MANIFEST_FILENAME).read_text()
+        assert not (tmp_path / "artifacts" / "email" / "old.eml").exists()
+        assert (tmp_path / "artifacts" / "email" / "new.eml").read_text() == "new artifact"
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "scenario-authored"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
@@ -594,6 +801,7 @@ output:
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
         (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+        (tmp_path / ARTIFACTS_MANIFEST_FILENAME).write_text("old artifacts manifest")
 
         with patch.object(Path, "rename", _fail_on_data_install):
             result = runner.invoke(
@@ -611,6 +819,7 @@ output:
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+        assert (tmp_path / ARTIFACTS_MANIFEST_FILENAME).read_text() == "old artifacts manifest"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_restores_on_gt_install_failure(
