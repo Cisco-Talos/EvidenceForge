@@ -1027,6 +1027,45 @@ class TestNatRecords:
         assert any("Built inbound TCP connection" in line for line in lines)
         assert any("Teardown TCP connection" in line for line in lines)
 
+    def test_inbound_static_nat_real_tuple_renders_public_vip_in_parens(
+        self,
+        asa_emitter,
+        tmp_path,
+    ):
+        """ASA should show the public VIP even when the canonical tuple is post-NAT."""
+        from evidenceforge.events.contexts import NatContext
+
+        event = _make_connection_event(
+            src_ip="93.18.207.241",
+            src_port=60814,
+            dst_ip="172.16.0.5",
+            dst_port=443,
+            firewall=FirewallContext(
+                action="permit",
+                msg_id=302013,
+                connection_id=100,
+                src_interface="outside",
+                dst_interface="dmz",
+            ),
+            nat=NatContext(
+                nat_type="static",
+                mapped_src_ip="93.18.207.241",
+                mapped_src_port=60814,
+                mapped_dst_ip="172.16.0.5",
+                mapped_dst_port=443,
+                pre_nat_dst_ip="203.0.113.5",
+                pre_nat_dst_port=443,
+            ),
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        built_line = next(line for line in lines if "Built inbound TCP connection" in line)
+        assert "outside:93.18.207.241/60814 (93.18.207.241/60814)" in built_line
+        assert "dmz:172.16.0.5/443 (203.0.113.5/443)" in built_line
+        assert "dmz:172.16.0.5/443 (172.16.0.5/443)" not in built_line
+
     def test_syn_timeout_teardown_duration_is_realistic(self, asa_emitter, tmp_path):
         """SYN Timeout teardown rows should not all render as zero-second waits."""
         event = _make_connection_event(

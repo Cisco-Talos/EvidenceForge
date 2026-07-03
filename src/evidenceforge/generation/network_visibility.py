@@ -526,5 +526,24 @@ class NetworkVisibilityEngine:
                             mapped_dst_ip=rule.real_ip,
                             mapped_dst_port=dst_port,
                         )
+                    # Inbound static with an already-translated canonical tuple:
+                    # some generators model the real DMZ host as the destination
+                    # while the firewall still needs the public VIP for ASA
+                    # source-native rendering.
+                    if (
+                        rule.mapped_ip
+                        and rule.real_ip
+                        and dst_ip == rule.real_ip
+                        and not src_segments
+                    ):
+                        return NatContext(
+                            nat_type="static",
+                            mapped_src_ip=src_ip,
+                            mapped_src_port=src_port,
+                            mapped_dst_ip=rule.real_ip,
+                            mapped_dst_port=dst_port,
+                            pre_nat_dst_ip=rule.mapped_ip,
+                            pre_nat_dst_port=dst_port,
+                        )
 
         return None
