@@ -19,9 +19,10 @@ from pathlib import Path
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
-from evidenceforge.events.contexts import SslContext
+from evidenceforge.events.contexts import DnsContext, SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.events.ground_truth import load_ground_truth_document
+from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.mail_public_identities import (
     is_public_mail_ip,
     public_mail_ptr_name,
@@ -29,6 +30,7 @@ from evidenceforge.generation.activity.mail_public_identities import (
 )
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.core import GenerationEngine
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import (
     BaselineActivity,
     EmailArtifactsConfig,
@@ -849,6 +851,33 @@ def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:
     ]
     assert mail_answers
     assert set(mail_answers) <= {"10.10.2.25", "fd00:3714:0019::1"}
+
+
+def test_generic_internal_mail_alias_uses_ingress_mail_server_dns_identity() -> None:
+    """Internal MX companion A answers should not inherit arbitrary connection targets."""
+    scenario = _email_scenario()
+    generator = ActivityGenerator(StateManager(), {})
+    generator._scenario_environment = scenario.environment
+    generator._ad_domain = "corp.local"
+    dns = DnsContext(
+        query="mail.corp.local",
+        trans_id=1234,
+        query_type="A",
+        qtype=1,
+        rcode="NOERROR",
+        rcode_num=0,
+        answers=["10.10.1.10"],
+        TTLs=[3600.0],
+    )
+
+    generator._normalize_dns_context_for_resolver(
+        dns,
+        resolver_ip="10.10.0.10",
+        time=datetime(2026, 1, 5, 14, 10, tzinfo=UTC),
+    )
+
+    assert dns.answers == ["10.10.2.25"]
+    assert dns.AA is True
 
 
 def test_inbound_route_uses_configured_entry_server(tmp_path: Path, monkeypatch) -> None:

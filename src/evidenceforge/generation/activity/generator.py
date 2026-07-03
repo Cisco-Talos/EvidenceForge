@@ -13919,6 +13919,25 @@ class ActivityGenerator:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
         if email_config is None:
             return None
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+        generic_mail_aliases = {
+            f"mail.{domain.lower().rstrip('.')}"
+            for domain in getattr(email_config, "accepted_domains", [])
+            if str(domain).strip()
+        }
+        if ad_domain:
+            generic_mail_aliases.add(f"mail.{ad_domain}")
+        if wanted in generic_mail_aliases:
+            route_server_names = list(getattr(email_config, "inbound_route", []) or [])
+            route_server_names.extend(
+                name
+                for name in getattr(email_config, "default_mailbox_servers", []) or []
+                if name not in route_server_names
+            )
+            if not route_server_names and email_config.mail_servers:
+                route_server_names.append(email_config.mail_servers[0].name)
+            if route_server_names:
+                return self._email_system_for_server_name(route_server_names[0])
         for server in email_config.mail_servers:
             candidates = {
                 str(server.hostname).lower().rstrip("."),
@@ -19348,7 +19367,12 @@ class ActivityGenerator:
                 query, txt_answer, txt_ttl = _dns_txt_query_and_answer(rng, hostname)
                 answers = [txt_answer]
 
-        query_is_internal = qtype_name == "SRV" or _dns_is_internal_name(query, ad_domain)
+        query_email_system = self._email_dns_system_for_hostname(query)
+        query_is_internal = (
+            qtype_name == "SRV"
+            or _dns_is_internal_name(query, ad_domain)
+            or query_email_system is not None
+        )
         if query_is_internal and not _is_private_ip(dns_server_ip):
             dns_server_ip = _get_rng().choice(dns_ips)
             src_port = self._allocate_ephemeral_port(
@@ -19485,8 +19509,11 @@ class ActivityGenerator:
                     ]
                 else:
                     companion_answers = _public_dns_soa_answers(companion_query)
-            companion_is_internal = _dns_is_internal_name(companion_query, ad_domain) or (
-                companion_kind == "PTR" and _is_private_ip(dst_ip)
+            companion_email_system = self._email_dns_system_for_hostname(companion_query)
+            companion_is_internal = (
+                _dns_is_internal_name(companion_query, ad_domain)
+                or (companion_kind == "PTR" and _is_private_ip(dst_ip))
+                or companion_email_system is not None
             )
             companion_ttls = self._dns_observed_ttls(
                 resolver_ip=dns_server_ip,
@@ -19549,10 +19576,16 @@ class ActivityGenerator:
                             random.Random(_stable_seed(f"dns_mx_companion_a:{mx_host}"))
                         )
                     )
-                    mx_a_is_internal = _dns_is_internal_name(mx_host, ad_domain)
+                    mx_a_email_system = self._email_dns_system_for_hostname(mx_host)
+                    mx_a_email_ip = (
+                        str(getattr(mx_a_email_system, "ip", "") or "") if mx_a_email_system else ""
+                    )
+                    mx_a_is_internal = (
+                        _dns_is_internal_name(mx_host, ad_domain) or mx_a_email_system is not None
+                    )
                     mx_a_answers = _dns_address_rrset(
                         mx_host,
-                        mx_a_ip,
+                        mx_a_email_ip or mx_a_ip,
                         is_internal=mx_a_is_internal,
                     )
                     mx_a_ctx = DnsContext(
