@@ -80,6 +80,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         output_dir: Path,
         progress_callback: Callable[[str, dict], None] | None = None,
         ground_truth_dir: Path | None = None,
+        artifact_dir: Path | None = None,
+        scenario_root: Path | None = None,
         output_target: str | OutputTarget | None = None,
         oob_hosts: tuple[str, ...] = (),
     ):
@@ -91,6 +93,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             progress_callback: Optional callback for progress reporting.
                 Called with (event_type: str, data: dict) at key milestones.
             ground_truth_dir: Directory for GROUND_TRUTH.md. Defaults to output_dir.
+            scenario_root: Directory used to resolve scenario-relative sidecar inputs.
             output_target: Render/layout target for generated output.
             oob_hosts: Operator-registered live-callback host(s) for adversarial_payload
                 out-of-band testing (off by default). When set, an adversarial payload's
@@ -98,8 +101,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         """
         reset_thread_rng()
         self.scenario = scenario
-        self.output_dir = output_dir
-        self.ground_truth_dir = ground_truth_dir or output_dir
+        self.output_dir = Path(output_dir)
+        self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
+        self.ground_truth_dir = (
+            Path(ground_truth_dir) if ground_truth_dir is not None else self.output_dir
+        )
+        self.artifact_dir = (
+            Path(artifact_dir) if artifact_dir is not None else self.ground_truth_dir / "artifacts"
+        )
         self.output_target = normalize_output_target(output_target)
         self.oob_hosts = tuple(oob_hosts)
         self.progress_callback = progress_callback
@@ -312,6 +321,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             dispatcher=self.dispatcher,
         )
         self.activity_generator._network_resolver = self.network_resolver
+        self.activity_generator._scenario_environment = self.scenario.environment
+        self.activity_generator._scenario_root = self.scenario_root
+        self.activity_generator._email_artifact_dir = self.artifact_dir / "email"
         # Live-callback OOB host(s) for adversarial_payload (off by default).
         self.activity_generator._oob_hosts = self.oob_hosts
         # Build IP->System lookup for HostContext resolution on connection events
@@ -497,6 +509,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         for format_name, emitter in self.emitters.items():
             logger.info(f"Stopping {format_name} emitter thread")
             emitter.close()
+
+        if self.activity_generator is not None:
+            self.activity_generator.write_email_artifact_manifest()
 
         logger.info("All emitters closed")
 

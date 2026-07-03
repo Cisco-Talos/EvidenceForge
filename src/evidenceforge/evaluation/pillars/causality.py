@@ -88,6 +88,7 @@ class CausalityScorer(DimensionScorer):
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
+        self._email_gt = context.email_ground_truth or {}
         # storyline_id -> adversarial-payload labels (from the canonical GROUND_TRUTH.json)
         # + per-format searchable text (parsed fields + raw lines, newline-normalized)
         # so a labeled payload — including a CRLF split that spans two physical
@@ -134,12 +135,28 @@ class CausalityScorer(DimensionScorer):
                 for system in scenario.environment.systems
                 if "forward_proxy" in (system.roles or [])
             }
+            self._email_actor_emails = {
+                user.username.lower(): user.email.lower()
+                for user in scenario.environment.users
+                if user.email
+            }
+            systems_by_name = {system.hostname: system for system in scenario.environment.systems}
+            email_config = getattr(scenario.environment, "email", None)
+            self._email_server_ips = {}
+            if email_config is not None:
+                self._email_server_ips = {
+                    server.name.lower(): systems_by_name[server.system].ip
+                    for server in email_config.mail_servers
+                    if server.system in systems_by_name
+                }
             # Build host-time index and find traces
             host_time_index = self._build_host_time_index(records)
             self._find_traces(resolved, records, host_time_index)
         else:
             self._proxy_mode = "transparent"
             self._proxy_ips = set()
+            self._email_actor_emails = {}
+            self._email_server_ips = {}
             host_time_index = self._build_host_time_index(records)
 
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
@@ -249,8 +266,48 @@ class CausalityScorer(DimensionScorer):
     ) -> None:
         for event in resolved:
             for event_type in event.event_types:
-                traces = self._search_for_event_indexed(event, event_type, host_time_index)
+                if event_type in {"email_message", "email_read"}:
+                    traces = self._search_for_email_event(event, event_type, records)
+                else:
+                    traces = self._search_for_event_indexed(event, event_type, host_time_index)
                 event.traces.extend(traces)
+
+    def _search_for_email_event(
+        self,
+        event: ResolvedEvent,
+        event_type: str,
+        records: dict[str, list[ParsedRecord]],
+    ) -> list[ParsedRecord]:
+        """Search email storyline traces without relying on the actor host index.
+
+        Email delivery evidence can land on SMTP servers, external MX peers, or the
+        artifact manifest rather than the storyline actor's workstation. Mailbox reads
+        are opaque TLS sessions keyed by the reader host and mailbox server.
+        """
+        found: list[ParsedRecord] = []
+        seen: set[int] = set()
+        for format_name, record_list in records.items():
+            for record in record_list:
+                if id(record) in seen:
+                    continue
+                if not self._record_near_event(record, event):
+                    continue
+                if self._record_matches(record, format_name, event, event_type):
+                    found.append(record)
+                    seen.add(id(record))
+        return found
+
+    @staticmethod
+    def _record_near_event(record: ParsedRecord, event: ResolvedEvent) -> bool:
+        if record.timestamp is None:
+            return False
+        record_ts = record.timestamp
+        if record_ts.tzinfo is None:
+            record_ts = record_ts.replace(tzinfo=UTC)
+        event_ts = event.time
+        if event_ts.tzinfo is None:
+            event_ts = event_ts.replace(tzinfo=UTC)
+        return abs((record_ts - event_ts).total_seconds()) <= TIME_TOLERANCE.total_seconds()
 
     # --- Observation-profile adjustment helpers ---
 
@@ -799,9 +856,92 @@ class CausalityScorer(DimensionScorer):
             return self._spillage_record_matches(f, format_name, event)
         elif event_type == "adversarial_payload":
             return self._adversarial_payload_record_matches(f, format_name, event)
+        elif event_type == "email_message":
+            return self._email_message_record_matches(f, format_name, event)
+        elif event_type == "email_read":
+            return self._email_read_record_matches(f, format_name, event)
         elif event_type == "raw":
             return self._raw_record_matches(f, format_name, event)
         return False
+
+    def _email_message_record_matches(
+        self,
+        fields: dict[str, Any],
+        format_name: str,
+        event: ResolvedEvent,
+    ) -> bool:
+        """Match storyline email delivery to manifest or plaintext SMTP evidence."""
+        if format_name == "email_artifacts":
+            gt = self._email_gt.get(event.storyline_id) or {}
+            message_id = gt.get("message_id")
+            return bool(message_id and fields.get("message_id") == message_id)
+        if format_name != "zeek_smtp":
+            return False
+
+        sender = str(
+            event.details.get("sender") or self._email_actor_emails.get(event.actor.lower()) or ""
+        ).lower()
+        if sender and str(fields.get("mailfrom") or "").lower() != sender:
+            return False
+
+        expected_visible = {
+            self._normalize_email_address(address)
+            for key in ("to", "cc")
+            for address in (event.details.get(key) or [])
+        }
+        if expected_visible:
+            observed_visible = {
+                self._normalize_email_address(address)
+                for key in ("to", "cc")
+                for address in (fields.get(key) or [])
+            }
+            if not (expected_visible & observed_visible):
+                return False
+
+        subject = event.details.get("subject")
+        if subject and fields.get("subject") and str(fields["subject"]) != str(subject):
+            return False
+        return True
+
+    def _email_read_record_matches(
+        self,
+        fields: dict[str, Any],
+        format_name: str,
+        event: ResolvedEvent,
+    ) -> bool:
+        """Match opaque TLS mailbox reads to Zeek connection/SSL evidence."""
+        if format_name not in {"zeek_conn", "zeek_ssl"}:
+            return False
+        if event.system_ip and fields.get("id.orig_h") != event.system_ip:
+            return False
+
+        server_name = str(event.details.get("server") or "").lower()
+        expected_server_ips: set[str] = set(self._email_server_ips.values())
+        if server_name:
+            server_ip = self._email_server_ips.get(server_name)
+            if server_ip is None:
+                return False
+            expected_server_ips = {server_ip}
+        if expected_server_ips and fields.get("id.resp_h") not in expected_server_ips:
+            return False
+
+        protocol = event.details.get("protocol")
+        expected_ports = {443, 993}
+        if protocol == "owa":
+            expected_ports = {443}
+        elif protocol == "imaps":
+            expected_ports = {993}
+        if not self._record_has_expected_port(fields, expected_ports, ("id.resp_p",)):
+            return False
+        if format_name == "zeek_conn" and fields.get("service") not in {"ssl", "https"}:
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_email_address(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        match = re.search(r"<?([a-z0-9._%+$-]+@[a-z0-9.-]+\.[a-z]{2,})>?", text)
+        return match.group(1) if match else text
 
     # The text field(s) that carry a spilled credential, per parsed log format.
     # process_command_line requires `ecar` (the cross-OS EDR process source — see

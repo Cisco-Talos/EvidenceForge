@@ -29,6 +29,8 @@ class GroundTruthAttributesBase(BaseModel):
     """Known ground-truth attribute fields across tracked event kinds."""
 
     action: str | None = None
+    artifact_id: str | None = None
+    artifact_path: str | None = None
     attempt_count: int | None = None
     base_domain: str | None = None
     bytes_exfiltrated: int | None = None
@@ -44,14 +46,19 @@ class GroundTruthAttributesBase(BaseModel):
     interval: str | int | float | None = None
     logon_id: str | None = None
     logon_type: int | None = None
+    mail_action: str | None = None
     mac_address: str | None = None
+    mailbox: str | None = None
     member_name: str | None = None
+    message_id: str | None = None
+    message_ids: list[str] | None = None
     network_target: str | None = None
     network_target_ip: str | None = None
     network_target_port: int | None = None
     network_url: str | None = None
     nxdomain_count: int | None = None
     output_file: str | None = None
+    outcome: str | None = None
     pattern: str | None = None
     pid: int | None = None
     ports: list[int] | None = None
@@ -61,16 +68,21 @@ class GroundTruthAttributesBase(BaseModel):
     qtype: str | None = None
     query: str | None = None
     rcode: str | None = None
+    recipients: list[str] | None = None
     rendered_value: str | None = None
     rendered_sha256: str | None = None
     request_count: int | None = None
     scheme: str | None = None
+    server: str | None = None
     service_file_name: str | None = None
     service_name: str | None = None
+    sender: str | None = None
+    smtp_uids: list[str] | None = None
     source_ip: str | None = None
     staged_archive: str | None = None
     success_account: str | None = None
     success_at_attempt: int | None = None
+    subject: str | None = None
     surface: str | None = None
     target_accounts: list[str] | None = None
     target_count: int | None = None
@@ -88,6 +100,8 @@ class GroundTruthAttributesBase(BaseModel):
     uid: str | None = None
     value: str | None = None
     value_sha256: str | None = None
+    verdict: str | None = None
+    route: list[dict[str, str]] | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -370,6 +384,24 @@ class DnsQueryGroundTruthEvent(GroundTruthEventBase):
     attributes: DnsQueryAttributes = Field(default_factory=DnsQueryAttributes)
 
 
+class EmailMessageAttributes(GroundTruthAttributesBase):
+    """Email message event attributes."""
+
+
+class EmailMessageGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["email_message"]
+    attributes: EmailMessageAttributes = Field(default_factory=EmailMessageAttributes)
+
+
+class EmailReadAttributes(GroundTruthAttributesBase):
+    """Email read/access event attributes."""
+
+
+class EmailReadGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["email_read"]
+    attributes: EmailReadAttributes = Field(default_factory=EmailReadAttributes)
+
+
 class WebScanGroundTruthEvent(GroundTruthEventBase):
     kind: Literal["web_scan"]
     attributes: WebScanAttributes = Field(default_factory=WebScanAttributes)
@@ -477,6 +509,8 @@ GroundTruthEvent = Annotated[
     | PortScanGroundTruthEvent
     | BeaconGroundTruthEvent
     | DnsQueryGroundTruthEvent
+    | EmailMessageGroundTruthEvent
+    | EmailReadGroundTruthEvent
     | WebScanGroundTruthEvent
     | CredentialSprayGroundTruthEvent
     | DgaQueriesGroundTruthEvent

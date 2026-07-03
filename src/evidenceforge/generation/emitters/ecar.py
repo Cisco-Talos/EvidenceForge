@@ -193,13 +193,15 @@ def _flow_principal_probability(username: str, direction: str) -> float:
     """Return the configured probability for FLOW principal attribution."""
     cfg = ecar_flow_identity_config()
     normalized = username.strip().lower()
-    if direction == "INBOUND":
-        return float(cfg.get("inbound_listener_probability", 0.36))
     if normalized == "root":
-        return float(cfg.get("root_process_probability", 0.42))
-    if normalized in _SERVICE_PRINCIPAL_NAMES:
-        return float(cfg.get("service_process_probability", 0.48))
-    return float(cfg.get("user_process_probability", 0.88))
+        probability = float(cfg.get("root_process_probability", 0.42))
+    elif normalized in _SERVICE_PRINCIPAL_NAMES:
+        probability = float(cfg.get("service_process_probability", 0.48))
+    else:
+        probability = float(cfg.get("user_process_probability", 0.88))
+    if direction == "INBOUND":
+        probability = max(probability, float(cfg.get("inbound_listener_probability", 0.36)))
+    return probability
 
 
 class EcarEmitter(HostMultiplexEmitter):
@@ -748,7 +750,15 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["principal"] = principal
             if process_identity_safe:
                 self._apply_process_provenance(event_data, rendered_source_proc)
-            self._apply_flow_edr_context(event_data, event, include_actor=process_identity_safe)
+            self._apply_flow_edr_context(
+                event_data,
+                event,
+                include_actor=process_identity_safe and bool(principal),
+            )
+            if process_identity_safe and principal and "actorID" not in event_data:
+                actor_id = self._process_actor_id(event.src_host, rendered_source_proc)
+                if actor_id:
+                    event_data["actorID"] = actor_id
             event_data.setdefault(
                 "tid",
                 self._stable_tid(
@@ -826,6 +836,10 @@ class EcarEmitter(HostMultiplexEmitter):
                     event_data["principal"] = principal
                 if listener_observed and inbound_proc is not None:
                     self._apply_process_provenance(event_data, inbound_proc)
+                    if principal:
+                        actor_id = self._process_actor_id(event.dst_host, inbound_proc)
+                        if actor_id:
+                            event_data["actorID"] = actor_id
                 event_data.setdefault(
                     "tid",
                     self._stable_tid(
@@ -934,6 +948,15 @@ class EcarEmitter(HostMultiplexEmitter):
             lower_bound = (
                 event.timestamp if lower_bound is None else max(lower_bound, event.timestamp)
             )
+        min_offset_ms = EcarEmitter._flow_min_endpoint_offset_ms(event, seed_parts)
+        if min_offset_ms > 0:
+            min_observation_time = event.timestamp + timedelta(milliseconds=min_offset_ms)
+            if min_observation_time <= not_after:
+                lower_bound = (
+                    min_observation_time
+                    if lower_bound is None
+                    else max(lower_bound, min_observation_time)
+                )
 
         seed = _stable_seed(
             "ecar_paired_flow_observation:"
@@ -1049,17 +1072,42 @@ class EcarEmitter(HostMultiplexEmitter):
             return None
         if net.duration is None:
             if net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
-                return event.timestamp
+                seed = _stable_seed(
+                    "ecar_failed_flow_not_after:"
+                    + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+                )
+                return event.timestamp + timedelta(milliseconds=45 + (seed % 620))
             return None
         close_time = event.timestamp + timedelta(seconds=max(0.0, net.duration))
         if close_time <= event.timestamp:
             return close_time
         duration_us = int((close_time - event.timestamp).total_seconds() * 1_000_000)
         seed = _stable_seed("ecar_flow_not_after:" + ":".join(str(part) for part in seed_parts))
+        if duration_us < 100_000:
+            return close_time + timedelta(milliseconds=35 + (seed % 340))
         margin_us = 1000 + (seed % 4000)
         if duration_us <= margin_us:
             margin_us = max(0, duration_us // 2)
         return close_time - timedelta(microseconds=margin_us)
+
+    @staticmethod
+    def _flow_min_endpoint_offset_ms(event: SecurityEvent, seed_parts: tuple[Any, ...]) -> int:
+        """Return minimum FLOW observation separation from the network timestamp."""
+        net = event.network
+        if net is None:
+            return 0
+        applies = False
+        if net.duration is None:
+            applies = net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}
+        else:
+            applies = 0 <= net.duration < 0.1
+        if not applies:
+            return 0
+        seed = _stable_seed(
+            "ecar_flow_min_endpoint_offset:"
+            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+        )
+        return 18 + (seed % 65)
 
     @staticmethod
     def _flow_connection_failed(net: NetworkContext | None) -> bool:
@@ -1111,10 +1159,21 @@ class EcarEmitter(HostMultiplexEmitter):
         pid = int(getattr(process, "pid", -1) or -1)
         probability = _flow_principal_probability(username, direction)
         key = (
-            f"ecar_flow_principal:{direction}:{host.hostname}:{pid}:{username}:"
-            f"{getattr(process, 'image', '')}"
+            f"ecar_flow_principal:{host.hostname}:{pid}:{username}:{getattr(process, 'image', '')}"
         )
         return username if _ecar_probability_enabled(key, probability) else ""
+
+    def _process_actor_id(self, host: HostContext | None, process: Any | None) -> str:
+        """Return the eCAR object ID for a known local process."""
+        if host is None or process is None:
+            return ""
+        pid = int(getattr(process, "pid", -1) or -1)
+        if pid <= 0:
+            return ""
+        state_manager = getattr(self, "_state_manager", None)
+        if state_manager is None:
+            return ""
+        return str(state_manager.get_process_object_id(host.hostname, pid) or "")
 
     def _lookup_running_process(self, host: HostContext, pid: int) -> Any | None:
         """Read a process from attached state when a connection only carries a PID."""
@@ -1772,6 +1831,80 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @classmethod
+    def _normalize_user_session_lifecycle_order(cls, lines: list[str]) -> list[str]:
+        """Keep USER_SESSION LOGOUT rows after matching successful LOGIN rows."""
+        records: list[dict[str, Any] | None] = []
+        sessions: dict[tuple[str, str], dict[str, list[int]]] = {}
+        for index, line in enumerate(lines):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "USER_SESSION":
+                continue
+            action = str(record.get("action") or "")
+            if action not in {"LOGIN", "LOGOUT"}:
+                continue
+            props = record.get("properties") or {}
+            if action == "LOGIN" and str(props.get("outcome") or "success") == "failure":
+                continue
+            session_id = str(
+                props.get("logon_id") or props.get("session_id") or record.get("objectID") or ""
+            )
+            if not session_id:
+                continue
+            key = (str(record.get("hostname") or ""), session_id)
+            sessions.setdefault(key, {"LOGIN": [], "LOGOUT": []})[action].append(index)
+
+        for key, session_indexes in sessions.items():
+            login_indexes = session_indexes["LOGIN"]
+            logout_indexes = session_indexes["LOGOUT"]
+            if not login_indexes or not logout_indexes:
+                continue
+            latest_login_ms = max(
+                cls._ecar_int(records[index].get("timestamp_ms"), 0)
+                for index in login_indexes
+                if records[index] is not None
+            )
+            next_logout_ms = latest_login_ms + 1
+            for index in sorted(
+                logout_indexes,
+                key=lambda idx: (
+                    cls._ecar_int(records[idx].get("timestamp_ms"), 0)
+                    if records[idx] is not None
+                    else 0
+                ),
+            ):
+                record = records[index]
+                if record is None:
+                    continue
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                if timestamp_ms <= latest_login_ms:
+                    seed_text = ":".join(
+                        [
+                            key[0],
+                            key[1],
+                            str(record.get("id") or ""),
+                            str(record.get("objectID") or ""),
+                            str(timestamp_ms),
+                        ]
+                    )
+                    stable_delay_ms = 25 + (sum(ord(ch) for ch in seed_text) % 175)
+                    timestamp_ms = max(next_logout_ms, latest_login_ms + stable_delay_ms)
+                    record["timestamp_ms"] = timestamp_ms
+                next_logout_ms = max(next_logout_ms, timestamp_ms + 1)
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
     _LINUX_SHELL_FOREGROUND_EXES = {
         "cargo",
         "cat",
@@ -2283,6 +2416,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
+                    writer.buffer = self._normalize_user_session_lifecycle_order(writer.buffer)
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)

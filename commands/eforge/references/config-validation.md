@@ -8,6 +8,19 @@ Checks for verifying config file integrity. Run via the config skill's validatio
 
 Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activity`, `eforge info overlay.exists`). Run `eforge info --fields` to see all available fields. Use `eforge info --json` if you need everything at once.
 
+`eforge info identity_pools` summarizes generated identity-pool config files:
+baseline email domains/local-parts (`email_background.yaml`), public mail
+replacement domains (`mail_public_identities.yaml`), omitted storyline external
+IP pools (`external_actor_profiles.yaml`), suspicious-benign DNS/connection
+targets (`suspicious_benign.yaml`), and command URL/host placeholder pools
+(`command_parameter_pools.yaml`).
+
+`eforge validate-config` validates these pools after overlays are merged. Common
+blocking errors are empty lists, duplicate domains/hosts/IPs, malformed public
+domains or IP addresses, reserved documentation domains in realism-bound public
+pools, invalid/non-positive weights, malformed suspicious-benign host/IP pairs,
+and command URL placeholders that are not HTTP(S) URLs with hosts.
+
 ## YAML Health (run first — blocks all others)
 
 | # | Check | Severity | Description |

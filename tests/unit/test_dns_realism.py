@@ -57,6 +57,13 @@ def mock_emitters():
 def activity_gen(state_manager, mock_emitters):
     gen = ActivityGenerator(state_manager, mock_emitters)
     gen._dns_server_ips = ["10.0.0.1"]
+    workstation = System(
+        hostname="WS-01",
+        ip="10.0.1.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {workstation.ip: workstation}
     return gen
 
 
@@ -225,6 +232,44 @@ class TestHostnameConsistency:
         assert dns_event.dns.query_type == "A"
         assert dns_event.dns.query == hostname
         assert conn_event.network.dst_ip in dns_event.dns.answers
+
+    def test_hostname_backed_local_tcp_emits_dns_without_emit_dns_flag(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Visible SNI/Host evidence from local clients should have DNS cache evidence."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        rng = random.Random(42)
+        monkeypatch.setattr(rng, "random", lambda: 0.5)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        state_manager.set_current_time(timestamp)
+        hostname = "updates.example.net"
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="151.101.141.68",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=False,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+
+        assert address_events
+        assert conn_event.ssl is not None
+        assert conn_event.ssl.server_name == hostname
+        assert conn_event.network.dst_ip in address_events[0].dns.answers
 
     def test_registered_multi_ip_prerequisite_orders_connected_ip_first(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
@@ -454,6 +499,222 @@ class TestHostnameConsistency:
         second_ttl = dns_events[1].dns.TTLs[0]
         assert 0 <= first_ttl - second_ttl <= 15
 
+    def test_prerequisite_address_cache_uses_returned_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Client DNS suppression should last only as long as the visible returned TTL."""
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            activity_gen,
+            "_dns_observed_ttls",
+            lambda **_kwargs: [5.0],
+        )
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(seconds=20),
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].dns.TTLs == [30.0]
+
+    def test_prerequisite_address_lookup_refreshes_after_visible_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Later hostname-backed TCP activity should not rely on expired DNS answers."""
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            activity_gen,
+            "_dns_observed_ttls",
+            lambda **_kwargs: [5.0],
+        )
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(seconds=35),
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 2
+        assert [event.dns.TTLs for event in address_events] == [[30.0], [30.0]]
+
+    def test_future_generated_lookup_does_not_duplicate_earlier_timestamp(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Generation order should not create duplicate DNS rows inside one TTL window."""
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            activity_gen,
+            "_dns_observed_ttls",
+            lambda **_kwargs: [300.0],
+        )
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(seconds=10),
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            hostname="cdn.example.net",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+
+    def test_direct_dns_observation_cache_suppresses_repeats_inside_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Direct/generated DNS rows should respect visible client cache windows."""
+        state_manager.set_current_time(timestamp)
+
+        for offset in (0, 10):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.1",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                dns=DnsContext(
+                    query="dc01.example.org",
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=["10.0.0.10"],
+                    TTLs=[300.0],
+                ),
+                duration=0.01,
+                orig_bytes=64,
+                resp_bytes=160,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "dc01.example.org"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+
+    def test_direct_dns_observation_cache_suppresses_out_of_order_repeats(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Generation order should not create duplicate visible DNS cache hits."""
+        state_manager.set_current_time(timestamp)
+
+        for offset in (10, 0):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.1",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                dns=DnsContext(
+                    query="dc01.example.org",
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=["10.0.0.10"],
+                    TTLs=[300.0],
+                ),
+                duration=0.01,
+                orig_bytes=64,
+                resp_bytes=160,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "dc01.example.org"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+
+    def test_hostname_dns_fallback_suppresses_repeats_inside_ttl(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Hostname-only DNS connections should use the same visible cache contract."""
+        state_manager.set_current_time(timestamp)
+
+        for offset in (0, 10):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.1",
+                time=timestamp + timedelta(seconds=offset),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                hostname="dc01.example.org",
+                duration=0.01,
+                orig_bytes=64,
+                resp_bytes=160,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "dc01.example.org"
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+
     def test_registered_a_rrset_is_stable_across_cache_expirations(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
@@ -608,6 +869,147 @@ class TestHostnameConsistency:
         assert len(address_events) == 1
         assert address_events[0].network.src_ip == proxy.ip
         assert address_events[0].network.dst_ip == "10.0.0.10"
+
+    def test_pre_window_proxy_dns_does_not_suppress_visible_origin_prerequisite(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Warm-up resolver cache should not hide the first visible proxy-origin A row."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.dispatcher.output_start_time = timestamp
+        hostname = "packages.microsoft.com"
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="13.107.246.52",
+            time=timestamp - timedelta(seconds=5),
+            hostname=hostname,
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="13.107.246.52",
+            time=timestamp + timedelta(seconds=10),
+            hostname=hostname,
+            force_address=True,
+            bypass_cache=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp >= timestamp
+        assert "13.107.246.52" in address_events[0].dns.answers
+
+    def test_invisible_forced_dns_cache_does_not_suppress_visible_refresh(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Forced address cache hits must be based on visible DNS evidence."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.dispatcher.output_start_time = timestamp
+        hostname = "changelogs.ubuntu.com"
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="91.189.91.39",
+            time=timestamp - timedelta(seconds=5),
+            hostname=hostname,
+            force_address=True,
+        )
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="91.189.91.39",
+            time=timestamp + timedelta(seconds=10),
+            hostname=hostname,
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp >= timestamp
+        assert "91.189.91.39" in address_events[0].dns.answers
+
+    def test_forward_proxy_direct_tls_refreshes_pre_window_dns_cache(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Proxy-host HTTPS traffic should refresh invisible warm-up DNS before visible TLS."""
+        state_manager.set_current_time(timestamp)
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.dispatcher.output_start_time = timestamp
+        hostname = "secure-client-updates.cisco.com"
+
+        for event_time in (timestamp - timedelta(seconds=5), timestamp + timedelta(seconds=10)):
+            activity_gen.generate_connection(
+                src_ip=proxy.ip,
+                dst_ip="72.163.4.185",
+                time=event_time,
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                emit_dns=False,
+                hostname=hostname,
+                conn_state="SF",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=1000,
+                source_system=proxy,
+            )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == hostname
+            and call.args[0].dns.query_type == "A"
+        ]
+
+        assert len(address_events) == 1
+        assert address_events[0].timestamp >= timestamp
+        assert "72.163.4.185" in address_events[0].dns.answers
+        ssl_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_ssl"].emit.call_args_list
+            if call.args[0].ssl and call.args[0].ssl.server_name == hostname
+        )
+        assert address_events[0].timestamp < ssl_event.timestamp
 
 
 class TestNoReverseDnsHostnames:

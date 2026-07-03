@@ -49,6 +49,171 @@ def test_proxy_user_agent_selection_is_role_aware_for_servers():
     assert any(token in ua for ua in user_agents for token in ("curl", "Wget", "requests"))
 
 
+def test_activity_generator_stabilizes_generic_server_proxy_user_agent():
+    generator = ActivityGenerator(StateManager(), {})
+    web_server = System(
+        hostname="web01",
+        ip="10.0.3.20",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["web_server"],
+    )
+
+    user_agents = {
+        generator._proxy_user_agent_for_context(
+            random.Random(seed),
+            web_server,
+            hostname=hostname,
+            domain_tags=[],
+        )
+        for seed, hostname in enumerate(
+            [
+                "api.github.com",
+                "registry.npmjs.org",
+                "www.bing.com",
+                "login.microsoftonline.com",
+                "api.snapcraft.io",
+            ]
+        )
+    }
+
+    assert len(user_agents) == 1
+    assert all("Mozilla/" not in user_agent for user_agent in user_agents)
+
+
+def test_activity_generator_uses_browser_agent_for_workstation_browser_domains():
+    generator = ActivityGenerator(StateManager(), {})
+    workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    user_agents = {
+        generator._proxy_user_agent_for_context(
+            random.Random(seed),
+            workstation,
+            hostname=hostname,
+            domain_tags=["web"],
+        )
+        for seed, hostname in enumerate(
+            ["www.reddit.com", "calendar.google.com", "stackoverflow.com"]
+        )
+    }
+
+    assert len(user_agents) == 1
+    user_agent = next(iter(user_agents))
+    assert "Mozilla/" in user_agent
+    assert not any(token in user_agent for token in ("curl/", "Wget/", "python-requests/"))
+
+
+def test_activity_generator_collapses_generated_browser_family_user_agents():
+    generator = ActivityGenerator(StateManager(), {})
+    workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    user_agents = {
+        generator._proxy_user_agent_for_context(
+            random.Random(seed),
+            workstation,
+            hostname="www.reddit.com",
+            domain_tags=["web"],
+            existing_user_agent=existing_user_agent,
+        )
+        for seed, existing_user_agent in enumerate(
+            [
+                (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                ),
+                "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
+            ]
+        )
+    }
+
+    assert len(user_agents) == 1
+    assert "Mozilla/" in next(iter(user_agents))
+
+
+def test_activity_generator_collapses_browser_user_agents_for_cdn_assets():
+    generator = ActivityGenerator(StateManager(), {})
+    workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    user_agents = {
+        generator._proxy_user_agent_for_context(
+            random.Random(seed),
+            workstation,
+            hostname="www.gstatic.com",
+            domain_tags=["cdn"],
+            existing_user_agent=existing_user_agent,
+        )
+        for seed, existing_user_agent in enumerate(
+            [
+                (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                ),
+                "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
+            ]
+        )
+    }
+
+    assert len(user_agents) == 1
+    assert "Mozilla/" in next(iter(user_agents))
+
+
+def test_activity_generator_preserves_tool_user_agent_for_browser_domains():
+    generator = ActivityGenerator(StateManager(), {})
+    workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    user_agent = generator._proxy_user_agent_for_context(
+        random.Random(17),
+        workstation,
+        hostname="www.reddit.com",
+        domain_tags=["web"],
+        existing_user_agent="curl/8.4.0",
+    )
+
+    assert user_agent == "curl/8.4.0"
+
+
+def test_activity_generator_preserves_override_browser_user_agent():
+    generator = ActivityGenerator(StateManager(), {})
+    workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    user_agent = generator._proxy_user_agent_for_context(
+        random.Random(23),
+        workstation,
+        hostname="www.reddit.com",
+        domain_tags=["web"],
+        override_user_agent=(
+            "Mozilla/5.0 (X11; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0"
+        ),
+    )
+
+    assert "Firefox/122.0" in user_agent
+
+
 def test_server_proxy_package_user_agents_are_destination_aware():
     from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
 

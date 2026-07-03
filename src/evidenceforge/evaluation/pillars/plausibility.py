@@ -338,6 +338,12 @@ class PlausibilityScorer(DimensionScorer):
             if len(failures) < 10:
                 failures.extend(fails[: 10 - len(failures)])
 
+        email_matched, email_agreeing, email_failures = _score_email_evidence_consistency(records)
+        total_matched += email_matched
+        total_agreeing += email_agreeing
+        if len(failures) < 10:
+            failures.extend(email_failures[: 10 - len(failures)])
+
         score = (100.0 * total_agreeing / total_matched) if total_matched > 0 else 100.0
         return SubScore(
             name="Cross-Source Field Agreement",
@@ -664,6 +670,53 @@ def _cosine_similarity(a: Counter, b: Counter) -> float:
 
 
 # Field-agreement helpers (extracted from cross_source.py)
+
+
+def _score_email_evidence_consistency(
+    records: dict[str, list[ParsedRecord]],
+) -> tuple[int, int, list[str]]:
+    """Return basic email cross-source consistency counts."""
+    smtp_records = records.get("zeek_smtp", [])
+    conn_uids = {record.fields.get("uid") for record in records.get("zeek_conn", [])}
+    file_fuids = {record.fields.get("fuid") for record in records.get("zeek_files", [])}
+    artifacts_by_msg_id = {
+        record.fields.get("message_id"): record
+        for record in records.get("email_artifacts", [])
+        if record.fields.get("message_id")
+    }
+
+    matched = 0
+    agreeing = 0
+    failures: list[str] = []
+
+    for smtp in smtp_records:
+        uid = smtp.fields.get("uid")
+        if uid:
+            matched += 1
+            if uid in conn_uids:
+                agreeing += 1
+            elif len(failures) < 10:
+                failures.append(f"email SMTP uid {uid} has no matching zeek_conn row")
+
+        fuids = smtp.fields.get("fuids") or []
+        if isinstance(fuids, list):
+            for fuid in fuids:
+                matched += 1
+                if fuid in file_fuids:
+                    agreeing += 1
+                elif len(failures) < 10:
+                    failures.append(f"email SMTP fuid {fuid} has no matching zeek_files row")
+
+        msg_id = smtp.fields.get("msg_id")
+        artifact = artifacts_by_msg_id.get(msg_id)
+        if artifact is not None and smtp.fields.get("subject") is not None:
+            matched += 1
+            if smtp.fields.get("subject") == artifact.fields.get("subject"):
+                agreeing += 1
+            elif len(failures) < 10:
+                failures.append(f"email artifact subject disagrees for msg_id {msg_id}")
+
+    return matched, agreeing, failures
 
 
 def _matches_condition(record: ParsedRecord, condition: dict) -> bool:

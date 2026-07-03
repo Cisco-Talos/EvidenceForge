@@ -58,11 +58,13 @@ from evidenceforge.generation.emitters import (
     ZeekPacketFilterEmitter,
     ZeekPeEmitter,
     ZeekReporterEmitter,
+    ZeekSmtpEmitter,
     ZeekSslEmitter,
     ZeekWeirdEmitter,
     ZeekX509Emitter,
 )
 from evidenceforge.generation.identity import IdentityDirectory
+from evidenceforge.generation.world_model import database_services_for_host
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
@@ -101,6 +103,7 @@ def _build_emitter_classes() -> dict:
         "zeek_conn": ZeekEmitter,
         "zeek_dns": ZeekDnsEmitter,
         "zeek_http": ZeekHttpEmitter,
+        "zeek_smtp": ZeekSmtpEmitter,
         "zeek_ssl": ZeekSslEmitter,
         "zeek_files": ZeekFilesEmitter,
         "zeek_dhcp": ZeekDhcpEmitter,
@@ -125,6 +128,7 @@ _ZEEK_FORMAT_NAMES = {
     "zeek_conn",
     "zeek_dns",
     "zeek_http",
+    "zeek_smtp",
     "zeek_ssl",
     "zeek_files",
     "zeek_dhcp",
@@ -721,6 +725,22 @@ class EmitterSetupMixin:
             # Servers/DCs: no persistent desktop session at boot
             pids["explorer"] = pids["winlogon"]  # Alias for fallback lookups
         pids["dwm"] = _c(pids["csrss_s0"], r"C:\Windows\System32\dwm.exe", "dwm.exe", "SYSTEM")
+
+        roles = {role.lower() for role in (system.roles or [])}
+        service_defaults = getattr(self, "_system_service_defaults", {})
+        services = tuple(service_defaults.get(system.hostname, system.services or ()))
+        db_services = database_services_for_host(
+            services,
+            "windows",
+            has_database_role=bool(roles & {"database", "db_server"}),
+        )
+        if "mssql" in db_services:
+            pids["sqlservr"] = _c(
+                pids["services"],
+                r"C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQL\Binn\sqlservr.exe",
+                "sqlservr.exe -sMSSQLSERVER",
+                r"NT SERVICE\MSSQLSERVER",
+            )
         if boot_base is not None:
             sm.set_current_time(boot_base)
 
@@ -787,9 +807,10 @@ class EmitterSetupMixin:
 
         roles = {role.lower() for role in (system.roles or [])}
         service_defaults = getattr(self, "_system_service_defaults", {})
-        services = {svc.lower() for svc in service_defaults.get(system.hostname, [])}
+        services = tuple(service_defaults.get(system.hostname, system.services or ()))
+        service_tokens = {svc.lower() for svc in services}
         proxy_markers = {"forward_proxy", "squid", "proxy"}
-        if roles & proxy_markers or services & proxy_markers:
+        if roles & proxy_markers or service_tokens & proxy_markers:
             squid_user = "squid" if is_rhel else "proxy"
             pids["squid"] = _c(
                 pids["systemd"],
@@ -799,7 +820,7 @@ class EmitterSetupMixin:
             )
 
         web_markers = {"web_server", "apache", "apache2", "httpd", "nginx"}
-        if roles & web_markers or services & web_markers or "web" in system.hostname.lower():
+        if roles & web_markers or service_tokens & web_markers or "web" in system.hostname.lower():
             if is_rhel:
                 pids["httpd"] = _c(
                     pids["systemd"],
@@ -814,6 +835,26 @@ class EmitterSetupMixin:
                     "/usr/sbin/apache2 -DFOREGROUND",
                     "www-data",
                 )
+
+        db_services = database_services_for_host(
+            services,
+            "linux",
+            has_database_role=bool(roles & {"database", "db_server"}),
+        )
+        if "mysql" in db_services:
+            pids["mysqld"] = _c(
+                pids["systemd"],
+                "/usr/sbin/mysqld",
+                "/usr/sbin/mysqld --daemonize --pid-file=/run/mysqld/mysqld.pid",
+                "mysql",
+            )
+        if "postgresql" in db_services:
+            pids["postgres"] = _c(
+                pids["systemd"],
+                "/usr/bin/postgres",
+                "/usr/bin/postgres -D /var/lib/pgsql/data",
+                "postgres",
+            )
 
         cron_name = "/usr/sbin/crond" if is_rhel else "/usr/sbin/cron"
         cron_cmd = "/usr/sbin/crond -n" if is_rhel else "/usr/sbin/cron -f"

@@ -92,6 +92,7 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
     "zeek_conn": TargetFormatPolicy("zeek_conn", "ndjson", "ndjson"),
     "zeek_dns": TargetFormatPolicy("zeek_dns", "ndjson", "ndjson"),
     "zeek_http": TargetFormatPolicy("zeek_http", "ndjson", "ndjson"),
+    "zeek_smtp": TargetFormatPolicy("zeek_smtp", "ndjson", "ndjson"),
     "zeek_ssl": TargetFormatPolicy("zeek_ssl", "ndjson", "ndjson"),
     "zeek_files": TargetFormatPolicy("zeek_files", "ndjson", "ndjson"),
     "zeek_dhcp": TargetFormatPolicy("zeek_dhcp", "ndjson", "ndjson"),
@@ -139,12 +140,13 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
     ),
     "proxy_access": TargetFormatPolicy(
         "proxy_access",
-        "apache_combined",
+        "apache_proxy_extended_combined",
         "apache_combined",
         splunk_variant="apache_proxy_json",
         notes=(
-            "Default and SOF-ELK consume Apache/Nginx combined proxy logs; Splunk consumes "
-            "Apache TA-compatible JSON proxy access records with CIM proxy tagging."
+            "Default consumes Apache/Nginx combined proxy logs with an optional proxy metadata "
+            "tail; SOF-ELK consumes plain combined proxy logs; Splunk consumes Apache "
+            "TA-compatible JSON proxy access records with CIM proxy tagging."
         ),
     ),
 }

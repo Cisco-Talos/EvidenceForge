@@ -196,6 +196,35 @@ def _proxy_url_category(event_data: dict[str, Any]) -> str:
     return "Business/Economy"
 
 
+def _ssl_bump_action(event_data: dict[str, Any]) -> str:
+    """Return source-native TLS inspection metadata for proxy access rows."""
+    action = str(event_data.get("proxy_action") or "").lower()
+    method = str(event_data.get("method") or "").upper()
+    url = str(event_data.get("url") or "").lower()
+    status_code = _int_value(event_data.get("status_code"), 0)
+    if action == "ssl-inspect":
+        return "bump"
+    if url.startswith("https://") and method != "CONNECT":
+        return "bump"
+    if action == "tunnel-setup":
+        return "peek"
+    if method == "CONNECT" and (action in {"deny", "auth-required"} or status_code >= 400):
+        return "terminate"
+    return ""
+
+
+def _proxy_metadata(event_data: dict[str, Any]) -> str:
+    """Return optional key-value metadata for extended proxy combined logs."""
+    parts: list[str] = []
+    proxy_action = str(event_data.get("proxy_action") or "")
+    if proxy_action:
+        parts.append(f"proxy_action={proxy_action}")
+    ssl_bump = _ssl_bump_action(event_data)
+    if ssl_bump:
+        parts.append(f"ssl_bump={ssl_bump}")
+    return " ".join(parts)
+
+
 class ProxyEmitter(HostMultiplexEmitter):
     """Emitter for forward proxy access logs.
 
@@ -279,7 +308,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             needs_connect = True
             if last_activity is not None:
                 elapsed = (event.timestamp - last_activity).total_seconds()
-                if elapsed < _CONNECT_TUNNEL_TIMEOUT_S:
+                if 0 <= elapsed < _CONNECT_TUNNEL_TIMEOUT_S:
                     needs_connect = False
 
             if needs_connect:
@@ -358,6 +387,9 @@ class ProxyEmitter(HostMultiplexEmitter):
             "sc_bytes": event_data.get("sc_bytes"),
             "user_agent": _combined_log_quoted(event_data.get("user_agent")),
             "referrer": _combined_log_quoted(event_data.get("referrer")),
+            "proxy_metadata": ""
+            if self.output_target == OutputTarget.SOF_ELK
+            else _combined_log_quoted(_proxy_metadata(event_data)),
         }
         rendered = self._template.render(**context)
         return rendered.strip()
@@ -396,6 +428,9 @@ class ProxyEmitter(HostMultiplexEmitter):
             "proxy_action": proxy_action,
             "url_category": _proxy_url_category(event_data),
         }
+        ssl_bump_action = _ssl_bump_action(event_data)
+        if ssl_bump_action:
+            record["ssl_bump_action"] = ssl_bump_action
         content_type = event_data.get("content_type")
         if content_type:
             record["http_content_type"] = str(content_type)

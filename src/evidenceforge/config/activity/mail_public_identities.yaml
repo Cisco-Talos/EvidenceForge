@@ -1,0 +1,39 @@
+# Role-specific public identity pools for external SMTP senders and relays.
+# These ranges intentionally stay separate from generic web/CDN pools so port 25
+# peers do not inherit browser/CDN-looking PTR and provider identities.
+reserved_replacement_domains:
+  - postrelay.net
+  - mailbridge.io
+  - relaygridmail.com
+  - inboxroute.net
+  - sendmesh.io
+  - edgepostmail.com
+
+providers:
+  - name: proofpoint
+    weight: 4
+    prefixes:
+      - [148, 163, 128, 191]
+      - [199, 255, 192, 195]
+    ptr_templates:
+      - "mx{slot}.{domain}"
+      - "mail{slot}.{domain}"
+      - "mta-{third}-{fourth}.pphostedmail.net"
+  - name: sendgrid
+    weight: 3
+    prefixes:
+      - [167, 89, 0, 127]
+      - [198, 37, 144, 159]
+    ptr_templates:
+      - "o{third}.outbound-mail.{domain}"
+      - "mta-{third}-{fourth}.sendgrid.net"
+      - "smtp{slot}.{domain}"
+  - name: hosted-mail
+    weight: 3
+    prefixes:
+      - [66, 96, 128, 191]
+      - [74, 208, 0, 255]
+    ptr_templates:
+      - "mx{slot}.{domain}"
+      - "smtp{slot}.{domain}"
+      - "mail-{third}-{fourth}.{domain}"

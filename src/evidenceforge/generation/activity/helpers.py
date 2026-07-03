@@ -28,6 +28,8 @@ from evidenceforge.utils.rng for backward compatibility.
 
 from evidenceforge.utils.rng import _get_rng, _thread_local  # noqa: F401
 
+from .command_parameter_pools import command_parameter_pools
+
 
 def _get_os_category(os_string: str) -> str:
     """Detect OS category from OS string.
@@ -140,32 +142,11 @@ _GENERAL_PARAMS = {
         "nginx-proxy",
         "api-gateway",
     ],
-    "ssh_target": ["web-srv-01", "db-srv-01", "app-srv-02", "bastion-01", "10.0.2.50"],
     "small_int": ["1024", "2048", "3072", "4096", "5120", "6144", "7168", "8192"],
-    "url": [
-        "https://mail.google.com/mail/u/0/#inbox",
-        "https://outlook.office365.com/mail/inbox",
-        "https://app.slack.com/client/T01234567",
-        "https://jira.corp.local/browse/PROJ-1234",
-    ],
-    "internal_url": [
-        "https://jira.corp.local/browse/PROJ-1234",
-        "https://wiki.corp.local/display/ENG/Architecture",
-        "https://gitlab.corp.local/team/project/-/pipelines",
-        "https://grafana.corp.local/d/system-overview",
-    ],
-    "external_api_url": [
-        "https://api.github.com/rate_limit",
-        "https://api.gitlab.com/version",
-        "https://api.cloudflare.com/client/v4/user",
-        "https://api.slack.com/methods/api.test",
-        "https://api.snapcraft.io/v2/snaps/refresh",
-    ],
 }
 
 # Parameterized command-line value pools for process_query variety
 _QUERY_PARAMS = {
-    "db_server": ["localhost", "DB-SRV-01", "sqlprod01", "10.0.2.50", "SQLEXPRESS"],
     "db_name": ["master", "inventory", "analytics", "hr_records", "webapp_prod", "reporting"],
     "sql_query": [
         "SELECT TOP 100 * FROM dbo.Users ORDER BY LastLogin DESC",
@@ -254,6 +235,8 @@ def _parameterize_command(rng, command_line: str, username: str = "") -> str:
         command_line = command_line.replace("{username}", username)
 
     all_params = {**_GENERAL_PARAMS, **_QUERY_PARAMS, **_QUERY_PARAMS_LINUX}
+    for section_values in command_parameter_pools().values():
+        all_params.update(section_values)
     for _pass in range(3):  # Max 3 passes to resolve nested placeholders
         changed = False
         for key, values in all_params.items():

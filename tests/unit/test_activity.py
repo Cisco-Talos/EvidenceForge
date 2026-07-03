@@ -3021,6 +3021,52 @@ class TestActivityGenerator:
         )
         assert unlock_logon.auth.source_ip == "-"
 
+    def test_locked_workstation_session_does_not_own_foreground_process_activity(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Foreground user-app activity should not launch while the session is locked."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x4f2a1b"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=5),
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+        locked_time = lock_time + timedelta(minutes=2)
+
+        assert (
+            activity_gen._active_user_interactive_windows_session(
+                test_user,
+                test_system,
+                locked_time,
+            )
+            is None
+        )
+        assert activity_gen._active_interactive_windows_session(test_system, locked_time) is None
+        assert (
+            activity_gen._locked_user_interactive_windows_session(
+                test_user,
+                test_system,
+                locked_time,
+            )
+            is not None
+        )
+
+        activity_gen.generate_process = Mock(return_value=4242)
+        activity_gen.execute_baseline_activity(
+            test_user,
+            test_system,
+            locked_time,
+            "process_user_apps",
+        )
+
+        activity_gen.generate_process.assert_not_called()
+
     def test_workstation_unlock_reauth_precedes_4801_with_varied_gap(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -3332,6 +3378,8 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.kerberos.service_name == "krbtgt/example.local"
         assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
+        assert event.kerberos.target_username == "alice"
+        assert event.kerberos.target_domain == "EXAMPLE.LOCAL"
 
     def test_machine_account_logon_emits_nearby_dc_kerberos_audit(
         self, activity_gen, state_manager, mock_emitters
@@ -4219,6 +4267,109 @@ class TestActivityGenerator:
         assert network_events
         assert network_events[-1].network.dst_ip == web_server.ip
         assert network_events[-1].network.dst_port == 22
+
+    def test_ssh_process_network_effect_passes_command_username(self, activity_gen, test_user):
+        """SSH process-network correlation should pass the attempted username."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.1.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        app_server = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
+        activity_gen._all_system_ips = [workstation.ip, app_server.ip]
+        activity_gen.generate_connection = Mock(return_value="")
+
+        activity_gen._emit_process_network_correlation(
+            workstation,
+            "/usr/bin/ssh",
+            f"ssh -l {test_user.username} APP-INT-01",
+            timestamp,
+            4242,
+            random.Random(1),
+        )
+
+        assert activity_gen.generate_connection.called
+        assert (
+            activity_gen.generate_connection.call_args.kwargs["ssh_attempted_username"]
+            == test_user.username
+        )
+
+    def test_generic_ssh_preauth_syslog_uses_attempted_username(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Generic destination sshd failure rows should use the source command username."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.1.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        app_server = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+            services=["ssh"],
+        )
+        mock_emitters["syslog"] = Mock()
+        activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
+        activity_gen._all_system_ips = [workstation.ip, app_server.ip]
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen.sid_registry[test_user.username] = "S-1-5-21-1-2-3-1001"
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=0,
+            image="/usr/bin/ssh",
+            command_line=f"ssh {test_user.username}@APP-INT-01",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+
+        activity_gen.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip=app_server.ip,
+            time=timestamp,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=1.2,
+            orig_bytes=500,
+            resp_bytes=900,
+            src_port=52876,
+            pid=pid,
+            source_system=workstation,
+            conn_state="SF",
+            ssh_attempted_username=test_user.username,
+        )
+
+        messages = [
+            call.args[0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None and call.args[0].syslog.app_name == "sshd"
+        ]
+        assert any(
+            message.startswith("Connection from 10.0.1.10 port 52876 ") for message in messages
+        )
+        assert any(f"Failed password for {test_user.username} " in message for message in messages)
+        assert any(
+            f"Connection closed by authenticating user {test_user.username} " in message
+            for message in messages
+        )
+        assert not any("unknown" in message for message in messages)
 
     def test_sqlcmd_unresolved_host_emits_failed_network_attempt(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -7100,6 +7251,96 @@ class TestActivityGenerator:
         child = process_events[-1]
         assert child.process.parent_pid != one_shot_parent_pid
 
+    def test_generate_process_spaces_bare_shell_child_commands(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Human-entered commands should not spawn immediately after an interactive shell."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x44444"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp)
+        shell_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Users\testuser\.cargo\bin\cargo.exe",
+            "cargo.exe build --release",
+            parent_pid=shell_pid,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == shell_pid
+        assert child.timestamp >= timestamp + timedelta(seconds=8)
+
+    def test_storyline_process_preserves_bare_shell_child_timing(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Explicit storyline timing remains authoritative for shell child commands."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x55555"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp)
+        shell_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        requested_time = timestamp + timedelta(seconds=1)
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            requested_time,
+            logon_id,
+            r"C:\Users\testuser\.cargo\bin\cargo.exe",
+            "cargo.exe build --release",
+            parent_pid=shell_pid,
+            from_storyline=True,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == shell_pid
+        assert child.timestamp == requested_time
+
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -7163,6 +7404,50 @@ class TestActivityGenerator:
             "tcp",
             "ssh",
         )
+
+    def test_generate_connection_drops_recorded_terminated_process_pid(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        test_user,
+        test_system,
+    ):
+        """Connections should not inherit PID identity from a terminated process instance."""
+        start_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line="chrome.exe --type=renderer",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+        running = state_manager.get_process(test_system.hostname, pid)
+        assert running is not None
+        activity_gen._terminated_process_keys.add((test_system.hostname, pid, running.start_time))
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="93.184.216.34",
+            time=start_time + timedelta(minutes=20),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            pid=pid,
+            source_system=test_system,
+            process_image=running.image,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.process is None
+        assert event.network.initiating_pid == -1
 
     def test_generate_connection_preserves_public_vip_for_inbound_web_host(
         self,
@@ -9726,8 +10011,8 @@ def activity_gen():
     return ActivityGenerator(sm, mock_emitters)
 
 
-def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
-    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+def test_disambiguate_icmp_observation_time_uses_monotonic_varied_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe or use fixed spacing."""
 
     class CountingDict(dict[tuple[str, int, str, int], int]):
         """Dictionary that counts next-timestamp lookups."""
@@ -9755,8 +10040,16 @@ def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity
         for _ in range(1000)
     ]
 
+    gaps = [
+        (current - previous).total_seconds()
+        for previous, current in zip(adjusted_times[:-1], adjusted_times[1:], strict=True)
+    ]
+
     assert adjusted_times[0] == base_time
-    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert all(gap > 0 for gap in gaps)
+    assert min(gaps) >= timedelta(milliseconds=7).total_seconds()
+    assert max(gaps) < timedelta(milliseconds=84).total_seconds()
+    assert len({round(gap, 6) for gap in gaps}) > 100
     assert next_timestamps.get_calls == len(adjusted_times)
     assert len(next_timestamps) == 1
 
@@ -9767,16 +10060,20 @@ def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
     ts_now = now.timestamp()
 
     activity_gen._dns_cache = {
-        (f"10.0.0.{i % 255}", f"host-{i}.example.com"): ts_now - 5 for i in range(50_100)
+        (f"10.0.0.{i % 255}", "10.0.0.1", f"host-{i}.example.com", "ADDR"): (
+            ts_now - 35,
+            ts_now - 5,
+        )
+        for i in range(50_100)
     }
-    hot_key = ("10.0.0.5", "active.example.com")
-    activity_gen._dns_cache[hot_key] = ts_now - 1
+    hot_key = ("10.0.0.5", "10.0.0.1", "active.example.com", "ADDR")
+    activity_gen._dns_cache[hot_key] = (ts_now - 1, ts_now + 30)
     activity_gen._dns_cache_last_prune = 0.0
 
-    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[1])
+    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[2])
 
     assert hot_key in activity_gen._dns_cache
-    assert len(activity_gen._dns_cache) <= 50_001
+    assert len(activity_gen._dns_cache) <= 2
 
 
 def test_ensure_file_event_skips_existing_linux_binaries(activity_gen):

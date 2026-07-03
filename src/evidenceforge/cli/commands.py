@@ -270,7 +270,11 @@ def generate(
         from evidenceforge.validation import ScenarioValidator
 
         console.print("\n[bold]Validating cross-references...[/bold]")
-        validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
+        validator = ScenarioValidator(
+            scenario,
+            oob_hosts=oob_hosts,
+            scenario_root=scenario_file.parent,
+        )
         issues = validator.validate()
 
         if issues:
@@ -326,6 +330,7 @@ def generate(
         raise typer.Exit(EXIT_INPUT_ERROR)
 
     # Determine output directory
+    scenario_dir = scenario_file.parent
     if output:
         # Explicit --output flag: logs in data/ subdirectory, ground truth at root
         data_dir = output / "data"
@@ -333,9 +338,9 @@ def generate(
     else:
         # Default: derive from scenario file location
         # scenarios/<name>/scenario.yaml → data goes to scenarios/<name>/data/
-        scenario_dir = scenario_file.parent
         data_dir = scenario_dir / "data"
         ground_truth_dir = scenario_dir
+    artifacts_dir = ground_truth_dir / "artifacts"
 
     from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
     from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
@@ -376,8 +381,11 @@ def generate(
     json_path = ground_truth_dir / GROUND_TRUTH_JSON_FILENAME
     manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
     target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
+    email_artifacts_path = artifacts_dir / "email"
     try:
-        _reject_generated_sidecar_symlinks([gt_path, json_path, manifest_path, target_path])
+        _reject_generated_sidecar_symlinks(
+            [gt_path, json_path, manifest_path, target_path, artifacts_dir]
+        )
     except PermissionError as e:
         console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
@@ -392,6 +400,8 @@ def generate(
         existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
     if _path_exists_or_symlink(target_path):
         existing.append(f"  {OUTPUT_TARGET_FILENAME} ({target_path})")
+    if _path_exists_or_symlink(email_artifacts_path):
+        existing.append(f"  artifacts/email/ ({email_artifacts_path})")
 
     has_existing = bool(existing)
     if has_existing:
@@ -417,10 +427,12 @@ def generate(
     staging_dir = None
     gen_data_dir = data_dir
     gen_gt_dir = ground_truth_dir
+    gen_artifacts_dir = artifacts_dir
     if has_existing:
         staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
         gen_data_dir = staging_dir / "data"
         gen_gt_dir = staging_dir
+        gen_artifacts_dir = staging_dir / "artifacts"
 
     # Generate logs
     try:
@@ -485,6 +497,8 @@ def generate(
                 output_dir=gen_data_dir,
                 progress_callback=progress_callback,
                 ground_truth_dir=gen_gt_dir,
+                artifact_dir=gen_artifacts_dir,
+                scenario_root=scenario_dir,
                 output_target=output_target,
                 oob_hosts=oob_hosts,
             )
@@ -500,6 +514,7 @@ def generate(
             staged_json = gen_gt_dir / GROUND_TRUTH_JSON_FILENAME
             staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
             staged_target = gen_gt_dir / OUTPUT_TARGET_FILENAME
+            staged_artifacts = gen_artifacts_dir
             if not gen_data_dir.exists():
                 raise RuntimeError("Staged data/ directory missing after generation")
             if not staged_gt.exists():
@@ -532,6 +547,8 @@ def generate(
                     manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
                 if _path_exists_or_symlink(target_path):
                     target_path.rename(rollback_dir / OUTPUT_TARGET_FILENAME)
+                if artifacts_dir.exists():
+                    artifacts_dir.rename(rollback_dir / "artifacts")
 
                 # Step 2: Install new output.
                 gen_data_dir.rename(data_dir)
@@ -541,6 +558,8 @@ def generate(
                     staged_manifest.rename(manifest_path)
                 if staged_target.exists():
                     staged_target.rename(target_path)
+                if staged_artifacts.exists():
+                    staged_artifacts.rename(artifacts_dir)
                 swap_succeeded = True
 
             except BaseException:
@@ -559,6 +578,8 @@ def generate(
                         json_path.unlink()
                     if manifest_path.exists():
                         manifest_path.unlink()
+                    if artifacts_dir.exists():
+                        shutil.rmtree(artifacts_dir)
                     if _path_exists_or_symlink(target_path):
                         target_path.unlink()
                     if (rollback_dir / "data").exists():
@@ -571,6 +592,9 @@ def generate(
                     rollback_manifest = rollback_dir / OBSERVATION_MANIFEST_FILENAME
                     if rollback_manifest.exists():
                         rollback_manifest.rename(manifest_path)
+                    rollback_artifacts = rollback_dir / "artifacts"
+                    if rollback_artifacts.exists():
+                        rollback_artifacts.rename(artifacts_dir)
                     rollback_target = rollback_dir / OUTPUT_TARGET_FILENAME
                     if rollback_target.exists():
                         rollback_target.rename(target_path)
@@ -609,6 +633,14 @@ def generate(
                     size = file.stat().st_size
                     size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
                     console.print(f"    • {file.name} ({size_str})")
+
+        if artifacts_dir.exists():
+            console.print(f"  Artifacts: {artifacts_dir}")
+            for file in sorted(artifacts_dir.rglob("*")):
+                if file.is_file():
+                    size = file.stat().st_size
+                    size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+                    console.print(f"    • {file.relative_to(artifacts_dir)} ({size_str})")
 
         # Success - exit normally
         return
@@ -707,7 +739,11 @@ def validate(
     from evidenceforge.validation import ScenarioValidator
 
     console.print("\n[bold]Validating cross-references...[/bold]")
-    validator = ScenarioValidator(scenario, oob_hosts=oob_hosts)
+    validator = ScenarioValidator(
+        scenario,
+        oob_hosts=oob_hosts,
+        scenario_root=scenario_file.parent,
+    )
     issues = validator.validate()
 
     if issues:

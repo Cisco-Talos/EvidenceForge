@@ -49,6 +49,7 @@ from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
+    sample_packet_timing_delta,
     sample_timing_delta,
 )
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
@@ -176,6 +177,7 @@ class _SshTransportState:
     resp_ip_bytes: int = 0
     open_time: datetime | None = None
     execution_anchor: ActionAnchor | None = None
+    logon_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +339,7 @@ class SshSessionActionBundle:
         """Expand and dispatch SSH session evidence through the generator runtime."""
 
         state = self._plan_transport()
+        self._ensure_session_identity(state)
         auth_plan = self._prepare_linux_auth_plan(state)
         self._open_transport(
             state,
@@ -440,12 +443,31 @@ class SshSessionActionBundle:
             session_obj_id=request.session_obj_id,
             src_host=self._source_host_context(),
             open_time=request.time,
+            logon_id=request.logon_id,
             execution_anchor=ActionAnchor(
                 family="ssh_session",
                 stable_id=request.execution_stable_id(src_port),
                 source=request.source,
             ),
         )
+
+    def _ensure_session_identity(self, state: _SshTransportState) -> None:
+        """Ensure this SSH action has one canonical session identity."""
+
+        request = self.request
+        executor = self.executor
+        if not state.logon_id:
+            state.logon_id = executor.state_manager.create_session(
+                username=request.user.username,
+                system=request.target_system.hostname,
+                logon_type=10,
+                source_ip=request.source_ip,
+                source_port=state.source_port,
+                session_kind="ssh",
+                start_time=request.time,
+            )
+        if not state.session_obj_id:
+            state.session_obj_id = executor.state_manager.get_session_object_id(state.logon_id)
 
     def _open_transport(self, state: _SshTransportState, responding_pid: int | None) -> None:
         """Delegate SSH TCP transport to the canonical network connection contract."""
@@ -498,18 +520,16 @@ class SshSessionActionBundle:
         if network_uid:
             self._sync_transport_from_connection_state(state, network_uid)
 
-        if request.logon_id:
+        if state.logon_id:
             executor.state_manager.update_session_metadata(
-                request.logon_id,
+                state.logon_id,
                 source_port=state.source_port,
                 session_kind="ssh",
                 transport_pid=responding_pid,
                 network_close_time=state.close_time,
             )
             if not state.session_obj_id:
-                state.session_obj_id = executor.state_manager.get_session_object_id(
-                    request.logon_id
-                )
+                state.session_obj_id = executor.state_manager.get_session_object_id(state.logon_id)
         if not state.session_obj_id:
             state.session_obj_id = self._stable_session_object_id(state)
 
@@ -523,6 +543,7 @@ class SshSessionActionBundle:
             request.user.username,
             request.source_ip,
             state.source_port,
+            state.logon_id,
             request.time.isoformat(),
             request.source,
         )
@@ -610,7 +631,7 @@ class SshSessionActionBundle:
                 username=request.user.username,
                 source_ip=request.source_ip,
                 source_port=state.source_port,
-                logon_id=request.logon_id,
+                logon_id=state.logon_id,
                 session_id=auth_state.logind_session_id if auth_state is not None else 0,
                 logon_type=10,
             ),
@@ -631,9 +652,9 @@ class SshSessionActionBundle:
         if plan is None or not event.dst_host or event.dst_host.os_category != "linux":
             return None
 
-        if request.logon_id:
+        if state.logon_id:
             executor.state_manager.update_session_metadata(
-                request.logon_id,
+                state.logon_id,
                 transport_pid=plan.sshd_pid,
             )
         resolved_times = self._resolve_linux_auth_lifecycle(
@@ -656,6 +677,11 @@ class SshSessionActionBundle:
             state.rng,
             resolved_times["logind"],
         )
+        if state.logon_id:
+            executor.state_manager.update_session_metadata(
+                state.logon_id,
+                session_id=logind_session_id,
+            )
         return _SshLinuxAuthState(
             sshd_pid=plan.sshd_pid,
             logind_session_id=logind_session_id,
@@ -725,8 +751,8 @@ class SshSessionActionBundle:
                 (canonical_event_time - canonical_transport_open_time).total_seconds() * 1000
             ),
         )
-        transport_to_syslog_ms = max(
-            conn_delay_ms,
+        auth_ready_delay_ms = max(
+            conn_delay_ms + accepted_gap_ms,
             canonical_offset_ms + flow_window.max_ms + 25,
         )
         graph = TemporalConstraintGraph()
@@ -736,7 +762,7 @@ class SshSessionActionBundle:
             _ssh_syslog_time(
                 transport_open_time,
                 "connection",
-                transport_to_syslog_ms,
+                conn_delay_ms,
                 *syslog_seed,
             ),
         )
@@ -745,7 +771,7 @@ class SshSessionActionBundle:
             _ssh_syslog_time(
                 transport_open_time,
                 "accepted",
-                transport_to_syslog_ms + accepted_gap_ms,
+                auth_ready_delay_ms,
                 *syslog_seed,
             ),
         )
@@ -754,7 +780,7 @@ class SshSessionActionBundle:
             _ssh_syslog_time(
                 transport_open_time,
                 "pam",
-                transport_to_syslog_ms + accepted_gap_ms + pam_gap_ms,
+                auth_ready_delay_ms + pam_gap_ms,
                 *syslog_seed,
             ),
         )
@@ -763,14 +789,14 @@ class SshSessionActionBundle:
             _ssh_syslog_time(
                 transport_open_time,
                 "logind",
-                transport_to_syslog_ms + accepted_gap_ms + pam_gap_ms + logind_gap_ms,
+                auth_ready_delay_ms + pam_gap_ms + logind_gap_ms,
                 *syslog_seed,
             ),
         )
         graph.constrain_after(
             "connection",
             "transport_open",
-            min_gap=timedelta(milliseconds=transport_to_syslog_ms),
+            min_gap=timedelta(milliseconds=conn_delay_ms),
         )
         graph.constrain_after(
             "accepted",
@@ -810,9 +836,9 @@ class SshSessionActionBundle:
         state.close_time = earliest_close_time
         state.duration = max(1.0, (state.close_time - request.time).total_seconds())
 
-        if request.logon_id:
+        if state.logon_id:
             self.executor.state_manager.update_session_metadata(
-                request.logon_id,
+                state.logon_id,
                 network_close_time=state.close_time,
             )
 
@@ -820,6 +846,23 @@ class SshSessionActionBundle:
             connection = self.executor.state_manager.get_connection(state.conn_id)
             if connection is not None:
                 connection.close_time = state.close_time
+
+    def _predicted_transport_open_time(self, state: _SshTransportState) -> datetime:
+        """Return the deterministic source-visible transport anchor for this SSH tuple."""
+
+        request = self.request
+        return request.time + sample_packet_timing_delta(
+            "network.connection_start_jitter",
+            seed_parts=(
+                request.source_ip,
+                state.source_port,
+                request.target_system.ip,
+                22,
+                "tcp",
+                "ssh",
+                request.time,
+            ),
+        )
 
     def _resolve_responder_pid(self, state: _SshTransportState, conn_delay_ms: int) -> int:
         """Resolve or materialize the destination-side sshd process for this tuple."""
@@ -842,10 +885,10 @@ class SshSessionActionBundle:
             )
             is None
         ):
+            transport_open_time = self._predicted_transport_open_time(state)
             return executor.ensure_linux_ssh_responder_process(
                 target_system=request.target_system,
-                time=(state.open_time or request.time)
-                + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
+                time=transport_open_time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
                 source_ip=request.source_ip,
                 source_port=state.source_port,
                 target_user=request.user.username,
@@ -904,7 +947,7 @@ class SshSessionActionBundle:
             request.user.username,
             request.source_ip,
             state.source_port,
-            request.logon_id,
+            state.logon_id,
             10,
             state.session_obj_id,
             event.timestamp,
@@ -928,7 +971,7 @@ class SshSessionActionBundle:
         ready_seed = _stable_seed(
             "ssh_session_source_ready:"
             f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
-            f"{state.source_port}:{request.logon_id}:{request.time.isoformat()}"
+            f"{state.source_port}:{state.logon_id}:{request.time.isoformat()}"
         )
         ready_time = max(ecar_login_time, auth_state.logind_time) + timedelta(
             milliseconds=80 + (ready_seed % 160)
@@ -939,9 +982,9 @@ class SshSessionActionBundle:
             request.target_system.ip,
             ready_time,
         )
-        if request.logon_id:
+        if state.logon_id:
             self.executor.state_manager.update_session_metadata(
-                request.logon_id,
+                state.logon_id,
                 source_ready_time=ready_time,
             )
 
@@ -1050,7 +1093,7 @@ class SshSessionActionBundle:
                     username=request.user.username,
                     source_ip=request.source_ip,
                     source_port=state.source_port,
-                    logon_id=request.logon_id,
+                    logon_id=state.logon_id,
                     session_id=auth_state.logind_session_id,
                     logon_type=10,
                 ),

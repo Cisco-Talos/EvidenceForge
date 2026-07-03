@@ -1290,6 +1290,278 @@ or follow-up batch is needed.
   texture. The loop-307 ICMP target verified clean: 238/238 ICMP eCAR FLOW rows
   omitted `src_port`/`dst_port` and included `icmp_type=8`/`icmp_code=0`.
 
+- Loops 308-310 continued the dev-branch assessment loop. Loop 308 fixed Linux
+  SSH failed-auth source-native ordering and username semantics; loop 309 fixed
+  source SSH command username propagation into destination generic SSH preauth
+  syslog; loop 310 fixed Windows locked-session foreground activity by recording
+  lock intervals, deferring/skipping baseline activity while locked, emitting
+  pending unlocks independently, and blocking host-level process ownership from
+  locked workstation logons. Loop 310 automated eval passed at
+  96.47478843254147 over 84585 records, and the locked-session hard probe found
+  0 violations. The next P0 is source-local session lifecycle ordering:
+  loop-310 blind review and
+  `scenarios/iteration-test/blind-test/loop-310/hard_probe_session_lifecycle_ordering.json`
+  found one Windows Security 4634-before-4624 group and one eCAR USER_SESSION
+  LOGOUT-before-LOGIN group for short network logons.
+
+- Loop 311 fixed source-local session lifecycle ordering. Windows Security final
+  rendering now treats matching 4624 rows as prerequisites for 4634 logoff
+  repair, and eCAR final normalization moves USER_SESSION LOGOUT rows after
+  matching successful LOGIN rows. Automated eval passed at 96.4753649476231 over
+  84585 records, full local verification passed (`4704 passed, 19 skipped`),
+  and hard probes found 0 session lifecycle, locked-session, SSH failed-auth, or
+  SSH username violations. Blind review selected proxy-origin DNS causality as
+  the next P0: `scenarios/iteration-test/blind-test/loop-311/hard_probe_proxy_origin_dns_causality.json`
+  found 18 proxy-origin TLS rows whose SNI/IP had no prior visible Zeek A answer.
+
+- Loop 312 partially fixed proxy-origin DNS causality/cache state. Explicit proxy
+  egress and direct forward-proxy external HTTP/TLS paths now force uncached
+  proxy-side A lookups shortly before origin egress, and invisible/pre-window DNS
+  cache observations no longer suppress the first visible forced lookup. Automated
+  eval passed at 96.5498460793631 over 90768 records, repo-wide Ruff checks passed,
+  and full local verification passed (`4707 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-312/hard_probe_proxy_origin_dns_causality.json`
+  improved from 18 broad no-prior rows to 9 across 1120 proxy-origin TLS rows.
+  Blind review no longer prioritized proxy DNS: initial synthetic-confidence
+  scores were Threat Hunter 62, Detection Engineer 32, Network Forensics 31, and
+  Host/EDR 38; deliberation final scores were 52/36/33/40, average 40.25. The next
+  highest-leverage target is eCAR FLOW principal attribution plus endpoint baseline
+  texture, especially known PID/image FLOW rows with null principals while nearby
+  source-local activity carries `SYSTEM`, `LOCAL SERVICE`, `NETWORK SERVICE`, or a
+  user principal.
+
+- Loop 313 fixed the eCAR FLOW principal attribution policy by raising the
+  data-driven service/root/listener principal visibility probabilities so retained
+  PID/image provenance no longer flips independently from known principal evidence.
+  Automated eval passed at 96.31130005616335 over 90768 records, full local
+  verification passed (`4708 passed, 19 skipped`), and
+  `scenarios/iteration-test/blind-test/loop-313/hard_probe_ecar_flow_principal_attribution.json`
+  found 0 FLOW rows retaining PID/image while omitting principal when the same
+  host/PID/image had principal-bearing activity (down from 2865 on pre-fix data).
+  Blind scores were Threat Hunter 44, Detection Engineer 43, Network Forensics 18,
+  and Host/EDR 62; deliberation final scores were 49/48/24/64, average 46.25. The
+  next target is eCAR Group Policy registry semantics: replace one-off random
+  `Extension-List` GUID keys with a stable realistic client-side extension GUID set
+  reused by host/policy cycle, then follow with Windows Security 1102 EventData and
+  eCAR SSH session identifier consistency.
+
+- Loop 314 fixed eCAR Group Policy registry semantics at the shared data-pool and
+  materializer layer. `edr_pools.yaml` now provides a bounded
+  `group_policy_extension_guids` pool, the `Extension-List` HKLM template uses a
+  dedicated `group_policy_extension_guid` placeholder, and the EDR pool loader
+  validates GUID-shaped overlays. The shared materializer chooses from a stable
+  per-host subset and reuses one value inside a template group, covering both
+  baseline registry churn and process-side registry side effects. Automated eval
+  passed at 95.74878158737843 over 95168 records, focused EDR pool tests passed
+  (`58 passed`), config validation passed, and full local verification passed
+  (`4711 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-314/hard_probe_ecar_group_policy_registry_guid_reuse.json`
+  checked 293 Group Policy `Extension-List` rows and found 0 invalid GUIDs, 0
+  hosts with one unique GUID per row, and a maximum of 5 unique GUIDs per host from
+  a configured pool of 6. Blind scores were Threat Hunter 46, Detection Engineer
+  34, Network Forensics 38, and Host/EDR 39, average 39.25; deliberation was not
+  triggered because all reviewers returned inconclusive and score spread was only
+  12. The prior Group Policy issue did not recur; Host/EDR cited Group Policy
+  registry texture positively. Next target candidates are Windows service-account
+  4648 texture (`services.exe` explicit credential use repetition), workstation
+  Security/Sysmon event-family ratio sameness, proxy CONNECT companion gaps,
+  Linux bash command-pool repetition, and secondary source-profile polish.
+
+- Loop 315 fixed Windows service-account 4648 caller texture. Benign service-account
+  delegation is now data-driven under `auth_noise.yaml` with role-specific backup,
+  monitoring, deployment, reporting, and default service-task caller profiles. Baseline
+  service-account delegation now selects/reuses an agent process from that profile instead
+  of emitting every 4648 as `C:\Windows\System32\services.exe`. Validation schemas and
+  overlay checks were extended for the new config section. Automated eval passed at
+  96.28554535209074 over 92587 records, focused auth-noise tests passed, config validation
+  passed, and full local verification passed (`4714 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-315/hard_probe_service_account_4648_callers.json`
+  checked 28 service-account 4648 rows and found 0 `services.exe` callers across 6
+  distinct caller images. Blind scores were Threat Hunter 37, Detection Engineer 34,
+  Network Forensics 43, and Host/EDR 36, average 37.5; deliberation was not triggered.
+  The service-account 4648 issue did not recur. Next target candidates are proxy HTTPS
+  inspection semantics, DNS-to-TLS timing texture, eCAR actor object completeness for
+  long-lived daemon actors, IDS alert texture, and secondary DHCP/bash/1102 polish.
+
+- Loop 316 fixed proxy HTTPS inspection semantics. Default proxy access rows now render
+  explicit inspection metadata (`proxy_action=ssl-inspect ssl_bump=bump`) on inspected
+  HTTPS GET/POST rows and `proxy_action=tunnel-setup ssl_bump=peek` on CONNECT setup
+  rows, while SOF-ELK® keeps plain combined proxy logs and Splunk JSON gets
+  `ssl_bump_action`. The proxy parser and format schema understand the optional metadata
+  tail, and the emitter no longer lets future active-tunnel state suppress an earlier
+  CONNECT setup row. Automated eval passed at 96/100 over 92630 records, parseability
+  remained 100/100, focused proxy/parser tests passed (`75 passed`), config validation
+  passed, and full local verification passed (`4717 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-316/hard_probe_proxy_https_inspection_metadata.json`
+  found 1497 inspected HTTPS rows with 0 missing `ssl-inspect`/`bump`, 340 CONNECT setup
+  rows with 0 missing `peek`, 0 inspected rows without recent setup, and 0 proxy parse
+  errors. Blind scores were Threat Hunter 43, Detection Engineer 44, Network Forensics
+  43, and Host/EDR 56, average 46.5; deliberation was not triggered. The proxy HTTPS
+  semantic issue did not recur. Next target candidates are proxy client/user-agent
+  identity stability, repeated generic web/proxy asset skeletons and scanner UAs,
+  workstation maintenance/Sysmon event-family uniformity, perimeter TLS imperfection,
+  and Linux/syslog/proxy burst statefulness.
+
+- Loop 317 fixed proxy client/User-Agent identity stability. Generated full browser
+  User-Agents now collapse through a source-sticky proxy identity helper, including
+  CDN/subresource requests and baseline browser-session traffic, while explicit tool
+  and authored User-Agents remain intact. Automated eval passed at 96.51212004785118
+  over 92398 records, parseability remained 100/100, focused proxy/baseline tests
+  passed (`205 passed, 1 skipped`), and full local verification passed
+  (`4723 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-317/hard_probe_proxy_user_agent_stability.json`
+  found 2699 proxy rows, 0 parse errors, 26 source/second groups with multiple
+  User-Agents, 2 groups with more than two UA families, and max 3 distinct UA
+  families in one source/second. Blind scores were Threat Hunter 38, Detection
+  Engineer 34, Network Forensics 34, and Host/EDR 44, average 37.5; deliberation
+  was not triggered. The prior same-source same-second server/proxy UA burst issue
+  did not recur as a major finding. Next target is eCAR SSH `USER_SESSION` lifecycle
+  field consistency: preserve `session_id`, `logon_id`, source IP, source port, and
+  username across paired LOGIN/LOGOUT rows, then address public web external UA/path
+  diversity and Windows 4625 failure-mode texture.
+
+- Loop 318 fixed eCAR SSH `USER_SESSION` lifecycle identity at the SSH action bundle
+  and canonical session state layers. Unmanaged SSH bundle executions now create a
+  canonical session identity, use the resolved `logon_id` across LOGIN/LOGOUT and
+  source-timing seeds, and write Linux logind `session_id` back to state so later
+  generic logoff paths preserve the same identity; `StateManager.get_session_object_id`
+  now also resolves aliases and recently ended sessions. Automated eval passed at
+  95.95333291230318 over 188044 records, parseability remained 100/100, focused
+  lifecycle tests passed (`174 passed`), and full local verification passed
+  (`4724 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-318/hard_probe_ecar_ssh_session_lifecycle.json`
+  found 135 SSH `USER_SESSION` rows with 0 missing LOGIN/LOGOUT `logon_id`, 0 missing
+  LOGIN/LOGOUT `session_id`, 0 paired field mismatches, and 0 multi-value identity
+  groups; 6 complete identity-bearing LOGOUT rows remained unmatched by in-window
+  LOGIN rows, consistent with slice-of-time collection. Blind scores were Threat
+  Hunter 32, Detection Engineer 28, Network Forensics 28, and Host/EDR 36, average
+  31.0. Deliberation triggered for verdict disagreement and ended at average 30.5,
+  with Host/EDR revising to Real. The prior SSH session identity issue did not recur.
+  Next target is Linux syslog/eCAR companion contracts for dbus
+  `hostname1`/`locale1`/`timedate1`/`resolve1` activity and `timedatectl`/polkit
+  process evidence.
+
+- Loop 319 fixed Linux dbus/polkit syslog and eCAR companion contracts. Dbus
+  activation noise is now lower weighted and capped per host/window in
+  `extra_syslog_messages.yaml`, and polkit action messages that name concrete
+  command-line tools (`timedatectl`, `systemctl`, `pkcon`, `nmcli`) now materialize
+  compatible eCAR `PROCESS` evidence before rendering the syslog `unix-process`
+  PID. Automated eval passed at 96.49059004592698 over 183761 records, parseability
+  remained 100/100, focused Linux system-traffic tests passed (`61 passed`), Ruff
+  checks passed, and full local verification passed (`4726 passed, 19 skipped`).
+  The hard probe
+  `scenarios/iteration-test/blind-test/loop-319/hard_probe_linux_dbus_polkit_companions.json`
+  found 51 dbus activation rows, 0 dbus burst groups, 12 polkit action rows with
+  process paths, and 0 missing eCAR process companions. Blind scores were Threat
+  Hunter 28, Detection Engineer 24, Network Forensics 34, and Host/EDR 28, average
+  28.5; deliberation triggered for verdict disagreement and reconciled to Real at
+  average 27.0. The prior Linux dbus/polkit issue did not recur. Next target is
+  proxy/DNS/HTTP transaction texture: repeated HTTP response sizes, compact
+  proxy/TLS vocabulary, and weak transaction-level linkage between CONNECT rows,
+  origin-side SNI, and DNS cache evidence.
+
+- Loop 320 fixed HTTP document transfer-size texture at the shared HTTP content
+  and baseline browsing-session layers. A new transfer-static resource check keeps
+  immutable assets, health endpoints, and downloads byte-stable while allowing HTML
+  document transfers to vary by session; persona, affinity, and inbound web-server
+  browsing sessions now include the session timestamp in `transfer_variant_key`.
+  Automated eval passed at 96.37171538391951 over 184608 records, parseability
+  remained 100/100, focused HTTP/session tests passed (`65 passed` plus targeted
+  baseline/proxy tests), Ruff checks passed, and full local verification passed
+  (`4728 passed, 19 skipped`). The hard probe
+  `scenarios/iteration-test/blind-test/loop-320/hard_probe_proxy_http_transaction_texture.json`
+  reduced the max exact non-health page-document response-size cluster from 44 to
+  4 while preserving static asset reuse. The first blind-panel attempt was
+  invalidated after a reviewer accidentally modified generated data; reports were
+  moved to `invalid-contaminated-panel/`, data was regenerated, and the clean rerun
+  passed a 79-file SHA-256 before/after data-integrity check. Clean blind scores
+  were Threat Hunter 26, Detection Engineer 18, Network Forensics 24, and Host/EDR
+  40, average 27.0; deliberation triggered for verdict disagreement and reconciled
+  to Real at average 28.0. The repeated HTTP object-size issue did not recur as a
+  network finding. Next target is SSH destination endpoint/source timing: eCAR
+  `sshd` child process creation should not systematically precede syslog
+  `Connection from` without explicit varied source-latency modeling.
+
+- Loop 321 fixed SSH destination endpoint/source timing at the SSH action bundle
+  and generic SSH preauth layers. SSH `Connection from` syslog now anchors at
+  transport accept time while accepted/PAM/logind rows still wait for endpoint
+  FLOW visibility; tuple responder processes are materialized from the same
+  deterministic connection-start jitter as the canonical transport. The hard
+  probe
+  `scenarios/iteration-test/blind-test/loop-321/hard_probe_ssh_destination_timing.json`
+  reduced negative eCAR sshd-process-vs-syslog-connection offsets from 68/72
+  matched rows to 0/68. Automated eval passed at 96.08943284310241 over 183974
+  records, parseability remained 100/100, focused SSH tests passed (`22 passed`),
+  and Ruff checks passed. The first blind-panel attempt was invalidated after a
+  post-panel hash check detected `zeek-dmz/ocsp.json` changed; data was regenerated
+  and the clean rerun passed an 80-file SHA-256 before/after data-integrity check.
+  Clean blind scores were Threat Hunter 30, Detection Engineer 28, Network
+  Forensics 59, and Host/EDR 28, average 36.25, with final clean-panel verdict
+  Real. The prior systematic SSH destination timing issue did not recur. Next
+  target is duplicate SSH endpoint lineage: one login can produce two near-identical
+  `sshd: <user> [priv]` eCAR child processes before the shell while syslog ties
+  the session to only one PID.
+
+- Loop 322 fixed duplicate SSH endpoint lineage in the visible-shell bootstrap
+  path. `ensure_linux_ssh_session_shell()` now reuses the SSH action bundle's
+  tuple-scoped responder process from `ActiveSession.transport_pid` as the shell
+  parent when it is still a matching `/usr/sbin/sshd` `sshd: <user> [priv]`
+  process, instead of always materializing a second near-identical SSH priv
+  child. The hard probe
+  `scenarios/iteration-test/blind-test/loop-322/hard_probe_duplicate_ssh_priv_children.json`
+  reduced duplicate SSH priv clusters with shell children from 12 to 0. Automated
+  eval passed at 96.02516303602455 over 188589 records, parseability remained
+  100/100, focused SSH/world-model tests passed, Ruff checks passed, and full
+  local verification passed (`4729 passed, 19 skipped`). The clean blind panel
+  passed an 80-file SHA-256 before/after data-integrity check and scored Threat
+  Hunter 52, Detection Engineer 42, Network Forensics 54, and Host/EDR 68,
+  average 54.0, with final stance Inconclusive after Host/EDR found a stronger
+  user-session lifecycle contradiction. The prior duplicate SSH shell-parenting
+  issue did not recur. Next target is post-logout authenticated endpoint/proxy
+  activity: `WS-OHADDAD-01` logs out `omar.haddad` and then emits eCAR Firefox
+  proxy flows plus authenticated proxy rows as the same user seconds later.
+
+- Loop 323 fixed post-logout authenticated proxy/user browsing activity at the
+  baseline browser-session and proxy-auth attribution layers. Browser session
+  requests now carry a `latest_request_time`, baseline persona browsing skips
+  offsets after the planned session deadline instead of clamping them to logout,
+  and proxy username attribution requires an active same-host interactive/RDP/SSH
+  session at request time. The hard probe
+  `scenarios/iteration-test/blind-test/loop-323/hard_probe_post_logout_user_activity.json`
+  reduced authenticated proxy rows after visible logout from 96 to 0 and eCAR
+  same-user flow rows from 22 to 2; the remaining two rows are SSH FLOW lifecycle
+  texture, not proxy auth. Automated eval passed at 96.21349513015599 over
+  178508 records, parseability remained 100/100, Ruff checks passed, and full
+  local verification passed (`4731 passed, 19 skipped`). The clean blind panel
+  passed a SHA-256 before/after data-integrity check and scored Threat Hunter 39,
+  Detection Engineer 38, Network Forensics 27, and Host/EDR 31, average 33.75,
+  with final stance Inconclusive/real-leaning and no hard contradictions. Next
+  target is DB-PROD-01 database listener eCAR attribution: inbound MySQL/TDS/
+  PostgreSQL FLOW rows are high-volume but lack database process/principal
+  identity while comparable SSH/proxy/DC listener families are attributed.
+
+- Loop 324 fixed DB-PROD-01 database listener eCAR attribution and database
+  service compatibility at the world-model, baseline-planning, and system-process
+  seeding layers. Database service labels now normalize through one shared rule,
+  DB listener processes (`mysqld`, `postgres`, `sqlservr`) are seeded from host
+  service inventory, database profile traffic is filtered to engines actually
+  supported by the target host, and seeded DB daemons are protected from stale
+  termination. The hard probe
+  `scenarios/iteration-test/blind-test/loop-324/hard_probe_db_listener_ecar_attribution.json`
+  reduced DB-PROD-01 successful inbound DB eCAR FLOW rows from 539 bare rows
+  across ports 1433/3306/5432 to 300 current-data rows on port 3306, with 298
+  attributed and 2 bare. Automated eval passed at 95.59008216061706 over 91227
+  records, parseability remained 100/100, acceptance passed, focused tests
+  passed, Ruff checks passed, and full local verification passed (`4738 passed,
+  19 skipped`). The clean blind panel passed a SHA-256 before/after
+  data-integrity check and scored Threat Hunter 39, Detection Engineer 28,
+  Network Forensics 74, and Host/EDR 66, average 51.75, with final stance
+  synthetic-leaning mixed panel. Per user instruction, the assessment run is
+  paused after this loop. If resumed, the next target is perimeter/firewall
+  policy enforcement and denied-path rendering: ASA/Zeek currently show built
+  paths that scenario policy says should be denied, and explicit denied direct
+  DC-to-C2 attempts are absent.
+
 ## How to Continue
 
 1. Start from the current `dev` state and read `TODO.md` for durable priorities.

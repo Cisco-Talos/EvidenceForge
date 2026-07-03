@@ -736,14 +736,17 @@ class SysmonEventEmitter(LogEmitter):
         return (pid, "-")
 
     @staticmethod
-    def _resolve_destination_hostname(ip: str) -> str:
+    def _resolve_destination_hostname(ip: str, dst_port: int = 0) -> str:
         """Resolve destination IP to hostname via REVERSE_DNS.
 
         Returns FQDN for known internal hosts (scenario systems), "-" for unknown.
         """
         from evidenceforge.generation.activity.network import REVERSE_DNS
 
-        return REVERSE_DNS.get(ip, "-")
+        hostname = REVERSE_DNS.get(ip, "-")
+        if dst_port == 25 and hostname in {"imap.gmail.com", "pop.gmail.com"}:
+            return "smtp.gmail.com"
+        return hostname
 
     def _get_stable_process_guid(
         self, hostname: str, pid: int, fallback_timestamp: datetime
@@ -1487,7 +1490,7 @@ class SysmonEventEmitter(LogEmitter):
             "SourcePortName": _PORT_NAMES.get(src_port, "-"),
             "DestinationIsIpv6": "true" if ":" in dst_ip else "false",
             "DestinationIp": dst_ip,
-            "DestinationHostname": self._resolve_destination_hostname(dst_ip),
+            "DestinationHostname": self._resolve_destination_hostname(dst_ip, dst_port),
             "DestinationPort": dst_port,
             "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
         }

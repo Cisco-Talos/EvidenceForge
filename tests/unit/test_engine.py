@@ -64,11 +64,11 @@ class TestGenerationEngine:
 
     @pytest.fixture(autouse=True)
     def mock_new_emitters(self):
-        """Mock the 5 emitter classes added in Phase 2.2.
+        """Mock emitter classes outside the original Phase 1 test surface.
 
-        Tests were written for Phase 1 (2 emitters). The engine now creates
-        7 emitters. This fixture mocks the 5 new ones so existing tests
-        that only patch WindowsEventEmitter and ZeekEmitter still work.
+        Tests were written for Phase 1 (2 emitters). The engine now creates many
+        emitters, so this fixture keeps tests that patch only WindowsEventEmitter
+        and ZeekEmitter focused on engine behavior.
         """
         with (
             patch("evidenceforge.generation.engine.emitter_setup.EcarEmitter") as m1,
@@ -76,8 +76,9 @@ class TestGenerationEngine:
             patch("evidenceforge.generation.engine.emitter_setup.BashHistoryEmitter") as m3,
             patch("evidenceforge.generation.engine.emitter_setup.SnortEmitter") as m4,
             patch("evidenceforge.generation.engine.emitter_setup.WebEmitter") as m5,
+            patch("evidenceforge.generation.engine.emitter_setup.ZeekSmtpEmitter") as m6,
         ):
-            yield m1, m2, m3, m4, m5
+            yield m1, m2, m3, m4, m5, m6
 
     @pytest.fixture
     def minimal_scenario(self):
@@ -211,10 +212,10 @@ class TestGenerationEngine:
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
 
-        # Verify emitters created: windows (2: security + sysmon) + zeek (13) = 15
+        # Verify emitters created: windows (2: security + sysmon) + zeek (14) = 16
         assert mock_windows.called
         assert mock_zeek.called
-        assert len(engine.emitters) == 15
+        assert len(engine.emitters) == 16
         assert "windows_event_security" in engine.emitters
         assert "zeek_conn" in engine.emitters
         assert "zeek_http" in engine.emitters

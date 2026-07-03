@@ -29,11 +29,12 @@ multiple emitters, producing correlated cross-source records.
 import random
 import re
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 
-from evidenceforge.events.contexts import HttpContext, IdsContext
+from evidenceforge.events.contexts import HostContext, HttpContext, IdsContext
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
@@ -46,8 +47,10 @@ from evidenceforge.generation.engine.baseline import (
     _LINUX_AMBIENT_SSH_NOISE_BAND,
     _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
     _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
+    BaselineMixin,
     _ambient_registry_entry_allowed,
     _baseline_inbound_ids_probe_profile,
+    _dhcp_renewal_epochs_for_hour,
     _extra_syslog_service_values,
     _linux_ambient_logind_probability,
     _linux_baseline_pam_close_lead,
@@ -107,6 +110,214 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
     assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
     assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
     assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
+
+
+def test_interactive_startup_activity_pacing_spreads_early_baseline_events():
+    """Fresh interactive desktop activity should not collapse into the logon second."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 13, 0, 0, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    system = SimpleNamespace(hostname="WS-01")
+    user = SimpleNamespace(username="analyst")
+    current_hour = datetime(2026, 4, 13, 13, 0, 0, tzinfo=UTC)
+
+    first = engine._pace_interactive_startup_activity(
+        session=session,
+        system=system,
+        user=user,
+        candidate_time=current_hour + timedelta(seconds=2),
+        activity_key="user_activity:connection_web",
+        current_hour=current_hour,
+    )
+    second = engine._pace_interactive_startup_activity(
+        session=session,
+        system=system,
+        user=user,
+        candidate_time=current_hour + timedelta(seconds=3),
+        activity_key="profile:ssl:portal.example",
+        current_hour=current_hour,
+    )
+    later = engine._pace_interactive_startup_activity(
+        session=session,
+        system=system,
+        user=user,
+        candidate_time=current_hour + timedelta(minutes=8),
+        activity_key="user_activity:process_user_apps",
+        current_hour=current_hour,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert 35 <= (first - session.start_time).total_seconds() <= 95
+    assert (second - first).total_seconds() >= 12
+    assert later == current_hour + timedelta(minutes=8)
+
+
+def test_interactive_startup_activity_pacing_respects_hour_and_logoff_boundaries():
+    """Startup pacing should skip baseline events that no longer fit the session window."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 13, 59, 20, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    system = SimpleNamespace(hostname="WS-01")
+    user = SimpleNamespace(username="analyst")
+    current_hour = datetime(2026, 4, 13, 13, 0, 0, tzinfo=UTC)
+
+    assert (
+        engine._pace_interactive_startup_activity(
+            session=session,
+            system=system,
+            user=user,
+            candidate_time=current_hour + timedelta(seconds=3565),
+            activity_key="user_activity:connection_web",
+            current_hour=current_hour,
+        )
+        is None
+    )
+
+    session.start_time = datetime(2026, 4, 13, 13, 10, 0, tzinfo=UTC)
+    engine = object.__new__(BaselineMixin)
+    assert (
+        engine._pace_interactive_startup_activity(
+            session=session,
+            system=system,
+            user=user,
+            candidate_time=current_hour + timedelta(minutes=10, seconds=2),
+            activity_key="profile:ssl:portal.example",
+            current_hour=current_hour,
+            planned_logoffs={("WS-01", "0x12345"): 615},
+        )
+        is None
+    )
+
+
+def test_locked_workstation_activity_defers_until_after_unlock():
+    """Foreground baseline activity should not occur while the workstation is visibly locked."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 9, 0, 0, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    current_hour = datetime(2026, 4, 13, 10, 0, 0, tzinfo=UTC)
+    lock_time = current_hour + timedelta(minutes=15)
+    unlock_time = current_hour + timedelta(minutes=25)
+
+    engine._remember_workstation_locked_interval(
+        hostname="WS-01",
+        logon_id="0x12345",
+        lock_time=lock_time,
+        unlock_time=unlock_time,
+    )
+
+    outside = engine._activity_time_outside_locked_session(
+        session=session,
+        candidate_time=current_hour + timedelta(minutes=10),
+        activity_key="user_activity:connection_web",
+        current_hour=current_hour,
+        planned_logoffs=None,
+    )
+    adjusted = engine._activity_time_outside_locked_session(
+        session=session,
+        candidate_time=current_hour + timedelta(minutes=20),
+        activity_key="user_activity:connection_web",
+        current_hour=current_hour,
+        planned_logoffs=None,
+    )
+
+    assert outside == current_hour + timedelta(minutes=10)
+    assert adjusted is not None
+    assert unlock_time + timedelta(seconds=3) <= adjusted <= unlock_time + timedelta(seconds=90)
+
+
+def test_locked_workstation_activity_skips_when_unlock_window_does_not_fit():
+    """Locked-session activity should be dropped if deferral would miss the active window."""
+    engine = object.__new__(BaselineMixin)
+    session = SimpleNamespace(
+        logon_type=2,
+        session_kind="interactive",
+        start_time=datetime(2026, 4, 13, 9, 0, 0, tzinfo=UTC),
+        system="WS-01",
+        logon_id="0x12345",
+    )
+    current_hour = datetime(2026, 4, 13, 10, 0, 0, tzinfo=UTC)
+
+    engine._remember_workstation_locked_interval(
+        hostname="WS-01",
+        logon_id="0x12345",
+        lock_time=current_hour + timedelta(minutes=15),
+        unlock_time=current_hour + timedelta(hours=1, minutes=2),
+    )
+
+    assert (
+        engine._activity_time_outside_locked_session(
+            session=session,
+            candidate_time=current_hour + timedelta(minutes=20),
+            activity_key="user_activity:connection_web",
+            current_hour=current_hour,
+            planned_logoffs=None,
+        )
+        is None
+    )
+
+    engine = object.__new__(BaselineMixin)
+    engine._remember_workstation_locked_interval(
+        hostname="WS-01",
+        logon_id="0x12345",
+        lock_time=current_hour + timedelta(minutes=15),
+        unlock_time=current_hour + timedelta(minutes=50),
+    )
+
+    assert (
+        engine._activity_time_outside_locked_session(
+            session=session,
+            candidate_time=current_hour + timedelta(minutes=20),
+            activity_key="user_activity:connection_web",
+            current_hour=current_hour,
+            planned_logoffs={("WS-01", "0x12345"): 3002},
+        )
+        is None
+    )
+
+
+def test_pending_workstation_unlock_emits_independent_of_new_lock_path():
+    """Deferred unlock lifecycle should not depend on later user activity scheduling."""
+    engine = object.__new__(BaselineMixin)
+    user = User(username="analyst", full_name="Analyst User", email="analyst@example.com")
+    system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    unlock_time = current_hour + timedelta(minutes=5)
+    logon_id = "0x12345"
+    session = SimpleNamespace(
+        username=user.username,
+        system=system.hostname,
+        logon_id=logon_id,
+        start_time=current_hour - timedelta(hours=2),
+        network_close_time=None,
+    )
+
+    engine._pending_unlocks = {user.username: (unlock_time, logon_id)}
+    engine.state_manager = SimpleNamespace(get_session=Mock(return_value=session))
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+    engine._emit_unlock = Mock()
+
+    engine._emit_pending_workstation_unlock(user, current_hour, planned_logoffs=None)
+
+    assert engine._pending_unlocks == {}
+    engine._emit_unlock.assert_called_once()
+    args = engine._emit_unlock.call_args.args
+    assert args[:4] == (user, system, unlock_time, logon_id)
 
 
 def test_linux_baseline_session_initiator_creates_pam_session_message():
@@ -1199,10 +1410,11 @@ class TestSyslogContext:
 
         syslog = mock_emitters["syslog"]
         assert syslog.emit.called
-        event = syslog.emit.call_args[0][0]
-        assert event.syslog is not None
-        assert "Failed password" in event.syslog.message
-        assert event.syslog.severity == 4  # Warning level
+        syslog_events = [
+            call.args[0] for call in syslog.emit.call_args_list if call.args[0].syslog is not None
+        ]
+        assert any("Failed password" in event.syslog.message for event in syslog_events)
+        assert any(event.syslog.severity == 4 for event in syslog_events)
 
     def test_remote_linux_failed_logon_reuses_ssh_source_port_for_zeek_tuple(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1220,7 +1432,14 @@ class TestSyslogContext:
             source_ip=source_ip,
         )
 
-        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None
+        ]
+        syslog_event = next(
+            event for event in syslog_events if "Failed password" in event.syslog.message
+        )
         match = re.search(r"from (?P<src>\S+) port (?P<port>\d+) ssh2", syslog_event.syslog.message)
         assert match is not None
         ssh_source_port = int(match.group("port"))
@@ -1242,6 +1461,41 @@ class TestSyslogContext:
 
         assert matching_ssh_events
         assert syslog_event.syslog.pid == matching_ssh_events[0].network.responding_pid
+
+    def test_remote_linux_failed_logon_syslog_orders_connection_before_failure(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Remote failed sshd auth should render one ordered tuple-scoped lifecycle."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        source_ip = "10.0.10.99"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(
+            user=User(username="attacker", full_name="Attacker", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+        )
+
+        syslog_events = sorted(
+            [
+                call.args[0]
+                for call in mock_emitters["syslog"].emit.call_args_list
+                if call.args[0].syslog is not None and call.args[0].syslog.app_name == "sshd"
+            ],
+            key=lambda event: event.timestamp,
+        )
+        messages = [event.syslog.message for event in syslog_events]
+        assert messages[0].startswith(f"Connection from {source_ip} port ")
+        assert any(message.startswith("Failed password for attacker ") for message in messages)
+        assert not any("invalid user unknown" in message for message in messages)
+        failure_index = next(
+            index for index, message in enumerate(messages) if message.startswith("Failed password")
+        )
+        assert failure_index > 0
+        assert messages[-1].startswith("Connection closed by authenticating user attacker ")
+        assert len({event.syslog.pid for event in syslog_events}) == 1
 
     def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1353,6 +1607,41 @@ class TestWeirdContext:
 
 class TestDhcpLease:
     """DHCP lease events dispatch through canonical path."""
+
+    def test_dhcp_renewal_schedule_catches_up_from_warmup(self):
+        """Renewal scheduling should skip hidden catch-up renewals and emit visible ones."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        warmup_lease_epoch = datetime(2024, 3, 15, 11, 3, 0, tzinfo=UTC).timestamp()
+
+        due, updated_last = _dhcp_renewal_epochs_for_hour(
+            last_renewal=warmup_lease_epoch,
+            lease_time=3600.0,
+            current_hour=current_hour,
+            rng=random.Random(7),
+        )
+
+        hour_start = current_hour.timestamp()
+        hour_end = (current_hour + timedelta(hours=1)).timestamp()
+        assert len(due) >= 2
+        assert all(hour_start <= epoch < hour_end for epoch in due)
+        assert updated_last == due[-1]
+
+    def test_dhcp_renewal_schedule_emits_multiple_due_renewals(self):
+        """One-hour leases can have more than one visible renewal inside one hour."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        recent_renewal_epoch = datetime(2024, 3, 15, 12, 45, 0, tzinfo=UTC).timestamp()
+
+        due, updated_last = _dhcp_renewal_epochs_for_hour(
+            last_renewal=recent_renewal_epoch,
+            lease_time=3600.0,
+            current_hour=current_hour,
+            rng=random.Random(11),
+        )
+
+        assert len(due) == 2
+        assert due == sorted(due)
+        assert updated_last == due[-1]
+        assert min(b - a for a, b in zip(due[:-1], due[1:], strict=True)) > 20 * 60
 
     def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
         """DHCP lease requests should expose durable deterministic anchors."""
@@ -1748,6 +2037,60 @@ class TestBaselineRegistryRealism:
             {"lease_time": 3600},
             cfg,
         )
+
+    def test_dhcp_registry_side_effect_uses_lease_server_for_name_server(self):
+        """DhcpNameServer registry writes should match the canonical DHCP server."""
+        workstation = System(
+            hostname="WS-01",
+            ip="10.55.10.21",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alice",
+        )
+        dispatched = []
+        host_context = HostContext(
+            hostname=workstation.hostname,
+            ip=workstation.ip,
+            os=workstation.os,
+            os_category="windows",
+            system_type=workstation.type,
+        )
+        fake_activity_generator = SimpleNamespace(
+            _build_host_context=Mock(return_value=host_context),
+            _get_sid=Mock(return_value="S-1-5-20"),
+            dispatcher=SimpleNamespace(dispatch=dispatched.append),
+        )
+        baseline = SimpleNamespace(
+            emitters={"windows_event_sysmon": Mock()},
+            activity_generator=fake_activity_generator,
+            state_manager=SimpleNamespace(get_process=Mock(return_value=None)),
+        )
+        dhcp_state = {"server_addr": "10.55.20.10", "lease_time": 3600.0}
+
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.get_registry_keys_hklm",
+            return_value=[
+                (
+                    r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
+                    "DhcpNameServer",
+                    "{dns_server_ip}",
+                )
+            ],
+        ):
+            BaselineMixin._emit_dhcp_registry_side_effect(
+                baseline,
+                system=workstation,
+                time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+                rng=random.Random(7),
+                sys_pids={"svchost_netsvcs": 912},
+                dhcp_state=dhcp_state,
+            )
+
+        assert len(dispatched) == 1
+        event = dispatched[0]
+        assert event.registry is not None
+        assert event.registry.key.endswith(r"Tcpip\Parameters\DhcpNameServer")
+        assert event.registry.value == "10.55.20.10"
 
     def test_ambient_registry_noise_suppresses_static_inventory_values(self):
         """Ambient churn should not rewrite static installed-software inventory fields."""

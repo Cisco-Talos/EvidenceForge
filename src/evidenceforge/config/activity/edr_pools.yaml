@@ -11,6 +11,14 @@
 # {hex} = 8-character hexadecimal token, {process_prefetch_name} = owning
 # process basename uppercased for Windows Prefetch artifacts.
 
+group_policy_extension_guids:
+  - "35378EAC-683F-11D2-A89A-00C04FBBCFA2"
+  - "42B5FAAE-6536-11D2-AE5A-0000F87571E3"
+  - "827D319E-6EAC-11D2-A4EA-00C04F79F83A"
+  - "C631DF4C-088F-4156-B058-4375F0853CD8"
+  - "A2E30F80-D7DE-11D2-BBDE-00C04F86AE3B"
+  - "E437BC1C-AA7D-11D2-A382-00C04F991E27"
+
 # Process-aware file side effects for ambient eCAR/Sysmon FILE telemetry.
 # Only processes matching one of these profiles emit probabilistic file events;
 # read-only recon tools intentionally have no profile, so they cannot create
@@ -306,7 +314,7 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate", "DWORD (0x00000000)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management", "ClearPageFileAtShutdown", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA", "DWORD (0x00000001)"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "10.10.2.10"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "{dns_server_ip}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config", "MaxPollInterval", "DWORD (0x0000000f)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters", "EnableSecuritySignature", "DWORD (0x00000001)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending", "TrustedInstaller", "DWORD (0x00000001)"]
@@ -326,7 +334,7 @@ registry_keys_hklm:
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "{host_ip}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "DynamicSiteName", "Default-First-Site-Name"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", "C:\\ProgramData\\Vendor\\Cache\\{doc}", "DWORD (0x00000000)"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{guid}}}", "EndTimeHi", "DWORD (0x00000000)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{group_policy_extension_guid}}}", "EndTimeHi", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan", "Id", "{{{guid}}}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e972-e325-11ce-bfc1-08002be10318}}\\{mru}", "DriverDesc", "Intel(R) Ethernet Connection"]
 

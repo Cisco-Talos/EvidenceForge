@@ -12,8 +12,10 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Any, ClassVar, Literal, Self
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
@@ -21,6 +23,54 @@ from evidenceforge.config.public_dns_templates import validate_public_dns_answer
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
 KERBEROS_TRANSPORT_MAX_WEIGHT = 1_000_000
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+_HOST_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
+_REALISM_RESERVED_DOMAINS = (
+    "example",
+    "example.com",
+    "example.net",
+    "example.org",
+    "test",
+    "invalid",
+    "localhost",
+)
+
+
+def _normalized_domain(value: str) -> str:
+    domain = value.strip().lower().rstrip(".")
+    if not _DOMAIN_RE.fullmatch(domain):
+        raise ValueError(f"{value!r} is not a valid DNS domain")
+    if domain in _REALISM_RESERVED_DOMAINS or any(
+        domain.endswith(f".{suffix}") for suffix in _REALISM_RESERVED_DOMAINS
+    ):
+        raise ValueError(f"{value!r} uses a reserved documentation domain")
+    return domain
+
+
+def _normalized_hostname(value: str, *, allow_single_label: bool = False) -> str:
+    host = value.strip().lower().rstrip(".")
+    if not host:
+        raise ValueError("hostname must not be empty")
+    if not allow_single_label and "." not in host:
+        raise ValueError(f"{value!r} must be a fully-qualified hostname")
+    if not _HOST_RE.fullmatch(host):
+        raise ValueError(f"{value!r} is not a valid hostname")
+    return host
+
+
+def _unique_values(items: list[Any], attr: str, label: str) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for item in items:
+        value = str(getattr(item, attr, "")).lower()
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    if duplicates:
+        raise ValueError(f"{label} contains duplicate values: {', '.join(sorted(duplicates))}")
+
 
 # --- DNS Registry ---
 
@@ -117,6 +167,199 @@ class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
         if not v:
             raise ValueError("aaaa_profiles must not be empty")
         return v
+
+
+# --- Data-driven identity pools ---
+
+
+class WeightedDomainEntry(BaseModel, extra="forbid"):
+    """Weighted external DNS domain entry for generated identities."""
+
+    domain: str
+    weight: int = Field(default=1, gt=0)
+
+    @field_validator("domain")
+    @classmethod
+    def domain_realistic(cls, v: str) -> str:
+        return _normalized_domain(v)
+
+
+class WeightedLocalPartEntry(BaseModel, extra="forbid"):
+    """Weighted email local-part entry."""
+
+    local_part: str
+    weight: int = Field(default=1, gt=0)
+
+    @field_validator("local_part")
+    @classmethod
+    def local_part_non_empty(cls, v: str) -> str:
+        local_part = v.strip()
+        if not local_part:
+            raise ValueError("local_part must not be empty")
+        if "@" in local_part or any(ch.isspace() for ch in local_part):
+            raise ValueError("local_part must not contain @ or whitespace")
+        return local_part
+
+
+class EmailBackgroundConfig(BaseModel, extra="forbid"):
+    """Root schema for email_background.yaml."""
+
+    external_domains: list[WeightedDomainEntry]
+    inbound_local_parts: list[WeightedLocalPartEntry]
+    outbound_local_parts: list[WeightedLocalPartEntry]
+
+    @model_validator(mode="after")
+    def pools_non_empty_and_unique(self) -> Self:
+        for field_name in ("external_domains", "inbound_local_parts", "outbound_local_parts"):
+            values = getattr(self, field_name)
+            if not values:
+                raise ValueError(f"{field_name} must not be empty")
+        _unique_values(self.external_domains, "domain", "external_domains")
+        _unique_values(self.inbound_local_parts, "local_part", "inbound_local_parts")
+        _unique_values(self.outbound_local_parts, "local_part", "outbound_local_parts")
+        return self
+
+
+class MailPublicIdentitiesConfig(BaseModel, extra="forbid"):
+    """Root schema for mail_public_identities.yaml."""
+
+    reserved_replacement_domains: list[str]
+    providers: list[dict[str, Any]]
+
+    @field_validator("reserved_replacement_domains")
+    @classmethod
+    def replacement_domains_valid(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("reserved_replacement_domains must not be empty")
+        normalized = [_normalized_domain(domain) for domain in v]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("reserved_replacement_domains contains duplicate domains")
+        return normalized
+
+
+class ExternalActorIpEntry(BaseModel, extra="forbid"):
+    """Weighted public IPv4/IPv6 entry for omitted storyline external addresses."""
+
+    ip: str
+    weight: int = Field(default=1, gt=0)
+
+    @field_validator("ip")
+    @classmethod
+    def ip_valid(cls, v: str) -> str:
+        try:
+            parsed = ipaddress.ip_address(v)
+        except ValueError as exc:
+            raise ValueError(f"{v!r} is not a valid IP address") from exc
+        if parsed.is_private or parsed.is_loopback or parsed.is_link_local or parsed.is_multicast:
+            raise ValueError(f"{v!r} must be a routable public IP address")
+        return v
+
+
+class ExternalActorProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for external_actor_profiles.yaml."""
+
+    logon_source_ips: list[ExternalActorIpEntry]
+    failed_logon_source_ips: list[ExternalActorIpEntry]
+    connection_c2_ips: list[ExternalActorIpEntry]
+
+    @model_validator(mode="after")
+    def pools_non_empty_and_unique(self) -> Self:
+        for field_name in ("logon_source_ips", "failed_logon_source_ips", "connection_c2_ips"):
+            values = getattr(self, field_name)
+            if not values:
+                raise ValueError(f"{field_name} must not be empty")
+            _unique_values(values, "ip", field_name)
+        return self
+
+
+class SuspiciousBenignDnsHostEntry(BaseModel, extra="forbid"):
+    """Weighted suspicious-looking benign DNS hostname entry."""
+
+    hostname: str
+    weight: int = Field(default=1, gt=0)
+
+    @field_validator("hostname")
+    @classmethod
+    def hostname_valid(cls, v: str) -> str:
+        return _normalized_hostname(v)
+
+
+class SuspiciousBenignConnectionEntry(BaseModel, extra="forbid"):
+    """Suspicious-looking benign outbound connection target entry."""
+
+    dst_ip: str
+    dst_port: int = Field(gt=0, le=65535)
+    service: str
+    hostname: str
+    desc: str
+    weight: int = Field(default=1, gt=0)
+
+    @field_validator("dst_ip")
+    @classmethod
+    def dst_ip_valid(cls, v: str) -> str:
+        try:
+            ipaddress.ip_address(v)
+        except ValueError as exc:
+            raise ValueError(f"{v!r} is not a valid IP address") from exc
+        return v
+
+    @field_validator("hostname")
+    @classmethod
+    def hostname_valid(cls, v: str) -> str:
+        return _normalized_hostname(v)
+
+    @field_validator("service", "desc")
+    @classmethod
+    def strings_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("value must not be empty")
+        return v
+
+
+class SuspiciousBenignConfig(BaseModel, extra="forbid"):
+    """Root schema for suspicious_benign.yaml."""
+
+    dns_hosts: list[SuspiciousBenignDnsHostEntry]
+    unusual_connections: list[SuspiciousBenignConnectionEntry]
+
+    @model_validator(mode="after")
+    def pools_non_empty_and_unique(self) -> Self:
+        if not self.dns_hosts:
+            raise ValueError("dns_hosts must not be empty")
+        if not self.unusual_connections:
+            raise ValueError("unusual_connections must not be empty")
+        _unique_values(self.dns_hosts, "hostname", "dns_hosts")
+        _unique_values(self.unusual_connections, "hostname", "unusual_connections")
+        pairs = {(entry.hostname.lower(), entry.dst_ip) for entry in self.unusual_connections}
+        if len(pairs) != len(self.unusual_connections):
+            raise ValueError("unusual_connections contains duplicate hostname/dst_ip pairs")
+        return self
+
+
+class CommandParameterPoolsConfig(BaseModel, extra="forbid"):
+    """Root schema for command_parameter_pools.yaml."""
+
+    general: dict[str, list[str]]
+    query: dict[str, list[str]]
+    linux_query: dict[str, list[str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def pools_are_non_empty_strings_and_urls_have_hosts(self) -> Self:
+        for section_name in ("general", "query", "linux_query"):
+            section = getattr(self, section_name)
+            for key, values in section.items():
+                if not values:
+                    raise ValueError(f"{section_name}.{key} must not be empty")
+                for value in values:
+                    if not str(value).strip():
+                        raise ValueError(f"{section_name}.{key} contains an empty value")
+                    if key.endswith("url") or key == "url":
+                        parsed = urlparse(value)
+                        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                            raise ValueError(
+                                f"{section_name}.{key} value {value!r} must be an HTTP(S) URL with a host"
+                            )
+        return self
 
 
 # --- Application Catalog ---
@@ -1077,10 +1320,44 @@ class ScheduledStaleCredentialsConfig(BaseModel, extra="forbid"):
         return self
 
 
+class ServiceAccountDelegationProcessConfig(BaseModel, extra="forbid"):
+    """One caller-process choice for service-account explicit-credential noise."""
+
+    image: str = Field(min_length=1)
+    command_line: str = Field(min_length=1)
+    parent_key: str = Field(default="services", min_length=1)
+    weight: int = Field(gt=0)
+
+
+class ServiceAccountDelegationProfileConfig(BaseModel, extra="forbid"):
+    """Role-specific service-account delegation caller profile."""
+
+    name: str = Field(min_length=1)
+    account_terms: list[str] = Field(min_length=1)
+    weight: int = Field(gt=0)
+    processes: list[ServiceAccountDelegationProcessConfig] = Field(min_length=1)
+
+    @field_validator("account_terms")
+    @classmethod
+    def account_terms_are_non_empty(cls, v: list[str]) -> list[str]:
+        for term in v:
+            if not term.strip():
+                raise ValueError("account_terms entries must be non-empty")
+        return v
+
+
+class ServiceAccountDelegationConfig(BaseModel, extra="forbid"):
+    """Service-account explicit-credential baseline profile."""
+
+    hourly_probability: float = Field(ge=0.0, le=0.95)
+    caller_profiles: list[ServiceAccountDelegationProfileConfig] = Field(min_length=1)
+
+
 class AuthNoiseConfig(BaseModel, extra="forbid"):
     """Root schema for auth_noise.yaml."""
 
     scheduled_stale_credentials: ScheduledStaleCredentialsConfig
+    service_account_delegation: ServiceAccountDelegationConfig
 
 
 # --- Network Params ---
@@ -1754,6 +2031,7 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
         "zeek_conn": "zeek",
         "zeek_dns": "zeek",
         "zeek_http": "zeek",
+        "zeek_smtp": "zeek",
         "zeek_ssl": "zeek",
         "zeek_files": "zeek",
         "zeek_x509": "zeek",

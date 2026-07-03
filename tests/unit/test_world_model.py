@@ -366,6 +366,8 @@ def test_world_planner_bootstraps_ssh_session(
     assert shell.image == "/bin/bash"
     assert shell.logon_id == session.logon_id
     assert shell.start_time >= session.source_ready_time
+    assert shell.parent_pid == session.transport_pid
+    assert session.process_tree_root == session.transport_pid
 
     early_command_time = session.source_ready_time - timedelta(seconds=1)
     command_time = activity_generator.generate_bash_command(
@@ -388,6 +390,14 @@ def test_world_planner_bootstraps_ssh_session(
         if event.process is not None and event.process.pid == session.session_shell_pid
     ]
     assert bash_events
+    sshd_events = [
+        event
+        for event in process_events
+        if event.process is not None
+        and event.process.command_line == f"sshd: {users['alice.admin'].username} [priv]"
+    ]
+    assert len(sshd_events) == 1
+    assert sshd_events[0].process.pid == session.transport_pid
     assert bash_events[0].process.parent_image == "/usr/sbin/sshd"
     assert session.transport_pid > 180_000
     assert result.network_uid

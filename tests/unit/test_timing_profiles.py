@@ -366,7 +366,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
 
 
 def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
-    """Stored source-terminate time should include eCAR create latency and lifetime."""
+    """Stored source-terminate time should preserve lifetime from the real create."""
     generator = object.__new__(ActivityGenerator)
     generator._source_timing_planner = SourceTimingPlanner()
     generator._process_source_create_times = {}
@@ -396,15 +396,46 @@ def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
     generator._record_process_source_terminate_time("DB-PROD-01", 699072, event)
 
     source_terminate_time = generator.process_source_terminate_time("DB-PROD-01", 699072)
-    assert event.source_timing is not None
-    ecar_create_time = next(
-        value
-        for key, value in event.source_timing.source_times.items()
-        if key.startswith("source.ecar_process_create|")
-    )
     assert source_terminate_time is not None
     assert source_terminate_time >= terminate_time
-    assert source_terminate_time >= ecar_create_time + timedelta(seconds=8)
+    assert source_terminate_time < terminate_time + timedelta(seconds=2)
+
+
+def test_process_source_terminate_time_uses_stored_visible_create_anchor():
+    """Termination planning should not add the full process lifetime twice."""
+    generator = object.__new__(ActivityGenerator)
+    generator._source_timing_planner = SourceTimingPlanner()
+    start_time = datetime(2024, 3, 18, 13, 48, 41, tzinfo=UTC)
+    terminate_time = start_time + timedelta(hours=2, minutes=4, seconds=48)
+    visible_create_time = start_time + timedelta(milliseconds=350)
+    generator._process_source_create_times = {("WS-01", 5396): visible_create_time}
+    generator._process_source_terminate_times = {}
+    event = SecurityEvent(
+        timestamp=terminate_time,
+        event_type="process_terminate",
+        src_host=HostContext(
+            hostname="WS-01",
+            ip="10.10.1.22",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+        ),
+        process=ProcessContext(
+            pid=5396,
+            parent_pid=5092,
+            image=r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE",
+            command_line="",
+            username="alice",
+            start_time=start_time,
+        ),
+    )
+
+    generator._record_process_source_terminate_time("WS-01", 5396, event)
+
+    source_terminate_time = generator.process_source_terminate_time("WS-01", 5396)
+    assert source_terminate_time is not None
+    assert source_terminate_time >= terminate_time
+    assert source_terminate_time < terminate_time + timedelta(seconds=2)
 
 
 def test_process_causal_audit_expansion_waits_for_visible_command_create():

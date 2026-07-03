@@ -226,6 +226,31 @@ class EvaluationEngine:
                 entry["time"] = rec.time.astimezone(UTC)
         return result
 
+    def _load_email_ground_truth(self) -> dict[str, dict]:
+        """Load emitted email identifiers from GROUND_TRUTH.json, keyed by storyline id."""
+        from evidenceforge.events.ground_truth import load_ground_truth_document
+
+        result: dict[str, dict] = {}
+        document = load_ground_truth_document(self.output_dir, self.scenario)
+        if document is None:
+            return result
+        for rec in document.events:
+            if rec.kind != "email_message" or not rec.emitted:
+                continue
+            sid = rec.storyline_id
+            message_id = rec.attributes.message_id
+            if not (sid and message_id):
+                continue
+            result[sid] = {
+                "message_id": message_id,
+                "artifact_path": rec.attributes.artifact_path,
+                "smtp_uids": list(rec.attributes.smtp_uids or ()),
+                "subject": rec.attributes.subject,
+                "sender": rec.attributes.sender,
+                "recipients": list(rec.attributes.recipients or ()),
+            }
+        return result
+
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
         # 1. Discover and parse all log files
@@ -247,6 +272,7 @@ class EvaluationEngine:
             observation_manifest=observation_manifest,
             spillage_ground_truth=self._load_spillage_ground_truth(),
             adversarial_payload_ground_truth=self._load_adversarial_payload_ground_truth(),
+            email_ground_truth=self._load_email_ground_truth(),
         )
 
         # 2. Run each available pillar scorer

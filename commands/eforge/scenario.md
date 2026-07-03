@@ -48,6 +48,9 @@ scenarios/<slug>/
   scenario.yaml
   ENVIRONMENT.md
   artifacts/                 # Optional authored collateral only, such as phishing .eml files
+    email/                   # Generated email artifacts live here after generation
+      EMAIL_ARTIFACTS.json
+      <artifact-id>.eml
   GROUND_TRUTH.md            # Created by generation
   OBSERVATION_MANIFEST.json  # Created by generation
   OUTPUT_TARGET.txt          # Created by generation
@@ -81,7 +84,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call. Every user must have a `primary_system` assigned — ensure there are enough workstations for all users (users can share systems, but each user needs a designated primary).
 
-**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with CONNECT tunnels and full URLs).
+**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with CONNECT tunnels and full URLs). Zeek includes `zeek_smtp` when a network sensor can see modeled SMTP traffic.
 
 **System roles** — Assign `roles` to systems in the environment to drive both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives). Roles like `web_server`, `database`, `mail_server`, `file_server`, `domain_controller` each have specific traffic profiles. For example, a `web_server` generates outbound database queries AND receives inbound HTTPS from external clients and internal users. A `database` generates outbound replication AND receives inbound SQL queries from web/app servers.
 
@@ -106,6 +109,19 @@ config registry for reusable domain libraries. For web affinities, prefer
 route-owned profiles where each path declares its valid methods, statuses, body
 sizes, and content type instead of independent random method/status pools.
 
+**Email evidence** — For phishing, business-email compromise, prompt-injection
+via email, or realistic SMTP background, add explicit `environment.email`.
+Do not rely on `roles: [mail_server]` alone. Define `accepted_domains`,
+`mail_servers`, `default_mailbox_servers`, optional group mailbox overrides,
+outbound/inbound routes, distribution groups, TLS settings, and artifact mode.
+Use typed `email_message` storyline events for specific messages. Any rich body
+text or AI-generated corpus must be authored now in the scenario or companion
+corpus files; `eforge generate` is deterministic and must not call an LLM.
+Client submission is plaintext SMTP on 587 in V1; server relay is port 25; server
+STARTTLS visibility is controlled by `allow_inbound_starttls` and
+`attempt_outbound_starttls`. Use `email_read` for opaque TLS mailbox access
+sessions; IMAPS uses 993 and OWA-style access uses 443.
+
 **Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how many top-level visitor actions web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). Human page views automatically fan out into required page assets (JS, CSS, images, fonts, same-origin API calls) without consuming additional `web` budget. If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
 
 **Observation profile** — Default to `observation_profile: complete`. This preserves training-friendly perfect source coverage and correlation. Only choose another named profile such as `enterprise_standard` or `messy_collection` when the user explicitly wants source-native gaps, ingestion delays, or blind-review realism; do not invent per-source rates in scenario YAML.
@@ -117,6 +133,11 @@ sizes, and content type instead of independent random method/status pools.
 ### Persona Selection
 
 EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Custom personas in the project overlay (`.eforge/config/personas/`) are also available. Only define personas inline if you need to customize behavior for a single scenario. Run `eforge info personas` to see the full list of available persona names (including any overlay additions), or `eforge info --fields` to see all available queries.
+
+For external IPs, public domains, and email addresses that are part of the
+storyline or environment, author them explicitly in the scenario. Reusable
+fallback/background pools live in config overlays (`eforge info identity_pools`),
+but scenario-authored IPs/domains and `environment.network_identities` always win.
 
 | Persona | Work Hours | Risk Profile | Typical Role |
 |---------|-----------|--------------|-------------|
@@ -276,6 +297,29 @@ environment:
       # nat_rules, threat_detection_rate.
       # See /eforge:references:scenario-reference for the full firewall schema.
 
+  email:                          # Optional; required for email_message events
+    accepted_domains: [example.com]
+    mail_servers:
+      - name: primary
+        hostname: mail.example.com
+        system: MAIL-01           # Must reference an environment.systems hostname
+        platform: generic_smtp    # generic_smtp | exchange
+        allow_inbound_starttls: false
+        attempt_outbound_starttls: false
+    default_mailbox_servers: [primary]
+    mailbox_overrides: []         # Optional group -> server overrides
+    outbound_routes:
+      - name: default
+        servers: [primary]
+    inbound_route: [primary]
+    isp_relays: []                # Optional ISP relay hostnames for outbound mail
+    distribution_groups: []       # One-level only; no nested distribution groups
+    artifacts:
+      mode: storyline             # none | storyline | selected | all
+      selected_ids: []
+    background_messages_per_user_per_day: 0.0
+    corpus: email_corpus.yaml     # Optional scenario-relative content corpus
+
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer               # Only needed for custom personas; pre-built ones resolve by name
     description: "Software developer"
@@ -319,6 +363,19 @@ storyline:                        # The attack events to bury in the data
         process_name: "C:\\Windows\\System32\\whoami.exe"
         command_line: "whoami"
         technique: "T1033 - System Owner/User Discovery"
+      # Email example:
+      # - type: email_message
+      #   to: [victim@example.com]
+      #   subject: "Quarterly forecast review"
+      #   body: |
+      #     Please review the attached notes.
+      #   # Or use corpus_id: phishing-note with body/attachments in email_corpus.yaml
+      #   verdict: phishing       # clean | spam | phishing | malware | suspicious
+      #   mail_action: deliver    # deliver | reject | quarantine | strip_attachment
+      # - type: email_read
+      #   mailbox: victim@example.com
+      #   protocol: imaps         # imaps | owa; defaults from mailbox server platform
+      #   message_ids: []         # Documentation/correlation only; reads are TLS opaque
 
 red_herrings:                     # Optional: suspicious-but-benign events
   - id: rh-afterhours

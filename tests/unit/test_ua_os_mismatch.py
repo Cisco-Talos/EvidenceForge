@@ -4,7 +4,7 @@
 """Tests for User-Agent OS-awareness in proxy URI templates."""
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import yaml
@@ -819,6 +819,84 @@ class TestProxyUriOsFiltering:
         )
 
         assert context.username == "MERIDIAN\\alex.morgan"
+
+    def test_proxy_auth_stops_at_planned_session_deadline(self):
+        """Assigned-user proxy auth should not continue after a visible logout."""
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
+        )
+        state_manager = StateManager()
+        generator = ActivityGenerator(state_manager, {})
+        generator._netbios_domain = "MERIDIAN"
+        start_time = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        deadline = start_time + timedelta(hours=1)
+        state_manager.set_current_time(start_time)
+        state_manager.create_session(
+            username="alex.morgan",
+            system=source.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        generator.set_proxy_auth_session_deadlines({(source.hostname, "alex.morgan"): deadline})
+
+        assert (
+            generator._proxy_username_for_source(
+                source_system=source,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                cache_result="MISS",
+                hostname="example.com",
+                time=deadline - timedelta(seconds=1),
+            )
+            == "MERIDIAN\\alex.morgan"
+        )
+        assert (
+            generator._proxy_username_for_source(
+                source_system=source,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                cache_result="MISS",
+                hostname="example.com",
+                time=deadline + timedelta(seconds=1),
+            )
+            == ""
+        )
+
+        state_manager.set_current_time(deadline + timedelta(minutes=5))
+        state_manager.create_session(
+            username="alex.morgan",
+            system=source.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+
+        assert (
+            generator._proxy_username_for_source(
+                source_system=source,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                cache_result="MISS",
+                hostname="example.com",
+                time=deadline + timedelta(minutes=6),
+            )
+            == "MERIDIAN\\alex.morgan"
+        )
 
 
 class TestProxyUriTemplateSubstitution:

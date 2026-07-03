@@ -30,6 +30,7 @@ from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
+    EmailContext,
     FileContext,
     HostContext,
     IdsContext,
@@ -41,6 +42,7 @@ from evidenceforge.events.contexts import (
     RawContext,
     RegistryContext,
     ShellContext,
+    SmtpContext,
 )
 
 __all__ = [
@@ -52,11 +54,13 @@ __all__ = [
     "ProcessAccessContext",
     "NetworkContext",
     "DnsContext",
+    "EmailContext",
     "FileContext",
     "RegistryContext",
     "IdsContext",
     "ImageLoadContext",
     "KerberosContext",
     "ShellContext",
+    "SmtpContext",
     "RawContext",
 ]
