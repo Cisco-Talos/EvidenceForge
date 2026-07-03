@@ -625,6 +625,8 @@ class NatContext:
     mapped_src_port: int  # post-NAT source port (PAT changes this; static keeps it)
     mapped_dst_ip: str  # post-NAT dest IP (for inbound static NAT)
     mapped_dst_port: int  # post-NAT dest port
+    pre_nat_dst_ip: str = ""  # original public dest when canonical tuple is already post-NAT
+    pre_nat_dst_port: int = 0  # original public dest port when canonical tuple is already post-NAT
 
 
 @dataclass(slots=True)

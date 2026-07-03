@@ -517,6 +517,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if self.activity_generator is not None:
             self.activity_generator.write_artifacts_manifest()
 
+        from evidenceforge.events.collection_profile import write_collection_profile
+
+        write_collection_profile(self.output_dir, self.scenario, self.output_target)
+
         logger.info("All emitters closed")
 
     def _generate_ground_truth(self) -> None:

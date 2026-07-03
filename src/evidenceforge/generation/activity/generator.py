@@ -30,6 +30,7 @@ coordinates them across multiple log formats for consistency.
 import base64
 import hashlib
 import heapq
+import io
 import ipaddress
 import itertools
 import logging
@@ -40,6 +41,7 @@ import random
 import re
 import shlex
 import uuid
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -3118,6 +3120,42 @@ def _dns_hostname_allows_mx(hostname: str) -> bool:
     return lowered.split(".", 1)[0] not in service_labels
 
 
+def _dns_companion_kind_distribution_for_source(
+    src_system: Any | None,
+) -> tuple[list[str], list[int]]:
+    """Return source-appropriate low-volume DNS companion query choices."""
+
+    source_roles = {str(role).lower() for role in (getattr(src_system, "roles", None) or [])}
+    source_services = {
+        str(service).lower() for service in (getattr(src_system, "services", None) or [])
+    }
+    authoritative_source = bool(
+        source_roles
+        & {
+            "dns_server",
+            "domain_controller",
+            "mail_server",
+            "security_sensor",
+        }
+        or source_services
+        & {
+            "dns",
+            "dns-server",
+            "bind",
+            "named",
+            "smtp",
+            "exchange",
+            "postfix",
+        }
+    )
+    companion_choices = ["AAAA", "PTR"]
+    companion_weights = [65, 35]
+    if authoritative_source:
+        companion_choices.extend(["NS", "MX", "SOA"])
+        companion_weights.extend([10, 10, 5])
+    return companion_choices, companion_weights
+
+
 def _linux_uid_for_user(username: str) -> int:
     """Return a stable plausible Linux UID for a login username."""
     return default_linux_uid_for_user(username)
@@ -5812,6 +5850,15 @@ class ActivityGenerator:
                 domain_tags=domain_tags,
             )
 
+        if existing_user_agent and existing_is_browser_family and source_system is None:
+            return normalize_proxy_user_agent_for_os(
+                rng,
+                source_system,
+                existing_user_agent,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+
         if existing_user_agent and not existing_is_browser_family:
             return normalize_proxy_user_agent_for_os(
                 rng,
@@ -7141,10 +7188,15 @@ class ActivityGenerator:
         # issued to private IPs. If explicit internal SNI exists, it remains
         # the certificate identity and SAN source of truth.
         internal_cert_name = ""
+        ad_domain = getattr(self, "_ad_domain", "")
+        server_name_is_internal = bool(server_name) and _dns_is_internal_name(
+            server_name,
+            ad_domain,
+        )
         if _is_private_ip(dst_ip):
-            if server_name:
+            if server_name_is_internal:
                 internal_cert_name = server_name
-            else:
+            elif not server_name:
                 dst_host = event.dst_host
                 if dst_host is None and hasattr(self, "_ip_to_system"):
                     dst_system = self._ip_to_system.get(dst_ip)
@@ -12293,12 +12345,17 @@ class ActivityGenerator:
         )
         message_id = self._email_message_id(artifact_id, sender, user_agent)
         route = self._plan_email_route(sender, expanded_recipients, request.system)
+        delivery_succeeded = spec.outcome == "delivered"
+        if route and not delivery_succeeded:
+            route = route[:1]
         if route and route[0].get("submission"):
             route[0]["recipients"] = envelope_recipients
+        transport_body = body if delivery_succeeded else ""
+        transport_attachments = attachments if delivery_succeeded else []
         transfer_sizes = self._smtp_transfer_sizes(
             message_id=message_id,
-            body=body,
-            attachments=attachments,
+            body=transport_body,
+            attachments=transport_attachments,
             route=route,
         )
         hop_times = self._email_smtp_hop_times(
@@ -12386,7 +12443,7 @@ class ActivityGenerator:
                     attachments=attachments,
                     duration=rng.uniform(0.04, 0.4),
                 )
-                if not tls
+                if delivery_succeeded and not tls
                 else []
             )
             smtp_ctx = SmtpContext(
@@ -12487,19 +12544,28 @@ class ActivityGenerator:
             )
             if uid:
                 smtp_uids.append(visible_uid or uid)
-            self._emit_email_mta_syslog(
-                route=route,
-                hop_index=index,
-                hop=hop,
-                time=hop_time,
-                duration=float(transfer_sizes[index]["duration"]),
-                message_id=message_id,
-                sender=sender,
-                actor=request.actor,
-                smtp=smtp_ctx,
-                size=int(transfer_sizes[index]["message_size"]),
-                source_pid=source_pid,
-            )
+            if delivery_succeeded:
+                self._emit_email_mta_syslog(
+                    route=route,
+                    hop_index=index,
+                    hop=hop,
+                    time=hop_time,
+                    duration=float(transfer_sizes[index]["duration"]),
+                    message_id=message_id,
+                    sender=sender,
+                    actor=request.actor,
+                    smtp=smtp_ctx,
+                    size=int(transfer_sizes[index]["message_size"]),
+                    source_pid=source_pid,
+                )
+            else:
+                self._emit_email_mta_reject_syslog(
+                    hop=hop,
+                    time=hop_time,
+                    duration=float(transfer_sizes[index]["duration"]),
+                    sender=sender,
+                    smtp=smtp_ctx,
+                )
             recipient_domains = sorted(
                 {self._email_domain(address) for address in hop.get("recipients", [])}
             )
@@ -12518,7 +12584,9 @@ class ActivityGenerator:
             )
 
         artifact_path = ""
-        if self._should_materialize_email_artifact(artifact_id, request.storyline_id):
+        if delivery_succeeded and self._should_materialize_email_artifact(
+            artifact_id, request.storyline_id
+        ):
             artifact_path = self._write_email_artifact(email_ctx)
             email_ctx.artifact_path = artifact_path
         self._record_email_artifact_manifest(email_ctx, artifact_path)
@@ -13453,6 +13521,49 @@ class ActivityGenerator:
                 delivery_pid=source_pid if source_pid > 0 else None,
             )
 
+    def _emit_email_mta_reject_syslog(
+        self,
+        *,
+        hop: dict[str, Any],
+        time: datetime,
+        duration: float,
+        sender: str,
+        smtp: SmtpContext,
+    ) -> None:
+        """Emit receive-side MTA evidence for an SMTP transaction rejected before DATA."""
+        dst_system = hop["dst_system"]
+        if not self._is_linux_mail_server(dst_system):
+            return
+        src_system = hop["src_system"]
+        smtpd_pid = self._email_responding_process_pid(
+            dst_system,
+            time=time,
+            port=587 if hop["submission"] else 25,
+        )
+        peer_name = self._postfix_peer_name(src_system)
+        connect_time = self._smtp_lifecycle_time(time, duration, 0.08)
+        reject_time = self._smtp_lifecycle_time(time, duration, 0.42)
+        recipient = self._postfix_recipient_list(smtp.rcptto)[:1]
+        to_address = recipient[0] if recipient else "undisclosed-recipients"
+        reply = smtp.last_reply or "550 5.7.1 Message rejected"
+        self.generate_syslog_event(
+            dst_system,
+            connect_time,
+            "postfix/smtpd",
+            f"connect from {peer_name}[{src_system.ip}]",
+            pid=smtpd_pid,
+        )
+        self.generate_syslog_event(
+            dst_system,
+            reject_time,
+            "postfix/smtpd",
+            (
+                f"NOQUEUE: reject: RCPT from {peer_name}[{src_system.ip}]: {reply}; "
+                f"from=<{sender}> to=<{to_address}> proto=ESMTP helo=<{smtp.helo}>"
+            ),
+            pid=smtpd_pid,
+        )
+
     def _emit_postfix_receive_syslog(
         self,
         *,
@@ -13861,6 +13972,25 @@ class ActivityGenerator:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
         if email_config is None:
             return None
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+        generic_mail_aliases = {
+            f"mail.{domain.lower().rstrip('.')}"
+            for domain in getattr(email_config, "accepted_domains", [])
+            if str(domain).strip()
+        }
+        if ad_domain:
+            generic_mail_aliases.add(f"mail.{ad_domain}")
+        if wanted in generic_mail_aliases:
+            route_server_names = list(getattr(email_config, "inbound_route", []) or [])
+            route_server_names.extend(
+                name
+                for name in getattr(email_config, "default_mailbox_servers", []) or []
+                if name not in route_server_names
+            )
+            if not route_server_names and email_config.mail_servers:
+                route_server_names.append(email_config.mail_servers[0].name)
+            if route_server_names:
+                return self._email_system_for_server_name(route_server_names[0])
         for server in email_config.mail_servers:
             candidates = {
                 str(server.hostname).lower().rstrip("."),
@@ -14610,6 +14740,8 @@ class ActivityGenerator:
         size = max(0, int(attachment.get("size") or 0))
         if size == 0:
             return b""
+        if ActivityGenerator._email_attachment_is_openxml_office(attachment):
+            return ActivityGenerator._openxml_office_attachment_bytes(attachment, artifact_id, size)
         seed = (
             f"email-attachment:{artifact_id}:"
             f"{attachment.get('filename') or 'attachment.bin'}:"
@@ -14617,6 +14749,125 @@ class ActivityGenerator:
         ).encode()
         repeats = (size // len(seed)) + 1
         return (seed * repeats)[:size]
+
+    @staticmethod
+    def _email_attachment_is_openxml_office(attachment: dict[str, Any]) -> bool:
+        """Return whether attachment metadata claims an OpenXML Office container."""
+        filename = str(attachment.get("filename") or "").lower()
+        content_type = str(attachment.get("content_type") or "").lower()
+        return filename.endswith((".docx", ".pptx", ".xlsx", ".xlsm")) or any(
+            marker in content_type
+            for marker in (
+                "openxmlformats-officedocument",
+                "application/vnd.ms-excel.sheet.macroenabled",
+            )
+        )
+
+    @staticmethod
+    def _openxml_office_attachment_bytes(
+        attachment: dict[str, Any],
+        artifact_id: str,
+        requested_size: int,
+    ) -> bytes:
+        """Return deterministic Office-like OOXML bytes for generated binary attachments."""
+        filename = str(attachment.get("filename") or "attachment.xlsx").lower()
+        is_macro_workbook = (
+            filename.endswith(".xlsm")
+            or "macroenabled" in str(attachment.get("content_type") or "").lower()
+        )
+        payload_seed = (
+            f"office-attachment:{artifact_id}:{filename}:"
+            f"{attachment.get('content_type') or 'application/octet-stream'}"
+        )
+        binary_size = max(1024, requested_size - 2200)
+        if not is_macro_workbook:
+            binary_size = max(256, min(binary_size, 8192))
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "[Content_Types].xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    b'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                    b'<Default Extension="xml" ContentType="application/xml"/>'
+                    b'<Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/>'
+                    b'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    b"</Types>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "_rels/.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                    b"</Relationships>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/workbook.xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    b'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    b'<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>'
+                    b"</workbook>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/_rels/workbook.xml.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    b"</Relationships>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/worksheets/sheet1.xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    b'<sheetData><row r="1"><c r="A1" t="str"><v>Invoice reference</v></c></row></sheetData>'
+                    b"</worksheet>"
+                ),
+            )
+            if is_macro_workbook:
+                ActivityGenerator._write_deterministic_zip_member(
+                    archive,
+                    "xl/vbaProject.bin",
+                    ActivityGenerator._deterministic_binary_bytes(payload_seed, binary_size),
+                )
+        return buffer.getvalue()
+
+    @staticmethod
+    def _write_deterministic_zip_member(
+        archive: zipfile.ZipFile,
+        name: str,
+        payload: bytes,
+    ) -> None:
+        """Write a ZIP member with stable metadata."""
+        info = zipfile.ZipInfo(name, (2024, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED
+        info.external_attr = 0o600 << 16
+        archive.writestr(info, payload)
+
+    @staticmethod
+    def _deterministic_binary_bytes(seed: str, size: int) -> bytes:
+        """Return deterministic binary-looking bytes for source-native container members."""
+        chunks: list[bytes] = []
+        counter = 0
+        while sum(len(chunk) for chunk in chunks) < size:
+            chunks.append(hashlib.sha256(f"{seed}:{counter}".encode()).digest())
+            counter += 1
+        return b"".join(chunks)[:size]
 
     def _maybe_generate_email_recipient_reads(
         self,
@@ -15186,6 +15437,10 @@ class ActivityGenerator:
             self._email_artifact_manifest = []
             manifest = self._email_artifact_manifest
         eml_path = Path(artifact_path).name if artifact_path else ""
+        export_status, export_reason = self._email_artifact_export_state(
+            email_ctx,
+            artifact_path,
+        )
         manifest.append(
             {
                 "message_id": email_ctx.message_id,
@@ -15196,11 +15451,25 @@ class ActivityGenerator:
                 "subject": email_ctx.subject,
                 "date": email_ctx.date_header,
                 "eml_path": eml_path,
+                "artifact_export_status": export_status,
+                "artifact_export_reason": export_reason,
             }
         )
 
+    @staticmethod
+    def _email_artifact_export_state(
+        email_ctx: EmailContext,
+        artifact_path: str,
+    ) -> tuple[str, str]:
+        """Return blind-facing artifact export state for one manifest row."""
+        if artifact_path:
+            return "materialized", "selected_by_artifact_policy"
+        if email_ctx.outcome != "delivered":
+            return "metadata_only", "transport_not_completed"
+        return "metadata_only", "not_selected_by_artifact_policy"
+
     def write_artifacts_manifest(self) -> None:
-        """Write the top-level artifact manifest when artifact metadata exists."""
+        """Write the top-level artifact manifest when email artifact metadata exists."""
         manifest = getattr(self, "_email_artifact_manifest", None)
         manifest_path = getattr(self, "_artifacts_manifest_path", None)
         if manifest_path is None or manifest is None:
@@ -19158,7 +19427,12 @@ class ActivityGenerator:
                 query, txt_answer, txt_ttl = _dns_txt_query_and_answer(rng, hostname)
                 answers = [txt_answer]
 
-        query_is_internal = qtype_name == "SRV" or _dns_is_internal_name(query, ad_domain)
+        query_email_system = self._email_dns_system_for_hostname(query)
+        query_is_internal = (
+            qtype_name == "SRV"
+            or _dns_is_internal_name(query, ad_domain)
+            or query_email_system is not None
+        )
         if query_is_internal and not _is_private_ip(dns_server_ip):
             dns_server_ip = _get_rng().choice(dns_ips)
             src_port = self._allocate_ephemeral_port(
@@ -19234,13 +19508,16 @@ class ActivityGenerator:
         # resolver ecosystem. Add low-volume companion questions so Zeek DNS
         # does not collapse to only A/TXT/SRV in generated enterprise slices.
         if force_address and rng.random() < 0.25:
+            companion_choices, companion_weights = _dns_companion_kind_distribution_for_source(
+                src_system
+            )
             companion_time = dns_time + timedelta(milliseconds=rng.randint(1, 30))
             companion_src_port = self._allocate_ephemeral_port(
                 src_ip, dns_server_ip, 53, "udp", companion_time, _src_os
             )
             companion_kind = rng.choices(
-                ["AAAA", "PTR", "NS", "MX", "SOA"],
-                weights=[45, 30, 10, 10, 5],
+                companion_choices,
+                weights=companion_weights,
                 k=1,
             )[0]
             companion_query = hostname
@@ -19295,8 +19572,11 @@ class ActivityGenerator:
                     ]
                 else:
                     companion_answers = _public_dns_soa_answers(companion_query)
-            companion_is_internal = _dns_is_internal_name(companion_query, ad_domain) or (
-                companion_kind == "PTR" and _is_private_ip(dst_ip)
+            companion_email_system = self._email_dns_system_for_hostname(companion_query)
+            companion_is_internal = (
+                _dns_is_internal_name(companion_query, ad_domain)
+                or (companion_kind == "PTR" and _is_private_ip(dst_ip))
+                or companion_email_system is not None
             )
             companion_ttls = self._dns_observed_ttls(
                 resolver_ip=dns_server_ip,
@@ -19359,10 +19639,16 @@ class ActivityGenerator:
                             random.Random(_stable_seed(f"dns_mx_companion_a:{mx_host}"))
                         )
                     )
-                    mx_a_is_internal = _dns_is_internal_name(mx_host, ad_domain)
+                    mx_a_email_system = self._email_dns_system_for_hostname(mx_host)
+                    mx_a_email_ip = (
+                        str(getattr(mx_a_email_system, "ip", "") or "") if mx_a_email_system else ""
+                    )
+                    mx_a_is_internal = (
+                        _dns_is_internal_name(mx_host, ad_domain) or mx_a_email_system is not None
+                    )
                     mx_a_answers = _dns_address_rrset(
                         mx_host,
-                        mx_a_ip,
+                        mx_a_email_ip or mx_a_ip,
                         is_internal=mx_a_is_internal,
                     )
                     mx_a_ctx = DnsContext(

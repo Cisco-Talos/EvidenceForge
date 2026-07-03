@@ -371,9 +371,12 @@ output/
 artifacts and other artifact families may be added later. `ARTIFACTS_MANIFEST.json`
 is the production-facing artifact index with schema version `1.0`; email records
 live under `email.messages` and contain message IDs, sender/recipient metadata,
-subject/date, and optional `eml_path`. It deliberately omits storyline IDs,
-exercise verdict labels, local filesystem paths, expanded delivery recipients,
-and route-hop metadata; `GROUND_TRUTH.json` is the canonical identity source for
+subject/date, optional `eml_path`, and blind-safe `artifact_export_status` /
+`artifact_export_reason` fields explaining whether an `.eml` was materialized or
+the row is metadata-only. It deliberately omits storyline/internal case IDs,
+exercise verdict or classification labels, local filesystem paths, expanded
+delivery recipients, and SMTP transport-route internals; `GROUND_TRUTH.json` is
+the canonical identity source for
 scenario/storyline correlation.
 
 Storyline email artifacts are referenced in both `GROUND_TRUTH.json` and

@@ -327,8 +327,9 @@ groups are one-level only; nested groups are validation errors.
 
 Email artifact metadata is written to top-level `ARTIFACTS_MANIFEST.json` under
 `email.messages`; selected materialized messages are written as `.eml` files
-under `artifacts/email/`. Storyline email artifacts are also referenced from
-`GROUND_TRUTH.json` and `GROUND_TRUTH.md`. Generation is deterministic: any
+under `artifacts/email/`. Manifest rows include blind-safe export status fields
+so metadata-only messages are explicit. Storyline email artifacts are also
+referenced from `GROUND_TRUTH.json` and `GROUND_TRUTH.md`. Generation is deterministic: any
 AI-authored message bodies or corpora must be prepared during scenario creation,
 not during `eforge generate`.
 

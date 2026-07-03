@@ -9301,15 +9301,16 @@ class BaselineMixin:
             )
             client_sys = ip_map.get(client_ip)
             source_os = _get_os_category(client_sys.os) if client_sys is not None else None
+            client_os_category = source_os or ("external" if is_external_client else "windows")
             ua_rng = random.Random(
                 _stable_seed(
-                    f"web_client_ua:{client_ip}:{http_host}:{profile_name}:{source_os or 'external'}"
+                    f"web_client_ua:{client_ip}:{http_host}:{profile_name}:{client_os_category}"
                 )
             )
             chosen_ua = self._source_sticky_browser_user_agent(
                 source_system=client_sys,
                 src_ip=client_ip,
-                os_cat=source_os or "windows",
+                os_cat=client_os_category,
                 rng=ua_rng,
                 profile=profile,
                 hostname=http_host,
@@ -9333,7 +9334,7 @@ class BaselineMixin:
                         service=dst_service,
                         source_system=client_sys,
                         domain_tags=("web",),
-                        source_os=source_os or "windows",
+                        source_os=client_os_category,
                         browsing_intensity=str(profile.get("browsing_intensity", "normal")),
                         require_browser_like_domain=False,
                         transfer_variant_key=f"{client_ip}:{chosen_ua}:{base_ts.isoformat()}",

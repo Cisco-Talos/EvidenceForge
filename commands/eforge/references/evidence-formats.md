@@ -24,6 +24,7 @@ output/
     email/
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
   data/                                    # Generated logs for every output target
+    COLLECTION_PROFILE.json                # Blind-safe collection/export semantics
     <hostname.domain>/                     # Per-host directories (FQDN)
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
@@ -88,9 +89,11 @@ top-level `ARTIFACTS_MANIFEST.json`; materialized email messages live outside
 - `ARTIFACTS_MANIFEST.json` — production-facing generated artifact manifest.
   Email records live under `email.messages` for materialized and metadata-only
   messages. They record message IDs, sender/recipient metadata, subject/date,
-  and optional `eml_path`, but do not include storyline IDs, exercise verdict
-  labels, local filesystem artifact paths, expanded delivery recipients, or SMTP
-  route-hop metadata.
+  optional `eml_path`, and blind-safe `artifact_export_status` /
+  `artifact_export_reason` fields explaining whether an `.eml` was materialized
+  or the row is metadata-only. They do not include storyline/internal case IDs,
+  exercise verdict or classification labels, local filesystem artifact paths,
+  expanded delivery recipients, or SMTP transport-route internals.
 - `artifacts/email/<artifact-id>.eml` — RFC 5322 message artifacts for selected
   or storyline-backed messages.
 - `<sensor>/smtp.json` — Zeek `smtp.log` NDJSON for visible SMTP transactions.

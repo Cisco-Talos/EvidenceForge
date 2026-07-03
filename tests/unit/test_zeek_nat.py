@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_smtp import ZeekSmtpEmitter
 
 T0 = datetime(2024, 6, 15, 14, 23, 5, tzinfo=UTC)
 
@@ -65,6 +66,14 @@ def _make_conn_event_data(
 def _read_conn_json(base_path, sensor_hostname):
     """Read the first JSON record from a sensor's conn.json output."""
     path = base_path / sensor_hostname / "conn.json"
+    assert path.exists(), f"Expected output at {path}"
+    with open(path) as f:
+        return json.loads(f.readline())
+
+
+def _read_smtp_json(base_path, sensor_hostname):
+    """Read the first JSON record from a sensor's smtp.json output."""
+    path = base_path / sensor_hostname / "smtp.json"
     assert path.exists(), f"Expected output at {path}"
     with open(path) as f:
         return json.loads(f.readline())
@@ -148,6 +157,50 @@ class TestZeekNatSwaps:
         assert inside_record["id.resp_h"] == "203.0.113.50"
         # Outside sensor sees NAT-mapped destination IP
         assert outside_record["id.resp_h"] == "198.51.100.80"
+
+    def test_nat_does_not_add_conn_or_file_only_fields_to_smtp(self, tmp_path):
+        """NAT rendering must not leak unrelated Zeek fields into smtp.log rows."""
+        fmt = load_format("zeek_smtp")
+        emitter = ZeekSmtpEmitter(fmt, tmp_path, sensor_hostnames=["outside-zeek"])
+
+        event_data = {
+            "ts": T0.timestamp(),
+            "uid": "CTestSmtp123",
+            "id.orig_h": "198.51.100.10",
+            "id.orig_p": 52525,
+            "id.resp_h": "10.0.10.25",
+            "id.resp_p": 25,
+            "trans_depth": 1,
+            "helo": "mx.example.test",
+            "mailfrom": "sender@example.test",
+            "rcptto": ["user@example.test"],
+            "last_reply": "250 2.0.0 queued",
+            "path": [],
+            "tls": False,
+            "date": "Mon, 18 Mar 2024 12:00:00 +0000",
+            "from": "<sender@example.test>",
+            "to": ["<user@example.test>"],
+            "cc": [],
+            "msg_id": "<message@example.test>",
+            "subject": "Test",
+            "user_agent": "Postfix",
+            "fuids": [],
+            "_sensor_hostnames": ["outside-zeek"],
+            "_nat_swaps_by_sensor": {
+                "outside-zeek": {
+                    "dst_ip": "203.0.113.25",
+                    "local_resp": True,
+                }
+            },
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        record = _read_smtp_json(tmp_path, "outside-zeek")
+        assert record["id.resp_h"] == "203.0.113.25"
+        assert "local_resp" not in record
+        assert "tx_hosts" not in record
+        assert "rx_hosts" not in record
 
     def test_no_swap_when_no_nat_metadata(self, tmp_path):
         """Without _nat_swaps_by_sensor, all sensors see identical real IPs."""

@@ -22,11 +22,13 @@
 
 """Unit tests for generation engine."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
@@ -969,12 +971,28 @@ class TestGenerationEngine:
 
         ground_truth = tmp_path / "GROUND_TRUTH.md"
         manifest = tmp_path / OBSERVATION_MANIFEST_FILENAME
+        collection_profile = tmp_path / COLLECTION_PROFILE_FILENAME
         target_marker = tmp_path / OUTPUT_TARGET_FILENAME
         assert ground_truth.exists()
         assert manifest.exists()
+        assert collection_profile.exists()
         assert target_marker.read_text(encoding="utf-8") == "default\n"
         assert "No malicious activities" in ground_truth.read_text()
         assert "No malicious events were generated" in ground_truth.read_text()
+        profile = json.loads(collection_profile.read_text(encoding="utf-8"))
+        assert "storyline_events" not in profile
+        assert "red_herring_events" not in profile
+        profile_text = json.dumps(profile)
+        assert "stable replay" not in profile_text
+        assert "storyline" not in profile_text.lower()
+        assert "verdict" not in profile_text.lower()
+        assert profile["output_target"] == "default"
+        endpoint_family = next(
+            family
+            for family in profile["source_families"]
+            if family["family"] == "endpoint_telemetry"
+        )
+        assert "lifecycle closure rows after the primary window" in endpoint_family["tail_policy"]
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
