@@ -1951,6 +1951,36 @@ class TestDnsSupportQueryTypes:
         monkeypatch.setattr(rng, "random", _fixed_random)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
 
+    def test_dns_companion_distribution_gates_authoritative_qtypes_by_source_role(self):
+        from evidenceforge.generation.activity.generator import (
+            _dns_companion_kind_distribution_for_source,
+        )
+
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+            services=["squid", "systemd-resolved"],
+        )
+        mail = System(
+            hostname="mail01",
+            ip="10.0.3.30",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["mail_server"],
+            services=["postfix"],
+        )
+
+        proxy_choices, proxy_weights = _dns_companion_kind_distribution_for_source(proxy)
+        mail_choices, mail_weights = _dns_companion_kind_distribution_for_source(mail)
+
+        assert {"NS", "MX", "SOA"}.isdisjoint(proxy_choices)
+        assert {"NS", "MX", "SOA"} <= set(mail_choices)
+        assert len(proxy_choices) == len(proxy_weights)
+        assert len(mail_choices) == len(mail_weights)
+
     def test_txt_queries_model_mail_authentication_noise(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
     ):

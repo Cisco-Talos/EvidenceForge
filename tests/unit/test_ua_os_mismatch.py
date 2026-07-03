@@ -483,6 +483,28 @@ class TestProxyUriOsFiltering:
         assert "Windows NT" not in event.proxy.user_agent
         assert "Edg/" not in event.proxy.user_agent
 
+    def test_external_browser_context_preserves_existing_user_agent(self):
+        """Anonymous public web clients should not collapse to one proxy UA scope."""
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+
+        generator = ActivityGenerator(StateManager(), {})
+        user_agent = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        )
+
+        resolved = generator._proxy_user_agent_for_context(
+            random.Random(42),
+            None,
+            hostname="ehr-portal.meridianhcs.com",
+            domain_tags=["web"],
+            existing_user_agent=user_agent,
+            apply_domain_override=False,
+        )
+
+        assert resolved == user_agent
+
     def test_connect_user_agent_uses_domain_override(self):
         """CONNECT proxy entries should still use destination-specific service UAs."""
         from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent

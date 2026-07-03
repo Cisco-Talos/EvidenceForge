@@ -3117,6 +3117,42 @@ def _dns_hostname_allows_mx(hostname: str) -> bool:
     return lowered.split(".", 1)[0] not in service_labels
 
 
+def _dns_companion_kind_distribution_for_source(
+    src_system: Any | None,
+) -> tuple[list[str], list[int]]:
+    """Return source-appropriate low-volume DNS companion query choices."""
+
+    source_roles = {str(role).lower() for role in (getattr(src_system, "roles", None) or [])}
+    source_services = {
+        str(service).lower() for service in (getattr(src_system, "services", None) or [])
+    }
+    authoritative_source = bool(
+        source_roles
+        & {
+            "dns_server",
+            "domain_controller",
+            "mail_server",
+            "security_sensor",
+        }
+        or source_services
+        & {
+            "dns",
+            "dns-server",
+            "bind",
+            "named",
+            "smtp",
+            "exchange",
+            "postfix",
+        }
+    )
+    companion_choices = ["AAAA", "PTR"]
+    companion_weights = [65, 35]
+    if authoritative_source:
+        companion_choices.extend(["NS", "MX", "SOA"])
+        companion_weights.extend([10, 10, 5])
+    return companion_choices, companion_weights
+
+
 def _linux_uid_for_user(username: str) -> int:
     """Return a stable plausible Linux UID for a login username."""
     return default_linux_uid_for_user(username)
@@ -5807,6 +5843,15 @@ class ActivityGenerator:
                 rng,
                 source_system,
                 override_user_agent,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+
+        if existing_user_agent and existing_is_browser_family and source_system is None:
+            return normalize_proxy_user_agent_for_os(
+                rng,
+                source_system,
+                existing_user_agent,
                 hostname=hostname,
                 domain_tags=domain_tags,
             )
@@ -19453,13 +19498,16 @@ class ActivityGenerator:
         # resolver ecosystem. Add low-volume companion questions so Zeek DNS
         # does not collapse to only A/TXT/SRV in generated enterprise slices.
         if force_address and rng.random() < 0.25:
+            companion_choices, companion_weights = _dns_companion_kind_distribution_for_source(
+                src_system
+            )
             companion_time = dns_time + timedelta(milliseconds=rng.randint(1, 30))
             companion_src_port = self._allocate_ephemeral_port(
                 src_ip, dns_server_ip, 53, "udp", companion_time, _src_os
             )
             companion_kind = rng.choices(
-                ["AAAA", "PTR", "NS", "MX", "SOA"],
-                weights=[45, 30, 10, 10, 5],
+                companion_choices,
+                weights=companion_weights,
                 k=1,
             )[0]
             companion_query = hostname

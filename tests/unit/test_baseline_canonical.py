@@ -2280,6 +2280,7 @@ class TestWebAccessExternalVisitors:
             "_external_outbound_destination_pool",
             "_choose_external_outbound_destination_ip",
             "_web_visitor_profile_for_client",
+            "_source_sticky_browser_user_agent",
         ):
             setattr(engine, method_name, getattr(BaselineMixin, method_name).__get__(engine))
 
@@ -2920,6 +2921,76 @@ class TestWebAccessExternalVisitors:
         assert {kw["src_ip"] for kw in collected} == {"8.8.8.8"}
         assert {kw["http"].uri for kw in collected} == {"/api/v1/status"}
         assert {kw["http"].status_code for kw in collected} == {200}
+
+    def test_external_browser_clients_use_public_user_agent_pool(self, monkeypatch):
+        """Anonymous public visitors should not all inherit a Windows-only UA pool."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.engine import baseline
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+        from evidenceforge.generation.state_manager import StateManager
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                    "user_agent_pool_by_os": {
+                        "windows": "browser_windows",
+                        "linux": "browser_linux",
+                    },
+                },
+            ),
+        )
+
+        captured_requests = []
+
+        class FakeBrowserSessionBundle:
+            def __init__(self, *, request, executor, rng, static_cache_seen):
+                captured_requests.append(request)
+
+            def execute_with_result(self):
+                return SimpleNamespace(page_load_count=1)
+
+        monkeypatch.setattr(baseline, "BrowserSessionActionBundle", FakeBrowserSessionBundle)
+
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        real_activity_gen = ActivityGenerator(StateManager(), {})
+        activity_gen._proxy_user_agent_for_context = real_activity_gen._proxy_user_agent_for_context
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (40, 40)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.side_effect = [f"8.8.4.{idx}" for idx in range(1, 60)]
+        self._attach_web_helpers(engine)
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(19),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        user_agents = {request.user_agent for request in captured_requests}
+        assert len(user_agents) >= 4
+        assert any(
+            "Macintosh" in user_agent or "iPhone" in user_agent for user_agent in user_agents
+        )
+        assert all(request.source_os == "external" for request in captured_requests)
 
     def test_web_server_access_avoids_authored_and_scanner_external_ips(self, monkeypatch):
         """Generic web clients should not reuse external IPs already claimed by other roles."""
