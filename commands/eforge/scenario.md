@@ -31,7 +31,11 @@ EvidenceForge uses a two-phase approach:
 
 The engine does NOT embellish or fill in details. Whatever you put in the scenario YAML is exactly what drives generation. This means you need to generate realistic, specific technical details: actual command lines, realistic file paths, proper IP addresses, correct process names. Vague or placeholder content produces vague logs.
 
-Your job is to understand what the user wants, ask smart questions to fill gaps, and produce a valid, technically detailed scenario YAML file — plus an ENVIRONMENT.md companion document.
+Your job is to understand what the user wants, ask smart questions to fill gaps,
+and produce either reusable organization context, a complete scenario YAML file,
+or both, depending on the user's request. Complete scenarios should include a
+valid, technically detailed scenario definition plus an `ENVIRONMENT.md`
+companion document.
 
 Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
@@ -47,11 +51,15 @@ under that one directory:
 scenarios/<slug>/
   scenario.yaml
   ENVIRONMENT.md
-  artifacts/                 # Optional authored collateral only, such as phishing .eml files
-    email/                   # Generated email artifacts live here after generation
-      EMAIL_ARTIFACTS.json
+  includes/                  # Optional authored YAML fragments for large scenarios
+    storyline.yaml
+    red_herrings.yaml
+  ARTIFACTS_MANIFEST.json    # Created by generation when artifacts exist
+  artifacts/                 # Generated sidecar artifacts and optional authored collateral
+    email/
       <artifact-id>.eml
   GROUND_TRUTH.md            # Created by generation
+  GROUND_TRUTH.json          # Created by generation
   OBSERVATION_MANIFEST.json  # Created by generation
   OUTPUT_TARGET.txt          # Created by generation
   data/                      # Created by generation for every output target
@@ -61,6 +69,58 @@ Do not write a single YAML file directly under `scenarios/`, repo-root environme
 repo-root artifact directories, generic output directories, or target-named dataset directories. The output target
 (`default` or `sof-elk`) changes source-native file rendering inside the bundle only; it must not
 change the scenario root or create target-named directories.
+
+## Organization vs Scenario Creation
+
+Users may ask for an organization, environment, or org. Treat that as reusable
+context: the network, systems, users, personas, baseline behavior, observation
+profile, and any standard behaviors that should be shared across multiple
+scenarios. An organization is not a generated dataset by itself.
+
+Users may ask for a scenario in an existing organization. Treat that as the
+storyline, red herrings, time window, output formats, and any local copies of
+organization include files that must differ for this one exercise.
+
+Preferred large-scenario layout:
+
+```text
+scenarios/
+  organizations/<org>/
+    ENVIRONMENT.md
+    includes/
+      environment.yaml
+      personas.yaml
+      baseline.yaml
+      observation.yaml
+
+  <scenario>/
+    scenario.yaml
+    includes/
+      storyline.yaml
+      red_herrings.yaml
+      # optional local override copies of org include files
+```
+
+`ENVIRONMENT.md` is the standard human-authored documentation file for reusable
+organization context. Do not create a separate `ORG.md` or `SCENARIO.md`
+convention.
+
+Scenario `includes` paths are resolved relative to the YAML file that declares
+them. A scenario can include organization files with paths such as
+`../organizations/<org>/includes/environment.yaml`. If a scenario needs to
+change a shared organization section, copy the relevant organization include
+into the scenario's local `includes/` directory and include the local copy
+instead of the shared one. Do not include both versions of the same section:
+duplicate fields are validation errors, not overrides.
+
+Use a monolithic `scenario.yaml` when the scenario is small, one-off, and
+unlikely to share an environment with future exercises. Use `includes/` when the
+YAML is large enough that sections are hard to review, when multiple scenarios
+will share one organization, or when the user explicitly asks to create an org
+first and scenarios later. Keep includes section-oriented: shared organization
+files should own whole top-level sections such as `environment`, `personas`,
+`baseline_activity`, or `observation_profile`; scenario-local includes should
+own `storyline` and `red_herrings`.
 
 ## Interview Flow
 
@@ -632,13 +692,14 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 
 ## Output Workflow
 
-After the interview, generate both files:
+After the interview, generate the files that match the user's intent:
 
-1. **Scenario root** — Create/use `scenarios/<slug>/` unless the user explicitly requested a different bundle root
-2. **Scenario YAML** — Write to `scenarios/<slug>/scenario.yaml`
-3. **ENVIRONMENT.md** — Write to `scenarios/<slug>/ENVIRONMENT.md`
-4. **Optional authored artifacts** — If you create exercise collateral such as a phishing email message (`.eml`), write it under `scenarios/<slug>/artifacts/`. Do not put standard files such as `ENVIRONMENT.md`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, or `OUTPUT_TARGET.txt` in `artifacts/`.
-5. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
+1. **Organization root** — If creating reusable organization context, create/use `scenarios/organizations/<org>/`, write `ENVIRONMENT.md`, and put shared YAML fragments under `scenarios/organizations/<org>/includes/`.
+2. **Scenario root** — If creating a concrete scenario, create/use `scenarios/<slug>/` unless the user explicitly requested a different bundle root.
+3. **Scenario YAML** — Write to `scenarios/<slug>/scenario.yaml`; for large or organization-backed scenarios, keep storyline/red-herring sections in `scenarios/<slug>/includes/`.
+4. **ENVIRONMENT.md** — For standalone scenarios, write to `scenarios/<slug>/ENVIRONMENT.md`. For organization-backed scenarios, reuse the organization's `ENVIRONMENT.md` unless the user requests scenario-specific student context.
+5. **Optional authored artifacts** — If you create exercise collateral such as a phishing email message (`.eml`), write it under `scenarios/<slug>/artifacts/`. Do not put standard generated files such as `ARTIFACTS_MANIFEST.json`, `ENVIRONMENT.md`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, or `OUTPUT_TARGET.txt` in `artifacts/`.
+6. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
    - **Attack realism**: Does the attack chain make sense? Would a real attacker do this in this order? Are there missing steps (e.g., no reconnaissance before lateral movement, no persistence after initial access)?
    - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
    - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts, scheduled tasks, services, staging archives) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
@@ -687,4 +748,4 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 
 If the user wants to immediately generate logs, suggest using `/eforge generate` or running `eforge generate <scenario-file>`.
 
-When generation completes, the scenario root will contain `GROUND_TRUTH.md` with the full attack timeline, IOCs, and answer key, plus `data/` for logs. Let the user know these exist and where to find them.
+When generation completes, the scenario root will contain generated sidecars such as `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, optional `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` for logs. Let the user know these exist and where to find them.

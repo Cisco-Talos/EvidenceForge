@@ -66,6 +66,14 @@ class ConfigurationError(EvidenceForgeError):
     """
 
 
+class ScenarioIncludeError(ConfigurationError):
+    """Scenario include expansion failed.
+
+    Raised when a scenario YAML file references invalid include syntax,
+    missing include files, circular includes, or conflicting included fields.
+    """
+
+
 class FormatDefinitionError(ConfigurationError):
     """Format definition loading or validation failed.
 

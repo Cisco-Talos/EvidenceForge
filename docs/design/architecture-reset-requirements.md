@@ -64,7 +64,8 @@ No repo-local memory files were discovered during the scan.
   cross-reference checks for users, systems, personas, groups, segments, sensors,
   storyline actors, and event timing.
 - Generate logs into a scenario bundle containing generated `GROUND_TRUTH.md`,
-  `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/`.
+  `OBSERVATION_MANIFEST.json`, optional `ARTIFACTS_MANIFEST.json`,
+  `OUTPUT_TARGET.txt`, and `data/`.
 - Preserve canonical output formats in scenario YAML and select parser-specific
   file shapes through `eforge generate --target default|sof-elk`.
 - Use format terminology at two levels:

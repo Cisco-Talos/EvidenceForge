@@ -2073,7 +2073,7 @@ class EmailArtifactsConfig(BaseModel):
         default="storyline",
         description=(
             "Which messages receive full RFC 5322 .eml artifacts. Background messages still "
-            "receive metadata in EMAIL_ARTIFACTS.json when artifacts are enabled."
+            "receive metadata in ARTIFACTS_MANIFEST.json when artifacts are enabled."
         ),
     )
     selected_ids: list[str] = Field(

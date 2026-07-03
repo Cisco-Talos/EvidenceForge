@@ -22,6 +22,7 @@
 
 """Tests for evaluation log parsers."""
 
+import json
 from datetime import UTC
 from pathlib import Path
 
@@ -527,6 +528,61 @@ class TestBashHistoryParser:
 
 
 class TestParserDiscovery:
+    def test_discovers_top_level_artifacts_manifest_as_email_artifacts(self, tmp_path):
+        from evidenceforge.evaluation.parsers import discover_log_files, get_parser
+        from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        manifest = tmp_path / ARTIFACTS_MANIFEST_FILENAME
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "email": {
+                        "messages": [
+                            {
+                                "message_id": "<m1@corp.example>",
+                                "sender": "alice@corp.example",
+                                "to": ["bob@corp.example"],
+                                "cc": [],
+                                "bcc": [],
+                                "subject": "Quarterly plan",
+                                "date": "Mon, 05 Jan 2026 10:00:00 +0000",
+                                "eml_path": "m1.eml",
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        files = discover_log_files(data_dir)
+        records = list(get_parser("email_artifacts").parse_file(manifest))
+
+        assert files["email_artifacts"] == [manifest]
+        assert records[0].source_format == "email_artifacts"
+        assert records[0].fields["message_id"] == "<m1@corp.example>"
+
+    def test_legacy_email_artifacts_manifest_is_not_discovered(self, tmp_path):
+        from evidenceforge.evaluation.parsers import discover_log_files
+        from evidenceforge.evaluation.parsers.email_artifacts import EmailArtifactsParser
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        legacy_manifest = tmp_path / "artifacts" / "email" / "EMAIL_ARTIFACTS.json"
+        legacy_manifest.parent.mkdir(parents=True)
+        legacy_manifest.write_text(
+            json.dumps({"schema_version": "1.0", "messages": []}),
+            encoding="utf-8",
+        )
+
+        files = discover_log_files(data_dir)
+
+        assert "email_artifacts" not in files
+        assert not EmailArtifactsParser().can_parse(legacy_manifest)
+
     def test_discovers_all_formats_in_good_fixtures(self):
         from evidenceforge.evaluation.parsers import discover_log_files
 

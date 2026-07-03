@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Parser for EMAIL_ARTIFACTS.json manifests."""
+"""Parser for the top-level artifact manifest's email section."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import json
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+
+from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 
 from . import LogParser, ParsedRecord, register_parser
 
@@ -19,7 +21,7 @@ class EmailArtifactsParser(LogParser):
     """Parse email artifact manifests into per-message records."""
 
     format_name = "email_artifacts"
-    _filenames = {"EMAIL_ARTIFACTS.json"}
+    _filenames = {ARTIFACTS_MANIFEST_FILENAME}
 
     def can_parse(self, path: Path) -> bool:
         return path.name in self._filenames
@@ -35,13 +37,22 @@ class EmailArtifactsParser(LogParser):
                 parse_errors=[str(exc)],
             )
             return
-        messages = payload.get("messages", [])
+        email_section = payload.get("email", {})
+        if not isinstance(email_section, dict):
+            yield ParsedRecord(
+                source_format=self.format_name,
+                raw=json.dumps(payload, sort_keys=True),
+                fields={},
+                parse_errors=[f"{ARTIFACTS_MANIFEST_FILENAME} email section must be an object"],
+            )
+            return
+        messages = email_section.get("messages", [])
         if not isinstance(messages, list):
             yield ParsedRecord(
                 source_format=self.format_name,
                 raw=json.dumps(payload, sort_keys=True),
                 fields={},
-                parse_errors=["EMAIL_ARTIFACTS.json messages must be a list"],
+                parse_errors=[f"{ARTIFACTS_MANIFEST_FILENAME} email.messages must be a list"],
             )
             return
         for index, message in enumerate(messages, start=1):

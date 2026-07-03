@@ -52,6 +52,9 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from evidenceforge.events.artifacts_manifest import (
+    ARTIFACTS_MANIFEST_SCHEMA_VERSION,
+)
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -15426,6 +15429,9 @@ class ActivityGenerator:
         email_ctx: EmailContext,
         artifact_path: str,
     ) -> None:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None or email_config.artifacts.mode == "none":
+            return
         manifest = getattr(self, "_email_artifact_manifest", None)
         if manifest is None:
             self._email_artifact_manifest = []
@@ -15462,28 +15468,32 @@ class ActivityGenerator:
             return "metadata_only", "transport_not_completed"
         return "metadata_only", "not_selected_by_artifact_policy"
 
-    def write_email_artifact_manifest(self) -> None:
-        """Write EMAIL_ARTIFACTS.json when email artifact metadata exists."""
+    def write_artifacts_manifest(self) -> None:
+        """Write the top-level artifact manifest when email artifact metadata exists."""
         manifest = getattr(self, "_email_artifact_manifest", None)
-        artifact_dir = getattr(self, "_email_artifact_dir", None)
-        if artifact_dir is None or manifest is None:
+        manifest_path = getattr(self, "_artifacts_manifest_path", None)
+        if manifest_path is None or manifest is None:
             return
         import json
 
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        path = artifact_dir / "EMAIL_ARTIFACTS.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": "1.0",
-            "messages": sorted(
-                manifest,
-                key=lambda item: (
-                    item.get("date") or "",
-                    item.get("message_id") or "",
-                    item.get("sender") or "",
+            "schema_version": ARTIFACTS_MANIFEST_SCHEMA_VERSION,
+            "email": {
+                "messages": sorted(
+                    manifest,
+                    key=lambda item: (
+                        item.get("date") or "",
+                        item.get("message_id") or "",
+                        item.get("sender") or "",
+                    ),
                 ),
-            ),
+            },
         }
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def _execute_network_connection_bundle(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
