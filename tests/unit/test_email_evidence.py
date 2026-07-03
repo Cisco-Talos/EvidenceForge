@@ -390,6 +390,8 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert not (blind_facing_transport_fields & set(manifest["messages"][0]))
     assert manifest["messages"][0]["bcc"] == []
     assert manifest["messages"][0]["eml_path"].endswith(".eml")
+    assert manifest["messages"][0]["artifact_export_status"] == "materialized"
+    assert manifest["messages"][0]["artifact_export_reason"] == "selected_by_artifact_policy"
     materialized = tmp_path / "artifacts" / "email" / manifest["messages"][0]["eml_path"]
     assert materialized.exists()
     assert "Bcc:" not in materialized.read_text(encoding="utf-8")
@@ -1438,6 +1440,8 @@ def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path
     assert not list(email_dir.glob("*.eml"))
     manifest = json.loads((email_dir / "EMAIL_ARTIFACTS.json").read_text(encoding="utf-8"))
     assert manifest["messages"][0]["eml_path"] == ""
+    assert manifest["messages"][0]["artifact_export_status"] == "metadata_only"
+    assert manifest["messages"][0]["artifact_export_reason"] == "transport_not_completed"
 
 
 def test_service_email_artifact_uses_service_header_profile(tmp_path: Path) -> None:

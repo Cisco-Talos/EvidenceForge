@@ -15362,6 +15362,10 @@ class ActivityGenerator:
             self._email_artifact_manifest = []
             manifest = self._email_artifact_manifest
         eml_path = Path(artifact_path).name if artifact_path else ""
+        export_status, export_reason = self._email_artifact_export_state(
+            email_ctx,
+            artifact_path,
+        )
         manifest.append(
             {
                 "message_id": email_ctx.message_id,
@@ -15372,8 +15376,22 @@ class ActivityGenerator:
                 "subject": email_ctx.subject,
                 "date": email_ctx.date_header,
                 "eml_path": eml_path,
+                "artifact_export_status": export_status,
+                "artifact_export_reason": export_reason,
             }
         )
+
+    @staticmethod
+    def _email_artifact_export_state(
+        email_ctx: EmailContext,
+        artifact_path: str,
+    ) -> tuple[str, str]:
+        """Return blind-facing artifact export state for one manifest row."""
+        if artifact_path:
+            return "materialized", "selected_by_artifact_policy"
+        if email_ctx.outcome != "delivered":
+            return "metadata_only", "transport_not_completed"
+        return "metadata_only", "not_selected_by_artifact_policy"
 
     def write_email_artifact_manifest(self) -> None:
         """Write EMAIL_ARTIFACTS.json when email artifact metadata exists."""
