@@ -29,7 +29,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, NetworkContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
-from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -2069,18 +2069,12 @@ class EcarEmitter(HostMultiplexEmitter):
                     continue
                 timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
                 if timestamp_ms <= latest_dependent_ms:
-                    delay = sample_timing_delta(
-                        "source.ecar_session_logout_after_dependents",
-                        seed_parts=(
-                            key[0],
-                            key[1],
-                            record.get("objectID", ""),
-                            record.get("id", ""),
-                            timestamp_ms,
-                            latest_dependent_ms,
-                        ),
+                    seed = _stable_seed(
+                        "source.ecar_session_logout_after_dependents:"
+                        f"{key[0]}:{key[1]}:{record.get('objectID', '')}:"
+                        f"{record.get('id', '')}:{timestamp_ms}:{latest_dependent_ms}"
                     )
-                    delay_ms = max(1, int(delay.total_seconds() * 1000))
+                    delay_ms = 15 + (seed % 120)
                     timestamp_ms = max(next_logout_ms, latest_dependent_ms + delay_ms)
                     record["timestamp_ms"] = timestamp_ms
                 next_logout_ms = max(next_logout_ms, timestamp_ms + 1)
@@ -2788,18 +2782,13 @@ class EcarEmitter(HostMultiplexEmitter):
             if has_prior_open or not candidate_open_ms:
                 continue
             prerequisite_ms = min(candidate_open_ms)
-            delay = sample_timing_delta(
-                "source.ecar_remote_thread_after_process_open",
-                seed_parts=(
-                    record.get("hostname", ""),
-                    record.get("objectID", ""),
-                    record.get("actorID", ""),
-                    record.get("pid", ""),
-                    timestamp_ms,
-                    prerequisite_ms,
-                ),
+            seed = _stable_seed(
+                "source.ecar_remote_thread_after_process_open:"
+                f"{record.get('hostname', '')}:{record.get('objectID', '')}:"
+                f"{record.get('actorID', '')}:{record.get('pid', '')}:"
+                f"{timestamp_ms}:{prerequisite_ms}"
             )
-            delay_ms = max(1, int(delay.total_seconds() * 1000))
+            delay_ms = 15 + (seed % 120)
             record["timestamp_ms"] = prerequisite_ms + delay_ms
 
         normalized: list[str] = []

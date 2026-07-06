@@ -6738,8 +6738,7 @@ class ActivityGenerator:
             proxy_content_type = "text/html"
 
         apply_domain_user_agent = http is None or (
-            proxy_ua_override is None
-            and not _is_tool_http_user_agent(http.user_agent)
+            not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
         user_agent = self._proxy_user_agent_for_context(
@@ -13030,6 +13029,41 @@ class ActivityGenerator:
             return pid, running.image
         return pid, image
 
+    def _ensure_email_submission_session(
+        self,
+        *,
+        actor: "User",
+        system: "System",
+        time: datetime,
+    ) -> None:
+        """Ensure a sender has an interactive session before SMTP client activity."""
+        planner = getattr(self, "_world_planner", None)
+        if planner is None:
+            return
+        rng = random.Random(
+            _stable_seed(
+                f"email_submission_session:{system.hostname}:{actor.username}:{time.isoformat()}"
+            )
+        )
+        try:
+            planner.ensure_user_session(
+                actor,
+                system,
+                time,
+                rng,
+                session_kind="interactive",
+                allow_existing=True,
+                storyline_protected=True,
+                required_until=time + timedelta(seconds=30),
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            logger.debug(
+                "Unable to bootstrap email submission session for %s@%s: %s",
+                actor.username,
+                system.hostname,
+                exc,
+            )
+
     def _email_source_process_attribution(
         self,
         *,
@@ -13043,6 +13077,7 @@ class ActivityGenerator:
         if "external_mail_server" in (src_system.roles or []):
             return -1, None
         if hop.get("submission"):
+            self._ensure_email_submission_session(actor=actor, system=src_system, time=time)
             image = self._email_access_process_image(src_system, "smtp", user_agent, _get_rng())
             command_line = self._email_access_process_command_line(
                 image,
@@ -16133,9 +16168,15 @@ class ActivityGenerator:
         if pid <= 0 or not email_ctx.attachments:
             return
         rng = random.Random(_stable_seed(f"email_sender_files:{email_ctx.message_id}"))
+        proc = self.state_manager.get_process(system.hostname, pid)
+        min_file_time = proc.start_time + timedelta(milliseconds=250) if proc else None
         for index, attachment in enumerate(email_ctx.attachments[:4]):
             filename = self._safe_email_attachment_filename(attachment)
             file_time = time - timedelta(seconds=rng.uniform(1.5, 18.0))
+            if min_file_time is not None and file_time < min_file_time:
+                file_time = min_file_time + timedelta(milliseconds=index * 120)
+            if file_time >= time:
+                file_time = time - timedelta(milliseconds=max(100, 300 - index * 50))
             self._emit_email_endpoint_file_event(
                 email_ctx=email_ctx,
                 user=user,
@@ -16739,6 +16780,7 @@ class ActivityGenerator:
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
         ssh_attempted_username = request.ssh_attempted_username
+        caller_supplied_pid = pid > 0
 
         from evidenceforge.events.contexts import NetworkContext
 
@@ -17190,6 +17232,7 @@ class ActivityGenerator:
 
         if pid > 0 and resolved_source_system:
             resolved_process = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            drop_explicit_pid_without_inference = False
             if (
                 resolved_process
                 and resolved_process.start_time
@@ -17207,6 +17250,7 @@ class ActivityGenerator:
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif self._process_termination_recorded(
                 resolved_source_system.hostname,
                 pid,
@@ -17221,6 +17265,7 @@ class ActivityGenerator:
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif (
                 resolved_process
                 and resolved_process.start_time
@@ -17241,6 +17286,7 @@ class ActivityGenerator:
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif resolved_process is None and pid != 4:
                 logger.debug(
                     "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
@@ -17250,6 +17296,9 @@ class ActivityGenerator:
                     dst_port,
                 )
                 pid = -1
+                drop_explicit_pid_without_inference = caller_supplied_pid
+            if drop_explicit_pid_without_inference:
+                suppress_source_pid_inference = True
 
         if pid <= 0 and resolved_source_system is not None and not suppress_source_pid_inference:
             pid, process_image = self._ensure_high_confidence_connection_owner(

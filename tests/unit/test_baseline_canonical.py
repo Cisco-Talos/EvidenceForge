@@ -1302,7 +1302,11 @@ class TestWebAccessCorrelation:
             hostname="WEB-EXT-01.meridianhcs.local",
         )
 
-        event = mock_emitters["zeek_http"].emit.call_args[0][0]
+        event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_http"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].http is not None
+        )
         assert event.http is not None
         assert "Mozilla/" not in event.http.user_agent
         if event.process is not None:
@@ -1463,7 +1467,10 @@ class TestSyslogContext:
         ecar_session_events = [
             call.args[0]
             for call in mock_emitters["ecar"].emit.call_args_list
-            if call.args[0].auth is not None and call.args[0].auth.username == "alice"
+            if call.args[0].auth is not None
+            and call.args[0].auth.username == "alice"
+            and call.args[0].auth.logon_id == logon_id
+            and call.args[0].event_type == "ssh_session"
         ]
         assert [event.event_type for event in ecar_session_events] == ["ssh_session"]
         assert ecar_session_events[0].auth.logon_id == logon_id

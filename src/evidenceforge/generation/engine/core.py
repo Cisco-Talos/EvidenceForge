@@ -461,6 +461,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             state_manager=self.state_manager,
             activity_generator=self.activity_generator,
         )
+        self.activity_generator._world_planner = self.world_planner
 
         logger.info("Initialization complete")
 
