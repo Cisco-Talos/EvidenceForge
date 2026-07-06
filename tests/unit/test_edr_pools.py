@@ -55,6 +55,11 @@ class TestLoadEdrPools:
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
 
+    def test_default_windows_file_paths_exclude_protected_event_logs(self):
+        paths = get_file_paths("windows")
+
+        assert not any(r"\winevt\Logs" in path for path in paths)
+
     def test_read_only_recon_tool_has_no_file_side_effect(self):
         import random
 
@@ -254,6 +259,20 @@ class TestFilePaths:
             rng=random.Random(3),
             user="SYSTEM",
             path_templates=[r"C:\Windows\Prefetch\SVCHOST.EXE-{hex}.pf"],
+            actions=["modify"],
+            weights=[1],
+        )
+
+        assert effect is None
+
+    def test_ambient_file_churn_filters_windows_protected_event_logs(self):
+        effect = select_ambient_file_churn_effect(
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs",
+            os_category="windows",
+            rng=random.Random(3),
+            user="SYSTEM",
+            path_templates=[r"C:\Windows\System32\winevt\Logs\Security.evtx"],
             actions=["modify"],
             weights=[1],
         )

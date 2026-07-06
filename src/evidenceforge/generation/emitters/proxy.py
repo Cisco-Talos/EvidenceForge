@@ -216,6 +216,12 @@ def _ssl_bump_action(event_data: dict[str, Any]) -> str:
 def _proxy_metadata(event_data: dict[str, Any]) -> str:
     """Return optional key-value metadata for extended proxy combined logs."""
     parts: list[str] = []
+    cs_bytes = event_data.get("cs_bytes")
+    if cs_bytes not in {None, ""}:
+        parts.append(f"cs_bytes={_int_value(cs_bytes, 0)}")
+    sc_bytes = event_data.get("sc_bytes")
+    if sc_bytes not in {None, ""}:
+        parts.append(f"sc_bytes={_int_value(sc_bytes, 0)}")
     proxy_action = str(event_data.get("proxy_action") or "")
     if proxy_action:
         parts.append(f"proxy_action={proxy_action}")

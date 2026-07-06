@@ -224,6 +224,128 @@ class TestObservationProfiles:
         assert event.timestamp == _make_ts()
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"delayed": 1}
 
+    def test_ssh_success_syslog_lifecycle_rows_share_observation_delay(self, monkeypatch):
+        """Successful SSH syslog lifecycle rows should not be reordered by delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "syslog": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("delay_test")
+        host = HostContext(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        auth = AuthContext(
+            username="marcus.chen",
+            logon_id="0x1079caef",
+            session_id=266599,
+            logon_type=10,
+            source_ip="10.10.1.31",
+            source_port=52267,
+        )
+        events = [
+            SecurityEvent(
+                timestamp=_make_ts(),
+                event_type="syslog",
+                src_host=host,
+                auth=auth,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=658147,
+                    facility=10,
+                    severity=6,
+                    message="Connection from 10.10.1.31 port 52267 on 10.10.3.20 port 22",
+                ),
+            ),
+            SecurityEvent(
+                timestamp=_make_ts() + timedelta(milliseconds=100),
+                event_type="syslog",
+                src_host=host,
+                auth=auth,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=658147,
+                    facility=10,
+                    severity=6,
+                    message="Accepted password for marcus.chen from 10.10.1.31 port 52267 ssh2",
+                ),
+            ),
+            SecurityEvent(
+                timestamp=_make_ts() + timedelta(milliseconds=180),
+                event_type="syslog",
+                src_host=host,
+                auth=auth,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=658147,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        "pam_unix(sshd:session): session opened for user "
+                        "marcus.chen(uid=4119) by (uid=0)"
+                    ),
+                ),
+            ),
+            SecurityEvent(
+                timestamp=_make_ts() + timedelta(milliseconds=240),
+                event_type="syslog",
+                src_host=host,
+                auth=auth,
+                syslog=SyslogContext(
+                    app_name="systemd-logind",
+                    pid=18702,
+                    facility=10,
+                    severity=6,
+                    message="New session 266599 of user marcus.chen.",
+                ),
+            ),
+            SecurityEvent(
+                timestamp=_make_ts() + timedelta(seconds=60),
+                event_type="logoff",
+                dst_host=host,
+                auth=auth,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=658147,
+                    facility=10,
+                    severity=6,
+                    message="pam_unix(sshd:session): session closed for user marcus.chen",
+                ),
+            ),
+            SecurityEvent(
+                timestamp=_make_ts() + timedelta(seconds=60, milliseconds=120),
+                event_type="syslog",
+                src_host=host,
+                auth=auth,
+                syslog=SyslogContext(
+                    app_name="systemd-logind",
+                    pid=18702,
+                    facility=10,
+                    severity=6,
+                    message="Removed session 266599.",
+                ),
+            ),
+        ]
+
+        delays = {policy.decide("syslog", event).delay for event in events}
+
+        assert len(delays) == 1
+
     def test_delayed_process_source_observation_extends_process_activity(
         self,
         monkeypatch,
@@ -946,6 +1068,224 @@ class TestObservationProfiles:
             policy.decide("snort_alert", first).delay == policy.decide("snort_alert", second).delay
         )
 
+    def test_ecar_ssh_transport_and_session_observation_are_tuple_coherent(self, monkeypatch):
+        """Target eCAR SSH FLOW and USER_SESSION rows should share observation fate."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_ssh_tuple_delay_test")
+        target = HostContext(
+            hostname="WEB-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        transport = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            dst_host=target,
+            network=NetworkContext(
+                src_ip="10.0.1.25",
+                src_port=55122,
+                dst_ip="10.0.3.10",
+                dst_port=22,
+                protocol="tcp",
+                zeek_uid="CsshTransport123",
+            ),
+        )
+        login = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=2),
+            event_type="ssh_session",
+            dst_host=target,
+            auth=AuthContext(
+                username="alice",
+                source_ip="10.0.1.25",
+                source_port=55122,
+                logon_id="0x123",
+                logon_type=10,
+            ),
+        )
+
+        assert policy._coherent_group_key("ecar", transport) == policy._coherent_group_key(
+            "ecar", login
+        )
+        assert policy.decide("ecar", transport).delay == policy.decide("ecar", login).delay
+
+    def test_ecar_rdp_transport_and_session_observation_are_tuple_coherent(self, monkeypatch):
+        """Target eCAR RDP FLOW and Type 10 USER_SESSION rows should share observation fate."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_rdp_tuple_delay_test")
+        target = HostContext(
+            hostname="FILE-01",
+            ip="10.0.2.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+        )
+        transport = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            dst_host=target,
+            network=NetworkContext(
+                src_ip="10.0.1.25",
+                src_port=55891,
+                dst_ip="10.0.2.20",
+                dst_port=3389,
+                protocol="tcp",
+                zeek_uid="CrdpTransport123",
+            ),
+        )
+        login = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=2),
+            event_type="logon",
+            dst_host=target,
+            auth=AuthContext(
+                username="alice",
+                source_ip="10.0.1.25",
+                source_port=55891,
+                logon_id="0x456",
+                logon_type=10,
+            ),
+        )
+
+        assert policy._coherent_group_key("ecar", transport) == policy._coherent_group_key(
+            "ecar", login
+        )
+        assert policy.decide("ecar", transport).delay == policy.decide("ecar", login).delay
+
+    def test_visible_ecar_rdp_transport_preserves_zeek_conn_parent(self, monkeypatch):
+        """A visible endpoint RDP FLOW should not orphan its successful Zeek transport."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    },
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_conn": 1.0},
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    },
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        ecar = _make_mock_emitter("ecar", handles=True)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"ecar": ecar, "zeek_conn": conn},
+            observation_policy=ObservationPolicy("rdp_transport_parent_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.25",
+                src_port=55891,
+                dst_ip="10.0.2.20",
+                dst_port=3389,
+                protocol="tcp",
+                service="rdp",
+                zeek_uid="CrdpTransport123",
+                conn_state="SF",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        ecar.emit.assert_called_once()
+        conn.emit.assert_called_once()
+        assert ecar.emit.call_args.args[0]._observed_formats == {"ecar", "zeek_conn"}
+        assert conn.emit.call_args.args[0]._observed_formats == {"ecar", "zeek_conn"}
+
+    def test_failed_rdp_transport_can_still_drop_zeek_conn(self, monkeypatch):
+        """RDP scanner/failure texture should still be eligible for Zeek missingness."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    },
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_conn": 1.0},
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    },
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        ecar = _make_mock_emitter("ecar", handles=True)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"ecar": ecar, "zeek_conn": conn},
+            observation_policy=ObservationPolicy("failed_rdp_transport_gap_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.25",
+                src_port=55891,
+                dst_ip="10.0.2.20",
+                dst_port=3389,
+                protocol="tcp",
+                service="rdp",
+                zeek_uid="CrdpFailure123",
+                conn_state="S0",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        ecar.emit.assert_called_once()
+        conn.emit.assert_not_called()
+
     def test_syslog_ssh_lifecycle_delay_preserves_session_order(self, monkeypatch):
         """SSH lifecycle syslog rows with one sshd PID should share collection delay."""
         monkeypatch.setattr(
@@ -1041,6 +1381,54 @@ class TestObservationProfiles:
             syslog=SyslogContext(
                 app_name="sshd",
                 pid=5158,
+                message=message,
+            ),
+        )
+
+        assert policy.decide("syslog", event).status == "visible"
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "New session 123 of user lina.nguyen.",
+            "Removed session 123.",
+        ],
+    )
+    def test_syslog_logind_lifecycle_rows_are_not_dropped(self, monkeypatch, message):
+        """Local logind rows should stay visible with correlated endpoint sessions."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "syslog": {
+                        "missingness": 1.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("logind_drop_test")
+        host = HostContext(
+            hostname="DB-PROD-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="syslog",
+            src_host=host,
+            syslog=SyslogContext(
+                app_name="systemd-logind",
+                pid=701,
+                facility=10,
+                severity=6,
                 message=message,
             ),
         )

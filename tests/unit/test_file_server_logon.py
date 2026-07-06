@@ -12,6 +12,14 @@ from unittest.mock import MagicMock
 class TestEmitSmbLogonPair:
     """Test _emit_smb_logon_pair helper method."""
 
+    def test_successful_logon_requires_successful_smb_transport_state(self):
+        """SMB transports that anchor successful Type 3 logons must be successful."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        assert BaselineMixin._smb_logon_transport_conn_state("smb", True) == "SF"
+        assert BaselineMixin._smb_logon_transport_conn_state("ldap", True) is None
+        assert BaselineMixin._smb_logon_transport_conn_state("smb", False) is None
+
     def test_emits_logon_and_logoff(self):
         """Should call generate_logon(type=3) then generate_logoff(type=3)."""
         import random

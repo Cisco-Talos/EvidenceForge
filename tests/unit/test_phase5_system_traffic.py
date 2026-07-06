@@ -330,6 +330,10 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
     engine.activity_generator = Mock()
     engine.activity_generator.generate_system_process.return_value = 4242
+    engine._polkit_action_profile = lambda _entry, _rng: (
+        "org.freedesktop.packagekit.system-update",
+        "/usr/lib/packagekit/packagekitd",
+    )
     entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
     template = next(message for message in entry["messages"] if "action {action_id}" in message)
     rng = random.Random(29)
@@ -349,6 +353,120 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     assert call["process_name"] in message
     assert call["emit_linux_syslog"] is False
     assert call["time"] < timestamp
+
+
+def test_polkit_cli_companion_process_uses_visible_user_shell(
+    linux_system, state_manager, mock_emitters
+):
+    """Foreground polkit CLI tools should not appear as direct PID 1/systemd children."""
+    from evidenceforge.generation.engine import GenerationEngine
+
+    engine = object.__new__(GenerationEngine)
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine._system_pids = {}
+
+    pids: dict[str, int] = {}
+    engine._seed_linux_process_tree(linux_system, pids)
+    engine._system_pids[linux_system.hostname] = pids
+
+    activity_generator = ActivityGenerator(state_manager, mock_emitters)
+    activity_generator._system_pids = engine._system_pids
+    engine.activity_generator = activity_generator
+
+    timestamp = datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC)
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=timestamp,
+        action_id="org.freedesktop.systemd1.manage-units",
+        process_path="/usr/bin/systemctl",
+        subject_user="deploy",
+        rng=random.Random(31),
+        sys_pids=pids,
+    )
+
+    emitted_events = [call.args[0] for call in mock_emitters["ecar"].emit.call_args_list]
+    create_event = next(
+        event
+        for event in emitted_events
+        if event.event_type == "process_create"
+        and event.process is not None
+        and event.process.image == "/usr/bin/systemctl"
+    )
+    terminate_event = next(
+        event
+        for event in emitted_events
+        if event.event_type == "process_terminate"
+        and event.process is not None
+        and event.process.pid == pid
+    )
+
+    assert pid is not None
+    assert create_event.auth.username == "deploy"
+    assert create_event.process.parent_image == "/bin/bash"
+    assert create_event.process.parent_pid != 1
+    assert terminate_event.timestamp > create_event.timestamp
+
+
+def test_polkit_reboot_action_is_explicitly_unsuccessful(
+    linux_system, state_manager, mock_emitters
+):
+    """Generic reboot attempts should not imply a successful host reboot lifecycle."""
+    from evidenceforge.generation.engine import GenerationEngine
+
+    engine = object.__new__(GenerationEngine)
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine._system_pids = {}
+
+    pids: dict[str, int] = {}
+    engine._seed_linux_process_tree(linux_system, pids)
+    engine._system_pids[linux_system.hostname] = pids
+
+    activity_generator = ActivityGenerator(state_manager, mock_emitters)
+    activity_generator._system_pids = engine._system_pids
+    engine.activity_generator = activity_generator
+    engine._polkit_action_profile = lambda _entry, _rng: (
+        "org.freedesktop.login1.reboot",
+        "/usr/bin/loginctl",
+    )
+
+    entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
+    templates = [message for message in entry["messages"] if "action {action_id}" in message]
+    timestamp = datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC)
+
+    messages = [
+        engine._render_polkit_syslog_message(
+            {**entry, "messages": [template]},
+            random.Random(41 + index),
+            system=linux_system,
+            timestamp=timestamp + timedelta(seconds=index),
+            sys_pids=pids,
+        )
+        for index, template in enumerate(templates)
+    ]
+
+    emitted_events = [call.args[0] for call in mock_emitters["ecar"].emit.call_args_list]
+    reboot_commands = [
+        event
+        for event in emitted_events
+        if event.event_type == "process_create"
+        and event.process is not None
+        and event.process.image == "/usr/bin/loginctl"
+    ]
+
+    assert messages
+    assert all("org.freedesktop.login1.reboot" in message for message in messages)
+    assert all("successfully authenticated" not in message for message in messages)
+    assert all(" is authorized for action " not in message for message in messages)
+    assert all(
+        "failed to authenticate" in message or "is not authorized" in message
+        for message in messages
+    )
+    assert reboot_commands
+    assert all(
+        event.process.command_line == "/usr/bin/loginctl reboot" for event in reboot_commands
+    )
 
 
 def test_windows_scheduled_task_selector_honors_per_host_window_caps(win_system):

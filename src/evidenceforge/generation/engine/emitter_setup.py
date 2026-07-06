@@ -33,9 +33,10 @@ Contains the EmitterSetupMixin with methods for:
 
 import logging
 import random
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.network_params import load_network_params, public_ntp_ips
 from evidenceforge.generation.emitters import (
@@ -93,6 +94,14 @@ def _system_uses_dhcp(system: System) -> bool:
         "server",
         "domain_controller",
     }
+
+
+def _has_dhcp_event(step: object) -> bool:
+    """Return whether a storyline step contains an explicit DHCP lease event."""
+
+    return any(
+        getattr(event, "type", None) == "dhcp_lease" for event in getattr(step, "events", [])
+    )
 
 
 def _build_emitter_classes() -> dict:
@@ -166,6 +175,38 @@ DB_SERVICE_MAP = {
 
 class EmitterSetupMixin:
     """Mixin providing emitter initialization and infrastructure setup methods."""
+
+    def _storyline_dhcp_lease_times_by_host(self) -> dict[str, list[datetime]]:
+        """Return explicit storyline DHCP lease times grouped by host."""
+
+        cached = getattr(self, "_storyline_dhcp_times_by_host", None)
+        if cached is not None:
+            return cached
+
+        times_by_host: dict[str, list[datetime]] = {}
+        for step in self.scenario.storyline or []:
+            hostname = getattr(step, "system", "")
+            if not hostname or not _has_dhcp_event(step):
+                continue
+            times_by_host.setdefault(hostname, []).append(self._parse_storyline_time(step.time))
+        for times in times_by_host.values():
+            times.sort()
+        self._storyline_dhcp_times_by_host = times_by_host
+        return times_by_host
+
+    def _storyline_dhcp_lease_time_in_hour(
+        self,
+        hostname: str,
+        current_hour: datetime,
+    ) -> datetime | None:
+        """Return the explicit DHCP storyline time for a host in the current hour."""
+
+        hour_start = current_hour.replace(minute=0, second=0, microsecond=0)
+        hour_end = hour_start + timedelta(hours=1)
+        for event_time in self._storyline_dhcp_lease_times_by_host().get(hostname, []):
+            if hour_start <= event_time < hour_end:
+                return event_time
+        return None
 
     def _init_emitters(self) -> None:
         """Initialize emitters for each requested format.
@@ -362,6 +403,7 @@ class EmitterSetupMixin:
             infra_ips = getattr(self, "_infra_ips", {})
             dhcp_servers = infra_ips.get("dc") or infra_ips.get("dns") or ["10.0.0.1"]
             dhcp_server = dhcp_servers[0] if isinstance(dhcp_servers, list) else dhcp_servers
+            renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
                 system=system,
@@ -370,12 +412,14 @@ class EmitterSetupMixin:
                 server_addr=dhcp_server,
                 lease_time=lease_time,
                 uid=uid,
+                renewal_interval=renewal_interval,
             )
             # Store state for renewals
             self._dhcp_lease_state[system.hostname] = {
                 "mac": mac,
                 "lease_time": lease_time,
                 "last_renewal": ts.timestamp(),
+                "next_renewal": ts.timestamp() + renewal_interval,
                 "server_addr": dhcp_server,
                 "system": system,
             }

@@ -29,12 +29,15 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
+    Group,
     OutputSpec,
     Scenario,
     System,
@@ -239,6 +242,77 @@ def test_world_model_plan_session_selects_interactive_ssh_and_rdp(
     assert rdp_plan.logon_type == 10
     assert rdp_plan.source_system is not None
     assert rdp_plan.source_system.hostname == "WKS-01"
+
+
+def test_world_model_ssh_admin_roster_is_role_and_group_scoped(scenario: Scenario) -> None:
+    """Baseline SSH admin users should be narrower than generic DB access personas."""
+    scenario.environment.users.extend(
+        [
+            User(
+                username="data.user",
+                full_name="Data User",
+                email="data@corp.local",
+                persona="data_analyst",
+                primary_system="WKS-03",
+            ),
+            User(
+                username="sales.user",
+                full_name="Sales User",
+                email="sales@corp.local",
+                persona="sales",
+                primary_system="WKS-04",
+            ),
+            User(
+                username="helpdesk.user",
+                full_name="Helpdesk User",
+                email="helpdesk@corp.local",
+                persona="help_desk",
+                primary_system="WKS-05",
+            ),
+        ]
+    )
+    scenario.environment.systems.extend(
+        [
+            System(
+                hostname="WKS-03",
+                ip="10.10.10.53",
+                os="Windows 11",
+                type="workstation",
+                assigned_user="data.user",
+            ),
+            System(
+                hostname="WKS-04",
+                ip="10.10.10.54",
+                os="Windows 11",
+                type="workstation",
+                assigned_user="sales.user",
+            ),
+            System(
+                hostname="WKS-05",
+                ip="10.10.10.55",
+                os="Windows 11",
+                type="workstation",
+                assigned_user="helpdesk.user",
+            ),
+        ]
+    )
+    scenario.environment.groups = [
+        Group(name="it-admins", members=["helpdesk.user"]),
+    ]
+    model = WorldModel(scenario, "corp.local")
+
+    db_roster = {
+        user.username for user in model.get_ssh_admin_users(model.systems_by_hostname["DB-01"])
+    }
+    web_roster = {
+        user.username for user in model.get_ssh_admin_users(model.systems_by_hostname["PROXY-01"])
+    }
+
+    assert {"alice.admin", "dev.user", "helpdesk.user"} <= db_roster
+    assert "data.user" not in db_roster
+    assert "sales.user" not in db_roster
+    assert "dev.user" not in web_roster
+    assert {"alice.admin", "helpdesk.user"} <= web_roster
 
 
 def test_world_planner_preallocates_sessions_before_logon_emission(
@@ -685,6 +759,39 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].protocol == "tcp"
     assert rdp_connections[0].initiating_pid > 0
     assert rdp_connections[0].source_system == "WKS-01"
+
+
+def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
+    """RDP target logon timing should not precede same-tuple eCAR FLOW visibility."""
+    scenario = _make_scenario()
+    target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
+    user = scenario.environment.users[0]
+    base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    bundle = RdpSessionActionBundle(
+        executor=Mock(),
+        request=RdpSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.10.10.50",
+        ),
+    )
+    flow_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=40,
+        default_max_ms=300,
+        default_position="after",
+        default_class="source_latency",
+    )
+
+    logon_time = bundle._target_logon_time(
+        rng=random.Random(7),
+        source_ip="10.10.10.50",
+        src_port=52875,
+        transport_start_time=base_time,
+    )
+
+    assert logon_time > base_time + timedelta(milliseconds=flow_window.max_ms)
 
 
 def test_world_planner_moves_rdp_source_after_future_workstation_session(

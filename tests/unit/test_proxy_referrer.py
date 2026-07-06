@@ -637,6 +637,8 @@ class TestProxyActionSemantics:
         assert connect_fields["method"] == "CONNECT"
         assert inspected_fields["method"] == "GET"
         assert connect_fields["status_code"] == 200
+        assert inspected_fields["cs_bytes"] == 700
+        assert inspected_fields["sc_bytes"] == 4096
         assert connect_fields["sc_bytes"] < inspected_fields["sc_bytes"]
         assert connect_fields["proxy_action"] == "tunnel-setup"
         assert connect_fields["ssl_bump_action"] == "peek"

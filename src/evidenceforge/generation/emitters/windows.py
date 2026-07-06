@@ -2301,10 +2301,10 @@ class WindowsEventEmitter(LogEmitter):
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
             self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
+            self._shift_spooled_network_logons_after_transport_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
             self._shift_spooled_process_dependents_after_create_unlocked()
-            self._shift_spooled_network_logons_after_transport_unlocked()
             self._shift_spooled_special_privileges_after_logons_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
@@ -2312,10 +2312,10 @@ class WindowsEventEmitter(LogEmitter):
             events = self._iter_spooled_events_unlocked()
         else:
             self._shift_kerberos_tgts_before_service_tickets()
+            self._shift_network_logons_after_transport()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
             self._shift_process_dependents_after_create()
-            self._shift_network_logons_after_transport()
             self._shift_special_privileges_after_logons()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()

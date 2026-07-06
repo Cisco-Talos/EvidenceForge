@@ -108,6 +108,33 @@ def test_activity_generator_uses_browser_agent_for_workstation_browser_domains()
     assert not any(token in user_agent for token in ("curl/", "Wget/", "python-requests/"))
 
 
+def test_generated_windows_browser_proxy_agents_exclude_legacy_ie():
+    from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+
+    workstation = System(
+        hostname="ws01",
+        ip="10.0.1.20",
+        os="Windows 11",
+        type="workstation",
+        roles=["workstation"],
+    )
+
+    user_agents = {
+        pick_proxy_user_agent(
+            random.Random(seed),
+            workstation,
+            hostname="calendar.google.com",
+            domain_tags=["saas"],
+        )
+        for seed in range(200)
+    }
+
+    assert user_agents
+    assert all(
+        "Trident/" not in user_agent and "MSIE " not in user_agent for user_agent in user_agents
+    )
+
+
 def test_activity_generator_collapses_generated_browser_family_user_agents():
     generator = ActivityGenerator(StateManager(), {})
     workstation = System(
@@ -212,6 +239,132 @@ def test_activity_generator_preserves_override_browser_user_agent():
     )
 
     assert "Firefox/122.0" in user_agent
+
+
+def test_activity_generator_replaces_server_browser_user_agent_with_service_client():
+    generator = ActivityGenerator(StateManager(), {})
+    domain_controller = System(
+        hostname="DC-01",
+        ip="10.10.2.10",
+        os="Windows Server 2022",
+        type="domain_controller",
+        roles=["domain_controller"],
+    )
+
+    user_agent = generator._proxy_user_agent_for_context(
+        random.Random(23),
+        domain_controller,
+        hostname="api.westbridge-services.net",
+        domain_tags=[],
+        override_user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "Chrome/121.0.0.0 Safari/537.36"
+        ),
+    )
+
+    assert user_agent == "Go-http-client/1.1"
+
+
+def test_build_proxy_context_preserves_caller_browser_user_agent_for_api_domain():
+    generator = ActivityGenerator(StateManager(), {})
+    workstation = System(
+        hostname="WS-AJOHNSON-01",
+        ip="10.10.1.35",
+        os="Windows 11",
+        type="workstation",
+    )
+    proxy = System(
+        hostname="PROXY-01",
+        ip="10.10.2.5",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["forward_proxy"],
+    )
+    chrome_user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "Chrome/121.0.0.0 Safari/537.36"
+    )
+
+    proxy_context = generator._build_proxy_context(
+        src_ip=workstation.ip,
+        dst_ip="45.33.32.30",
+        dst_port=443,
+        service="ssl",
+        duration=5.0,
+        orig_bytes=314_782_613,
+        resp_bytes=2048,
+        hostname="api.westbridge-services.net",
+        source_system=workstation,
+        proxy_sys=proxy,
+        http=HttpContext(
+            method="POST",
+            host="api.westbridge-services.net",
+            uri="/upload/telemetry/7f3a2b19",
+            user_agent=chrome_user_agent,
+            request_body_len=314_782_613,
+            response_body_len=2048,
+        ),
+        explicit_mode=True,
+        time=datetime(2026, 5, 18, 14, 25, tzinfo=UTC),
+    )
+
+    assert proxy_context.user_agent == chrome_user_agent
+
+
+def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
+    generator = ActivityGenerator(StateManager(), {})
+    domain_controller = System(
+        hostname="DC-01",
+        ip="10.10.2.10",
+        os="Windows Server 2022",
+        type="domain_controller",
+        roles=["domain_controller"],
+    )
+    proxy = System(
+        hostname="PROXY-01",
+        ip="10.10.3.20",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["forward_proxy"],
+    )
+
+    proxy_context = generator._build_proxy_context(
+        src_ip=domain_controller.ip,
+        dst_ip="45.33.32.30",
+        dst_port=443,
+        service="ssl",
+        duration=2.5,
+        orig_bytes=600,
+        resp_bytes=4096,
+        hostname="api.westbridge-services.net",
+        source_system=domain_controller,
+        proxy_sys=proxy,
+        http=HttpContext(
+            method="GET",
+            host="api.westbridge-services.net",
+            uri="/api/v2/checkin",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "Chrome/121.0.0.0 Safari/537.36"
+            ),
+            response_body_len=4096,
+        ),
+        explicit_mode=True,
+        time=datetime(2024, 3, 18, 16, 33, tzinfo=UTC),
+    )
+    hint = generator._explicit_proxy_client_process_hint(
+        user_agent=proxy_context.user_agent,
+        hostname=proxy_context.host,
+        dst_port=443,
+        proxy_sys=proxy,
+        source_system=domain_controller,
+    )
+
+    assert proxy_context.user_agent == "Go-http-client/1.1"
+    assert hint is not None
+    image, command_line = hint
+    assert image.endswith("service-healthcheck.exe")
+    assert "api.westbridge-services.net" in command_line
 
 
 def test_server_proxy_package_user_agents_are_destination_aware():
@@ -1607,8 +1760,99 @@ class TestExplicitProxyVisibility:
         assert client_event.process.pid != git_pid
         assert client_event.process.image == "/usr/lib/apt/methods/https"
         assert client_event.process.command_line == "/usr/lib/apt/methods/https"
+        assert client_event.process.username == "root"
+        assert client_event.process.logon_id != user_session.logon_id
 
-    def test_linux_proxy_scrubs_bad_caller_when_matching_process_cannot_be_owned(self):
+    def test_linux_package_proxy_client_uses_system_owner_after_session_logout(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        _user, linux_system, shell_pid = _seed_linux_proxy_client_user_session(generator)
+        shell_proc = generator.state_manager.get_process(linux_system.hostname, shell_pid)
+        assert shell_proc is not None
+        logon_id = shell_proc.logon_id
+        request_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+        generator.state_manager.end_session(
+            logon_id,
+            request_time - timedelta(seconds=30),
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+
+        pid, image = generator._ensure_explicit_proxy_client_process(
+            source_system=linux_system,
+            time=request_time,
+            proxy_context=ProxyContext(
+                client_ip=linux_system.ip,
+                method="CONNECT",
+                url="changelogs.ubuntu.com:443",
+                host="changelogs.ubuntu.com",
+                status_code=200,
+                user_agent="apt-http/2.4.11 (amd64)",
+                proxy_fqdn="PROXY-01.example.org",
+            ),
+            proxy_sys=proxy,
+            dst_port=443,
+        )
+
+        proc = generator.state_manager.get_process(linux_system.hostname, pid)
+        assert image == "/usr/lib/apt/methods/https"
+        assert proc is not None
+        assert proc.username == "root"
+        assert proc.logon_id != logon_id
+        assert proc.parent_pid != shell_pid
+        parent = generator.state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/usr/lib/systemd/systemd"
+
+    def test_linux_background_helper_process_drops_ended_user_session_parent(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, linux_system, shell_pid = _seed_linux_proxy_client_user_session(generator)
+        shell_proc = generator.state_manager.get_process(linux_system.hostname, shell_pid)
+        assert shell_proc is not None
+        systemd_pid = shell_proc.parent_pid
+        logon_id = shell_proc.logon_id
+        request_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+        generator.state_manager.end_session(
+            logon_id,
+            request_time - timedelta(seconds=30),
+        )
+
+        pid = generator.generate_process(
+            user=user,
+            system=linux_system,
+            time=request_time,
+            logon_id=logon_id,
+            process_name="/usr/lib/apt/methods/https",
+            command_line="/usr/lib/apt/methods/https",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+        )
+
+        proc = generator.state_manager.get_process(linux_system.hostname, pid)
+        assert proc is not None
+        assert proc.username == "root"
+        assert proc.logon_id == "0x3e7"
+        assert proc.parent_pid == systemd_pid
+
+    def test_linux_proxy_replaces_bad_caller_with_tool_owner(self):
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -1688,10 +1932,12 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         )
 
-        assert client_event.process is None
-        assert client_event.network.initiating_pid == -1
+        assert client_event.process is not None
+        assert client_event.process.image == "/usr/bin/curl"
+        assert client_event.process.username == "root"
+        assert client_event.network.initiating_pid != bash_pid
 
-    def test_linux_proxy_scrubs_service_daemon_for_tool_user_agent(self):
+    def test_linux_proxy_replaces_service_daemon_for_tool_user_agent(self):
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -1763,8 +2009,10 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         )
 
-        assert client_event.process is None
-        assert client_event.network.initiating_pid == -1
+        assert client_event.process is not None
+        assert client_event.process.image == "/usr/bin/python3"
+        assert client_event.process.username == "root"
+        assert client_event.network.initiating_pid != apache_pid
 
     def test_explicit_proxy_tunnel_reuse_is_user_agent_scoped(self):
         generator, emitters = _generator(
@@ -1847,7 +2095,7 @@ class TestExplicitProxyVisibility:
         assert len(client_events) == 2
         assert client_events[0].network.zeek_uid != client_events[1].network.zeek_uid
 
-    def test_direct_proxy_listener_flow_scrubs_linux_shell_owner(self):
+    def test_direct_proxy_listener_flow_replaces_linux_shell_with_service_owner(self):
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -1921,8 +2169,10 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         )
 
-        assert client_event.process is None
-        assert client_event.network.initiating_pid == -1
+        assert client_event.process is not None
+        assert client_event.process.image == "/usr/bin/wget"
+        assert client_event.process.username == "root"
+        assert client_event.network.initiating_pid != bash_pid
 
     def test_direct_proxy_listener_flow_replaces_mismatched_linux_browser(self):
         generator, emitters = _generator(

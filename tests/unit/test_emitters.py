@@ -1146,6 +1146,69 @@ class TestWindowsEventEmitter:
         assert logon["TimeCreated"] == expected_logon_time
         assert privilege["TimeCreated"] == expected_logon_time + expected_privilege_delta
 
+    def test_flush_repairs_transport_shifted_logon_before_process_create(
+        self, format_def, temp_output, monkeypatch
+    ):
+        """Flush should move remote 4624 rows before repairing same-session 4688 rows."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logon_time + timedelta(milliseconds=250)
+        wfp_time = logon_time + timedelta(milliseconds=450)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SubjectLogonId": "0xf63a33e",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+        calls: list[str] = []
+        rendered: list[dict] = []
+        shift_network = emitter._shift_network_logons_after_transport
+        shift_process = emitter._shift_process_creates_after_logons
+
+        def wrapped_network() -> None:
+            calls.append("network")
+            shift_network()
+
+        def wrapped_process() -> None:
+            calls.append("process")
+            shift_process()
+
+        monkeypatch.setattr(emitter, "_shift_network_logons_after_transport", wrapped_network)
+        monkeypatch.setattr(emitter, "_shift_process_creates_after_logons", wrapped_process)
+        monkeypatch.setattr(
+            emitter, "_render_event", lambda event: rendered.append(dict(event)) or ""
+        )
+
+        emitter._flush_unlocked()
+
+        assert calls.index("network") < calls.index("process")
+        logon = next(event for event in rendered if event["EventID"] == 4624)
+        process = next(event for event in rendered if event["EventID"] == 4688)
+        assert process["TimeCreated"] > logon["TimeCreated"]
+
     def test_reused_source_port_far_transport_does_not_shift_logon(self, format_def, temp_output):
         """Remote logon repair should not pair unrelated later source-port reuse."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)

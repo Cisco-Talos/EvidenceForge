@@ -92,6 +92,25 @@ def expand_formats(formats: list[str] | set[str]) -> set[str]:
     return expanded
 
 
+def _is_successful_remote_interactive_transport(event: SecurityEvent) -> bool:
+    """Return whether a network event is an established SSH/RDP session transport."""
+
+    network = event.network
+    if network is None:
+        return False
+    if str(network.protocol or "").lower() != "tcp" or network.dst_port not in {22, 3389}:
+        return False
+    state = str(network.conn_state or "").upper()
+    if state and state != "SF":
+        return False
+    if event.firewall is not None and event.firewall.action == "deny":
+        return False
+    service = str(network.service or "").lower()
+    if service and service not in {"ssh", "rdp"}:
+        return False
+    return True
+
+
 class EventDispatcher:
     """Routes SecurityEvents to StateManager and matching emitters."""
 
@@ -214,6 +233,24 @@ class EventDispatcher:
         self._promote_zeek_parent(decisions, "zeek_files", _ZEEK_FILES_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
         self._preserve_zeek_tls_certificate_companions(event, decisions)
+        self._preserve_remote_interactive_transport_companions(event, decisions)
+
+    @staticmethod
+    def _preserve_remote_interactive_transport_companions(
+        event: SecurityEvent,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Keep successful SSH/RDP network rows when endpoint transport telemetry survives."""
+
+        if not _is_successful_remote_interactive_transport(event):
+            return
+        endpoint_decision = decisions.get("ecar")
+        if endpoint_decision is None or endpoint_decision.status == "dropped":
+            return
+        for format_name in ("zeek_conn", "cisco_asa"):
+            decision = decisions.get(format_name)
+            if decision is not None and decision.status == "dropped":
+                decisions[format_name] = ObservationDecision(status="visible")
 
     @staticmethod
     def _preserve_zeek_tls_certificate_companions(

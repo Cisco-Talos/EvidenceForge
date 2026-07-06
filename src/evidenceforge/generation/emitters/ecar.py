@@ -29,7 +29,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, NetworkContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -44,8 +44,8 @@ _ECAR_SORT_PRIORITY = {
     ("FILE", "READ"): 5,
     ("FILE", "WRITE"): 6,
     ("FLOW", "CONNECT"): 7,
-    ("THREAD", "REMOTE_CREATE"): 8,
-    ("PROCESS", "OPEN"): 9,
+    ("PROCESS", "OPEN"): 8,
+    ("THREAD", "REMOTE_CREATE"): 9,
     ("PROCESS", "TERMINATE"): 10,
     ("USER_SESSION", "LOGOUT"): 11,
 }
@@ -317,15 +317,19 @@ class EcarEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _apply_session_properties(event_data: dict[str, Any], event: SecurityEvent) -> None:
-        """Copy durable source-native session identifiers onto USER_SESSION rows."""
+        """Copy durable source-native session identifiers onto session-owned rows."""
         auth = event.auth
-        if auth is None:
-            return
-        if auth.logon_id:
-            event_data["logon_id"] = auth.logon_id
-        if auth.session_id:
+        process = event.process
+        logon_id = ""
+        if auth is not None:
+            logon_id = auth.logon_id
+        if not logon_id and process is not None:
+            logon_id = getattr(process, "logon_id", "") or ""
+        if logon_id:
+            event_data["logon_id"] = logon_id
+        if auth is not None and auth.session_id:
             event_data["session_id"] = auth.session_id
-        if auth.logon_guid:
+        if auth is not None and auth.logon_guid:
             event_data["logon_guid"] = auth.logon_guid
 
     @staticmethod
@@ -352,13 +356,11 @@ class EcarEmitter(HostMultiplexEmitter):
         if pid <= 0:
             return -1
         if os_category == "linux":
-            if salt == "process_create":
+            if salt in {"process_create", "process_terminate"}:
                 return pid
             seed = _stable_seed(
                 f"ecar_linux_tid:{hostname}:{pid}:{salt}:{int(timestamp.timestamp()) // 30}"
             )
-            if salt == "process_terminate" and seed % 100 < 55:
-                return pid
             return pid + 1 + (seed % 997)
         bucket_ms = int(timestamp.timestamp() * 1000)
         tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
@@ -469,9 +471,12 @@ class EcarEmitter(HostMultiplexEmitter):
             if event.source_timing is not None
             else event.timestamp
         )
+        source_key = (
+            "source.ecar_session_logout" if lifecycle == "logout" else "source.ecar_session"
+        )
         timestamp = _SOURCE_TIMING.source_time(
             event,
-            "source.ecar_session",
+            source_key,
             seed_parts=(
                 lifecycle,
                 self._host_name(host),
@@ -549,6 +554,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["parent_image_path"] = proc.parent_image
         if proc.concurrency_group_id:
             event_data["_concurrency_group_id"] = proc.concurrency_group_id
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -576,6 +582,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "image_path": proc.image,
             "_host_fqdn": self._host_fqdn(host),
         }
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -610,6 +617,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_process_provenance(event_data, proc)
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -639,6 +647,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_process_provenance(event_data, proc)
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -673,6 +682,7 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         if proc:
             event_data["image_path"] = proc.image
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
@@ -1286,6 +1296,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "user_stack_limit": f"{remote_thread.user_stack_limit:016x}" if remote_thread else "",
             "_host_fqdn": self._host_fqdn(host),
         }
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -1342,6 +1353,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "call_trace": access.call_trace if access else "",
             "_host_fqdn": self._host_fqdn(host),
         }
+        self._apply_session_properties(event_data, event)
         self.emit_event(event_data)
 
     def _process_create_timestamp(
@@ -1453,6 +1465,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["service_name"] = service.service_name
             event_data["image_path"] = service.service_file_name
             event_data["service_account"] = service.service_account
+        self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -1783,6 +1796,32 @@ class EcarEmitter(HostMultiplexEmitter):
         except (TypeError, ValueError):
             return default
 
+    @staticmethod
+    def _process_create_repair_gap_ms(record: dict[str, Any], parent: dict[str, Any]) -> int:
+        """Return a small deterministic parent/child ordering repair gap."""
+        seed = _stable_seed(
+            "ecar-process-create-repair-gap:"
+            f"{record.get('hostname', '')}:"
+            f"{record.get('objectID', '')}:"
+            f"{record.get('pid', '')}:"
+            f"{record.get('ppid', '')}:"
+            f"{parent.get('objectID', '')}:"
+            f"{parent.get('pid', '')}"
+        )
+        return 18 + (seed % 133)
+
+    @staticmethod
+    def _canonical_process_create_repair_gap_ms(record: dict[str, Any]) -> int:
+        """Return a small deterministic gap for canonical create-order repairs."""
+        seed = _stable_seed(
+            "ecar-canonical-process-create-repair-gap:"
+            f"{record.get('hostname', '')}:"
+            f"{record.get('objectID', '')}:"
+            f"{record.get('pid', '')}:"
+            f"{record.get('_canonical_ms', '')}"
+        )
+        return 3 + (seed % 47)
+
     @classmethod
     def _normalize_process_create_canonical_order(cls, lines: list[str]) -> list[str]:
         """Keep PROCESS/CREATE rows ordered by canonical process start time."""
@@ -1818,7 +1857,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 continue
             timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
             if latest_render_ms and timestamp_ms <= latest_render_ms:
-                timestamp_ms = latest_render_ms + 1
+                timestamp_ms = latest_render_ms + cls._canonical_process_create_repair_gap_ms(
+                    record
+                )
                 record["timestamp_ms"] = timestamp_ms
             latest_render_ms = timestamp_ms
 
@@ -1905,6 +1946,315 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @classmethod
+    def _normalize_session_dependents_after_login(cls, lines: list[str]) -> list[str]:
+        """Keep same-logon endpoint activity after the visible USER_SESSION LOGIN row."""
+        records: list[dict[str, Any] | None] = []
+        login_ms_by_session: dict[tuple[str, str], int] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "USER_SESSION" or record.get("action") != "LOGIN":
+                continue
+            props = record.get("properties") or {}
+            if str(props.get("outcome") or "success") == "failure":
+                continue
+            logon_id = str(props.get("logon_id") or "")
+            if not logon_id:
+                continue
+            key = (str(record.get("hostname") or ""), logon_id)
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            current = login_ms_by_session.get(key)
+            if current is None or timestamp_ms < current:
+                login_ms_by_session[key] = timestamp_ms
+
+        dependent_objects = {"PROCESS", "FILE", "MODULE", "REGISTRY", "SERVICE"}
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") not in dependent_objects:
+                normalized.append(line)
+                continue
+            props = record.get("properties") or {}
+            logon_id = str(props.get("logon_id") or "")
+            if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+                normalized.append(line)
+                continue
+            key = (str(record.get("hostname") or ""), logon_id)
+            login_ms = login_ms_by_session.get(key)
+            if login_ms is None:
+                normalized.append(line)
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if timestamp_ms <= login_ms:
+                seed = _stable_seed(
+                    "ecar-session-dependent-after-login:"
+                    f"{key[0]}:{logon_id}:{record.get('objectID', '')}:"
+                    f"{record.get('id', '')}:{timestamp_ms}:{login_ms}"
+                )
+                record["timestamp_ms"] = login_ms + 15 + (seed % 120)
+                line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
+    @classmethod
+    def _normalize_user_session_logout_after_dependents(cls, lines: list[str]) -> list[str]:
+        """Keep USER_SESSION LOGOUT rows after same-session endpoint activity."""
+        records: list[dict[str, Any] | None] = []
+        latest_dependent_ms_by_session: dict[tuple[str, str], int] = {}
+        logout_indexes_by_session: dict[tuple[str, str], list[int]] = {}
+        dependent_objects = {
+            "PROCESS",
+            "FILE",
+            "MODULE",
+            "REGISTRY",
+            "SERVICE",
+            "THREAD",
+            "FLOW",
+        }
+
+        for index, line in enumerate(lines):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            props = record.get("properties") or {}
+            if not isinstance(props, dict):
+                props = {}
+            hostname = str(record.get("hostname") or "")
+            logon_id = str(props.get("logon_id") or "")
+            if (
+                logon_id
+                and logon_id not in {"0x3e7", "0x3e4", "0x3e5", "-"}
+                and record.get("object") in dependent_objects
+            ):
+                key = (hostname, logon_id)
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                if timestamp_ms > latest_dependent_ms_by_session.get(key, 0):
+                    latest_dependent_ms_by_session[key] = timestamp_ms
+                continue
+
+            if record.get("object") != "USER_SESSION" or record.get("action") != "LOGOUT":
+                continue
+            session_id = str(
+                props.get("logon_id") or props.get("session_id") or record.get("objectID") or ""
+            )
+            if not session_id:
+                continue
+            logout_indexes_by_session.setdefault((hostname, session_id), []).append(index)
+
+        for key, indexes in logout_indexes_by_session.items():
+            latest_dependent_ms = latest_dependent_ms_by_session.get(key)
+            if latest_dependent_ms is None:
+                continue
+            next_logout_ms = latest_dependent_ms + 1
+            for index in sorted(
+                indexes,
+                key=lambda idx: (
+                    cls._ecar_int(records[idx].get("timestamp_ms"), 0)
+                    if records[idx] is not None
+                    else 0
+                ),
+            ):
+                record = records[index]
+                if record is None:
+                    continue
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                if timestamp_ms <= latest_dependent_ms:
+                    delay = sample_timing_delta(
+                        "source.ecar_session_logout_after_dependents",
+                        seed_parts=(
+                            key[0],
+                            key[1],
+                            record.get("objectID", ""),
+                            record.get("id", ""),
+                            timestamp_ms,
+                            latest_dependent_ms,
+                        ),
+                    )
+                    delay_ms = max(1, int(delay.total_seconds() * 1000))
+                    timestamp_ms = max(next_logout_ms, latest_dependent_ms + delay_ms)
+                    record["timestamp_ms"] = timestamp_ms
+                next_logout_ms = max(next_logout_ms, timestamp_ms + 1)
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
+    @classmethod
+    def _normalize_remote_session_transport_order(cls, lines: list[str]) -> list[str]:
+        """Keep remote USER_SESSION LOGIN rows after same-host inbound FLOW rows."""
+        records: list[dict[str, Any] | None] = []
+        inbound_flow_ms_by_tuple: dict[tuple[str, str, int, int], int] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "FLOW" or record.get("action") != "CONNECT":
+                continue
+            props = record.get("properties") or {}
+            if str(props.get("direction") or "").upper() != "INBOUND":
+                continue
+            src_ip = str(props.get("src_ip") or "")
+            src_port = cls._ecar_int(props.get("src_port"))
+            dst_port = cls._ecar_int(props.get("dst_port"))
+            if not src_ip or src_port <= 0 or dst_port <= 0:
+                continue
+            key = (str(record.get("hostname") or ""), src_ip, src_port, dst_port)
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            current = inbound_flow_ms_by_tuple.get(key)
+            if current is None or timestamp_ms < current:
+                inbound_flow_ms_by_tuple[key] = timestamp_ms
+
+        for record in records:
+            if (
+                record is None
+                or record.get("object") != "USER_SESSION"
+                or record.get("action") != "LOGIN"
+            ):
+                continue
+            props = record.get("properties") or {}
+            if str(props.get("outcome") or "success") == "failure":
+                continue
+            src_ip = str(props.get("src_ip") or "")
+            src_port = cls._ecar_int(props.get("src_port"))
+            if not src_ip or src_ip == "-" or src_port <= 0:
+                continue
+            session_type = str(props.get("session_type") or "").lower()
+            logon_type = str(props.get("logon_type") or "")
+            candidate_ports: tuple[int, ...]
+            if session_type == "ssh":
+                candidate_ports = (22,)
+            elif logon_type == "10":
+                candidate_ports = (3389,)
+            elif logon_type == "3":
+                candidate_ports = (445,)
+            else:
+                continue
+            flow_ms = min(
+                (
+                    inbound_flow_ms_by_tuple[key]
+                    for key in (
+                        (str(record.get("hostname") or ""), src_ip, src_port, dst_port)
+                        for dst_port in candidate_ports
+                    )
+                    if key in inbound_flow_ms_by_tuple
+                ),
+                default=None,
+            )
+            if flow_ms is None:
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if timestamp_ms > flow_ms:
+                continue
+            seed_text = ":".join(
+                [
+                    str(record.get("hostname") or ""),
+                    src_ip,
+                    str(src_port),
+                    str(record.get("objectID") or ""),
+                    str(record.get("id") or ""),
+                    str(timestamp_ms),
+                ]
+            )
+            record["timestamp_ms"] = flow_ms + 12 + (sum(ord(ch) for ch in seed_text) % 83)
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
+    @staticmethod
+    def _is_linux_login_shell_create(record: dict[str, Any]) -> bool:
+        """Return whether a PROCESS/CREATE row is an interactive Linux login shell."""
+        if record.get("object") != "PROCESS" or record.get("action") != "CREATE":
+            return False
+        props = record.get("properties") or {}
+        image = str(props.get("image_path") or "")
+        if image not in {"/bin/bash", "/usr/bin/bash"}:
+            return False
+        command_line = str(props.get("command_line") or "").strip()
+        return command_line in {"-bash", "bash", "/bin/bash", "/usr/bin/bash"}
+
+    @classmethod
+    def _normalize_linux_login_shell_session_order(cls, lines: list[str]) -> list[str]:
+        """Keep interactive Linux shell creates after same-user session LOGIN rows."""
+        records: list[dict[str, Any] | None] = []
+        logins_by_host_user: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if (
+                record.get("object") != "USER_SESSION"
+                or record.get("action") != "LOGIN"
+                or not record.get("principal")
+            ):
+                continue
+            props = record.get("properties") or {}
+            if str(props.get("outcome") or "success") == "failure":
+                continue
+            key = (str(record.get("hostname") or ""), str(record.get("principal") or ""))
+            logins_by_host_user.setdefault(key, []).append(record)
+
+        for logins in logins_by_host_user.values():
+            logins.sort(key=lambda record: cls._ecar_int(record.get("timestamp_ms"), 0))
+
+        max_forward_gap_ms = 10_000
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if cls._is_linux_login_shell_create(record):
+                shell_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                key = (str(record.get("hostname") or ""), str(record.get("principal") or ""))
+                candidate_login = next(
+                    (
+                        login
+                        for login in logins_by_host_user.get(key, [])
+                        if 0
+                        <= cls._ecar_int(login.get("timestamp_ms"), 0) - shell_ms
+                        <= max_forward_gap_ms
+                    ),
+                    None,
+                )
+                if candidate_login is not None:
+                    login_ms = cls._ecar_int(candidate_login.get("timestamp_ms"), 0)
+                    seed = _stable_seed(
+                        "ecar-linux-login-shell-after-session:"
+                        f"{record.get('hostname', '')}:"
+                        f"{record.get('principal', '')}:"
+                        f"{record.get('objectID', '')}:"
+                        f"{candidate_login.get('objectID', '')}:"
+                        f"{shell_ms}:{login_ms}"
+                    )
+                    record["timestamp_ms"] = login_ms + 80 + (seed % 240)
+                    line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
     _LINUX_SHELL_FOREGROUND_EXES = {
         "cargo",
         "cat",
@@ -1969,6 +2319,9 @@ class EcarEmitter(HostMultiplexEmitter):
         image = str(props.get("image_path") or "")
         parent_image = str(props.get("parent_image_path") or "")
         command_line = str(props.get("command_line") or "")
+        concurrency_group_id = str(record.get("_concurrency_group_id") or "")
+        if concurrency_group_id.startswith("bash-history:"):
+            return False
         if "|" in command_line or cls._is_backgrounded_shell_command(command_line):
             return False
         exe = image.rsplit("/", 1)[-1].lower()
@@ -2231,7 +2584,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 parent_ms = cls._ecar_int(parent.get("timestamp_ms"), 0)
                 timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
                 if timestamp_ms <= parent_ms:
-                    record["timestamp_ms"] = parent_ms + 1
+                    record["timestamp_ms"] = parent_ms + cls._process_create_repair_gap_ms(
+                        record, parent
+                    )
                     changed = True
             if not changed:
                 break
@@ -2342,6 +2697,119 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(line)
         return normalized
 
+    @classmethod
+    def _remote_thread_process_open_keys(
+        cls,
+        record: dict[str, Any],
+    ) -> set[tuple[str, str, str, str, str]]:
+        """Return same-source/same-target keys for remote-thread prerequisite matching."""
+        hostname = str(record.get("hostname") or "")
+        props = record.get("properties") or {}
+        if not isinstance(props, dict):
+            props = {}
+
+        source_keys: list[tuple[str, str]] = []
+        actor_id = str(record.get("actorID") or "")
+        if actor_id:
+            source_keys.append(("actor", actor_id))
+        source_pid = cls._ecar_int(record.get("pid"))
+        if source_pid > 0:
+            source_keys.append(("pid", str(source_pid)))
+        source_pid_prop = cls._ecar_int(props.get("src_pid"))
+        if source_pid_prop > 0:
+            source_keys.append(("pid", str(source_pid_prop)))
+
+        target_keys: list[tuple[str, str]] = []
+        if record.get("object") == "PROCESS" and record.get("action") == "OPEN":
+            object_id = str(record.get("objectID") or "")
+            if object_id:
+                target_keys.append(("uuid", object_id))
+        target_uuid = str(props.get("target_process_uuid") or "")
+        if target_uuid:
+            target_keys.append(("uuid", target_uuid))
+        target_object_id = str(props.get("target_process_object_id") or "")
+        if target_object_id:
+            target_keys.append(("uuid", target_object_id))
+        target_pid = cls._ecar_int(props.get("target_pid"))
+        if target_pid > 0:
+            target_keys.append(("pid", str(target_pid)))
+
+        return {
+            (hostname, source_type, source_value, target_type, target_value)
+            for source_type, source_value in source_keys
+            for target_type, target_value in target_keys
+            if hostname and source_value and target_value
+        }
+
+    @classmethod
+    def _normalize_remote_thread_after_process_open(cls, lines: list[str]) -> list[str]:
+        """Keep eCAR remote-thread creation after the matching process-open row."""
+        records: list[dict[str, Any] | None] = []
+        open_ms_by_key: dict[tuple[str, str, str, str, str], list[int]] = {}
+
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "PROCESS" or record.get("action") != "OPEN":
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if timestamp_ms <= 0:
+                continue
+            for key in cls._remote_thread_process_open_keys(record):
+                open_ms_by_key.setdefault(key, []).append(timestamp_ms)
+
+        for timestamps in open_ms_by_key.values():
+            timestamps.sort()
+
+        max_repair_gap_ms = 30_000
+        for record in records:
+            if (
+                record is None
+                or record.get("object") != "THREAD"
+                or record.get("action") != "REMOTE_CREATE"
+            ):
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if timestamp_ms <= 0:
+                continue
+            candidate_open_ms: list[int] = []
+            has_prior_open = False
+            for key in cls._remote_thread_process_open_keys(record):
+                for open_ms in open_ms_by_key.get(key, []):
+                    if open_ms < timestamp_ms:
+                        has_prior_open = True
+                        continue
+                    if open_ms - timestamp_ms <= max_repair_gap_ms:
+                        candidate_open_ms.append(open_ms)
+            if has_prior_open or not candidate_open_ms:
+                continue
+            prerequisite_ms = min(candidate_open_ms)
+            delay = sample_timing_delta(
+                "source.ecar_remote_thread_after_process_open",
+                seed_parts=(
+                    record.get("hostname", ""),
+                    record.get("objectID", ""),
+                    record.get("actorID", ""),
+                    record.get("pid", ""),
+                    timestamp_ms,
+                    prerequisite_ms,
+                ),
+            )
+            delay_ms = max(1, int(delay.total_seconds() * 1000))
+            record["timestamp_ms"] = prerequisite_ms + delay_ms
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
     @staticmethod
     def _drop_flow_process_identity(record: dict[str, Any]) -> None:
         """Remove process attribution from a FLOW that cannot safely claim it."""
@@ -2416,15 +2884,23 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
+                    writer.buffer = self._normalize_remote_session_transport_order(writer.buffer)
                     writer.buffer = self._normalize_user_session_lifecycle_order(writer.buffer)
+                    writer.buffer = self._normalize_session_dependents_after_login(writer.buffer)
+                    writer.buffer = self._normalize_linux_login_shell_session_order(writer.buffer)
+                    writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
+                    writer.buffer = self._normalize_remote_thread_after_process_open(writer.buffer)
                     writer.buffer = self._filter_stale_process_references_after_termination(
                         writer.buffer
                     )
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)
+                    writer.buffer = self._normalize_user_session_logout_after_dependents(
+                        writer.buffer
+                    )
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
                     writer.buffer = self._filter_after_output_window(
                         writer.buffer,

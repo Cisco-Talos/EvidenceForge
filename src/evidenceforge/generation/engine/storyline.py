@@ -56,6 +56,7 @@ from evidenceforge.generation.actions import (
     StagedArchiveSmbReadRequest,
     WebScanActionBundle,
     WebScanRequest,
+    dhcp_renewal_interval_seconds,
 )
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
@@ -1926,6 +1927,98 @@ class StorylineMixin:
         normalized = normalized.lstrip("\\")
         return f"\\\\{system.hostname}\\{normalized}"
 
+    @staticmethod
+    def _local_staging_path_for_archive(
+        actor: User,
+        source_system: System,
+        archive_path: str,
+    ) -> str:
+        """Return the upload-host path that a browser reads after SMB staging."""
+
+        basename = re.split(r"[\\/]+", archive_path.rstrip("\\/"))[-1] or "staged_archive.zip"
+        if _get_os_category(source_system.os) == "windows":
+            return rf"C:\Users\{actor.username}\AppData\Local\Temp\{basename}"
+        home = "/root" if actor.username == "root" else f"/home/{actor.username}"
+        return f"{home}/.cache/{basename}"
+
+    def _storyline_logon_for_process_owner(
+        self,
+        actor: User,
+        system: System,
+        pid: int,
+        at_time: datetime,
+    ) -> str:
+        """Return a reasonable logon ID for a storyline process on a source host."""
+
+        running = self.state_manager.get_process(system.hostname, pid) if pid > 0 else None
+        running_logon_id = getattr(running, "logon_id", "") if running is not None else ""
+        if running_logon_id:
+            return running_logon_id
+        logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=at_time)
+        if logon_id:
+            return logon_id
+        sessions = self.state_manager.get_sessions_for_user_at(actor.username, at_time)
+        for session in sessions:
+            if getattr(session, "system", "") == system.hostname:
+                return session.logon_id
+        return "0x3e7"
+
+    def _staged_archive_copy_process(
+        self,
+        *,
+        actor: User,
+        source_system: System | None,
+        source_pid: int,
+        archive_smb_path: str,
+        local_staging_path: str,
+        exfil_time: datetime,
+        rng: random.Random,
+    ) -> tuple[int, str, str, str, bool]:
+        """Create a short-lived copy process that stages the archive locally."""
+
+        if source_system is None or _get_os_category(source_system.os) != "windows":
+            return source_pid, "", "", "", False
+        logon_id = self._storyline_logon_for_process_owner(
+            actor,
+            source_system,
+            source_pid,
+            exfil_time,
+        )
+        process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        command_line = (
+            "powershell.exe -NoProfile -Command "
+            f"\"Copy-Item -LiteralPath '{archive_smb_path}' "
+            f"-Destination '{local_staging_path}' -Force\""
+        )
+        process_time = exfil_time - timedelta(
+            minutes=rng.randint(5, 8),
+            seconds=rng.randint(5, 55),
+        )
+        parent_resolver = getattr(self.activity_generator, "_resolve_parent", None)
+        parent_pid = 4
+        if callable(parent_resolver):
+            parent_pid = parent_resolver(
+                source_system,
+                actor,
+                process_time,
+                logon_id,
+                process_name,
+            )
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=source_system,
+            time=process_time,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+        return pid, process_name, command_line, logon_id, True
+
     def _record_storyline_staged_archive(
         self,
         *,
@@ -1974,6 +2067,53 @@ class StorylineMixin:
         exact_source = [archive for archive in candidates if archive.source_ip == source_ip]
         return max(exact_source or candidates, key=lambda archive: archive.staged_at)
 
+    @staticmethod
+    def _windows_browser_process_for_user_agent(user_agent: str) -> str:
+        """Return a Windows browser image that matches an authored browser User-Agent."""
+        ua = (user_agent or "").lower()
+        if "firefox/" in ua:
+            return r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        if "edg/" in ua or "edge/" in ua:
+            return r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        if "chrome/" in ua and "google update" not in ua:
+            return r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        return ""
+
+    @staticmethod
+    def _windows_browser_command_line(process_name: str, destination: str) -> str:
+        """Return a browser launch command line matching the selected image."""
+        exe = process_name.rsplit("\\", 1)[-1].lower()
+        if exe == "firefox.exe":
+            return f'"{process_name}" -osint -url "{destination}"'
+        if exe == "msedge.exe":
+            return f'"{process_name}" --single-argument "{destination}"'
+        return f'"{process_name}" --profile-directory=Default --new-window "{destination}"'
+
+    @staticmethod
+    def _storyline_http_user_agent_for_process(
+        *,
+        system: System | None,
+        process_image: str | None,
+        command_line: str,
+        rng: random.Random,
+    ) -> str:
+        """Return a source-native HTTP User-Agent for an upload owner process."""
+        image = process_image or ""
+        exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        command = command_line.lower()
+        if exe in {"curl", "curl.exe"} or command.startswith("curl "):
+            return "curl/7.88.1"
+        if exe in {"wget", "wget.exe"} or command.startswith("wget "):
+            return "Wget/1.21.3"
+        if "python" in exe and "requests" in command:
+            return "python-requests/2.31.0"
+
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            browser_user_agent_for_process,
+        )
+
+        return browser_user_agent_for_process(rng, system, image)
+
     def _emit_storyline_archive_transfer_before_exfil(
         self,
         *,
@@ -1999,6 +2139,33 @@ class StorylineMixin:
         if target_system is None:
             return
         source_system = self._system_for_ip(source_ip)
+        source_file_read_path = archive.smb_filename
+        transfer_pid = source_pid
+        transfer_process = source_process
+        transfer_command = source_command
+        transfer_logon_id = ""
+        terminate_transfer_process = False
+        if source_system is not None:
+            source_file_read_path = self._local_staging_path_for_archive(
+                actor,
+                source_system,
+                archive.archive_path,
+            )
+            (
+                transfer_pid,
+                transfer_process,
+                transfer_command,
+                transfer_logon_id,
+                terminate_transfer_process,
+            ) = self._staged_archive_copy_process(
+                actor=actor,
+                source_system=source_system,
+                source_pid=source_pid,
+                archive_smb_path=archive.smb_filename,
+                local_staging_path=source_file_read_path,
+                exfil_time=exfil_time,
+                rng=rng,
+            )
         emitted = StagedArchiveSmbReadActionBundle(
             self,
             StagedArchiveSmbReadRequest(
@@ -2012,10 +2179,15 @@ class StorylineMixin:
                 upload_bytes=upload_bytes,
                 source_system=source_system,
                 target_system=target_system,
-                source_pid=source_pid,
-                source_process=source_process,
-                source_command=source_command,
-                source_file_read_path=archive.smb_filename,
+                source_pid=transfer_pid,
+                source_process=transfer_process,
+                source_command=transfer_command,
+                source_logon_id=transfer_logon_id,
+                terminate_source_process=terminate_transfer_process,
+                reader_pid=source_pid,
+                reader_process=source_process,
+                reader_command=source_command,
+                source_file_read_path=source_file_read_path,
             ),
             rng,
             emit_smb_logon_pair=getattr(self, "_emit_smb_logon_pair", None),
@@ -2046,7 +2218,15 @@ class StorylineMixin:
         )
         current_command = running.command_line if running is not None else current_image or ""
         image_name = (current_image or "").rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if image_name in {"chrome.exe", "msedge.exe", "firefox.exe", "curl", "curl.exe"}:
+        expected_windows_browser = (
+            self._windows_browser_process_for_user_agent(spec.user_agent or "")
+            if _get_os_category(system.os) == "windows"
+            else ""
+        )
+        if image_name in {"chrome.exe", "msedge.exe", "firefox.exe", "curl", "curl.exe"} and (
+            not expected_windows_browser
+            or (current_image or "").lower() == expected_windows_browser.lower()
+        ):
             return current_pid, current_image, current_command
 
         os_category = _get_os_category(system.os)
@@ -2057,10 +2237,10 @@ class StorylineMixin:
             uri if re.match(r"^https?://", uri, re.IGNORECASE) else f"{scheme}://{host}{uri}"
         )
         if os_category == "windows":
-            process_name = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-            command_line = (
-                f'"{process_name}" --profile-directory=Default --new-window "{destination}"'
+            process_name = (
+                expected_windows_browser or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
             )
+            command_line = self._windows_browser_command_line(process_name, destination)
         else:
             process_name = "/usr/bin/curl"
             method = spec.method or "POST"
@@ -3439,6 +3619,18 @@ class StorylineMixin:
                         rng=rng,
                     )
                 )
+                if http_ctx is not None:
+                    upload_user_agent = self._storyline_http_user_agent_for_process(
+                        system=src_sys,
+                        process_image=story_image,
+                        command_line=story_command,
+                        rng=rng,
+                    )
+                    if upload_user_agent and (
+                        not (spec.user_agent or "").strip()
+                        or (http_ctx.user_agent or "").strip().lower() == "mozilla/5.0"
+                    ):
+                        http_ctx.user_agent = upload_user_agent
                 self._emit_storyline_archive_transfer_before_exfil(
                     actor=actor,
                     source_ip=source_ip,
@@ -3860,19 +4052,6 @@ class StorylineMixin:
                 malicious_event["target_process"] = target_image
                 if not evidence_emitted:
                     malicious_event["skipped_reason"] = "no_live_target_process"
-                # Emit ProcessAccess via causal expansion engine (or legacy fallback)
-                # when targeting lsass.exe — primary credential-dumping detection signal
-                elif "lsass" in target_name:
-                    self.activity_generator._expand_and_emit(
-                        "create_remote_thread",
-                        effect_time,
-                        actor=actor,
-                        target_system=system,
-                        source_pid=source_pid,
-                        source_image=source_image,
-                        target_pid=target_pid,
-                        target_image=target_image,
-                    )
 
         elif spec.type == "process_access":
             source_pid, source_image = self._last_storyline_process_for_system(system)
@@ -3936,6 +4115,7 @@ class StorylineMixin:
                 if existing_lease
                 else float(rng.choice([3600, 7200, 14400, 86400]))
             )
+            renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
             self.activity_generator.generate_dhcp_lease(
                 system=system,
@@ -3945,12 +4125,14 @@ class StorylineMixin:
                 lease_time=lease_time,
                 uid=generate_zeek_uid("C"),
                 msg_types=msg_types,
+                renewal_interval=renewal_interval,
             )
             if hasattr(self, "_dhcp_lease_state"):
                 self._dhcp_lease_state[system.hostname] = {
                     "mac": mac,
                     "lease_time": lease_time,
                     "last_renewal": time.timestamp(),
+                    "next_renewal": time.timestamp() + renewal_interval,
                     "server_addr": dhcp_server,
                     "system": system,
                 }

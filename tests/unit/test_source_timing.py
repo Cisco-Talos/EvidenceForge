@@ -379,6 +379,58 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     assert dependent_time > process_time
 
 
+def test_ecar_session_dependents_shift_after_visible_login() -> None:
+    """eCAR PROCESS/FILE/MODULE rows should not precede their same LogonID login."""
+    login_ms = 1_710_781_261_000
+    rows = [
+        {
+            "timestamp_ms": login_ms - 200,
+            "id": "process-event",
+            "hostname": "FILE-SRV-01",
+            "object": "PROCESS",
+            "action": "CREATE",
+            "objectID": "process-object",
+            "pid": 4242,
+            "principal": "MERIDIANHCS\\svc_mhsync",
+            "properties": {"logon_id": "0xf88578c", "image_path": "powershell.exe"},
+        },
+        {
+            "timestamp_ms": login_ms,
+            "id": "session-event",
+            "hostname": "FILE-SRV-01",
+            "object": "USER_SESSION",
+            "action": "LOGIN",
+            "objectID": "session-object",
+            "principal": "MERIDIANHCS\\svc_mhsync",
+            "properties": {
+                "logon_id": "0xf88578c",
+                "outcome": "success",
+                "logon_type": "3",
+            },
+        },
+        {
+            "timestamp_ms": login_ms + 50,
+            "id": "other-process",
+            "hostname": "FILE-SRV-01",
+            "object": "PROCESS",
+            "action": "CREATE",
+            "objectID": "other-object",
+            "pid": 5000,
+            "principal": "NT AUTHORITY\\SYSTEM",
+            "properties": {"logon_id": "0x3e7", "image_path": "svchost.exe"},
+        },
+    ]
+    normalized = EcarEmitter._normalize_session_dependents_after_login(
+        [json.dumps(row, separators=(",", ":")) for row in rows]
+    )
+    process = json.loads(normalized[0])
+    system_process = json.loads(normalized[2])
+
+    assert process["timestamp_ms"] > login_ms
+    assert process["properties"]["logon_id"] == "0xf88578c"
+    assert system_process["timestamp_ms"] == login_ms + 50
+
+
 def test_ecar_type3_login_timestamp_follows_matching_inbound_flow(tmp_path: Path) -> None:
     """eCAR type-3 USER_SESSION rows should not visibly precede same-tuple FLOW rows."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
@@ -490,6 +542,7 @@ def test_ecar_process_create_normalization_preserves_canonical_order() -> None:
     rows = [json.loads(line) for line in normalized]
 
     assert rows[1]["timestamp_ms"] > rows[0]["timestamp_ms"]
+    assert 3 <= rows[1]["timestamp_ms"] - rows[0]["timestamp_ms"] <= 49
     assert "_canonical_ms" not in rows[0]
     assert "_canonical_ms" not in rows[1]
 
@@ -897,6 +950,68 @@ def test_ecar_linux_shell_foreground_order_serializes_close_unrelated_commands()
     rows = [json.loads(line) for line in normalized]
 
     assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
+
+
+def test_ecar_linux_shell_foreground_order_preserves_bash_history_sync() -> None:
+    """Bash-history-synchronized process rows should keep their sibling timestamp."""
+    npm_create = {
+        "timestamp_ms": 1_000_000,
+        "id": "npm-create",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "npm-process",
+        "actorID": "bash-process",
+        "pid": 781867,
+        "ppid": 780919,
+        "principal": "lina.nguyen",
+        "properties": {
+            "image_path": "/usr/bin/npm",
+            "command_line": "npm run ci",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    npm_terminate = {
+        "timestamp_ms": 1_060_000,
+        "id": "npm-terminate",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "npm-process",
+        "pid": 781867,
+        "principal": "lina.nguyen",
+        "properties": {"image_path": "/usr/bin/npm"},
+    }
+    emacs_create = {
+        "timestamp_ms": 1_020_000,
+        "id": "emacs-create",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "emacs-process",
+        "actorID": "bash-process",
+        "_concurrency_group_id": "bash-history:abc123",
+        "pid": 781901,
+        "ppid": 780919,
+        "principal": "lina.nguyen",
+        "properties": {
+            "image_path": "/usr/bin/emacs",
+            "command_line": "emacs -nw /home/lina.nguyen/repos/infra-config/requirements.txt",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+
+    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
+        [
+            json.dumps(npm_create, separators=(",", ":")),
+            json.dumps(emacs_create, separators=(",", ":")),
+            json.dumps(npm_terminate, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[1]["timestamp_ms"] == emacs_create["timestamp_ms"]
+    assert "_concurrency_group_id" not in rows[1]
 
 
 def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() -> None:

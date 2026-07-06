@@ -53,6 +53,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.timing_profiles import (
+    get_timing_window,
     sample_packet_timing_delta,
     sample_timing_delta,
 )
@@ -681,6 +682,46 @@ class TestSslContextPopulation:
 
         assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
 
+    def test_ssh_session_auth_waits_for_jittered_ecar_flow_deadline(self, activity_gen):
+        """SSH auth timing should account for connection-start jitter before eCAR FLOW."""
+        gen, events = activity_gen
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+
+        transport_event = _ssh_transport_event(events)
+        accepted_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Accepted password")
+        )
+        flow_window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+
+        assert accepted_event.timestamp > transport_event.timestamp + timedelta(
+            milliseconds=flow_window.max_ms
+        )
+
     def test_ssh_connection_syslog_precedes_responder_process_source_time(self, activity_gen):
         gen, events = activity_gen
 
@@ -795,6 +836,12 @@ class TestSslContextPopulation:
             if event.syslog is not None and event.syslog.message.startswith("New session ")
         )
         logind_session_id = int(logind_event.syslog.message.split()[2])
+        logind_removed_event = next(
+            event
+            for event in events
+            if event.syslog is not None
+            and event.syslog.message == f"Removed session {logind_session_id}."
+        )
         transport_close = transport_event.timestamp + timedelta(seconds=120)
         assert close_event.event_type == "logoff"
         assert close_event.auth is not None
@@ -811,6 +858,9 @@ class TestSslContextPopulation:
         assert close_event.edr is not None
         assert login_event.edr is not None
         assert close_event.edr.object_id == login_event.edr.object_id
+        assert logind_removed_event.syslog.app_name == "systemd-logind"
+        assert logind_removed_event.timestamp > close_event.timestamp
+        assert logind_removed_event.timestamp <= close_event.timestamp + timedelta(seconds=1)
 
         terminate_event = next(
             event

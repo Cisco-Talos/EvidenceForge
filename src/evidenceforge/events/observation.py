@@ -161,6 +161,8 @@ class ObservationPolicy:
     ) -> float:
         if self._preserve_ssh_session_lifecycle(source, event):
             return 0.0
+        if self._preserve_logind_session_lifecycle(source, event):
+            return 0.0
         if self._preserve_ecar_cron_process_lifecycle(source, event):
             return 0.0
         host = self._host_key_for_event(event)
@@ -259,6 +261,10 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if source == "ecar":
+            remote_session_group = self._ecar_remote_session_group_key(event)
+            if remote_session_group:
+                return remote_session_group
         if (
             source == "ecar"
             and event.storyline_cluster_id
@@ -273,6 +279,10 @@ class ObservationPolicy:
             )
         if source == "ecar" and event.process and event.process.concurrency_group_id:
             return f"process-group:{event.process.concurrency_group_id}"
+        if source == "syslog":
+            ssh_session_group = self._syslog_ssh_session_group_key(event)
+            if ssh_session_group:
+                return ssh_session_group
         if source == "syslog" and event.syslog and event.syslog.app_name == "sshd":
             pid = event.syslog.pid if event.syslog.pid not in (None, "") else ""
             if pid:
@@ -300,8 +310,41 @@ class ObservationPolicy:
         return "event"
 
     @staticmethod
+    def _ecar_remote_session_group_key(event: SecurityEvent) -> str:
+        """Return tuple-scoped eCAR grouping for remote session transport and login."""
+        host = event.dst_host
+        if host is None:
+            return ""
+        dst_port = 0
+        src_ip = ""
+        src_port = 0
+        dst_ip = host.ip
+        if event.network is not None:
+            protocol = str(event.network.protocol or "").lower()
+            if protocol != "tcp" or event.network.dst_port not in {22, 3389}:
+                return ""
+            dst_port = int(event.network.dst_port or 0)
+            src_ip = str(event.network.src_ip or "")
+            src_port = int(event.network.src_port or 0)
+            dst_ip = dst_ip or str(event.network.dst_ip or "")
+        elif event.auth is not None and event.auth.source_ip and event.auth.source_port:
+            if event.event_type == "ssh_session":
+                dst_port = 22
+            elif event.event_type == "logon" and event.auth.logon_type == 10:
+                dst_port = 3389
+            else:
+                return ""
+            src_ip = str(event.auth.source_ip or "")
+            src_port = int(event.auth.source_port or 0)
+        if not src_ip or src_port <= 0 or dst_port <= 0:
+            return ""
+        return f"remote-session:{dst_port}:{host.hostname}:{src_ip}:{src_port}:{dst_ip}"
+
+    @staticmethod
     def _uses_coherent_source_identity(source: str, group: str) -> bool:
         """Return whether observation delay/drop should be shared within a source group."""
+        if source == "ecar" and group.startswith("remote-session:"):
+            return True
         if group.startswith("process:") and source in {"windows_security", "sysmon", "ecar"}:
             return True
         if group.startswith("session:") and source in {"windows_security", "ecar", "syslog"}:
@@ -318,6 +361,8 @@ class ObservationPolicy:
             return True
         if source == "syslog" and group.startswith("sshd:"):
             return True
+        if source == "syslog" and group.startswith("linux-ssh-session:"):
+            return True
         if source == "ecar" and group.startswith("storyline-process:"):
             return True
         if source == "ecar" and group.startswith("process-group:"):
@@ -325,6 +370,31 @@ class ObservationPolicy:
         if source == "zeek" and (group.startswith("uid:") or group.startswith("dns:")):
             return True
         return False
+
+    @staticmethod
+    def _syslog_ssh_session_group_key(event: SecurityEvent) -> str:
+        """Return a shared syslog observation key for one SSH session lifecycle."""
+        if event.syslog is None or event.auth is None:
+            return ""
+        app_name = event.syslog.app_name
+        message = event.syslog.message
+        if app_name == "sshd":
+            if not (
+                message.startswith("Connection from ")
+                or message.startswith("Accepted ")
+                or "pam_unix(sshd:session): session " in message
+            ):
+                return ""
+        elif app_name == "systemd-logind":
+            if not (message.startswith("New session ") or message.startswith("Removed session ")):
+                return ""
+        else:
+            return ""
+        if not event.auth.username or not event.auth.logon_id or not event.auth.session_id:
+            return ""
+        return (
+            f"linux-ssh-session:{event.auth.username}:{event.auth.logon_id}:{event.auth.session_id}"
+        )
 
     @staticmethod
     def _preserve_ssh_session_lifecycle(source: str, event: SecurityEvent) -> bool:
@@ -342,6 +412,16 @@ class ObservationPolicy:
             or message.startswith("Connection closed by ")
             or "pam_unix(sshd:session): session " in message
         )
+
+    @staticmethod
+    def _preserve_logind_session_lifecycle(source: str, event: SecurityEvent) -> bool:
+        """Preserve logind session rows that correlate with endpoint session rows."""
+        if source != "syslog" or event.syslog is None:
+            return False
+        if event.syslog.app_name != "systemd-logind":
+            return False
+        message = event.syslog.message
+        return message.startswith("New session ") or message.startswith("Removed session ")
 
     @staticmethod
     def _preserve_ecar_cron_process_lifecycle(source: str, event: SecurityEvent) -> bool:

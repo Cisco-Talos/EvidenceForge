@@ -26,11 +26,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from random import Random
 from typing import Protocol
 
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
+
+
+def dhcp_renewal_interval_seconds(lease_time: float, rng: Random) -> float:
+    """Return a jittered DHCP T1-style renewal interval."""
+
+    base_renewal = max(60.0, lease_time / 2)
+    return base_renewal * (1.0 + rng.uniform(-0.10, 0.10))
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +53,7 @@ class DhcpLeaseRequest:
     uid: str = ""
     msg_types: list[str] | None = None
     domain: str | None = None
+    renewal_interval: float | None = None
     source: str = "activity_generator"
 
     @property
@@ -56,7 +65,7 @@ class DhcpLeaseRequest:
             "action_bundle:dhcp_lease:"
             f"{self.system.hostname}:{self.system.ip}:{self.time.isoformat()}:"
             f"{self.mac}:{self.server_addr}:{self.lease_time}:{self.uid}:"
-            f"{msg_types}:{self.domain or ''}:{self.source}"
+            f"{msg_types}:{self.domain or ''}:{self.renewal_interval or ''}:{self.source}"
         )
         return f"dhcp-lease-{seed:016x}"
 

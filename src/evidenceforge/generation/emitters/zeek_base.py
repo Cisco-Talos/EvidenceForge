@@ -55,6 +55,9 @@ from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
+_BULK_TCP_FLOW_MIN_IP_BYTES = 10_000_000
+_BULK_TCP_FLOW_MISSED_CAP_BYTES = 65_536
+
 
 def zeek_format_observed(event: Any, format_name: str) -> bool:
     """Return whether a Zeek sibling format survived source observation.
@@ -343,6 +346,24 @@ def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
     return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
 
 
+def _uses_bounded_bulk_tcp_accounting(render_data: dict[str, Any]) -> bool:
+    """Return whether TCP sensor texture should be capped to small packet deltas."""
+    if str(render_data.get("proto") or "").lower() != "tcp":
+        return False
+    missed = render_data.get("missed_bytes") or 0
+    if not isinstance(missed, int) or isinstance(missed, bool) or missed < 0:
+        return False
+    if missed > _BULK_TCP_FLOW_MISSED_CAP_BYTES:
+        return False
+
+    total = 0
+    for field in ("orig_ip_bytes", "resp_ip_bytes", "orig_bytes", "resp_bytes"):
+        value = render_data.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            total += value
+    return total >= _BULK_TCP_FLOW_MIN_IP_BYTES
+
+
 def _extend_locked_sensor_timing_field(
     render_data: dict[str, Any],
     field: str,
@@ -399,6 +420,25 @@ def _texture_locked_packet_accounting_observation(
     )
 
 
+def _texture_bounded_bulk_tcp_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+) -> None:
+    """Keep bulk TCP bytes coherent while adding source-native tap texture."""
+    if not render_data.get("_lock_duration"):
+        _jitter_duration_observation(
+            render_data,
+            hostname,
+            uid,
+            0.002,
+            max_delta_seconds=2.0,
+        )
+    _texture_lossless_tcp_packetization(render_data, hostname, uid)
+    _enforce_http_body_invariants(render_data)
+    _enforce_ip_byte_invariants(render_data)
+
+
 def _apply_sensor_observation_variance(
     render_data: dict[str, Any],
     hostname: str,
@@ -432,6 +472,9 @@ def _apply_sensor_observation_variance(
                 render_data["missed_bytes"] = missed + 16 + (seed % 496)
                 added_missed_bytes = True
                 lossy_observation = True
+    if lossy_observation and _uses_bounded_bulk_tcp_accounting(render_data):
+        _texture_bounded_bulk_tcp_observation(render_data, hostname, original_uid)
+        return
     if not lossy_observation:
         if not render_data.get("_lock_duration"):
             _extend_lossless_duration_observation(

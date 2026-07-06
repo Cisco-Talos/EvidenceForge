@@ -219,6 +219,31 @@ class TestStorylineAccountLifecycle:
             datetime(2024, 3, 18, 17, 1, tzinfo=UTC),
         )
 
+    def test_storyline_created_service_account_is_not_baseline_noise_eligible(self):
+        class Engine(BaselineMixin):
+            start_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+            def _parse_storyline_time(self, time_str):
+                hours = int(time_str.removeprefix("+").removesuffix("h"))
+                return self.start_time + timedelta(hours=hours)
+
+        engine = Engine()
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    time="+4h",
+                    events=[AccountCreatedEventSpec(target_username="svc_mhsync")],
+                )
+            ]
+        )
+
+        assert engine._service_account_available_at(
+            "svc_mhsync",
+            datetime(2024, 3, 18, 17, 0, tzinfo=UTC),
+        )
+        assert not engine._service_account_eligible_for_baseline_noise("svc_mhsync")
+        assert engine._service_account_eligible_for_baseline_noise("svc_backup")
+
     def test_service_account_delegation_uses_role_specific_caller_process(self):
         engine = object.__new__(BaselineMixin)
         config = {

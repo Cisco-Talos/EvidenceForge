@@ -119,6 +119,32 @@ def _provider_for_key(key: str) -> dict[str, Any]:
     return rng.choices(weighted, weights=weights, k=1)[0]
 
 
+def _provider_matches_hostname(provider: dict[str, Any], hostname: str) -> bool:
+    """Return whether a provider owns the given public mail hostname."""
+    lowered = public_safe_mail_hostname(hostname).lower()
+    if not lowered:
+        return False
+    patterns = [
+        str(pattern).strip().lower().rstrip(".")
+        for pattern in provider.get("hostname_patterns", [])
+        if str(pattern).strip()
+    ]
+    provider_name = str(provider.get("name", "")).strip().lower().replace("_", "-")
+    if provider_name:
+        patterns.append(provider_name)
+    return any(lowered == pattern or lowered.endswith(f".{pattern}") for pattern in patterns)
+
+
+def _provider_for_hostname(hostname: str | None) -> dict[str, Any]:
+    """Return the configured provider family for a public mail hostname."""
+    if not hostname:
+        return {}
+    for provider in load_mail_public_identities().get("providers", []):
+        if _provider_matches_hostname(provider, hostname):
+            return provider
+    return {}
+
+
 def _provider_for_ip(ip: str) -> dict[str, Any]:
     try:
         octets = [int(part) for part in ip.split(".")]
@@ -140,14 +166,20 @@ def _provider_for_ip(ip: str) -> dict[str, Any]:
     return {}
 
 
-def generate_public_mail_ip(identity_key: str) -> str:
+def _provider_name(provider: dict[str, Any]) -> str:
+    """Return a stable provider display key for seed material."""
+    return str(provider.get("name", "") or "mail").strip().lower() or "mail"
+
+
+def generate_public_mail_ip(identity_key: str, forward_hostname: str | None = None) -> str:
     """Return a stable public IPv4 address from mail-specific provider pools."""
-    provider = _provider_for_key(identity_key)
+    provider = _provider_for_hostname(forward_hostname) or _provider_for_key(identity_key)
     prefixes = list(provider.get("prefixes", []))
     if not prefixes:
         seed = _stable_seed(f"mail_public_ip:fallback:{identity_key.lower()}")
         return f"64.56.{32 + seed % 96}.{1 + (seed >> 8) % 253}"
-    rng = random.Random(_stable_seed(f"mail_public_ip:{identity_key.lower()}"))
+    seed_key = f"{identity_key.lower()}:{forward_hostname or ''}:{_provider_name(provider)}"
+    rng = random.Random(_stable_seed(f"mail_public_ip:{seed_key}"))
     prefix = list(rng.choice(prefixes))
     third = rng.randint(int(prefix[2]), int(prefix[3]))
     fourth = rng.randint(8, 246)
@@ -178,3 +210,15 @@ def public_mail_ptr_name(ip: str, forward_hostname: str | None) -> str:
 def is_public_mail_ip(ip: str) -> bool:
     """Return whether an IP belongs to a configured mail public identity pool."""
     return bool(_provider_for_ip(ip))
+
+
+def public_mail_provider_name_for_ip(ip: str) -> str:
+    """Return the configured mail provider family for an IP, or an empty string."""
+    return _provider_name(_provider_for_ip(ip)) if _provider_for_ip(ip) else ""
+
+
+def public_mail_provider_name_for_hostname(hostname: str) -> str:
+    """Return the configured mail provider family for a hostname, or an empty string."""
+    return (
+        _provider_name(_provider_for_hostname(hostname)) if _provider_for_hostname(hostname) else ""
+    )

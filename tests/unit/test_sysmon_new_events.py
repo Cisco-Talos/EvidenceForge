@@ -1493,6 +1493,31 @@ class TestUserFieldFormatting:
         content = list(emitter._host_writers.values())[0].output_path.read_text()
         assert "CORP\\jsmith" in content
 
+    def test_event1_version5_includes_parent_user(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="admin", logon_id="0x46a3f"),
+            process=ProcessContext(
+                pid=4100,
+                parent_pid=4000,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="admin",
+                parent_image=r"C:\Windows\explorer.exe",
+                parent_command_line=r"C:\Windows\explorer.exe",
+            ),
+        )
+
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+
+        assert "<EventID>1</EventID>" in content
+        assert "<Version>5</Version>" in content
+        assert '<Data Name="ParentUser">CORP\\admin</Data>' in content
+
     def test_process_access_target_user_gets_domain(self, emitter):
         """Sysmon Event 10 target user should use source-native domain formatting."""
         event = SecurityEvent(

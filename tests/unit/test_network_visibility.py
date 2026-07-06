@@ -27,6 +27,7 @@ Phase 2.5: Tests NetworkVisibilityEngine for sensor-based connection filtering.
 
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.models.scenario import (
+    NatRule,
     NetworkConfig,
     NetworkSegment,
     NetworkSensor,
@@ -90,6 +91,131 @@ class TestNoNetworkConfig:
         assert engine.is_connection_visible("10.10.10.1", "8.8.8.8") is False
         assert engine.get_observing_sensors("10.10.10.1", "8.8.8.8") == []
         assert engine.get_log_formats_for_connection("10.10.10.1", "8.8.8.8") == set()
+
+
+class TestNatComputation:
+    """Tests for firewall NAT context ownership."""
+
+    def test_static_vip_takes_precedence_for_internal_hairpin_flow(self):
+        """Internal traffic aimed at a known VIP should expose DNAT context."""
+        systems = [
+            System(
+                hostname="MAIL-EDGE-01",
+                ip="10.10.2.25",
+                os="Linux Ubuntu 22.04",
+                type="server",
+            ),
+            System(
+                hostname="MAIL-FIN-01",
+                ip="10.10.2.27",
+                os="Linux Ubuntu 22.04",
+                type="server",
+            ),
+        ]
+        config = NetworkConfig(
+            segments=[
+                NetworkSegment(
+                    name="server_vlan",
+                    cidr="10.10.2.0/24",
+                    systems=["MAIL-EDGE-01", "MAIL-FIN-01"],
+                    exposure="internal",
+                ),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="edge-fw",
+                    monitoring_segments=["server_vlan"],
+                    direction="bidirectional",
+                    log_formats=["asa"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src=["server_vlan"],
+                            mapped_ip="203.14.220.1",
+                        ),
+                        NatRule(
+                            type="static",
+                            src=["server_vlan"],
+                            mapped_ip="203.14.220.11",
+                            real_ip="10.10.2.25",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        engine = NetworkVisibilityEngine(config, systems)
+
+        nat = engine.compute_nat(
+            src_ip="10.10.2.27",
+            dst_ip="203.14.220.11",
+            src_port=60403,
+            dst_port=25,
+        )
+
+        assert nat is not None
+        assert nat.nat_type == "static"
+        assert nat.mapped_src_ip == "10.10.2.27"
+        assert nat.mapped_dst_ip == "10.10.2.25"
+
+    def test_same_segment_real_ip_flow_is_not_nat_translated(self):
+        """Ordinary server-to-server traffic should keep the no-NAT rule."""
+        systems = [
+            System(
+                hostname="MAIL-EDGE-01",
+                ip="10.10.2.25",
+                os="Linux Ubuntu 22.04",
+                type="server",
+            ),
+            System(
+                hostname="MAIL-FIN-01",
+                ip="10.10.2.27",
+                os="Linux Ubuntu 22.04",
+                type="server",
+            ),
+        ]
+        config = NetworkConfig(
+            segments=[
+                NetworkSegment(
+                    name="server_vlan",
+                    cidr="10.10.2.0/24",
+                    systems=["MAIL-EDGE-01", "MAIL-FIN-01"],
+                    exposure="internal",
+                ),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="edge-fw",
+                    monitoring_segments=["server_vlan"],
+                    direction="bidirectional",
+                    log_formats=["asa"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src=["server_vlan"],
+                            mapped_ip="203.14.220.1",
+                        ),
+                        NatRule(
+                            type="static",
+                            src=["server_vlan"],
+                            mapped_ip="203.14.220.11",
+                            real_ip="10.10.2.25",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        engine = NetworkVisibilityEngine(config, systems)
+
+        nat = engine.compute_nat(
+            src_ip="10.10.2.27",
+            dst_ip="10.10.2.25",
+            src_port=60403,
+            dst_port=25,
+        )
+
+        assert nat is None
 
 
 class TestBidirectionalSensor:

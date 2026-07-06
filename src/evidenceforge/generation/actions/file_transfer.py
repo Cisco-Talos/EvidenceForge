@@ -576,6 +576,11 @@ class StagedArchiveSmbReadRequest:
     source_pid: int = -1
     source_process: str = ""
     source_command: str = ""
+    source_logon_id: str = ""
+    terminate_source_process: bool = False
+    reader_pid: int = -1
+    reader_process: str = ""
+    reader_command: str = ""
     source_file_read_path: str = ""
     source: str = "storyline_staged_archive"
 
@@ -588,7 +593,8 @@ class StagedArchiveSmbReadRequest:
             f"{self.actor.username}:{self.source_ip}:{self.staging_ip}:"
             f"{self.archive_path}:{self.smb_filename}:{self.staged_at.isoformat()}:"
             f"{self.exfil_time.isoformat()}:{self.upload_bytes}:"
-            f"{self.source_pid}:{self.source_file_read_path}:{self.source}"
+            f"{self.source_pid}:{self.reader_pid}:{self.source_file_read_path}:"
+            f"{self.source}"
         )
         return f"staged-archive-smb-read-{seed:016x}"
 
@@ -680,7 +686,10 @@ class StagedArchiveSmbReadActionBundle:
                 **hashes,
             ),
         )
-        self._emit_source_file_read(transfer_time)
+        ready_time = transfer_time + timedelta(seconds=duration)
+        local_create_time = self._emit_source_local_staging_create(ready_time)
+        self._terminate_source_process(ready_time, not_before=local_create_time)
+        self._emit_source_file_read(ready_time, not_before=local_create_time)
         smb_source_port = self._last_smb_connection_source_port()
         if self._target_is_file_server() and self._emit_smb_logon_pair is not None:
             self._emit_smb_logon_pair(
@@ -723,18 +732,23 @@ class StagedArchiveSmbReadActionBundle:
             return None
         return candidate
 
-    def _emit_source_file_read(self, transfer_time: datetime) -> None:
-        """Emit upload-host FILE/READ evidence for the staged archive."""
+    def _source_file_read_path(self) -> str:
+        """Return the upload-host path read by the source process."""
+
+        return self._request.source_file_read_path or self._request.smb_filename
+
+    def _emit_source_local_staging_create(self, transfer_time: datetime) -> datetime | None:
+        """Emit local staging evidence when the upload host reads a copied archive."""
 
         if (
             self._request.source_system is None
             or self._request.source_pid <= 0
             or not self._request.source_process
         ):
-            return
-        source_path = self._request.source_file_read_path or self._request.smb_filename
-        if not source_path:
-            return
+            return None
+        source_path = self._source_file_read_path()
+        if not source_path or source_path == self._request.smb_filename:
+            return None
         running_source = self._executor.state_manager.get_process(
             self._request.source_system.hostname,
             self._request.source_pid,
@@ -744,7 +758,7 @@ class StagedArchiveSmbReadActionBundle:
             self._request.source_system.hostname,
             self._request.source_pid,
         )
-        file_time = transfer_time + timedelta(milliseconds=self._rng.randint(220, 1200))
+        file_time = transfer_time + timedelta(milliseconds=self._rng.randint(80, 240))
         source_time_getter = getattr(
             self._executor.activity_generator,
             "process_source_create_time",
@@ -757,15 +771,15 @@ class StagedArchiveSmbReadActionBundle:
             )
             if isinstance(source_process_time, datetime) and file_time <= source_process_time:
                 file_time = source_process_time + timedelta(
-                    milliseconds=self._rng.randint(250, 950)
+                    milliseconds=self._rng.randint(180, 500)
                 )
         if file_time >= self._request.exfil_time:
-            return
+            return None
 
         self._executor.dispatcher.dispatch(
             SecurityEvent(
                 timestamp=file_time,
-                event_type="file_read",
+                event_type="file_create",
                 src_host=self._executor.activity_generator._build_host_context(
                     self._request.source_system
                 ),
@@ -779,12 +793,12 @@ class StagedArchiveSmbReadActionBundle:
                 ),
                 file=FileContext(
                     path=source_path,
-                    action="read",
+                    action="create",
                     pid=self._request.source_pid,
                 ),
                 edr=EdrContext(
                     object_id=stable_uuid(
-                        "staged-archive-source-file-read-edr",
+                        "staged-archive-local-create-edr",
                         self._request.source_system.hostname,
                         self._request.source_pid,
                         source_path,
@@ -795,6 +809,138 @@ class StagedArchiveSmbReadActionBundle:
                 storyline_origin=True,
             )
         )
+        return file_time
+
+    def _terminate_source_process(
+        self,
+        ready_time: datetime,
+        *,
+        not_before: datetime | None = None,
+    ) -> None:
+        """Close a short-lived staging copy process when this bundle created one."""
+
+        if (
+            not self._request.terminate_source_process
+            or self._request.source_system is None
+            or self._request.source_pid <= 0
+            or not self._request.source_process
+            or not self._request.source_logon_id
+        ):
+            return
+        termination_time = ready_time + timedelta(milliseconds=self._rng.randint(650, 2100))
+        if not_before is not None and termination_time <= not_before:
+            termination_time = not_before + timedelta(milliseconds=self._rng.randint(300, 900))
+        if termination_time >= self._request.exfil_time:
+            return
+        terminate = getattr(self._executor.activity_generator, "generate_process_termination", None)
+        if not callable(terminate):
+            return
+        terminate(
+            user=self._request.actor,
+            system=self._request.source_system,
+            time=termination_time,
+            pid=self._request.source_pid,
+            process_name=self._request.source_process,
+            logon_id=self._request.source_logon_id,
+            from_storyline=True,
+        )
+
+    def _emit_source_file_read(
+        self,
+        transfer_time: datetime,
+        *,
+        not_before: datetime | None = None,
+    ) -> None:
+        """Emit upload-host FILE/READ evidence for the staged archive."""
+
+        if (
+            self._request.source_system is None
+            or self._reader_pid() <= 0
+            or not self._reader_process()
+        ):
+            return
+        source_path = self._source_file_read_path()
+        if not source_path:
+            return
+        running_source = self._executor.state_manager.get_process(
+            self._request.source_system.hostname,
+            self._reader_pid(),
+        )
+        parent_pid = running_source.parent_pid if running_source is not None else 0
+        source_actor_id = self._executor.state_manager.get_process_object_id(
+            self._request.source_system.hostname,
+            self._reader_pid(),
+        )
+        file_time = transfer_time + timedelta(milliseconds=self._rng.randint(420, 1400))
+        source_time_getter = getattr(
+            self._executor.activity_generator,
+            "process_source_create_time",
+            None,
+        )
+        if callable(source_time_getter):
+            source_process_time = source_time_getter(
+                self._request.source_system.hostname,
+                self._reader_pid(),
+            )
+            if isinstance(source_process_time, datetime) and file_time <= source_process_time:
+                file_time = source_process_time + timedelta(
+                    milliseconds=self._rng.randint(250, 950)
+                )
+        if not_before is not None and file_time <= not_before:
+            file_time = not_before + timedelta(milliseconds=self._rng.randint(120, 620))
+        if file_time >= self._request.exfil_time:
+            return
+
+        self._executor.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=file_time,
+                event_type="file_read",
+                src_host=self._executor.activity_generator._build_host_context(
+                    self._request.source_system
+                ),
+                auth=AuthContext(username=self._request.actor.username),
+                process=ProcessContext(
+                    pid=self._reader_pid(),
+                    parent_pid=parent_pid,
+                    image=self._reader_process(),
+                    command_line=self._reader_command() or self._reader_process(),
+                    username=self._request.actor.username,
+                ),
+                file=FileContext(
+                    path=source_path,
+                    action="read",
+                    pid=self._reader_pid(),
+                ),
+                edr=EdrContext(
+                    object_id=stable_uuid(
+                        "staged-archive-source-file-read-edr",
+                        self._request.source_system.hostname,
+                        self._reader_pid(),
+                        source_path,
+                        self._request.exfil_time.isoformat(),
+                    ),
+                    actor_id=source_actor_id,
+                ),
+                storyline_origin=True,
+            )
+        )
+
+    def _reader_pid(self) -> int:
+        """Return the process that reads the local staged file for upload."""
+
+        return (
+            self._request.reader_pid if self._request.reader_pid > 0 else self._request.source_pid
+        )
+
+    def _reader_process(self) -> str:
+        """Return the image that reads the local staged file for upload."""
+
+        return self._request.reader_process or self._request.source_process
+
+    def _reader_command(self) -> str:
+        """Return the command line that reads the local staged file for upload."""
+
+        return self._request.reader_command or self._request.source_command
 
     def _last_smb_connection_source_port(self) -> int | None:
         """Return the just-emitted SMB transfer source port when available."""

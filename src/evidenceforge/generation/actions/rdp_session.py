@@ -37,7 +37,7 @@ from typing import Any, Protocol
 
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.scenario import System, User
@@ -421,11 +421,31 @@ class RdpSessionActionBundle:
         )
         graph.add_node(
             "target_logon",
-            observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600)),
+            observed_connection_time
+            + timedelta(milliseconds=self._target_logon_gap_after_transport(rng)),
         )
         graph.constrain_after(
             "target_logon",
             "transport_observed",
-            min_gap=timedelta(milliseconds=900),
+            min_gap=timedelta(milliseconds=self._endpoint_flow_visible_gap_ms() + 25),
         )
         return graph.resolved_time("target_logon")
+
+    @staticmethod
+    def _endpoint_flow_visible_gap_ms() -> int:
+        """Return the latest expected same-tuple endpoint FLOW observation delay."""
+        flow_window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+        return flow_window.max_ms
+
+    def _target_logon_gap_after_transport(self, rng: random.Random) -> int:
+        """Choose an RDP target logon gap after endpoint transport visibility."""
+        return max(
+            rng.randint(900, 1600),
+            self._endpoint_flow_visible_gap_ms() + rng.randint(75, 260),
+        )

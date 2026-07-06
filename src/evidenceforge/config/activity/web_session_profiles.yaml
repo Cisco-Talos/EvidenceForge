@@ -42,6 +42,9 @@ visitor_classes:
     source_role_any: ["monitoring", "load_balancer", "forward_proxy", "app_server"]
     request_count: [1, 2]
     user_agent_pool: health_check
+    user_agent_pool_by_os:
+      windows: health_check_windows
+      linux: health_check_linux
     referrer_mode: none
     requests:
       - {path: "/health", method: "GET", status: 200, type: "application/json", weight: 40}
@@ -99,8 +102,16 @@ user_agent_pools:
     - "Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)"
   health_check:
     - "ELB-HealthChecker/2.0"
-    - "kube-probe/1.28"
     - "Prometheus/2.47.0"
+    - "Nagios-CheckHTTP/4.4.6"
+  health_check_windows:
+    - "Microsoft-Delivery-Optimization/10.0"
+    - "Windows-HealthCheck/10.0"
+    - "Meridian-ServiceHealth/2.4"
+  health_check_linux:
+    - "Prometheus/2.47.0"
+    - "curl/7.88.1"
+    - "Nagios-CheckHTTP/4.4.6"
   api_client:
     - "python-requests/2.31.0"
     - "Go-http-client/1.1"

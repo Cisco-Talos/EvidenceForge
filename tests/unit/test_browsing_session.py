@@ -73,6 +73,22 @@ class TestBrowsingSessionBasics:
             )
             assert not any(req.referrer.startswith("https://") for req in requests)
 
+    def test_calendar_api_time_min_tracks_session_month(self):
+        """Calendar API subresources should not carry fixed future dates."""
+        requests = generate_browsing_session(
+            random.Random(0),
+            "calendar.google.com",
+            ["saas"],
+            browsing_intensity="heavy",
+            request_time=datetime(2024, 3, 18, 9, 30, tzinfo=UTC),
+        )
+
+        calendar_paths = [request.path for request in requests if "timeMin=" in request.path]
+
+        assert calendar_paths
+        assert all("timeMin=2024-03-01T00:00:00Z" in path for path in calendar_paths)
+        assert all("2026-01-01" not in path for path in calendar_paths)
+
 
 class TestBrowserSessionActionBundle:
     """Action-bundle expansion behavior."""

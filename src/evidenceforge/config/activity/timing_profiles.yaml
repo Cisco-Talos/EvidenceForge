@@ -26,6 +26,11 @@ relationships:
     position: before
     min_ms: 1
     max_ms: 75
+  process.remote_thread_process_access:
+    class: source_latency
+    position: before
+    min_ms: 8
+    max_ms: 180
   windows.audit_from_admin_command:
     class: source_latency
     position: after
@@ -86,6 +91,11 @@ relationships:
     position: after
     min_ms: 2
     max_ms: 45
+  windows.remote_logon_source_ready:
+    class: source_latency
+    position: after
+    min_ms: 850
+    max_ms: 1450
   source.sysmon_network_connection:
     class: source_latency
     position: after
@@ -156,6 +166,16 @@ relationships:
     position: after
     min_ms: 1
     max_ms: 11
+  source.ecar_session_logout:
+    class: teardown
+    position: after
+    min_ms: 1800
+    max_ms: 2800
+  source.ecar_session_logout_after_dependents:
+    class: teardown
+    position: after
+    min_ms: 1800
+    max_ms: 2800
   source.ecar_ssh_session_after_accept:
     class: source_latency
     position: after
@@ -166,6 +186,11 @@ relationships:
     position: after
     min_ms: 35
     max_ms: 250
+  source.ecar_remote_thread_after_process_open:
+    class: source_latency
+    position: after
+    min_ms: 25
+    max_ms: 240
   source.zeek_conn_start:
     class: same_observation
     position: after

@@ -51,6 +51,7 @@ from evidenceforge.generation.actions.browser_session import (
 from evidenceforge.generation.actions.dhcp_lease import (
     DhcpLeaseActionBundle,
     DhcpLeaseRequest,
+    dhcp_renewal_interval_seconds,
 )
 from evidenceforge.generation.actions.dns_lookup import (
     DnsLookupActionBundle,
@@ -180,6 +181,7 @@ __all__ = [
     "CreateRemoteThreadRequest",
     "DhcpLeaseActionBundle",
     "DhcpLeaseRequest",
+    "dhcp_renewal_interval_seconds",
     "DnsLookupActionBundle",
     "DnsLookupRequest",
     "EmailAccessActionBundle",

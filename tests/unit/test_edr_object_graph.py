@@ -187,6 +187,63 @@ class TestObjectIdLifecycle:
         assert terminate_event.event_type == "process_terminate"
         assert terminate_event.edr.object_id == create_obj_id
 
+    def test_linux_system_process_termination_preserves_original_logon(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """System-owned Linux process termination must not inherit a later root SSH session."""
+        system = System(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        root_user = User(
+            username="root",
+            full_name="root",
+            email="root@example.local",
+            enabled=True,
+        )
+        state_manager.set_current_time(timestamp)
+
+        pid = activity_gen.generate_system_process(
+            system=system,
+            time=timestamp,
+            process_name="/usr/bin/wget",
+            command_line="wget -q -e use_proxy=yes -O - https://internal-service/",
+            parent_pid=0,
+            username="root",
+            emit_linux_syslog=False,
+        )
+        create_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
+        assert create_event.event_type == "system_process_create"
+        assert create_event.process.logon_id == "0x3e7"
+        assert state_manager.get_process(system.hostname, pid).logon_id == "0x3e7"
+
+        ssh_logon_id = state_manager.create_session(
+            "root",
+            system.hostname,
+            10,
+            "10.10.2.30",
+            source_port=55185,
+            session_kind="ssh",
+            start_time=timestamp + timedelta(minutes=20),
+            session_id=279177,
+        )
+        activity_gen.generate_process_termination(
+            user=root_user,
+            system=system,
+            time=timestamp + timedelta(minutes=21),
+            pid=pid,
+            process_name="/usr/bin/wget",
+            logon_id=ssh_logon_id,
+        )
+
+        terminate_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
+        assert terminate_event.event_type == "process_terminate"
+        assert terminate_event.auth.logon_id == "0x3e7"
+        assert terminate_event.auth.session_id == 0
+        assert terminate_event.process.logon_id == "0x3e7"
+
     def test_late_termination_reuses_remembered_process_object_id(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):
