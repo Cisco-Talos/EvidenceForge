@@ -72,6 +72,11 @@ def _parse_proxy_metadata(metadata: str) -> dict[str, str]:
             fields["proxy_action"] = value
         elif key == "ssl_bump":
             fields["ssl_bump_action"] = value
+        elif key in {"cs_bytes", "sc_bytes"}:
+            try:
+                fields[key] = int(value)
+            except ValueError:
+                fields[key] = value
     return fields
 
 

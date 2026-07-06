@@ -96,6 +96,22 @@ _DNS_SERVER_SERVICES = {
 }
 
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
+_LINUX_SSH_ADMIN_PERSONAS = {"sysadmin"}
+_LINUX_SSH_ADMIN_GROUPS = {
+    "domain-admins",
+    "infrastructure",
+    "it-admins",
+    "linux-admins",
+    "server-admins",
+    "sysadmins",
+}
+_LINUX_SSH_ROLE_PERSONAS: dict[str, set[str]] = {
+    "app_server": {"developer"},
+    "database": {"developer"},
+    "forward_proxy": {"security_analyst"},
+    "log_server": {"security_analyst"},
+    "web_server": {"developer"},
+}
 
 _DB_PORTS = {
     "mssql": 1433,
@@ -528,6 +544,44 @@ class WorldModel:
                 if len(roster) >= 2:
                     break
 
+        return roster
+
+    def effective_user_groups(self, user: User) -> set[str]:
+        """Return direct and environment-group memberships for a user."""
+        groups = {group.lower() for group in user.groups}
+        for group in self.scenario.environment.groups or []:
+            if user.username in group.members:
+                groups.add(group.name.lower())
+        return groups
+
+    def can_user_ssh_admin(self, user: User, target_system: System) -> bool:
+        """Return whether a scenario user plausibly opens baseline SSH admin sessions."""
+        host = self.hosts[target_system.hostname]
+        if not host.supports_ssh or not host.is_server:
+            return False
+
+        persona = (user.persona or "").lower()
+        if persona in _LINUX_SSH_ADMIN_PERSONAS:
+            return True
+        if self.effective_user_groups(user) & _LINUX_SSH_ADMIN_GROUPS:
+            return True
+        for role in host.canonical_roles:
+            if persona in _LINUX_SSH_ROLE_PERSONAS.get(role, set()):
+                return True
+        return False
+
+    def get_ssh_admin_users(self, target_system: System) -> list[User]:
+        """Return scenario users eligible for ordinary baseline SSH to a Linux server."""
+        enabled = [user for user in self.scenario.environment.users if user.enabled]
+        roster: list[User] = []
+        seen: set[str] = set()
+        for user in enabled:
+            if user.username in seen:
+                continue
+            if not self.can_user_ssh_admin(user, target_system):
+                continue
+            seen.add(user.username)
+            roster.append(user)
         return roster
 
     def resolve_destination(

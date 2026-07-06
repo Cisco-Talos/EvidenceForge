@@ -1131,12 +1131,12 @@ class TestDualSessionParentSelection:
             (
                 r"C:\Windows\System32\sc.exe",
                 "sc.exe create DeviceSyncSvc binPath= C:\\ProgramData\\sync.exe",
-                "services",
+                "wmiprvse",
             ),
             (
                 r"C:\Windows\System32\schtasks.exe",
                 r'schtasks.exe /Create /TN "\Ops\Sync" /TR "C:\ProgramData\sync.exe"',
-                "taskhostw",
+                "wmiprvse",
             ),
             (
                 r"C:\Windows\System32\wevtutil.exe",
@@ -1178,6 +1178,33 @@ class TestDualSessionParentSelection:
         assert parent_proc.command_line == rf"C:\Windows\System32\cmd.exe /c {command_line}"
         assert parent_proc.parent_pid == pids[expected_parent_key]
         assert parent_proc.parent_pid != pids["svchost_netsvcs"]
+
+    def test_scheduled_task_execution_can_still_use_taskhostw_owner(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Task actions can remain taskhostw-owned while task authoring avoids taskhostw."""
+        system_user = User(
+            username="SYSTEM",
+            full_name="SYSTEM",
+            email="system@example.com",
+            enabled=True,
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        command_line = r'schtasks.exe /Run /TN "\Ops\Sync"'
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            system_user,
+            datetime(2024, 3, 18, 12, 15, 0, tzinfo=UTC),
+            "0x3e7",
+            r"C:\Windows\System32\schtasks.exe",
+            command_line,
+        )
+        parent_proc = state_manager.get_process(win_system.hostname, parent_pid)
+
+        assert parent_proc is not None
+        assert parent_proc.image == r"C:\Windows\System32\cmd.exe"
+        assert parent_proc.parent_pid == pids["taskhostw"]
 
     def test_interactive_logon_still_gets_explorer_when_network_exists(
         self, state_manager, mock_emitters, win_system, user
@@ -1305,6 +1332,45 @@ class TestLinuxParentSelection:
         )
 
         assert parent_pid == bash_pid
+
+    def test_ssh_login_shell_keeps_privileged_sshd_parent(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """The root-owned sshd privilege process may parent the user login shell."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        event_time = datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            session_kind="ssh",
+        )
+        session_sshd = state_manager.create_process(
+            linux_system.hostname,
+            pids["sshd"],
+            "/usr/sbin/sshd",
+            f"sshd: {user.username} [priv]",
+            "root",
+            "System",
+            logon_id="0x3e7",
+        )
+
+        bash_pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=session_sshd,
+            suppress_command_file_effect=True,
+        )
+
+        bash_proc = state_manager.get_process(linux_system.hostname, bash_pid)
+        assert bash_proc is not None
+        assert bash_proc.parent_pid == session_sshd
+        assert bash_proc.logon_id == logon_id
 
     def test_linux_generate_process_replaces_untracked_parent_pid(
         self, state_manager, mock_emitters, linux_system, user

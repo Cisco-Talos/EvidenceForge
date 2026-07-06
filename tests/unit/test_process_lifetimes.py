@@ -235,6 +235,104 @@ def test_baseline_session_activity_stops_at_network_close() -> None:
     assert not _session_active_at(session, close + timedelta(seconds=1), start, None)
 
 
+def test_process_owned_ssh_transport_holds_client_process_until_close() -> None:
+    """A source SSH client should not terminate before its correlated transport closes."""
+    start = datetime(2024, 3, 18, 15, 59, 55, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    events = []
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    original_dispatch = dispatcher.dispatch
+
+    def capture(event):
+        events.append(event)
+        original_dispatch(event)
+
+    dispatcher.dispatch = capture
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    user = User(
+        username="aisha.johnson",
+        full_name="Aisha Johnson",
+        email="aisha.johnson@example.local",
+    )
+    source = System(
+        hostname="WS-AJOHNSON-01",
+        ip="10.10.1.35",
+        os="Windows 11",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    target = System(
+        hostname="DB-PROD-01",
+        ip="10.10.4.10",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["database"],
+        services=["ssh"],
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    logon_id = state.create_session(
+        username=user.username,
+        system=source.hostname,
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+        start_time=start - timedelta(minutes=5),
+    )
+    state.set_current_time(start - timedelta(seconds=5))
+    pid = state.create_process(
+        source.hostname,
+        0,
+        r"C:\Windows\System32\OpenSSH\ssh.exe",
+        "ssh.exe aisha.johnson@DB-PROD-01.meridianhcs.local",
+        user.username,
+        "Medium",
+        logon_id=logon_id,
+    )
+    state.set_current_time(start)
+
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip=target.ip,
+        time=start,
+        dst_port=22,
+        proto="tcp",
+        service="ssh",
+        duration=1800.0,
+        orig_bytes=38_000,
+        resp_bytes=58_000,
+        src_port=60175,
+        pid=pid,
+        source_system=source,
+        conn_state="SF",
+        process_image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+        suppress_application_side_effects=True,
+        suppress_prereq_dns=True,
+    )
+    connection_event = next(
+        event
+        for event in events
+        if event.event_type == "connection"
+        and event.network is not None
+        and event.network.dst_port == 22
+    )
+    close_time = connection_event.timestamp + timedelta(seconds=connection_event.network.duration)
+
+    state.end_session(logon_id, start + timedelta(seconds=30))
+    generator.generate_process_termination(
+        user=user,
+        system=source,
+        time=start + timedelta(seconds=45),
+        pid=pid,
+        process_name=r"C:\Windows\System32\OpenSSH\ssh.exe",
+        logon_id=logon_id,
+    )
+
+    terminate_event = next(event for event in events if event.event_type == "process_terminate")
+    assert terminate_event.timestamp > close_time
+    assert state.get_process(source.hostname, pid) is None
+
+
 def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None:
     start = datetime(2024, 3, 18, 17, 56, 39, tzinfo=UTC)
     state = StateManager()

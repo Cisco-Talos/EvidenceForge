@@ -2713,3 +2713,30 @@ class TestValidateConfig:
             and "must be a non-empty single-line string" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_generic_kube_probe_health_check_ua(self, monkeypatch):
+        from evidenceforge.generation.activity import web_session_profiles
+
+        real_loader = web_session_profiles.load_web_session_profiles
+
+        def load_invalid_web_session_profiles():
+            data = real_loader()
+            user_agent_pools = dict(data["user_agent_pools"])
+            user_agent_pools["health_check_windows"] = [
+                *user_agent_pools["health_check_windows"],
+                "kube-probe/1.28",
+            ]
+            return {**data, "user_agent_pools": user_agent_pools}
+
+        monkeypatch.setattr(
+            web_session_profiles, "load_web_session_profiles", load_invalid_web_session_profiles
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "kube-probe only with a Kubernetes-scoped source_role_any" in issue.message
+            for issue in result.issues
+        )

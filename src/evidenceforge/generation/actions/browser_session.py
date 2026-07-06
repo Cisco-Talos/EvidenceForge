@@ -156,6 +156,7 @@ class BrowserSessionActionBundle:
                 port=request.dst_port,
                 require_browser_like_domain=request.require_browser_like_domain,
                 transfer_variant_key=request.transfer_variant_key,
+                request_time=request.time,
             )
         visible_requests, page_load_count = self._visible_requests(session_requests)
         visible_requests = self._requests_before_deadline(visible_requests)
@@ -239,6 +240,7 @@ class BrowserSessionActionBundle:
                 port=self.request.dst_port,
                 require_browser_like_domain=self.request.require_browser_like_domain,
                 transfer_variant_key=self.request.transfer_variant_key,
+                request_time=self.request.time,
             )
 
         page_bounds = {

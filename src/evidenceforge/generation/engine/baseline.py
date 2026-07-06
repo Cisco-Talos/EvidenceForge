@@ -48,6 +48,7 @@ from evidenceforge.generation.actions import (
     IdsAlertRequest,
     ScheduledScanOverlapActionBundle,
     ScheduledScanOverlapRequest,
+    dhcp_renewal_interval_seconds,
 )
 from evidenceforge.generation.activity.auth_noise import (
     scheduled_stale_credentials_config,
@@ -415,28 +416,51 @@ def _dhcp_renewal_epochs_for_hour(
     lease_time: float,
     current_hour: datetime,
     rng: random.Random,
-) -> tuple[list[float], float]:
-    """Return DHCP renewal epochs due in this hour and the updated schedule anchor."""
+    next_renewal: float | None = None,
+) -> tuple[list[tuple[float, float]], float, float | None]:
+    """Return DHCP renewal epochs and advertised next-renewal intervals due in this hour."""
     base_renewal = max(60.0, lease_time / 2)
     hour_start_epoch = current_hour.timestamp()
     hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
-    due: list[float] = []
+    due: list[tuple[float, float]] = []
     schedule_anchor = last_renewal
+    previous_visible_index: int | None = None
+    pending_next_renewal: float | None = None
 
     max_iterations = max(
         8,
         int((hour_end_epoch - last_renewal) / max(60.0, base_renewal * 0.8)) + 4,
     )
     for _ in range(max_iterations):
-        jitter_factor = 1.0 + rng.uniform(-0.10, 0.10)
-        next_renewal = schedule_anchor + (base_renewal * jitter_factor)
-        if next_renewal >= hour_end_epoch:
-            break
-        schedule_anchor = next_renewal
-        if next_renewal >= hour_start_epoch:
-            due.append(next_renewal)
+        if next_renewal is None:
+            candidate_renewal = schedule_anchor + dhcp_renewal_interval_seconds(
+                lease_time,
+                rng,
+            )
+        else:
+            candidate_renewal = next_renewal
+            next_renewal = None
 
-    return due, schedule_anchor
+        if candidate_renewal >= hour_end_epoch and previous_visible_index is None:
+            pending_next_renewal = candidate_renewal
+            break
+        if candidate_renewal >= hour_start_epoch:
+            if previous_visible_index is not None:
+                previous_epoch = due[previous_visible_index][0]
+                due[previous_visible_index] = (
+                    previous_epoch,
+                    max(60.0, candidate_renewal - previous_epoch),
+                )
+            if candidate_renewal >= hour_end_epoch:
+                pending_next_renewal = candidate_renewal
+                break
+            due.append((candidate_renewal, base_renewal))
+            previous_visible_index = len(due) - 1
+        schedule_anchor = candidate_renewal
+        if candidate_renewal >= hour_end_epoch:
+            break
+
+    return due, schedule_anchor, pending_next_renewal
 
 
 def _linux_baseline_session_initiator(
@@ -531,6 +555,44 @@ def _linux_baseline_pam_open_lead(rng: random.Random) -> timedelta:
 def _linux_baseline_pam_close_lead(rng: random.Random) -> timedelta:
     """Return lead time for ambient PAM close rows before logind removal records."""
     return timedelta(milliseconds=rng.randint(1200, 4200))
+
+
+def _linux_sudo_command_runtime(command: str, rng: random.Random) -> timedelta:
+    """Return a source-native sudo session runtime for one COMMAND value."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    exe = tokens[0].rsplit("/", 1)[-1].lower() if tokens else ""
+
+    if exe in {"vmstat", "iostat"}:
+        numeric_args: list[float] = []
+        for token in tokens[1:]:
+            try:
+                numeric_args.append(float(token))
+            except ValueError:
+                continue
+        if len(numeric_args) >= 2:
+            delay = max(0.25, numeric_args[-2])
+            count = max(1.0, numeric_args[-1])
+            return timedelta(seconds=delay * count + rng.uniform(0.18, 0.95))
+        if len(numeric_args) == 1:
+            return timedelta(seconds=max(0.8, numeric_args[0]) + rng.uniform(0.2, 1.4))
+
+    normalized = " ".join(tokens).lower()
+    if any(marker in normalized for marker in ("apt-get", "apt list", "needrestart")):
+        return timedelta(seconds=rng.uniform(3.5, 18.0))
+    if any(marker in normalized for marker in ("systemctl restart", "service ") if marker):
+        return timedelta(seconds=rng.uniform(2.5, 15.0))
+    if "journalctl" in normalized or "find " in f" {normalized} ":
+        return timedelta(seconds=rng.uniform(1.2, 9.5))
+    if any(marker in normalized for marker in ("lsof", "iptables", "systemd-analyze")):
+        return timedelta(seconds=rng.uniform(1.0, 6.5))
+    if any(marker in normalized for marker in ("systemctl status", "systemctl list-")):
+        return timedelta(seconds=rng.uniform(0.9, 5.5))
+    if exe in {"df", "free", "ss", "lsblk", "tail", "grep", "du", "apt-cache"}:
+        return timedelta(seconds=rng.uniform(0.35, 3.2))
+    return timedelta(seconds=rng.uniform(0.25, 2.8))
 
 
 def _linux_transient_syslog_pid(
@@ -1546,6 +1608,11 @@ class BaselineMixin:
             return False
         return True
 
+    def _service_account_eligible_for_baseline_noise(self, username: str) -> bool:
+        """Return whether generic baseline noise may use a durable service account."""
+
+        return username.lower() not in self._storyline_account_lifecycle()
+
     def _pick_service_account_delegation_process(
         self,
         svc_name: str,
@@ -1991,6 +2058,25 @@ class BaselineMixin:
             )
         return process_path
 
+    @staticmethod
+    def _polkit_action_message_template(action_id: str, template: str) -> str:
+        """Return a source-native authorization template for a polkit action."""
+        if action_id != "org.freedesktop.login1.reboot":
+            return template
+        if template.startswith("Subject "):
+            return "Subject unix-process:{0}:{monotonic_start} is not authorized for action {action_id}"
+        return (
+            "Operator of unix-process:{0}:{monotonic_start} failed to authenticate as "
+            "unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} "
+            "for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
+        )
+
+    @staticmethod
+    def _polkit_action_process_is_user_cli(process_path: str) -> bool:
+        """Return whether a polkit companion process is a foreground CLI client."""
+        executable = process_path.rsplit("/", 1)[-1]
+        return executable in {"loginctl", "nmcli", "pkcon", "systemctl", "timedatectl"}
+
     def _materialize_polkit_action_process(
         self,
         *,
@@ -2023,6 +2109,48 @@ class BaselineMixin:
             parent_pid = sys_pids.get("systemd", sys_pids.get("dbus", 1))
         command_line = self._polkit_action_command_line(action_id, process_path, rng)
         username = subject_user if subject_user else "root"
+        if _get_os_category(system.os) == "linux" and self._polkit_action_process_is_user_cli(
+            process_path
+        ):
+            user_resolver = getattr(activity_generator, "_user_model_for_username", None)
+            if callable(user_resolver):
+                user = user_resolver(username)
+            else:
+                user = User(username=username, full_name=username, email=f"{username}@example.com")
+            visible_parent = None
+            shell_parent = getattr(activity_generator, "ensure_linux_visible_shell_parent", None)
+            if callable(shell_parent):
+                visible_parent = shell_parent(
+                    user=user,
+                    target_system=system,
+                    activity_time=process_time,
+                )
+            if visible_parent is not None:
+                parent_pid = visible_parent
+            try:
+                pid = activity_generator.generate_process(
+                    user=user,
+                    system=system,
+                    time=process_time,
+                    logon_id="",
+                    process_name=process_path,
+                    command_line=command_line,
+                    parent_pid=parent_pid,
+                    suppress_command_file_effect=True,
+                )
+                self._schedule_foreground_process_termination(
+                    user=user,
+                    system=system,
+                    start_time=process_time,
+                    pid=pid,
+                    process_name=process_path,
+                    command_line=command_line,
+                    logon_id="",
+                    rng=rng,
+                )
+                return pid
+            except AttributeError:
+                return None
         try:
             return activity_generator.generate_system_process(
                 system=system,
@@ -2067,6 +2195,7 @@ class BaselineMixin:
         subject_user = rng.choice(
             (entry.get("params") or {}).get("subject_user") or ["root", "admin", "deploy"]
         )
+        template = self._polkit_action_message_template(action_id, template)
         process_id = None
         if "action {action_id}" in template:
             process_id = self._materialize_polkit_action_process(
@@ -5899,6 +6028,65 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
+    def _get_baseline_ssh_users(self, system) -> list:
+        """Return scenario users eligible for ordinary baseline SSH sessions."""
+        if hasattr(self, "world_model") and hasattr(self.world_model, "get_ssh_admin_users"):
+            return self.world_model.get_ssh_admin_users(system)
+        return self._get_server_ssh_users(system)
+
+    def _baseline_ssh_source_system_for_user(
+        self,
+        user: User,
+        target_system: System,
+        rng: random.Random,
+    ) -> System | None:
+        """Pick the user's own plausible SSH source instead of a random host."""
+        if hasattr(self, "world_model"):
+            world_user = self.world_model.user_for(user.username)
+            if world_user is not None:
+                candidates = [
+                    system
+                    for system in world_user.remote_source_systems
+                    if system.hostname != target_system.hostname
+                    and (system.assigned_user in (None, user.username))
+                ]
+                if candidates:
+                    return rng.choice(candidates)
+
+        systems = list(self.scenario.environment.systems)
+        if user.primary_system:
+            primary = next((s for s in systems if s.hostname == user.primary_system), None)
+            if (
+                primary is not None
+                and primary.hostname != target_system.hostname
+                and primary.type == "workstation"
+                and primary.assigned_user in (None, user.username)
+            ):
+                return primary
+        assigned = [
+            system
+            for system in systems
+            if system.hostname != target_system.hostname
+            and system.type == "workstation"
+            and system.assigned_user == user.username
+        ]
+        return rng.choice(assigned) if assigned else None
+
+    def _pick_baseline_ssh_identity(
+        self,
+        target_system: System,
+        rng: random.Random,
+    ) -> tuple[User, System] | None:
+        """Pick a baseline SSH user and source host that agree with each other."""
+        roster = self._get_baseline_ssh_users(target_system)
+        if not roster:
+            return None
+        for user in rng.sample(roster, k=len(roster)):
+            source_system = self._baseline_ssh_source_system_for_user(user, target_system, rng)
+            if source_system is not None:
+                return user, source_system
+        return None
+
     def _linux_remote_admin_hour_probability(self, system: Any) -> float:
         """Return the hourly probability of an organic SSH admin session on a Linux server."""
         multiplier = self._activity_multiplier(system, "linux_remote_admin")
@@ -6145,6 +6333,13 @@ class BaselineMixin:
         if matcher is None:
             return None
         return matcher(src_ip=source_ip, dst_ip=dst_ip, dst_port=445, proto="tcp")
+
+    @staticmethod
+    def _smb_logon_transport_conn_state(service: Any, will_emit_logon: bool) -> str | None:
+        """Return the SMB transport state required by a successful companion logon."""
+        if will_emit_logon and str(service or "").lower() == "smb":
+            return "SF"
+        return None
 
     def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
         """Build weighted SMB targets for Windows client browsing noise."""
@@ -6756,6 +6951,12 @@ class BaselineMixin:
                                 time=tgs_time,
                             )
 
+                        will_emit_smb_logon = bool(
+                            conn.get("service") == "smb"
+                            and is_internal_src
+                            and src_sys
+                            and "file_server" in roles
+                        )
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,
@@ -6766,6 +6967,10 @@ class BaselineMixin:
                             duration=rng.uniform(0.05, 5.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
+                            conn_state=self._smb_logon_transport_conn_state(
+                                conn.get("service"),
+                                will_emit_smb_logon,
+                            ),
                             source_system=src_sys,
                             emit_dns=is_internal_src,
                             hostname=dst_hostname,
@@ -7203,17 +7408,29 @@ class BaselineMixin:
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
             if dhcp_state and "zeek_dhcp" in self.emitters:
+                storyline_dhcp_time = self._storyline_dhcp_lease_time_in_hour(
+                    system.hostname,
+                    current_hour,
+                )
+                if storyline_dhcp_time is not None:
+                    dhcp_state["next_renewal"] = storyline_dhcp_time.timestamp()
+                    continue
                 lease_time = dhcp_state["lease_time"]
-                renewal_epochs, updated_last_renewal = _dhcp_renewal_epochs_for_hour(
+                (
+                    renewal_epochs,
+                    updated_last_renewal,
+                    pending_next_renewal,
+                ) = _dhcp_renewal_epochs_for_hour(
                     last_renewal=dhcp_state["last_renewal"],
                     lease_time=lease_time,
                     current_hour=current_hour,
                     rng=rng,
+                    next_renewal=dhcp_state.get("next_renewal"),
                 )
                 if renewal_epochs:
                     from evidenceforge.utils.ids import generate_zeek_uid
 
-                for next_renewal in renewal_epochs:
+                for next_renewal, renewal_interval in renewal_epochs:
                     renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
                     # Randomize fractional seconds (OS timer imprecision)
                     renewal_ts = renewal_ts.replace(microsecond=rng.randint(0, 999999))
@@ -7226,6 +7443,7 @@ class BaselineMixin:
                         lease_time=lease_time,
                         uid=generate_zeek_uid("C"),
                         msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
+                        renewal_interval=renewal_interval,
                     )
                     self._emit_dhcp_registry_side_effect(
                         system=dhcp_state["system"],
@@ -7235,6 +7453,10 @@ class BaselineMixin:
                         dhcp_state=dhcp_state,
                     )
                 dhcp_state["last_renewal"] = updated_last_renewal
+                if pending_next_renewal is None:
+                    dhcp_state.pop("next_renewal", None)
+                else:
+                    dhcp_state["next_renewal"] = pending_next_renewal
 
             # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
@@ -7295,6 +7517,7 @@ class BaselineMixin:
                             duration = rng.uniform(0.1, 2.0)
                             orig_bytes = rng.randint(200, 2_000)
                             resp_bytes = rng.randint(500, 5_000)
+                        will_emit_smb_logon = smb_dst_sys is not None
                         self.activity_generator.generate_connection(
                             src_ip=system.ip,
                             dst_ip=smb_dst_ip,
@@ -7305,6 +7528,10 @@ class BaselineMixin:
                             duration=duration,
                             orig_bytes=orig_bytes,
                             resp_bytes=resp_bytes,
+                            conn_state=self._smb_logon_transport_conn_state(
+                                "smb",
+                                will_emit_smb_logon,
+                            ),
                             emit_dns=rng.random() > 0.02,
                             source_system=system,
                             pid=4,  # SMB: kernel System process
@@ -7687,6 +7914,8 @@ class BaselineMixin:
                 all_systems = self.scenario.environment.systems
                 servers = [s for s in all_systems if s.type in ("server", "domain_controller")]
                 for svc_name in self.scenario.environment.service_accounts:
+                    if not self._service_account_eligible_for_baseline_noise(svc_name):
+                        continue
                     if rng.random() < delegation_probability:
                         target_sys = rng.choice(servers) if servers else None
                         if target_sys and target_sys.hostname != system.hostname:
@@ -7889,7 +8118,7 @@ class BaselineMixin:
             # SSH: connections to Linux servers
             sys_type = (system.type or "workstation").lower()
             if os_cat == "linux" and sys_type == "server":
-                roster = self._get_server_ssh_users(system)
+                roster = self._get_baseline_ssh_users(system)
                 if roster and rng.random() < self._linux_remote_admin_hour_probability(system):
                     from evidenceforge.generation.activity.bash_commands import (
                         pick_bash_session_commands,
@@ -7897,7 +8126,10 @@ class BaselineMixin:
 
                     num_ssh = self._linux_remote_admin_session_count(rng, system)
                     for _ in range(num_ssh):
-                        ssh_user = rng.choice(roster)
+                        ssh_identity = self._pick_baseline_ssh_identity(system, rng)
+                        if ssh_identity is None:
+                            continue
+                        ssh_user, source_system = ssh_identity
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
                         hour_end = current_hour + timedelta(hours=1)
@@ -7908,6 +8140,7 @@ class BaselineMixin:
                             time=ts,
                             rng=rng,
                             session_kind="ssh",
+                            source_system=source_system,
                             allow_existing=True,
                             required_until=hour_end,
                         )
@@ -8487,15 +8720,12 @@ class BaselineMixin:
                             facility=10,
                         )
                 elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
-                    other_ips = [
-                        s.ip for s in self.scenario.environment.systems if s.ip != system.ip
-                    ]
-                    ip = rng.choice(other_ips) if other_ips else system.ip
+                    ssh_identity = self._pick_baseline_ssh_identity(system, rng)
+                    if ssh_identity is None:
+                        continue
+                    ssh_user_model, src_sys_obj = ssh_identity
+                    ip = src_sys_obj.ip
                     # Resolve source system for WFP 5156 emission and OS-aware port
-                    src_sys_obj = next(
-                        (s for s in self.scenario.environment.systems if s.ip == ip),
-                        None,
-                    )
                     from evidenceforge.generation.activity.generator import _ephemeral_port
 
                     _src_os = _get_os_category(src_sys_obj.os) if src_sys_obj else "linux"
@@ -8508,23 +8738,7 @@ class BaselineMixin:
                         time=ts,
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
-                    ssh_roster = self._get_server_ssh_users(system)
-                    ssh_usernames = [user.username for user in ssh_roster]
-                    if ssh_usernames:
-                        fallback_users = ["admin", "root"]
-                        if not is_rhel_like:
-                            fallback_users.append("ubuntu")
-                        ssh_user = rng.choices(
-                            ssh_usernames + fallback_users,
-                            weights=([20] * len(ssh_usernames)) + [3, 1, 1][: len(fallback_users)],
-                            k=1,
-                        )[0]
-                    else:
-                        ssh_user = rng.choice(["admin", "root"] if is_rhel_like else ["admin"])
-                    ssh_user_model = next(
-                        (user for user in ssh_roster if user.username == ssh_user),
-                        self.activity_generator._user_model_for_username(ssh_user),
-                    )
+                    ssh_user = ssh_user_model.username
                     _key_rng = random.Random(
                         _stable_seed(f"ssh_client_key:{ip}:{system.hostname}:{ssh_user}")
                     )
@@ -8819,6 +9033,8 @@ class BaselineMixin:
                     if sudo_has_session:
                         sudo_user = (msg.split(" : ", 1)[0] or "admin").strip()
                         uid = _linux_uid_for_user(sudo_user)
+                        sudo_command = msg.split("COMMAND=", 1)[1].strip()
+                        sudo_runtime = _linux_sudo_command_runtime(sudo_command, rng)
                         self.activity_generator.generate_syslog_event(
                             system=system,
                             time=ts - timedelta(milliseconds=rng.randint(80, 420)),
@@ -8843,7 +9059,7 @@ class BaselineMixin:
                     if sudo_has_session:
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + timedelta(milliseconds=rng.randint(90, 900)),
+                            time=ts + sudo_runtime + timedelta(milliseconds=rng.randint(120, 950)),
                             app_name="sudo",
                             message="pam_unix(sudo:session): session closed for user root",
                             pid=pid,

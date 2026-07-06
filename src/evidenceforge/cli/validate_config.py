@@ -1640,6 +1640,7 @@ def validate_config() -> ValidationResult:
                         f'Visitor class "{class_name}" references missing user_agent_pool "{pool_name}"',
                     )
                 )
+            referenced_pool_names = {pool_name} if isinstance(pool_name, str) else set()
             by_os = class_data.get("user_agent_pool_by_os")
             if by_os is not None and not isinstance(by_os, dict):
                 result.issues.append(
@@ -1668,6 +1669,30 @@ def validate_config() -> ValidationResult:
                                 f'Visitor class "{class_name}" references missing OS user_agent_pool "{os_pool}"',
                             )
                         )
+                    else:
+                        referenced_pool_names.add(os_pool)
+            role_values = class_data.get("source_role_any")
+            source_roles = (
+                {str(role).lower() for role in role_values}
+                if isinstance(role_values, list)
+                else set()
+            )
+            kube_roles = {"kubernetes", "k8s", "kubelet", "container", "container_runtime"}
+            if class_name == "health_check" and not source_roles & kube_roles:
+                for referenced_pool_name in sorted(referenced_pool_names):
+                    user_agents = web_ua_pools.get(referenced_pool_name)
+                    if not isinstance(user_agents, list):
+                        continue
+                    for user_agent in user_agents:
+                        if isinstance(user_agent, str) and "kube-probe" in user_agent.lower():
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "web_session_profiles.yaml",
+                                    'Visitor class "health_check" may use kube-probe only with '
+                                    "a Kubernetes-scoped source_role_any",
+                                )
+                            )
             if class_data.get("kind") == "requests":
                 request_count = class_data.get("request_count")
                 if (

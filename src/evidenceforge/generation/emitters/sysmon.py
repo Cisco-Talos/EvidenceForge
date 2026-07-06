@@ -37,7 +37,7 @@ from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import ProcessContext
+from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
@@ -975,6 +975,7 @@ class SysmonEventEmitter(LogEmitter):
         else:
             user = "NT AUTHORITY\\SYSTEM"
             logon_id = "0x3e7"
+        parent_user = self._sysmon_parent_user(host, parent_proc, proc, user)
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
 
@@ -1003,6 +1004,7 @@ class SysmonEventEmitter(LogEmitter):
             "ParentCommandLine": proc.parent_command_line
             if hasattr(proc, "parent_command_line") and proc.parent_command_line
             else "-",
+            "ParentUser": parent_user,
             "CurrentDirectory": proc.current_directory or self._default_current_directory(proc),
         }
         # Populate PE metadata from known binary lookup
@@ -1013,6 +1015,26 @@ class SysmonEventEmitter(LogEmitter):
         event_data["Company"] = company
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
+
+    def _sysmon_parent_user(
+        self,
+        host: HostContext,
+        parent_proc: Any | None,
+        proc: ProcessContext,
+        child_user: str,
+    ) -> str:
+        """Return Sysmon Event 1 ParentUser for the modeled parent process."""
+        parent_username = str(getattr(parent_proc, "username", "") or "")
+        if parent_username:
+            return self._format_user(parent_username, host.netbios_domain)
+        if proc.parent_pid in {0, 4}:
+            return "NT AUTHORITY\\SYSTEM"
+        parent_image = (proc.parent_image or "").lower()
+        if "\\windows\\system32\\services.exe" in parent_image or parent_image.endswith(
+            "\\services.exe"
+        ):
+            return "NT AUTHORITY\\SYSTEM"
+        return child_user or "-"
 
     @staticmethod
     def _default_current_directory(proc: ProcessContext) -> str:

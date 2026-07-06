@@ -788,6 +788,53 @@ class TestPerSensorDirectoryRouting:
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
 
+    def test_bulk_proxy_flow_sensor_accounting_stays_near_canonical_bytes(self):
+        """Bulk client-to-proxy rows should not drift by megabytes across sensors."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestBulkProxy12",
+                    "id.orig_h": "10.10.1.35",
+                    "id.orig_p": 50872,
+                    "id.resp_h": "10.10.3.20",
+                    "id.resp_p": 8080,
+                    "proto": "tcp",
+                    "duration": 925.5,
+                    "orig_bytes": 2_200_000,
+                    "resp_bytes": 326_500_000,
+                    "orig_pkts": 1800,
+                    "resp_pkts": 223_700,
+                    "orig_ip_bytes": 2_272_000,
+                    "resp_ip_bytes": 335_448_000,
+                    "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 308,
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+            core_total = core["orig_ip_bytes"] + core["resp_ip_bytes"]
+            dmz_total = dmz["orig_ip_bytes"] + dmz["resp_ip_bytes"]
+            allowed_delta = max(65_536, core["missed_bytes"] + dmz["missed_bytes"] + 8192)
+
+            assert dmz["orig_bytes"] == core["orig_bytes"]
+            assert dmz["resp_bytes"] == core["resp_bytes"]
+            assert abs(dmz_total - core_total) <= allowed_delta
+            assert abs(dmz_total - core_total) < 1_000_000
+            assert dmz["duration"] != core["duration"]
+            for row in (core, dmz):
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
     def test_single_sensor_single_subdir(self):
         """Single sensor creates a single subdirectory."""
         fmt = load_format("zeek_conn")

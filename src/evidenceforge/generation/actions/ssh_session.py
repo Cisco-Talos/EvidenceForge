@@ -425,6 +425,18 @@ class SshSessionActionBundle:
             duration = rng.uniform(30.0, 3600.0)
         if request.min_duration is not None and request.duration is None:
             duration = max(duration, request.min_duration)
+        transport_open_time = request.time + sample_packet_timing_delta(
+            "network.connection_start_jitter",
+            seed_parts=(
+                request.source_ip,
+                src_port,
+                request.target_system.ip,
+                22,
+                "tcp",
+                "ssh",
+                request.time,
+            ),
+        )
         orig_bytes = (
             request.orig_bytes if request.orig_bytes is not None else rng.randint(2000, 50000)
         )
@@ -435,14 +447,14 @@ class SshSessionActionBundle:
             rng=rng,
             source_port=src_port,
             duration=duration,
-            close_time=request.time + timedelta(seconds=duration),
+            close_time=transport_open_time + timedelta(seconds=duration),
             orig_bytes=max(0, orig_bytes),
             resp_bytes=max(0, resp_bytes),
             network_visible=self._is_network_visible(),
             dst_host=self.executor._build_host_context(request.target_system),
             session_obj_id=request.session_obj_id,
             src_host=self._source_host_context(),
-            open_time=request.time,
+            open_time=transport_open_time,
             logon_id=request.logon_id,
             execution_anchor=ActionAnchor(
                 family="ssh_session",
@@ -514,6 +526,7 @@ class SshSessionActionBundle:
             process_image=source_process_image,
             preserve_dst_ip=True,
             responding_pid=responding_pid or -1,
+            ssh_attempted_username=request.user.username,
         )
         state.uid = network_uid
         state.network_visible = bool(network_uid)
@@ -743,8 +756,8 @@ class SshSessionActionBundle:
             default_position="after",
             default_class="source_latency",
         )
-        canonical_event_time = ensure_utc(event.timestamp)
         canonical_transport_open_time = ensure_utc(transport_open_time)
+        canonical_event_time = ensure_utc(event.timestamp)
         canonical_offset_ms = max(
             0,
             math.ceil(
@@ -915,6 +928,14 @@ class SshSessionActionBundle:
                 timestamp=auth_state.connection_time,
                 event_type="syslog",
                 src_host=event.dst_host,
+                auth=AuthContext(
+                    username=request.user.username,
+                    source_ip=request.source_ip,
+                    source_port=state.source_port,
+                    logon_id=state.logon_id,
+                    session_id=auth_state.logind_session_id,
+                    logon_type=10,
+                ),
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=auth_state.sshd_pid,
@@ -1011,6 +1032,14 @@ class SshSessionActionBundle:
                 timestamp=auth_state.accepted_time,
                 event_type="syslog",
                 src_host=event.dst_host,
+                auth=AuthContext(
+                    username=request.user.username,
+                    source_ip=request.source_ip,
+                    source_port=state.source_port,
+                    logon_id=state.logon_id,
+                    session_id=auth_state.logind_session_id,
+                    logon_type=10,
+                ),
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=auth_state.sshd_pid,
@@ -1025,6 +1054,14 @@ class SshSessionActionBundle:
                 timestamp=auth_state.pam_time,
                 event_type="syslog",
                 src_host=event.dst_host,
+                auth=AuthContext(
+                    username=request.user.username,
+                    source_ip=request.source_ip,
+                    source_port=state.source_port,
+                    logon_id=state.logon_id,
+                    session_id=auth_state.logind_session_id,
+                    logon_type=10,
+                ),
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=auth_state.sshd_pid,
@@ -1045,6 +1082,14 @@ class SshSessionActionBundle:
                 timestamp=auth_state.logind_time,
                 event_type="syslog",
                 src_host=event.dst_host,
+                auth=AuthContext(
+                    username=request.user.username,
+                    source_ip=request.source_ip,
+                    source_port=state.source_port,
+                    logon_id=state.logon_id,
+                    session_id=session_id,
+                    logon_type=10,
+                ),
                 syslog=SyslogContext(
                     app_name="systemd-logind",
                     pid=executor._get_system_pid(hostname, "logind", 456),
@@ -1109,6 +1154,32 @@ class SshSessionActionBundle:
                 ),
             )
         )
+        self.executor.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=self._source_native_logind_removed_time(state, auth_state, close_time),
+                event_type="syslog",
+                src_host=event.dst_host,
+                auth=AuthContext(
+                    username=request.user.username,
+                    source_ip=request.source_ip,
+                    source_port=state.source_port,
+                    logon_id=state.logon_id,
+                    session_id=auth_state.logind_session_id,
+                    logon_type=10,
+                ),
+                syslog=SyslogContext(
+                    app_name="systemd-logind",
+                    pid=self.executor._get_system_pid(
+                        request.target_system.hostname,
+                        "logind",
+                        456,
+                    ),
+                    facility=10,
+                    severity=6,
+                    message=f"Removed session {auth_state.logind_session_id}.",
+                ),
+            )
+        )
         self._terminate_receiver_sshd_process(state, auth_state, close_time)
 
     def _terminate_receiver_sshd_process(
@@ -1164,4 +1235,23 @@ class SshSessionActionBundle:
         return state.close_time + timedelta(
             milliseconds=120 + (seed % 2380),
             microseconds=211 + (seed % 613),
+        )
+
+    def _source_native_logind_removed_time(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+        close_time: datetime,
+    ) -> datetime:
+        """Return systemd-logind removal time for the same visible SSH session ID."""
+
+        request = self.request
+        seed = _stable_seed(
+            "ssh_session_logind_removed:"
+            f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
+            f"{state.source_port}:{auth_state.logind_session_id}:{close_time.isoformat()}"
+        )
+        return close_time + timedelta(
+            milliseconds=120 + (seed % 880),
+            microseconds=701 + (seed % 173),
         )

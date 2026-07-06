@@ -237,7 +237,6 @@ file_paths_windows:
   - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
   - "C:\\Windows\\Temp\\{rand}.tmp"
   - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
-  - "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"
   - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
 
 file_paths_linux:

@@ -108,6 +108,7 @@ _LINUX_ROOT_ONLY_FILE_PREFIXES = (
     "/var/lib/dpkg/",
     "/var/log/apt/",
 )
+_WINDOWS_PROTECTED_EVENT_LOG_PREFIX = "c:\\windows\\system32\\winevt\\logs\\"
 _GUID_RE = re.compile(
     r"^\{?[0-9A-Fa-f]{8}-"
     r"[0-9A-Fa-f]{4}-"
@@ -449,6 +450,15 @@ def _is_windows_prefetch_template(template: str) -> bool:
     return "\\windows\\prefetch\\" in normalized
 
 
+def _is_windows_protected_event_log_template(template: str) -> bool:
+    """Return whether a file template points at protected Windows event logs."""
+
+    normalized = template.replace("/", "\\").lower()
+    return normalized.startswith(_WINDOWS_PROTECTED_EVENT_LOG_PREFIX) and normalized.endswith(
+        ".evtx"
+    )
+
+
 def _runmru_value_name(rng: random.Random) -> str:
     """Return a plausible RunMRU value slot."""
     return chr(ord("a") + rng.randint(0, 15))
@@ -732,7 +742,10 @@ def select_ambient_file_churn_effect(
     candidates = file_path_templates_for_user(path_templates, os_category, user)
     if os_category == "windows":
         candidates = [
-            candidate for candidate in candidates if not _is_windows_prefetch_template(candidate)
+            candidate
+            for candidate in candidates
+            if not _is_windows_prefetch_template(candidate)
+            and not _is_windows_protected_event_log_template(candidate)
         ]
     if not candidates:
         return None

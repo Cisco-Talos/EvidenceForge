@@ -100,6 +100,26 @@ def test_timing_profiles_load_default_relationship():
     assert ecar_process_window.max_ms >= 900
     assert 0 < ecar_after_sysmon_window.min_ms < ecar_after_sysmon_window.max_ms
     assert ecar_after_sysmon_window.max_ms >= 3000
+    remote_thread_after_open_window = get_timing_window(
+        "source.ecar_remote_thread_after_process_open",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert 0 < remote_thread_after_open_window.min_ms < remote_thread_after_open_window.max_ms
+    assert remote_thread_after_open_window.max_ms <= 300
+    remote_thread_process_access_window = get_timing_window(
+        "process.remote_thread_process_access",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="before",
+    )
+    assert (
+        0
+        < remote_thread_process_access_window.min_ms
+        < remote_thread_process_access_window.max_ms
+        <= 200
+    )
     security_gap_window = get_timing_window(
         "source.windows_security_after_sysmon_process_create_gap",
         default_min_ms=0,
@@ -114,6 +134,13 @@ def test_timing_profiles_load_default_relationship():
         default_position="after",
     )
     assert audit_after_command_window.min_ms > 0
+    remote_logon_ready_window = get_timing_window(
+        "windows.remote_logon_source_ready",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert 0 < remote_logon_ready_window.min_ms < remote_logon_ready_window.max_ms
 
     tls_window = get_timing_window(
         "network.tls_completed_min_duration",
