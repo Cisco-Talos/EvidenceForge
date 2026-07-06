@@ -407,11 +407,35 @@ def validate_config() -> ValidationResult:
         "activity/process_network_map.yaml": {
             "list_fields": {"mappings": None},
         },
+        "activity/email_background.yaml": {
+            "list_fields": {
+                "external_domains": "domain",
+                "inbound_local_parts": "local_part",
+                "outbound_local_parts": "local_part",
+            },
+        },
+        "activity/mail_public_identities.yaml": {
+            "list_fields": {"providers": "name"},
+            "string_list_fields": {"reserved_replacement_domains"},
+        },
+        "activity/external_actor_profiles.yaml": {
+            "list_fields": {
+                "logon_source_ips": "ip",
+                "failed_logon_source_ips": "ip",
+                "connection_c2_ips": "ip",
+            },
+        },
+        "activity/suspicious_benign.yaml": {
+            "list_fields": {"dns_hosts": "hostname", "unusual_connections": "hostname"},
+        },
+        "activity/command_parameter_pools.yaml": {
+            "dict_fields": {"general", "query", "linux_query"},
+        },
         "activity/process_access_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
         },
         "activity/auth_noise.yaml": {
-            "dict_fields": {"scheduled_stale_credentials"},
+            "dict_fields": {"scheduled_stale_credentials", "service_account_delegation"},
         },
         "activity/create_remote_thread_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
@@ -737,16 +761,26 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
     from evidenceforge.generation.activity.calltrace_patterns import load_calltrace_config
+    from evidenceforge.generation.activity.command_parameter_pools import (
+        load_command_parameter_pools,
+    )
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
         load_create_remote_thread_config,
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.email_background import load_email_background
     from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
+    from evidenceforge.generation.activity.external_actor_profiles import (
+        load_external_actor_profiles,
+    )
     from evidenceforge.generation.activity.host_activity_profiles import (
         load_host_activity_profiles,
     )
     from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+    from evidenceforge.generation.activity.mail_public_identities import (
+        load_mail_public_identities,
+    )
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
     )
@@ -756,6 +790,9 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
+    from evidenceforge.generation.activity.suspicious_benign_config import (
+        load_suspicious_benign,
+    )
     from evidenceforge.generation.activity.system_processes import load_system_processes
     from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
@@ -776,6 +813,11 @@ def validate_config() -> ValidationResult:
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
+    email_background_data = load_email_background()
+    mail_public_identities_data = load_mail_public_identities()
+    external_actor_profiles_data = load_external_actor_profiles()
+    suspicious_benign_data = load_suspicious_benign()
+    command_parameter_pools_data = load_command_parameter_pools()
     process_access_data = load_process_access_patterns()
     calltrace_config = load_calltrace_config()
     auth_noise_data = load_auth_noise_config()
@@ -1598,6 +1640,7 @@ def validate_config() -> ValidationResult:
                         f'Visitor class "{class_name}" references missing user_agent_pool "{pool_name}"',
                     )
                 )
+            referenced_pool_names = {pool_name} if isinstance(pool_name, str) else set()
             by_os = class_data.get("user_agent_pool_by_os")
             if by_os is not None and not isinstance(by_os, dict):
                 result.issues.append(
@@ -1626,6 +1669,30 @@ def validate_config() -> ValidationResult:
                                 f'Visitor class "{class_name}" references missing OS user_agent_pool "{os_pool}"',
                             )
                         )
+                    else:
+                        referenced_pool_names.add(os_pool)
+            role_values = class_data.get("source_role_any")
+            source_roles = (
+                {str(role).lower() for role in role_values}
+                if isinstance(role_values, list)
+                else set()
+            )
+            kube_roles = {"kubernetes", "k8s", "kubelet", "container", "container_runtime"}
+            if class_name == "health_check" and not source_roles & kube_roles:
+                for referenced_pool_name in sorted(referenced_pool_names):
+                    user_agents = web_ua_pools.get(referenced_pool_name)
+                    if not isinstance(user_agents, list):
+                        continue
+                    for user_agent in user_agents:
+                        if isinstance(user_agent, str) and "kube-probe" in user_agent.lower():
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "web_session_profiles.yaml",
+                                    'Visitor class "health_check" may use kube-probe only with '
+                                    "a Kubernetes-scoped source_role_any",
+                                )
+                            )
             if class_data.get("kind") == "requests":
                 request_count = class_data.get("request_count")
                 if (
@@ -2358,6 +2425,7 @@ def validate_config() -> ValidationResult:
         BeaconProfilesConfig,
         CallTracePatternEntry,
         CallTraceSourceFamilyEntry,
+        CommandParameterPoolsConfig,
         ConnectionEntry,
         CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
@@ -2366,10 +2434,13 @@ def validate_config() -> ValidationResult:
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
         EdrInstalledSoftwareProduct,
+        EmailBackgroundConfig,
         EndpointNoiseConfig,
+        ExternalActorProfilesConfig,
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
         KerberosRealismConfig,
+        MailPublicIdentitiesConfig,
         ObservationProfilesConfig,
         OuiEntry,
         PersonaEntry,
@@ -2382,6 +2453,7 @@ def validate_config() -> ValidationResult:
         ScheduledTaskEntry,
         SmbFileTransferConfig,
         SpawnRuleEntry,
+        SuspiciousBenignConfig,
         SyslogProgramEntry,
         SystemBinaryEntry,
         SystemdScheduleEntry,
@@ -2396,6 +2468,19 @@ def validate_config() -> ValidationResult:
         (domains, DnsEntry, "dns_registry.yaml"),
         (apps, ApplicationEntry, "application_catalog.yaml"),
         (all_merged_personas, PersonaEntry, "personas"),
+        ([email_background_data], EmailBackgroundConfig, "email_background.yaml"),
+        ([mail_public_identities_data], MailPublicIdentitiesConfig, "mail_public_identities.yaml"),
+        (
+            [external_actor_profiles_data],
+            ExternalActorProfilesConfig,
+            "external_actor_profiles.yaml",
+        ),
+        ([suspicious_benign_data], SuspiciousBenignConfig, "suspicious_benign.yaml"),
+        (
+            [command_parameter_pools_data],
+            CommandParameterPoolsConfig,
+            "command_parameter_pools.yaml",
+        ),
     ]
 
     # system_processes.yaml: scheduled_tasks, system_services, system_binaries

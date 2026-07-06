@@ -68,6 +68,7 @@ eforge info
 eforge info personas          # List all persona names (package + overlay)
 eforge info dns_tags          # List all DNS tags in use
 eforge info application_ids   # List all application IDs
+eforge info identity_pools    # Summarize generated identity-pool config files
 eforge info overlay.exists    # Check if an overlay is active
 eforge info overlay.files     # List files in the overlay
 eforge info paths.activity    # Path to the activity config directory
@@ -170,6 +171,7 @@ library that should influence many scenarios.
 | Baseline auth noise | `auth_noise.yaml` (stale scheduled-credential account pools, host counts, recurrence intervals, jitter, skips, and backoff) |
 | Endpoint background noise | `endpoint_noise.yaml` (Windows scheduled-process trigger windows, host drift, skip probability, and DHCP registry emission policy) |
 | Host/persona/role volume realism | `host_activity_profiles.yaml` (coarse rate-family multipliers, firewall deny burst shaping, and data-driven artifact variants) |
+| Generated identity pools | `email_background.yaml`, `mail_public_identities.yaml`, `external_actor_profiles.yaml`, `suspicious_benign.yaml`, and `command_parameter_pools.yaml` (baseline email senders/recipients, reserved public mail replacements, omitted storyline external IPs, suspicious-benign DNS/connection targets, and command URL/host placeholders). Scenario-authored IPs/domains still override fallback pools. |
 | Observation/source coverage | `observation_profiles.yaml` (named source-level missingness/delay profiles selected by scenario `observation_profile`; default `complete` keeps perfect coverage; non-complete decisions are coherent per source-local process, session, and same-UID network group; optional collection batching/window knobs belong here) |
 | Causal/source-native timing | `timing_profiles.yaml` (`relationships` for causal prerequisites, source latency, teardown margins, Zeek analyzer offsets and TLS duration floors, endpoint host-clock profiles shared by OS logs and host-resident eCAR, independent network sensor clock/path profiles, plus Windows/Sysmon collision spacing) |
 | Public NTP fallback servers and DNS tunnel timing | `network_params.yaml` (`public_ntp_servers`, `dns_tunnel_rtt`; scenario-defined internal/domain NTP servers still take precedence) |
@@ -185,6 +187,24 @@ library that should influence many scenarios.
 | Sysmon/eCAR ProcessAccess call traces | `calltrace_patterns.yaml` — `patterns:` define named module/offset palettes and `source_families:` maps source process families such as Defender, CSRSS, services, svchost, WMI, and suspicious tools to those palettes. Fields are optional/defaulted by package config; scenario YAML does not need call-trace directives. |
 
 The `/eforge:config` skill handles these dependencies automatically. If editing manually, run `/eforge:config validate my config files` to check for missing cross-references.
+
+## Generated Identity Pools
+
+EvidenceForge keeps realism-sensitive fallback identities in data files under
+`activity/` instead of hardcoded Python lists:
+
+| File | Overlay path | Purpose |
+|------|--------------|---------|
+| `email_background.yaml` | `.eforge/config/activity/email_background.yaml` | Weighted external domains and inbound/outbound local-parts for baseline email. |
+| `mail_public_identities.yaml` | `.eforge/config/activity/mail_public_identities.yaml` | Public SMTP provider profiles and reserved-domain replacement domains for public mail infrastructure. |
+| `external_actor_profiles.yaml` | `.eforge/config/activity/external_actor_profiles.yaml` | Public IP fallback pools for storyline logons, failed logons, and omitted C2 destinations. |
+| `suspicious_benign.yaml` | `.eforge/config/activity/suspicious_benign.yaml` | Suspicious-looking but legitimate DNS names and outbound connection targets. |
+| `command_parameter_pools.yaml` | `.eforge/config/activity/command_parameter_pools.yaml` | URL and host substitution pools for generated command lines that may appear in endpoint artifacts. |
+
+Run `eforge info identity_pools` to inspect counts and overlay paths. Run
+`eforge validate-config` after edits; validation rejects empty pools, duplicate
+keys, malformed domains/IPs, invalid weights, reserved public domains in
+realism-bound pools, and malformed command URLs.
 
 ## Customizing Data Quality Evaluation
 

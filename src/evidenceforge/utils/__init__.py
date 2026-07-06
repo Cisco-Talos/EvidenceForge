@@ -22,7 +22,7 @@
 
 """EvidenceForge utility functions."""
 
-from .files import ensure_directory, load_yaml, validate_output_path, write_yaml
+from .files import ensure_directory, load_scenario_yaml, load_yaml, validate_output_path, write_yaml
 from .ids import generate_zeek_uid
 from .logging import redact_secrets
 from .time import (
@@ -46,6 +46,7 @@ __all__ = [
     "convert_to_output_timezone",
     # File utilities
     "load_yaml",
+    "load_scenario_yaml",
     "write_yaml",
     "ensure_directory",
     "validate_output_path",

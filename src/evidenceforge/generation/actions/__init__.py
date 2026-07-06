@@ -51,10 +51,18 @@ from evidenceforge.generation.actions.browser_session import (
 from evidenceforge.generation.actions.dhcp_lease import (
     DhcpLeaseActionBundle,
     DhcpLeaseRequest,
+    dhcp_renewal_interval_seconds,
 )
 from evidenceforge.generation.actions.dns_lookup import (
     DnsLookupActionBundle,
     DnsLookupRequest,
+)
+from evidenceforge.generation.actions.email import (
+    EmailAccessActionBundle,
+    EmailAccessRequest,
+    EmailDeliveryActionBundle,
+    EmailDeliveryRequest,
+    EmailDeliveryResult,
 )
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
@@ -173,8 +181,14 @@ __all__ = [
     "CreateRemoteThreadRequest",
     "DhcpLeaseActionBundle",
     "DhcpLeaseRequest",
+    "dhcp_renewal_interval_seconds",
     "DnsLookupActionBundle",
     "DnsLookupRequest",
+    "EmailAccessActionBundle",
+    "EmailAccessRequest",
+    "EmailDeliveryActionBundle",
+    "EmailDeliveryRequest",
+    "EmailDeliveryResult",
     "FailedLogonActionBundle",
     "FailedLogonRequest",
     "HttpResponseFileTransferActionBundle",

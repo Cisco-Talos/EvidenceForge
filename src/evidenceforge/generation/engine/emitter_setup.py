@@ -33,9 +33,10 @@ Contains the EmitterSetupMixin with methods for:
 
 import logging
 import random
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.network_params import load_network_params, public_ntp_ips
 from evidenceforge.generation.emitters import (
@@ -58,11 +59,13 @@ from evidenceforge.generation.emitters import (
     ZeekPacketFilterEmitter,
     ZeekPeEmitter,
     ZeekReporterEmitter,
+    ZeekSmtpEmitter,
     ZeekSslEmitter,
     ZeekWeirdEmitter,
     ZeekX509Emitter,
 )
 from evidenceforge.generation.identity import IdentityDirectory
+from evidenceforge.generation.world_model import database_services_for_host
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
@@ -93,6 +96,14 @@ def _system_uses_dhcp(system: System) -> bool:
     }
 
 
+def _has_dhcp_event(step: object) -> bool:
+    """Return whether a storyline step contains an explicit DHCP lease event."""
+
+    return any(
+        getattr(event, "type", None) == "dhcp_lease" for event in getattr(step, "events", [])
+    )
+
+
 def _build_emitter_classes() -> dict:
     """Build emitter class map at call time (supports test patching of module-level names)."""
     return {
@@ -101,6 +112,7 @@ def _build_emitter_classes() -> dict:
         "zeek_conn": ZeekEmitter,
         "zeek_dns": ZeekDnsEmitter,
         "zeek_http": ZeekHttpEmitter,
+        "zeek_smtp": ZeekSmtpEmitter,
         "zeek_ssl": ZeekSslEmitter,
         "zeek_files": ZeekFilesEmitter,
         "zeek_dhcp": ZeekDhcpEmitter,
@@ -125,6 +137,7 @@ _ZEEK_FORMAT_NAMES = {
     "zeek_conn",
     "zeek_dns",
     "zeek_http",
+    "zeek_smtp",
     "zeek_ssl",
     "zeek_files",
     "zeek_dhcp",
@@ -162,6 +175,38 @@ DB_SERVICE_MAP = {
 
 class EmitterSetupMixin:
     """Mixin providing emitter initialization and infrastructure setup methods."""
+
+    def _storyline_dhcp_lease_times_by_host(self) -> dict[str, list[datetime]]:
+        """Return explicit storyline DHCP lease times grouped by host."""
+
+        cached = getattr(self, "_storyline_dhcp_times_by_host", None)
+        if cached is not None:
+            return cached
+
+        times_by_host: dict[str, list[datetime]] = {}
+        for step in self.scenario.storyline or []:
+            hostname = getattr(step, "system", "")
+            if not hostname or not _has_dhcp_event(step):
+                continue
+            times_by_host.setdefault(hostname, []).append(self._parse_storyline_time(step.time))
+        for times in times_by_host.values():
+            times.sort()
+        self._storyline_dhcp_times_by_host = times_by_host
+        return times_by_host
+
+    def _storyline_dhcp_lease_time_in_hour(
+        self,
+        hostname: str,
+        current_hour: datetime,
+    ) -> datetime | None:
+        """Return the explicit DHCP storyline time for a host in the current hour."""
+
+        hour_start = current_hour.replace(minute=0, second=0, microsecond=0)
+        hour_end = hour_start + timedelta(hours=1)
+        for event_time in self._storyline_dhcp_lease_times_by_host().get(hostname, []):
+            if hour_start <= event_time < hour_end:
+                return event_time
+        return None
 
     def _init_emitters(self) -> None:
         """Initialize emitters for each requested format.
@@ -358,6 +403,7 @@ class EmitterSetupMixin:
             infra_ips = getattr(self, "_infra_ips", {})
             dhcp_servers = infra_ips.get("dc") or infra_ips.get("dns") or ["10.0.0.1"]
             dhcp_server = dhcp_servers[0] if isinstance(dhcp_servers, list) else dhcp_servers
+            renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
                 system=system,
@@ -366,12 +412,14 @@ class EmitterSetupMixin:
                 server_addr=dhcp_server,
                 lease_time=lease_time,
                 uid=uid,
+                renewal_interval=renewal_interval,
             )
             # Store state for renewals
             self._dhcp_lease_state[system.hostname] = {
                 "mac": mac,
                 "lease_time": lease_time,
                 "last_renewal": ts.timestamp(),
+                "next_renewal": ts.timestamp() + renewal_interval,
                 "server_addr": dhcp_server,
                 "system": system,
             }
@@ -721,6 +769,22 @@ class EmitterSetupMixin:
             # Servers/DCs: no persistent desktop session at boot
             pids["explorer"] = pids["winlogon"]  # Alias for fallback lookups
         pids["dwm"] = _c(pids["csrss_s0"], r"C:\Windows\System32\dwm.exe", "dwm.exe", "SYSTEM")
+
+        roles = {role.lower() for role in (system.roles or [])}
+        service_defaults = getattr(self, "_system_service_defaults", {})
+        services = tuple(service_defaults.get(system.hostname, system.services or ()))
+        db_services = database_services_for_host(
+            services,
+            "windows",
+            has_database_role=bool(roles & {"database", "db_server"}),
+        )
+        if "mssql" in db_services:
+            pids["sqlservr"] = _c(
+                pids["services"],
+                r"C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQL\Binn\sqlservr.exe",
+                "sqlservr.exe -sMSSQLSERVER",
+                r"NT SERVICE\MSSQLSERVER",
+            )
         if boot_base is not None:
             sm.set_current_time(boot_base)
 
@@ -787,9 +851,10 @@ class EmitterSetupMixin:
 
         roles = {role.lower() for role in (system.roles or [])}
         service_defaults = getattr(self, "_system_service_defaults", {})
-        services = {svc.lower() for svc in service_defaults.get(system.hostname, [])}
+        services = tuple(service_defaults.get(system.hostname, system.services or ()))
+        service_tokens = {svc.lower() for svc in services}
         proxy_markers = {"forward_proxy", "squid", "proxy"}
-        if roles & proxy_markers or services & proxy_markers:
+        if roles & proxy_markers or service_tokens & proxy_markers:
             squid_user = "squid" if is_rhel else "proxy"
             pids["squid"] = _c(
                 pids["systemd"],
@@ -799,7 +864,7 @@ class EmitterSetupMixin:
             )
 
         web_markers = {"web_server", "apache", "apache2", "httpd", "nginx"}
-        if roles & web_markers or services & web_markers or "web" in system.hostname.lower():
+        if roles & web_markers or service_tokens & web_markers or "web" in system.hostname.lower():
             if is_rhel:
                 pids["httpd"] = _c(
                     pids["systemd"],
@@ -814,6 +879,26 @@ class EmitterSetupMixin:
                     "/usr/sbin/apache2 -DFOREGROUND",
                     "www-data",
                 )
+
+        db_services = database_services_for_host(
+            services,
+            "linux",
+            has_database_role=bool(roles & {"database", "db_server"}),
+        )
+        if "mysql" in db_services:
+            pids["mysqld"] = _c(
+                pids["systemd"],
+                "/usr/sbin/mysqld",
+                "/usr/sbin/mysqld --daemonize --pid-file=/run/mysqld/mysqld.pid",
+                "mysql",
+            )
+        if "postgresql" in db_services:
+            pids["postgres"] = _c(
+                pids["systemd"],
+                "/usr/bin/postgres",
+                "/usr/bin/postgres -D /var/lib/pgsql/data",
+                "postgres",
+            )
 
         cron_name = "/usr/sbin/crond" if is_rhel else "/usr/sbin/cron"
         cron_cmd = "/usr/sbin/crond -n" if is_rhel else "/usr/sbin/cron -f"

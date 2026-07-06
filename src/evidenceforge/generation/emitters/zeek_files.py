@@ -27,7 +27,6 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -53,19 +52,33 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             event.event_type in self._supported_types
             and event.network is not None
             and (
-                event.file_transfer is not None or bool(event.x509_chain) or event.x509 is not None
+                event.file_transfer is not None
+                or bool(event.file_transfers)
+                or bool(event.x509_chain)
+                or event.x509 is not None
             )
         )
 
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
-        ft = event.file_transfer
+        file_transfers = list(event.file_transfers)
+        if event.file_transfer is not None:
+            file_transfers.insert(0, event.file_transfer)
         sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
-        if ft is not None:
+        previous_file_ts: datetime | None = None
+        for ft in file_transfers:
+            min_start = _related_http_analyzer_timestamp(event)
+            if previous_file_ts is not None:
+                next_min_start = previous_file_ts + timedelta(microseconds=100)
+                min_start = (
+                    max(min_start, next_min_start) if min_start is not None else next_min_start
+                )
             file_ts, file_duration = _bounded_file_transfer_observation(
                 event,
-                min_start=_related_http_analyzer_timestamp(event),
+                min_start=min_start,
+                file_transfer=ft,
             )
+            previous_file_ts = file_ts
             event_data: dict[str, Any] = {
                 "ts": file_ts,
                 "fuid": ft.fuid,
@@ -80,7 +93,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ft.analyzers if ft.analyzers else None,
                 "mime_type": ft.mime_type or None,
                 "duration": file_duration,
-                "local_orig": ft.local_orig,
+                "local_orig": net.local_orig if ft.is_orig else net.local_resp,
                 "is_orig": ft.is_orig,
                 "seen_bytes": ft.seen_bytes,
                 "total_bytes": ft.total_bytes,
@@ -122,7 +135,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "analyzers": ["X509", "MD5", "SHA1", "SHA256"],
                 "mime_type": "application/pkix-cert",
                 "duration": None,
-                "local_orig": _is_private_ip(net.dst_ip),
+                "local_orig": net.local_resp,
                 "is_orig": False,
                 "seen_bytes": size,
                 "total_bytes": size,
@@ -153,11 +166,6 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         for f in optional_fields:
             if f not in event_data:
                 event_data[f] = None
-        tx_hosts = event_data.get("tx_hosts")
-        if isinstance(tx_hosts, list) and tx_hosts:
-            event_data["local_orig"] = any(
-                isinstance(host, str) and _is_private_ip(host) for host in tx_hosts
-            )
         return self._render_zeek_json(event_data)
 
 
@@ -363,10 +371,11 @@ def _file_transfer_analyzer_timestamp(
 def _bounded_file_transfer_observation(
     event: SecurityEvent,
     min_start: datetime | None = None,
+    file_transfer: Any | None = None,
 ) -> tuple[datetime, float]:
     """Keep files.log observation timing inside the owning conn.log interval."""
     net = event.network
-    ft = event.file_transfer
+    ft = file_transfer or event.file_transfer
     if net is None or ft is None:
         return event.timestamp, 0.0
     conn_ts = _SOURCE_TIMING.source_time(
@@ -385,7 +394,8 @@ def _bounded_file_transfer_observation(
     conn_duration = net.duration
     file_duration = ft.duration
     file_ts = _file_transfer_analyzer_timestamp(event, net.zeek_uid, ft.fuid, conn_ts)
-    lower_bound = max(conn_ts, min_start) if min_start is not None else conn_ts
+    hard_lower_bound = max(conn_ts, min_start) if min_start is not None else conn_ts
+    lower_bound = hard_lower_bound
     if ft.observation_not_before is not None:
         lower_bound = max(lower_bound, ft.observation_not_before)
     if file_ts < lower_bound:
@@ -399,7 +409,9 @@ def _bounded_file_transfer_observation(
     bounded_duration = min(max(0.0, file_duration), max_duration)
     latest_start = conn_end - timedelta(seconds=bounded_duration + epsilon)
     if lower_bound > latest_start:
-        lower_bound = latest_start
+        lower_bound = min(max(hard_lower_bound, latest_start), conn_end)
+        bounded_duration = max(0.0, (conn_end - lower_bound).total_seconds() - epsilon)
+        latest_start = lower_bound
     if file_ts > latest_start and lower_bound <= latest_start:
         file_ts = latest_start
     if file_ts < lower_bound:

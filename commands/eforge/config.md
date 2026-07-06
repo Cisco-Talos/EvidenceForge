@@ -22,6 +22,7 @@ eforge info overlay.exists
 eforge info overlay.path
 eforge info paths.activity
 eforge info paths.personas
+eforge info identity_pools
 ```
 
 Do not read files. Do not search. Do not explore. Run the commands above first.
@@ -77,6 +78,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify baseline auth noise | `auth_noise.yaml` | (standalone — stale scheduled-credential accounts and irregular recurrence timing) |
 | Modify endpoint background noise | `endpoint_noise.yaml` | (standalone — scheduled-process timing and DHCP registry emission policy) |
 | Modify host activity distribution | `host_activity_profiles.yaml` | (standalone — host/persona/role rate-family multipliers, firewall deny bursts, and artifact variants) |
+| Modify generated identity pools | `email_background.yaml`, `mail_public_identities.yaml`, `external_actor_profiles.yaml`, `suspicious_benign.yaml`, `command_parameter_pools.yaml` | (standalone fallback/background pools — baseline email domains/local-parts, reserved public mail replacement domains, omitted storyline external IPs, suspicious-benign DNS/connection targets, and command URL/host placeholders). Scenario-authored IPs/domains override these pools. |
 | Modify source observation coverage | `observation_profiles.yaml` | Scenario `observation_profile` selects the named profile; generated `OBSERVATION_MANIFEST.json` lets eval account for expected gaps; keep `complete` as the default training profile |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
 | Add/modify spillage credential families | `activity/secret_families.yaml` | Used by the `spillage` event type — add families (regex/value_template/carriers, incl. OS-aware `process_command_line_windows` carriers), poison markers, vendor fakes, and the host allowlist. Keep the marker INSIDE any high-entropy token in a `value_template`. Overlay-merge by family name. Validate with `eforge validate-config`, which samples every template/`examples` family and re-checks safety (no real-looking key, no non-reserved host) |
@@ -101,6 +103,7 @@ Also read the relevant reference doc for field schemas and conventions:
 | Sysmon filters, EDR pools, CallTrace, ProcessAccess masks, CreateRemoteThread pairs | `references/config-apps-processes.md` (Sysmon sections) |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog, endpoint noise) | `references/config-host-activity.md` |
+| Generated identity pools | `references/config-dns-network.md` and `references/config-host-activity.md` |
 | Timing profiles | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |
 | Evaluation rules | `references/config-evaluation.md` (read-only reference — not user-customizable) |

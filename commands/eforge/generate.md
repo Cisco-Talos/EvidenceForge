@@ -115,13 +115,23 @@ and endpoint flow rendering. `baseline_activity.traffic_affinities` produce
 baseline traffic only; they should not appear as storyline or red-herring leads
 in the generated ground truth.
 
+Generated fallback identities are deterministic but data-driven. Baseline email
+domains/local-parts, public mail replacement domains, omitted storyline external
+IP pools, suspicious-benign DNS/connection targets, and command URL/host
+placeholders come from overlay-aware files under `activity/`. Inspect them with
+`eforge info identity_pools` and validate overlays with `eforge validate-config`.
+The generator still never calls an LLM.
+
 Generation writes log files to a `data/` subdirectory alongside the scenario file:
 
 ```
 scenarios/<scenario-name>/
   scenario.yaml          ← input
   ENVIRONMENT.md         ← created by /eforge scenario
-  artifacts/             ← optional authored collateral, not eval input
+  ARTIFACTS_MANIFEST.json ← generated artifact manifest, when artifacts exist
+  artifacts/             ← generated sidecar artifacts and optional authored collateral
+    email/
+      <artifact-id>.eml
   GROUND_TRUTH.md        ← generated human-readable answer key (baseline-only runs
                            still include the standard "no malicious events" report)
   GROUND_TRUTH.json      ← generated canonical machine-readable ground-truth document;
@@ -141,19 +151,21 @@ scenarios/<scenario-name>/
     zeek/
       conn.json
       dns.json
+      smtp.json
+      files.json
     ...
 ```
 
-If generated output (`data/`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, or `OBSERVATION_MANIFEST.json`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
+If generated output (`data/`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, or `artifacts/`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
 
 ### 3. Post-Generation
 
 After successful generation:
 - List the generated files and their sizes
 - Check that expected formats were produced
-- Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
+- Note that `GROUND_TRUTH.json`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, optional `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. `GROUND_TRUTH.json` is the canonical machine-readable report; `GROUND_TRUTH.md` is rendered from it. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
-- Optional `artifacts/` contents are exercise collateral created by `/eforge scenario`, not generated log output
+- Email artifact metadata is written to top-level `ARTIFACTS_MANIFEST.json` under `email.messages` when `environment.email.artifacts` enables modeled message metadata; `.eml` files are written under `artifacts/email/` according to artifact mode, and plaintext SMTP MIME parts can also appear in Zeek `files.json`. The manifest is production-facing, records blind-safe `artifact_export_status` / `artifact_export_reason` values for materialized and metadata-only rows, and omits storyline IDs, exercise verdict labels, and local filesystem paths; use `GROUND_TRUTH.json` for scenario correlation.
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, auth/session-bundle validation, Kerberos/DC-bundle TGT/TGS evidence before domain logons, Windows-audit-bundle events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
 
@@ -201,7 +213,7 @@ After reviewing output, you can suggest:
 | Format | Description | Generated For |
 |--------|-------------|---------------|
 | windows | Windows Event Logs — default target XML, SOF-ELK target Snare syslog. Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
-| zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via `type: network` sensors |
+| zeek | Zeek logs (NDJSON) — conn/dns/http/smtp/ssl/files/ntp per sensor | Network connections via `type: network` sensors |
 | ecar | Simulated EDR telemetry using the eCAR record format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
 | syslog | Linux syslog — default target RFC5424 flat per-host, SOF-ELK target RFC3164/BSD per-host/year | Linux systems |
 | bash_history | Bash command history | Linux systems |

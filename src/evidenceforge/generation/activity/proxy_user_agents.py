@@ -261,6 +261,66 @@ def normalize_proxy_user_agent_for_os(
     return user_agent
 
 
+def _browser_family_for_process(process_image: str) -> str:
+    """Return the browser family implied by a process image, if any."""
+    exe = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    if exe in {"chrome.exe", "chrome", "google-chrome", "chromium", "chromium-browser"}:
+        return "chrome"
+    if exe in {"msedge.exe", "microsoft-edge", "edge"}:
+        return "edge"
+    if exe in {"firefox.exe", "firefox"}:
+        return "firefox"
+    if exe in {"opera.exe", "opera"}:
+        return "opera"
+    return ""
+
+
+def _user_agent_matches_browser_family(user_agent: str, family: str) -> bool:
+    """Return whether a User-Agent belongs to the requested browser family."""
+    ua = user_agent.lower()
+    if family == "chrome":
+        return "chrome/" in ua and "edg/" not in ua and "opr/" not in ua
+    if family == "edge":
+        return "edg/" in ua or "edge/" in ua
+    if family == "firefox":
+        return "firefox/" in ua
+    if family == "opera":
+        return "opr/" in ua or "opera/" in ua
+    return False
+
+
+def browser_user_agent_for_process(
+    rng: random.Random,
+    source_system: "System | None",
+    process_image: str,
+    *,
+    hostname: str | None = None,
+    domain_tags: list[str] | None = None,
+) -> str:
+    """Pick a User-Agent that agrees with a known browser process image."""
+    family = _browser_family_for_process(process_image)
+    if not family:
+        return ""
+
+    data = load_proxy_user_agents()
+    os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
+    pool_key = "linux" if os_category == "linux" else "windows"
+    candidates = [
+        user_agent
+        for user_agent in _pool(data, "workstation", pool_key)
+        if _user_agent_matches_browser_family(user_agent, family)
+    ]
+    if not candidates:
+        return ""
+    return normalize_proxy_user_agent_for_os(
+        rng,
+        source_system,
+        rng.choice(candidates),
+        hostname=hostname,
+        domain_tags=domain_tags,
+    )
+
+
 def pick_proxy_domain_user_agent(
     rng: random.Random,
     source_system: "System | None",

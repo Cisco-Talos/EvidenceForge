@@ -48,6 +48,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
+from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -1205,13 +1206,13 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
-    def test_short_flow_stays_inside_canonical_connection_interval(
+    def test_short_flow_uses_endpoint_completion_latency(
         self,
         emitter,
         monkeypatch,
         ts,
     ):
-        """FLOW rows should not be source-timed after the canonical transport close."""
+        """Very short FLOW rows should not share Zeek's packet-level timestamp."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         process = ProcessContext(
@@ -1248,17 +1249,18 @@ class TestChronologicalOutput:
 
         emitter._render_connection(event)
 
-        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=50)
-        assert emitted[0]["pid"] == -1
-        assert "actorID" not in emitted[0]
+        assert ts + timedelta(milliseconds=18) <= emitted[0]["timestamp"]
+        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=424)
+        assert emitted[0]["pid"] == 1234
+        assert emitted[0]["actorID"] == "process-1"
 
-    def test_incomplete_flow_without_duration_stays_at_canonical_attempt_time(
+    def test_incomplete_flow_without_duration_uses_attempt_result_latency(
         self,
         emitter,
         monkeypatch,
         ts,
     ):
-        """FLOW rows without a duration should not drift after a zero-duration Zeek row."""
+        """Failed no-duration FLOW rows should not share Zeek's exact packet timestamp."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         event = SecurityEvent(
@@ -1285,7 +1287,7 @@ class TestChronologicalOutput:
 
         emitter._render_connection(event)
 
-        assert emitted[0]["timestamp"] == ts
+        assert ts < emitted[0]["timestamp"] <= ts + timedelta(milliseconds=664)
 
     def test_paired_endpoint_flows_do_not_share_exact_millisecond(
         self,
@@ -1331,7 +1333,10 @@ class TestChronologicalOutput:
         rendered_ms = [json.loads(emitter._render_event(row))["timestamp_ms"] for row in emitted]
         assert len(rendered_ms) == 2
         assert len(set(rendered_ms)) == 2
-        assert all(ts - timedelta(milliseconds=540) <= row["timestamp"] <= ts for row in emitted)
+        assert all(
+            ts - timedelta(milliseconds=540) <= row["timestamp"] <= ts + timedelta(milliseconds=664)
+            for row in emitted
+        )
 
     def test_paired_endpoint_success_flows_without_close_bound_get_texture(
         self,
@@ -1761,6 +1766,52 @@ class TestChronologicalOutput:
 
         assert "principal" not in emitted[0]
 
+    def test_service_flow_default_policy_keeps_known_principal_visible(self, emitter, ts):
+        """Default service FLOW policy should not create high-volume principal flips."""
+        cfg = ecar_flow_identity_config()
+        assert cfg["service_process_probability"] >= 0.98
+        assert cfg["root_process_probability"] >= 0.96
+        assert cfg["inbound_listener_probability"] >= 0.92
+
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="dc01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc01.example.org",
+            ),
+            process=ProcessContext(
+                pid=444,
+                parent_pid=4,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe -k netsvcs",
+                username="SYSTEM",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49153,
+                dst_ip="10.0.0.20",
+                dst_port=88,
+                protocol="tcp",
+                initiating_pid=444,
+            ),
+        )
+
+        assert (
+            emitter._flow_principal_for_process(
+                event,
+                event.src_host,
+                event.process,
+                "OUTBOUND",
+            )
+            == "SYSTEM"
+        )
+
     def test_actor_linked_user_flow_preserves_principal(self, emitter, monkeypatch, ts):
         """Actor-linked user FLOW rows should not drop a known user principal."""
         monkeypatch.setattr(
@@ -1853,6 +1904,9 @@ class TestChronologicalOutput:
             (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
             (445, "tcp", {"system": 4, "lsass": 700}, 4),
             (8080, "tcp", {"squid": 3128, "apache2": 24118}, 3128),
+            (1433, "tcp", {"sqlservr": 14330}, 14330),
+            (3306, "tcp", {"mysqld": 33060}, 33060),
+            (5432, "tcp", {"postgres": 54320}, 54320),
         ],
     )
     def test_inbound_infrastructure_flow_uses_destination_service_pid(
@@ -1865,7 +1919,7 @@ class TestChronologicalOutput:
         system_pids,
         expected_pid,
     ):
-        """DC DNS/auth/SMB listener FLOW rows should use destination-local owners."""
+        """Infrastructure listener FLOW rows should use destination-local owners."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         emitter._system_pids = {"DC-01": system_pids}
@@ -2043,6 +2097,7 @@ class TestChronologicalOutput:
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == pid
         assert emitted[0]["principal"] == "www-data"
+        assert emitted[0]["actorID"] == state.get_process_object_id("WEB-EXT-01", pid)
 
     def test_rejected_inbound_flow_does_not_claim_listener_pid(self, emitter, monkeypatch, ts):
         """Rejected inbound attempts should not be attributed to a server process."""
@@ -2253,6 +2308,7 @@ class TestChronologicalOutput:
         parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
+        assert 18 <= child_ms - parent_ms <= 150
 
     def test_close_moves_parent_termination_after_visible_child_termination(self, tmp_path, ts):
         """Visible eCAR parents should not terminate before foreground children."""
@@ -2503,6 +2559,7 @@ class TestChronologicalOutput:
         parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
+        assert 18 <= child_ms - parent_ms <= 150
 
     def test_parent_order_skips_self_parented_pid_without_hanging(self):
         """Raw eCAR self-parented PID records should not loop forever."""
@@ -2745,26 +2802,33 @@ class TestChronologicalOutput:
         assert process_open["pid"] == source_create["pid"]
         assert process_open["properties"]["target_pid"] == target_create["pid"]
 
-    def test_linux_stable_tid_is_not_universally_pid(self, ts):
-        """Linux eCAR TIDs should include source-native thread texture."""
+    def test_linux_process_lifecycle_tid_uses_main_thread(self, ts):
+        """Linux PROCESS/CREATE and PROCESS/TERMINATE rows should share main-thread TID."""
+        pid = 3200
+
+        create_tid = EcarEmitter._stable_tid("linux-01", pid, ts, "process_create", "linux")
+        terminate_tid = EcarEmitter._stable_tid(
+            "linux-01",
+            pid,
+            ts + timedelta(seconds=5),
+            "process_terminate",
+            "linux",
+        )
+
+        assert create_tid == pid
+        assert terminate_tid == pid
+
+    def test_linux_dependent_tids_keep_source_thread_texture(self, ts):
+        """Linux non-lifecycle eCAR rows may still carry source-native thread texture."""
         tids = {
             EcarEmitter._stable_tid("linux-01", 3200, ts + timedelta(seconds=i), salt, "linux")
-            for i, salt in enumerate(
-                [
-                    "process_create",
-                    "process_terminate",
-                    "flow_inbound",
-                    "flow_outbound",
-                    "file",
-                    "module",
-                ]
-            )
+            for i, salt in enumerate(["flow_inbound", "flow_outbound", "file", "module"])
         }
 
-        assert all(tid >= 3200 for tid in tids)
-        assert any(tid != 3200 for tid in tids)
+        assert all(tid > 3200 for tid in tids)
+        assert len(tids) > 1
 
-    def test_flow_principal_visibility_is_stable_for_same_process(self, ts):
+    def test_flow_principal_visibility_is_stable_for_same_process_and_direction(self, ts):
         """FLOW principal attribution should be a process-level source decision."""
         host = HostContext(
             hostname="PROXY-01",
@@ -2813,6 +2877,43 @@ class TestChronologicalOutput:
             emitter._flow_principal_for_process(second, host, process, "OUTBOUND")
         )
 
+    def test_flow_principal_visibility_is_stable_across_directions(self, ts):
+        """FLOW principal attribution should not flip for the same local process."""
+        host = HostContext(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        process = ProcessContext(
+            pid=18750,
+            parent_pid=1,
+            image="/usr/sbin/squid",
+            command_line="/usr/sbin/squid --foreground -YC",
+            username="proxy",
+            start_time=ts,
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=host,
+            dst_host=host,
+            process=process,
+            network=NetworkContext(
+                src_ip="10.10.3.20",
+                src_port=40001,
+                dst_ip="10.10.3.20",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+        )
+        emitter = object.__new__(EcarEmitter)
+
+        assert emitter._flow_principal_for_process(event, host, process, "OUTBOUND") == (
+            emitter._flow_principal_for_process(event, host, process, "INBOUND")
+        )
+
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""
         lines = [
@@ -2844,6 +2945,467 @@ class TestChronologicalOutput:
 
         rows = [json.loads(line) for line in normalized]
         assert [row["timestamp_ms"] for row in rows] == [1000, 1000]
+
+    def test_user_session_logout_shifted_after_login(self):
+        """Short network sessions must not render USER_SESSION LOGOUT before LOGIN."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1710768759642,
+                    "object": "USER_SESSION",
+                    "action": "LOGOUT",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "principal": "evelyn.brooks",
+                    "properties": {
+                        "logon_id": "0xa445274",
+                        "logon_type": "3",
+                        "src_ip": "10.10.1.34",
+                        "src_port": "60409",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1710768760347,
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "objectID": "flow-object",
+                    "hostname": "WS-01",
+                    "properties": {
+                        "src_ip": "10.10.1.34",
+                        "src_port": "60409",
+                        "dst_ip": "10.10.1.33",
+                        "dst_port": "445",
+                        "direction": "INBOUND",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1710768760419,
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "principal": "evelyn.brooks",
+                    "properties": {
+                        "outcome": "success",
+                        "logon_id": "0xa445274",
+                        "logon_type": "3",
+                        "src_ip": "10.10.1.34",
+                        "src_port": "60409",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_user_session_lifecycle_order(lines)
+        ]
+        login = next(
+            row
+            for row in normalized
+            if row["object"] == "USER_SESSION" and row["action"] == "LOGIN"
+        )
+        logout = next(
+            row
+            for row in normalized
+            if row["object"] == "USER_SESSION" and row["action"] == "LOGOUT"
+        )
+        flow = next(row for row in normalized if row["object"] == "FLOW")
+
+        assert flow["timestamp_ms"] == 1710768760347
+        assert login["timestamp_ms"] == 1710768760419
+        assert logout["timestamp_ms"] > login["timestamp_ms"]
+
+    def test_user_session_logout_shifted_after_same_session_dependents(self):
+        """USER_SESSION LOGOUT must trail visible same-logon endpoint activity."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "USER_SESSION",
+                    "action": "LOGOUT",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "properties": {"logon_id": "0xabc", "session_id": "2"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2600,
+                    "object": "PROCESS",
+                    "action": "TERMINATE",
+                    "objectID": "process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {"logon_id": "0xabc", "session_id": "2"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2800,
+                    "object": "FILE",
+                    "action": "CREATE",
+                    "objectID": "file-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {"logon_id": "0xabc", "file_path": r"C:\Users\alice\a.txt"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 3200,
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "objectID": "flow-object",
+                    "hostname": "WS-01",
+                    "properties": {
+                        "logon_id": "0xabc",
+                        "src_ip": "10.10.1.20",
+                        "dst_ip": "10.10.2.20",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 5000,
+                    "object": "PROCESS",
+                    "action": "TERMINATE",
+                    "objectID": "system-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4,
+                    "properties": {"logon_id": "0x3e7"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line)
+            for line in EcarEmitter._normalize_user_session_logout_after_dependents(lines)
+        ]
+        logout = next(row for row in normalized if row["object"] == "USER_SESSION")
+        latest_dependent_ms = max(
+            row["timestamp_ms"]
+            for row in normalized
+            if row["object"] in {"PROCESS", "FILE", "FLOW"}
+            and row["properties"].get("logon_id") == "0xabc"
+        )
+
+        assert logout["timestamp_ms"] > latest_dependent_ms
+        assert logout["timestamp_ms"] < 5000
+
+    def test_remote_thread_shifted_after_matching_process_open(self):
+        """THREAD/REMOTE_CREATE must not precede its PROCESS/OPEN prerequisite."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "THREAD",
+                    "action": "REMOTE_CREATE",
+                    "objectID": "thread-object",
+                    "actorID": "source-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {
+                        "target_pid": "500",
+                        "target_process_uuid": "target-process-object",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2600,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target-process-object",
+                    "actorID": "source-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {
+                        "target_pid": "500",
+                        "target_process_uuid": "target-process-object",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1800,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "other-target-process-object",
+                    "actorID": "source-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {
+                        "target_pid": "501",
+                        "target_process_uuid": "other-target-process-object",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line)
+            for line in EcarEmitter._normalize_remote_thread_after_process_open(lines)
+        ]
+        remote_thread = next(row for row in normalized if row["object"] == "THREAD")
+        matching_open = next(
+            row
+            for row in normalized
+            if row["object"] == "PROCESS" and row["objectID"] == "target-process-object"
+        )
+        other_open = next(
+            row
+            for row in normalized
+            if row["object"] == "PROCESS" and row["objectID"] == "other-target-process-object"
+        )
+
+        assert remote_thread["timestamp_ms"] > matching_open["timestamp_ms"]
+        assert other_open["timestamp_ms"] == 1800
+
+    def test_remote_thread_uses_pid_fallback_for_process_open_order(self):
+        """PID-only eCAR rows should still preserve access-before-thread ordering."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 4000,
+                    "object": "THREAD",
+                    "action": "REMOTE_CREATE",
+                    "objectID": "thread-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {"target_pid": "500"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 4300,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {"target_pid": "500"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line)
+            for line in EcarEmitter._normalize_remote_thread_after_process_open(lines)
+        ]
+        remote_thread = next(row for row in normalized if row["object"] == "THREAD")
+        process_open = next(row for row in normalized if row["object"] == "PROCESS")
+
+        assert remote_thread["timestamp_ms"] > process_open["timestamp_ms"]
+
+    def test_remote_thread_preserves_existing_prior_process_open_order(self):
+        """A valid prior PROCESS/OPEN should not be shifted by a later matching row."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1900,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target-process-object",
+                    "actorID": "source-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {
+                        "target_pid": "500",
+                        "target_process_uuid": "target-process-object",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "THREAD",
+                    "action": "REMOTE_CREATE",
+                    "objectID": "thread-object",
+                    "actorID": "source-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {
+                        "target_pid": "500",
+                        "target_process_uuid": "target-process-object",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2600,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target-process-object",
+                    "actorID": "source-process-object",
+                    "hostname": "WS-01",
+                    "pid": 4300,
+                    "properties": {
+                        "target_pid": "500",
+                        "target_process_uuid": "target-process-object",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line)
+            for line in EcarEmitter._normalize_remote_thread_after_process_open(lines)
+        ]
+        remote_thread = next(row for row in normalized if row["object"] == "THREAD")
+
+        assert remote_thread["timestamp_ms"] == 2000
+
+    def test_remote_user_session_login_shifted_after_late_inbound_flow(self):
+        """Remote eCAR LOGIN rows should not precede same-tuple inbound FLOW rows."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1710764221308,
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-object",
+                    "hostname": "MAIL-EDGE-01",
+                    "principal": "marcus.chen",
+                    "properties": {
+                        "outcome": "success",
+                        "session_type": "ssh",
+                        "src_ip": "10.10.1.34",
+                        "src_port": "61712",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1710764222532,
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "objectID": "flow-object",
+                    "hostname": "MAIL-EDGE-01",
+                    "properties": {
+                        "src_ip": "10.10.1.34",
+                        "src_port": "61712",
+                        "dst_ip": "10.10.2.25",
+                        "dst_port": "22",
+                        "protocol": "tcp",
+                        "direction": "INBOUND",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line)
+            for line in EcarEmitter._normalize_remote_session_transport_order(lines)
+        ]
+        login = next(row for row in normalized if row["object"] == "USER_SESSION")
+        flow = next(row for row in normalized if row["object"] == "FLOW")
+
+        assert login["timestamp_ms"] > flow["timestamp_ms"]
+
+    def test_linux_login_shell_create_shifted_after_session_login(self):
+        """Interactive Linux shell PROCESS/CREATE rows should not predate session LOGIN."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1710765140391,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "shell-object",
+                    "hostname": "MAIL-EDGE-01",
+                    "principal": "aisha.johnson",
+                    "pid": 601049,
+                    "tid": 601049,
+                    "properties": {
+                        "command_line": "-bash",
+                        "image_path": "/bin/bash",
+                        "parent_image_path": "/usr/lib/systemd/systemd",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1710765142724,
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-object",
+                    "hostname": "MAIL-EDGE-01",
+                    "principal": "aisha.johnson",
+                    "properties": {
+                        "outcome": "success",
+                        "session_type": "ssh",
+                        "src_ip": "10.10.2.20",
+                        "src_port": "64417",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line)
+            for line in EcarEmitter._normalize_linux_login_shell_session_order(lines)
+        ]
+        shell = next(row for row in normalized if row["object"] == "PROCESS")
+        login = next(row for row in normalized if row["object"] == "USER_SESSION")
+
+        assert shell["timestamp_ms"] > login["timestamp_ms"]
+
+    def test_failed_user_session_login_does_not_anchor_logout_order(self):
+        """Failed USER_SESSION LOGIN attempts should not become session start anchors."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "USER_SESSION",
+                    "action": "LOGOUT",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "properties": {"logon_id": "0x999"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 3000,
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-object",
+                    "hostname": "WS-01",
+                    "properties": {"logon_id": "0x999", "outcome": "failure"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_user_session_lifecycle_order(lines)
+        ]
+
+        logout = next(row for row in normalized if row["action"] == "LOGOUT")
+        assert logout["timestamp_ms"] == 2000
 
 
 class TestTidEmission:

@@ -22,10 +22,13 @@
 
 """Tests for firewall deny baseline generation and FirewallRule model."""
 
+import random
+
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.models.scenario import FirewallRule, NetworkSensor
+from evidenceforge.generation.engine.baseline import BaselineMixin
+from evidenceforge.models.scenario import FirewallRule, NetworkSensor, System
 
 
 class TestFirewallRule:
@@ -108,3 +111,75 @@ class TestNetworkSensorFirewallFields:
                 monitoring_segments=["internal"],
                 deny_ratio=100.0,
             )
+
+
+class TestFirewallDenyProbeTexture:
+    def test_internal_probe_sources_are_small_and_stable(self):
+        systems = [
+            System(hostname="DC-01", ip="10.0.0.10", os="Windows Server 2022", type="server"),
+            System(hostname="MAIL-01", ip="10.0.0.20", os="Windows Server 2022", type="server"),
+            System(hostname="PROXY-01", ip="10.0.0.30", os="Ubuntu 22.04", type="server"),
+            System(hostname="WS-01", ip="10.0.1.11", os="Windows 11", type="workstation"),
+            System(hostname="WS-02", ip="10.0.1.12", os="Windows 11", type="workstation"),
+            System(hostname="WS-03", ip="10.0.1.13", os="Windows 11", type="workstation"),
+            System(hostname="WS-04", ip="10.0.1.14", os="Windows 11", type="workstation"),
+            System(hostname="WS-05", ip="10.0.1.15", os="Windows 11", type="workstation"),
+            System(hostname="WS-06", ip="10.0.1.16", os="Windows 11", type="workstation"),
+        ]
+
+        selected = BaselineMixin._firewall_internal_probe_sources("fw01", systems)
+        selected_again = BaselineMixin._firewall_internal_probe_sources("fw01", systems)
+
+        assert selected == selected_again
+        assert 1 <= len(selected) <= 2
+        assert all(system.type == "workstation" for system in selected)
+
+    def test_internal_probe_sources_prefer_explicit_scanner_roles(self):
+        systems = [
+            System(hostname="DC-01", ip="10.0.0.10", os="Windows Server 2022", type="server"),
+            System(
+                hostname="SCAN-01",
+                ip="10.0.0.50",
+                os="Ubuntu 22.04",
+                type="server",
+                roles=["vulnerability_scanner"],
+            ),
+            System(hostname="WS-01", ip="10.0.1.11", os="Windows 11", type="workstation"),
+            System(hostname="WS-02", ip="10.0.1.12", os="Windows 11", type="workstation"),
+        ]
+
+        selected = BaselineMixin._firewall_internal_probe_sources("fw01", systems)
+
+        assert [system.hostname for system in selected] == ["SCAN-01"]
+
+    def test_internal_blocked_port_profile_is_source_sticky(self):
+        first_rng = random.Random(7)
+        second_rng = random.Random(7)
+
+        first = [
+            BaselineMixin._firewall_blocked_port_for_internal_source("10.0.1.11", first_rng)
+            for _ in range(12)
+        ]
+        second = [
+            BaselineMixin._firewall_blocked_port_for_internal_source("10.0.1.11", second_rng)
+            for _ in range(12)
+        ]
+
+        assert first == second
+        assert len(set(first)) <= 4
+        assert set(first) <= {
+            22,
+            23,
+            80,
+            135,
+            445,
+            1433,
+            2323,
+            3306,
+            3389,
+            5432,
+            5900,
+            5985,
+            6379,
+            8080,
+        }

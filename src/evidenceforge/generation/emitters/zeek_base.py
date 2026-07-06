@@ -55,6 +55,9 @@ from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
+_BULK_TCP_FLOW_MIN_IP_BYTES = 10_000_000
+_BULK_TCP_FLOW_MISSED_CAP_BYTES = 65_536
+
 
 def zeek_format_observed(event: Any, format_name: str) -> bool:
     """Return whether a Zeek sibling format survived source observation.
@@ -343,6 +346,24 @@ def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
     return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
 
 
+def _uses_bounded_bulk_tcp_accounting(render_data: dict[str, Any]) -> bool:
+    """Return whether TCP sensor texture should be capped to small packet deltas."""
+    if str(render_data.get("proto") or "").lower() != "tcp":
+        return False
+    missed = render_data.get("missed_bytes") or 0
+    if not isinstance(missed, int) or isinstance(missed, bool) or missed < 0:
+        return False
+    if missed > _BULK_TCP_FLOW_MISSED_CAP_BYTES:
+        return False
+
+    total = 0
+    for field in ("orig_ip_bytes", "resp_ip_bytes", "orig_bytes", "resp_bytes"):
+        value = render_data.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            total += value
+    return total >= _BULK_TCP_FLOW_MIN_IP_BYTES
+
+
 def _extend_locked_sensor_timing_field(
     render_data: dict[str, Any],
     field: str,
@@ -399,6 +420,25 @@ def _texture_locked_packet_accounting_observation(
     )
 
 
+def _texture_bounded_bulk_tcp_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+) -> None:
+    """Keep bulk TCP bytes coherent while adding source-native tap texture."""
+    if not render_data.get("_lock_duration"):
+        _jitter_duration_observation(
+            render_data,
+            hostname,
+            uid,
+            0.002,
+            max_delta_seconds=2.0,
+        )
+    _texture_lossless_tcp_packetization(render_data, hostname, uid)
+    _enforce_http_body_invariants(render_data)
+    _enforce_ip_byte_invariants(render_data)
+
+
 def _apply_sensor_observation_variance(
     render_data: dict[str, Any],
     hostname: str,
@@ -432,6 +472,9 @@ def _apply_sensor_observation_variance(
                 render_data["missed_bytes"] = missed + 16 + (seed % 496)
                 added_missed_bytes = True
                 lossy_observation = True
+    if lossy_observation and _uses_bounded_bulk_tcp_accounting(render_data):
+        _texture_bounded_bulk_tcp_observation(render_data, hostname, original_uid)
+        return
     if not lossy_observation:
         if not render_data.get("_lock_duration"):
             _extend_lossless_duration_observation(
@@ -840,38 +883,46 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["id.resp_h"] = swaps["dst_ip"]
                     if "dst_port" in swaps:
                         render_data["id.resp_p"] = swaps["dst_port"]
-                    if "local_orig" in swaps:
+                    if "local_orig" in swaps and "local_orig" in render_data:
                         render_data["local_orig"] = swaps["local_orig"]
-                    if "local_resp" in swaps:
+                    if "local_resp" in swaps and "local_resp" in render_data:
                         render_data["local_resp"] = swaps["local_resp"]
-                    if "src_ip" in swaps:
+                    if "src_ip" in swaps and (
+                        "tx_hosts" in render_data or "rx_hosts" in render_data
+                    ):
                         original_src_ip = event_data.get("id.orig_h") or event_data.get(
                             "_id.orig_h"
                         )
-                        render_data["tx_hosts"] = _swap_host_list_value(
-                            render_data.get("tx_hosts"),
-                            original_src_ip,
-                            swaps["src_ip"],
-                        )
-                        render_data["rx_hosts"] = _swap_host_list_value(
-                            render_data.get("rx_hosts"),
-                            original_src_ip,
-                            swaps["src_ip"],
-                        )
-                    if "dst_ip" in swaps:
+                        if "tx_hosts" in render_data:
+                            render_data["tx_hosts"] = _swap_host_list_value(
+                                render_data.get("tx_hosts"),
+                                original_src_ip,
+                                swaps["src_ip"],
+                            )
+                        if "rx_hosts" in render_data:
+                            render_data["rx_hosts"] = _swap_host_list_value(
+                                render_data.get("rx_hosts"),
+                                original_src_ip,
+                                swaps["src_ip"],
+                            )
+                    if "dst_ip" in swaps and (
+                        "tx_hosts" in render_data or "rx_hosts" in render_data
+                    ):
                         original_dst_ip = event_data.get("id.resp_h") or event_data.get(
                             "_id.resp_h"
                         )
-                        render_data["tx_hosts"] = _swap_host_list_value(
-                            render_data.get("tx_hosts"),
-                            original_dst_ip,
-                            swaps["dst_ip"],
-                        )
-                        render_data["rx_hosts"] = _swap_host_list_value(
-                            render_data.get("rx_hosts"),
-                            original_dst_ip,
-                            swaps["dst_ip"],
-                        )
+                        if "tx_hosts" in render_data:
+                            render_data["tx_hosts"] = _swap_host_list_value(
+                                render_data.get("tx_hosts"),
+                                original_dst_ip,
+                                swaps["dst_ip"],
+                            )
+                        if "rx_hosts" in render_data:
+                            render_data["rx_hosts"] = _swap_host_list_value(
+                                render_data.get("rx_hosts"),
+                                original_dst_ip,
+                                swaps["dst_ip"],
+                            )
                 # Each sensor has independent clock skew/drift plus stable
                 # capture timing. Apply it to every sensor in a multi-sensor
                 # observation so cross-sensor deltas are sensor/path-shaped
@@ -916,7 +967,7 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data[fuid_field] = self._derive_sensor_file_id(
                             original_fuid, hostname
                         )
-                for fuid_list_field in ("cert_chain_fuids", "resp_fuids"):
+                for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
                     fuid_values = render_data.get(fuid_list_field)
                     if isinstance(fuid_values, list):
                         render_data[fuid_list_field] = [

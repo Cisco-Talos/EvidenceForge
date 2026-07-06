@@ -211,7 +211,7 @@ domains:
         nav_targets: ["/render", "/r/week", "/r/eventedit"]
         subresources:
           - {host: "www.gstatic.com", path: "/calendar/{hex8}/js/month-view.js", type: "application/javascript"}
-          - {path: "/calendar/v3/calendars/primary/events?timeMin=2026-01-01T00:00:00Z", type: "application/json"}
+          - {path: "/calendar/v3/calendars/primary/events?timeMin={calendar_time_min}", type: "application/json"}
 
   www.google.com:
     cdn_domains: ["www.gstatic.com", "encrypted-tbn0.gstatic.com", "fonts.gstatic.com"]

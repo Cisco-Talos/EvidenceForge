@@ -150,12 +150,30 @@ class TestProxyParserRegistration:
         assert record.fields["user_agent"] == "Mozilla/5.0 (Windows NT 10.0)"
         assert record.fields["referrer"] == "https://intranet.example.com/"
 
+    def test_proxy_access_parser_reads_optional_proxy_metadata(self):
+        parser = get_parser("proxy_access")
+        record = parser._parse_line(
+            "10.0.0.1 - jsmith [15/Jul/2024:10:00:00 +0000] "
+            '"GET https://example.com/download?q=1 HTTP/1.1" 200 1024 '
+            '"-" "Mozilla/5.0 (Windows NT 10.0)" '
+            '"cs_bytes=2048 sc_bytes=1024 proxy_action=ssl-inspect ssl_bump=bump"',
+            1,
+        )
+
+        assert record.parse_errors == []
+        assert record.fields["host"] == "example.com"
+        assert record.fields["cs_bytes"] == 2048
+        assert record.fields["sc_bytes"] == 1024
+        assert record.fields["proxy_action"] == "ssl-inspect"
+        assert record.fields["ssl_bump_action"] == "bump"
+
     def test_proxy_access_combined_columns_pass_format_validation(self):
         parser = get_parser("proxy_access")
         record = parser._parse_line(
             "10.0.0.1 - jsmith [15/Jul/2024:10:00:00 +0000] "
-            '"GET http://example.com/download?q=1 HTTP/1.1" 200 1024 '
-            '"https://intranet.example.com/" "Mozilla/5.0 (Windows NT 10.0)"',
+            '"GET https://example.com/download?q=1 HTTP/1.1" 200 1024 '
+            '"https://intranet.example.com/" "Mozilla/5.0 (Windows NT 10.0)" '
+            '"proxy_action=ssl-inspect ssl_bump=bump"',
             1,
         )
         normalized = _normalize_for_validation(

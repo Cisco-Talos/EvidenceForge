@@ -77,6 +77,18 @@ class TestInstallSkills:
             f"Expected at least {len(EXPECTED_REFERENCES_MIN)} references, got {len(all_refs)}"
         )
 
+    def test_installed_config_skill_mentions_identity_pools(self, tmp_path):
+        """Installed config skill and references document generated identity pools."""
+        install_skills(tmp_path)
+
+        config_skill = (tmp_path / "eforge" / "config.md").read_text()
+        config_ref = (tmp_path / "eforge" / "references" / "config-dns-network.md").read_text()
+        validation_ref = (tmp_path / "eforge" / "references" / "config-validation.md").read_text()
+
+        assert "identity_pools" in config_skill
+        assert "external_actor_profiles.yaml" in config_ref
+        assert "command_parameter_pools.yaml" in validation_ref
+
     def test_no_persona_files_installed(self, tmp_path):
         """Persona YAMLs are NOT installed (skills use eforge info instead)."""
         install_skills(tmp_path)
@@ -201,6 +213,18 @@ class TestInstallCodexSkills:
             ref = tmp_path / "eforge-scenario" / ref_path
             assert ref.is_file(), f"Missing reference: {ref_path}"
             assert len(ref.read_text()) > 100
+
+    def test_codex_config_skill_mentions_identity_pools(self, tmp_path):
+        """Installed Codex config skill includes identity-pool references."""
+        install_codex_skills(tmp_path)
+
+        config_skill = (tmp_path / "eforge-config" / "SKILL.md").read_text()
+        config_ref = (
+            tmp_path / "eforge-config" / "references" / "config-dns-network.md"
+        ).read_text()
+
+        assert "identity_pools" in config_skill
+        assert "mail_public_identities.yaml" in config_ref
 
     def test_codex_references_are_limited_per_skill(self, tmp_path):
         """Codex skills only receive the references they need."""

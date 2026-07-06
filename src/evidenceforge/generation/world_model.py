@@ -22,6 +22,7 @@ from evidenceforge.generation.activity.network_params import public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
     import random
@@ -95,12 +96,93 @@ _DNS_SERVER_SERVICES = {
 }
 
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
+_LINUX_SSH_ADMIN_PERSONAS = {"sysadmin"}
+_LINUX_SSH_ADMIN_GROUPS = {
+    "domain-admins",
+    "infrastructure",
+    "it-admins",
+    "linux-admins",
+    "server-admins",
+    "sysadmins",
+}
+_LINUX_SSH_ROLE_PERSONAS: dict[str, set[str]] = {
+    "app_server": {"developer"},
+    "database": {"developer"},
+    "forward_proxy": {"security_analyst"},
+    "log_server": {"security_analyst"},
+    "web_server": {"developer"},
+}
 
 _DB_PORTS = {
     "mssql": 1433,
     "mysql": 3306,
     "postgresql": 5432,
 }
+
+_DB_SERVICE_ALIASES = {
+    "mssql": "mssql",
+    "sql": "mssql",
+    "sql-server": "mssql",
+    "sql server": "mssql",
+    "sqlserver": "mssql",
+    "tds": "mssql",
+    "mysql": "mysql",
+    "mariadb": "mysql",
+    "maria": "mysql",
+    "postgres": "postgresql",
+    "postgresql": "postgresql",
+    "pgsql": "postgresql",
+}
+
+_DB_SERVICE_MATCH: dict[str, set[str]] = {
+    "mssql": {"mssql", "sqlserver", "sql-server", "sql server"},
+    "postgresql": {"postgres", "postgresql", "pgsql"},
+    "mysql": {"mysql", "maria", "mariadb"},
+}
+
+_OS_DB_DEFAULT = {"linux": "postgresql", "windows": "mssql"}
+
+
+def normalize_database_service(service: str | None) -> str | None:
+    """Return the canonical database engine name for a service label."""
+    if not service:
+        return None
+    normalized = service.lower().replace("_", "-")
+    return _DB_SERVICE_ALIASES.get(normalized)
+
+
+def database_services_for_host(
+    services: tuple[str, ...] | list[str] | None,
+    os_category: str,
+    *,
+    has_database_role: bool = False,
+) -> set[str]:
+    """Return canonical DB engines declared or inferred for a host."""
+    explicit = {
+        normalized
+        for service in services or ()
+        if (normalized := normalize_database_service(service)) is not None
+    }
+    if explicit:
+        return explicit
+    if has_database_role:
+        inferred = _OS_DB_DEFAULT.get(os_category)
+        return {inferred} if inferred else set()
+    return set()
+
+
+def host_services_support_database_service(
+    services: tuple[str, ...] | list[str] | None,
+    os_category: str,
+    service: str | None,
+) -> bool:
+    """Return whether a host service inventory supports the requested DB engine."""
+    requested = normalize_database_service(service)
+    if requested is None:
+        return True
+    declared = database_services_for_host(services, os_category, has_database_role=True)
+    return requested in declared
+
 
 _SHELL_EXES = {"bash", "sh", "zsh"}
 
@@ -323,23 +405,15 @@ class WorldModel:
         endpoints: list[DatabaseEndpoint] = []
         for system in self.systems_by_role.get("database", []):
             host = self.hosts[system.hostname]
-            service_names = [service.lower() for service in host.services]
-            db_service: str | None = None
-            if any("postgres" in service for service in service_names):
-                db_service = "postgresql"
-            elif any("mysql" in service or "maria" in service for service in service_names):
-                db_service = "mysql"
-            elif any("mssql" in service or "sqlserver" in service for service in service_names):
-                db_service = "mssql"
-            else:
-                # No explicit DB service — infer from OS to avoid assigning
-                # MSSQL to Linux hosts (or PostgreSQL to Windows).
-                if host.os_category == "windows":
-                    db_service = "mssql"
-                elif host.os_category == "linux":
-                    db_service = "postgresql"
-                else:
-                    db_service = "mssql"  # safe fallback
+            services = database_services_for_host(
+                host.services,
+                host.os_category,
+                has_database_role=True,
+            )
+            db_service = next(
+                (service for service in ("mssql", "mysql", "postgresql") if service in services),
+                "mssql",
+            )
             endpoints.append(
                 DatabaseEndpoint(
                     system=system,
@@ -472,12 +546,43 @@ class WorldModel:
 
         return roster
 
-    # DB service matching for service-aware destination filtering
-    _DB_SERVICE_MATCH: dict[str, set[str]] = {
-        "mssql": {"mssql", "sqlserver"},
-        "postgresql": {"postgres", "postgresql"},
-        "mysql": {"mysql", "maria", "mariadb"},
-    }
+    def effective_user_groups(self, user: User) -> set[str]:
+        """Return direct and environment-group memberships for a user."""
+        groups = {group.lower() for group in user.groups}
+        for group in self.scenario.environment.groups or []:
+            if user.username in group.members:
+                groups.add(group.name.lower())
+        return groups
+
+    def can_user_ssh_admin(self, user: User, target_system: System) -> bool:
+        """Return whether a scenario user plausibly opens baseline SSH admin sessions."""
+        host = self.hosts[target_system.hostname]
+        if not host.supports_ssh or not host.is_server:
+            return False
+
+        persona = (user.persona or "").lower()
+        if persona in _LINUX_SSH_ADMIN_PERSONAS:
+            return True
+        if self.effective_user_groups(user) & _LINUX_SSH_ADMIN_GROUPS:
+            return True
+        for role in host.canonical_roles:
+            if persona in _LINUX_SSH_ROLE_PERSONAS.get(role, set()):
+                return True
+        return False
+
+    def get_ssh_admin_users(self, target_system: System) -> list[User]:
+        """Return scenario users eligible for ordinary baseline SSH to a Linux server."""
+        enabled = [user for user in self.scenario.environment.users if user.enabled]
+        roster: list[User] = []
+        seen: set[str] = set()
+        for user in enabled:
+            if user.username in seen:
+                continue
+            if not self.can_user_ssh_admin(user, target_system):
+                continue
+            seen.add(user.username)
+            roster.append(user)
+        return roster
 
     def resolve_destination(
         self,
@@ -546,28 +651,21 @@ class WorldModel:
         # When a host has no explicit services, use the OS-inferred DB type
         # (Linux→postgresql, Windows→mssql) to avoid impossible protocol targets.
         if role == "database" and service and candidates:
-            match_terms = self._DB_SERVICE_MATCH.get(service, set())
-            if match_terms:
-                _OS_DB_DEFAULT = {"linux": "postgresql", "windows": "mssql"}
-                filtered = []
-                for s in candidates:
-                    host = self.hosts.get(s.hostname)
-                    if not host:
-                        continue
-                    if host.services:
-                        # Check explicit services
-                        if any(
-                            term in svc.lower() for svc in host.services for term in match_terms
-                        ):
-                            filtered.append(s)
-                    else:
-                        # No services — use OS-inferred DB type
-                        inferred = _OS_DB_DEFAULT.get(host.os_category, "mssql")
-                        if inferred == service:
-                            filtered.append(s)
-                # If no service-compatible host exists, skip rather than
-                # routing to an incompatible DB engine.
-                candidates = filtered if filtered else []
+            filtered = [
+                system
+                for system in candidates
+                if (
+                    (host := self.hosts.get(system.hostname)) is not None
+                    and host_services_support_database_service(
+                        host.services,
+                        host.os_category,
+                        service,
+                    )
+                )
+            ]
+            # If no service-compatible host exists, skip rather than routing to
+            # an incompatible DB engine.
+            candidates = filtered
         if candidates:
             target = rng.choice(candidates)
             return target.ip, self.fqdn_for_system(target)
@@ -919,6 +1017,12 @@ class WorldPlanner:
             exe for exe in compatible_exes if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES
         ]
         if not compatible_exes:
+            return -1
+
+        lock_time = getattr(self.activity_generator, "_last_workstation_lock_time", {}).get(
+            (system.hostname, user.username, session.logon_id)
+        )
+        if lock_time is not None and ensure_utc(lock_time) <= ensure_utc(time):
             return -1
 
         destination_tags: set[str] = set()

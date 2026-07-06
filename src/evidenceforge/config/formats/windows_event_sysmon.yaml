@@ -130,6 +130,9 @@ variants:
       - name: ParentCommandLine
         type: string
         required: false
+      - name: ParentUser
+        type: string
+        required: false
 
   # Sysmon EventID 5: Process Terminated
   - name: sysmon_process_terminate
@@ -530,6 +533,7 @@ output:
         <Data Name="ParentProcessId">{{ ParentProcessId | default(0) }}</Data>
         <Data Name="ParentImage">{{ ParentImage | default('-') }}</Data>
         <Data Name="ParentCommandLine">{{ ParentCommandLine | default('-') }}</Data>
+        <Data Name="ParentUser">{{ ParentUser | default('-') }}</Data>
         {% elif EventID == 5 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>

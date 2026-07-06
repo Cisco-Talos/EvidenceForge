@@ -188,6 +188,16 @@ class TestStaticNat:
         assert result is not None
         assert result.mapped_dst_ip == "172.16.0.5"
 
+    def test_static_nat_inbound_real_dest_keeps_public_vip_context(self, engine):
+        """External traffic generated to the real host should still carry ASA VIP context."""
+        result = engine.compute_nat("203.0.113.99", "172.16.0.5", 54321, 443)
+        assert result is not None
+        assert result.nat_type == "static"
+        assert result.mapped_dst_ip == "172.16.0.5"
+        assert result.mapped_dst_port == 443
+        assert result.pre_nat_dst_ip == "203.0.113.5"
+        assert result.pre_nat_dst_port == 443
+
 
 class TestNoNat:
     """Tests for scenarios where NAT should not apply."""

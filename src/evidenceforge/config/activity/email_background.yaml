@@ -1,0 +1,30 @@
+# Background email identity pools used by environment.email baseline traffic.
+external_domains:
+  - domain: vendorpost.net
+    weight: 3
+  - domain: partnerrelay.io
+    weight: 3
+  - domain: customermailhub.com
+    weight: 2
+  - domain: industrybriefs.net
+    weight: 2
+
+inbound_local_parts:
+  - local_part: billing
+    weight: 2
+  - local_part: alerts
+    weight: 2
+  - local_part: notifications
+    weight: 2
+  - local_part: support
+    weight: 2
+
+outbound_local_parts:
+  - local_part: contact
+    weight: 2
+  - local_part: orders
+    weight: 2
+  - local_part: support
+    weight: 2
+  - local_part: team
+    weight: 2

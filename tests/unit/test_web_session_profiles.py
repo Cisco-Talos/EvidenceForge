@@ -49,6 +49,32 @@ def test_health_check_profile_is_server_scoped():
     assert "monitoring" in profile["source_role_any"]
 
 
+def test_health_check_user_agent_is_os_scoped_and_not_kubernetes_generic():
+    data = load_web_session_profiles()
+    profile = data["visitor_classes"]["health_check"]
+    pools = data["user_agent_pools"]
+
+    assert profile["user_agent_pool_by_os"] == {
+        "windows": "health_check_windows",
+        "linux": "health_check_linux",
+    }
+    checked_pool_names = [
+        profile["user_agent_pool"],
+        *profile["user_agent_pool_by_os"].values(),
+    ]
+    checked_user_agents = [
+        user_agent for pool_name in checked_pool_names for user_agent in pools[pool_name]
+    ]
+    assert checked_user_agents
+    assert all("kube-probe" not in user_agent for user_agent in checked_user_agents)
+
+    windows_ua = pick_web_user_agent(random.Random(0), profile, source_os="windows")
+    linux_ua = pick_web_user_agent(random.Random(0), profile, source_os="linux")
+
+    assert windows_ua in pools["health_check_windows"]
+    assert linux_ua in pools["health_check_linux"]
+
+
 def test_internal_human_browser_profile_is_workstation_scoped():
     profile = load_web_session_profiles()["visitor_classes"]["human_browser"]
 

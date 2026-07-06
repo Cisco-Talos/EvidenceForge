@@ -1,0 +1,90 @@
+# Suspicious-looking but legitimate background DNS and outbound destinations.
+dns_hosts:
+  - hostname: a1b2c3d4e5.cloudfront.net
+    weight: 1
+  - hostname: x7k9m2.akamaized.net
+    weight: 1
+  - hostname: cdn-b4f8a2.azureedge.net
+    weight: 1
+  - hostname: f3d7e1a9b2c4.fastly.net
+    weight: 1
+  - hostname: tr-8a2f4b.doubleclick.net
+    weight: 1
+  - hostname: dns.google
+    weight: 1
+  - hostname: cloudflare-dns.com
+    weight: 1
+  - hostname: mozilla.cloudflare-dns.com
+    weight: 1
+  - hostname: doh.opendns.com
+    weight: 1
+  - hostname: corp-updates.io
+    weight: 1
+  - hostname: developer-portal.dev
+    weight: 1
+  - hostname: status-monitor.app
+    weight: 1
+  - hostname: internal-metrics.cloud
+    weight: 1
+  - hostname: session-f8a2b4c6d8e0-tracking.analytics.customeriq.net
+    weight: 1
+  - hostname: pixel-7f3a9b2e1d4c.marketing-cdn.com
+    weight: 1
+  - hostname: telemetry-x9k2m4.windows.com
+    weight: 1
+
+unusual_connections:
+  - dst_ip: 13.236.8.128
+    dst_port: 443
+    service: ssl
+    hostname: ec2.ap-southeast-2.amazonaws.com
+    desc: AWS ap-southeast-2 (dev testing)
+    weight: 1
+  - dst_ip: 20.205.243.166
+    dst_port: 443
+    service: ssl
+    hostname: copilot.github.com
+    desc: GitHub Copilot endpoint
+    weight: 1
+  - dst_ip: 104.16.0.35
+    dst_port: 443
+    service: ssl
+    hostname: api.cloudflare.com
+    desc: Cloudflare API
+    weight: 1
+  - dst_ip: 151.101.0.63
+    dst_port: 443
+    service: ssl
+    hostname: pypi.org
+    desc: PyPI package download
+    weight: 1
+  - dst_ip: 185.125.190.39
+    dst_port: 443
+    service: ssl
+    hostname: snapcraft.io
+    desc: Ubuntu snap store
+    weight: 1
+  - dst_ip: 34.104.35.123
+    dst_port: 443
+    service: ssl
+    hostname: gcr.io
+    desc: Google Container Registry
+    weight: 1
+  - dst_ip: 52.216.84.0
+    dst_port: 443
+    service: ssl
+    hostname: s3.amazonaws.com
+    desc: AWS S3 backup sync
+    weight: 1
+  - dst_ip: 13.107.42.14
+    dst_port: 443
+    service: ssl
+    hostname: onedrive.live.com
+    desc: OneDrive sync
+    weight: 1
+  - dst_ip: 142.250.80.46
+    dst_port: 443
+    service: ssl
+    hostname: drive.google.com
+    desc: Google Drive upload
+    weight: 1

@@ -103,7 +103,12 @@ def test_emit_dhcp_leases_keeps_storyline_hosts_in_warmup_state(tmp_path):
     assert kwargs["time"] < engine.start_time
     assert kwargs["time"] < engine.end_time
     assert "msg_types" not in kwargs
+    assert kwargs["renewal_interval"] > 0
     assert engine._dhcp_lease_state["TEST-01"]["last_renewal"] == kwargs["time"].timestamp()
+    assert (
+        engine._dhcp_lease_state["TEST-01"]["next_renewal"]
+        == kwargs["time"].timestamp() + kwargs["renewal_interval"]
+    )
 
 
 def test_emit_dhcp_leases_uses_storyline_mac_as_host_identity(tmp_path):
@@ -121,7 +126,12 @@ def test_emit_dhcp_leases_uses_storyline_mac_as_host_identity(tmp_path):
 
     kwargs = engine.activity_generator.generate_dhcp_lease.call_args.kwargs
     assert kwargs["mac"] == "dc:a6:32:44:91:7b"
+    assert kwargs["renewal_interval"] > 0
     assert engine._dhcp_lease_state["TEST-01"]["mac"] == "dc:a6:32:44:91:7b"
+    assert (
+        engine._dhcp_lease_state["TEST-01"]["next_renewal"]
+        == kwargs["time"].timestamp() + kwargs["renewal_interval"]
+    )
 
 
 def test_emit_dhcp_leases_handles_null_storyline(tmp_path):
@@ -141,7 +151,30 @@ def test_emit_dhcp_leases_handles_null_storyline(tmp_path):
     engine.activity_generator.generate_dhcp_lease.assert_called_once()
     kwargs = engine.activity_generator.generate_dhcp_lease.call_args.kwargs
     assert kwargs["system"].hostname == "TEST-01"
+    assert kwargs["renewal_interval"] > 0
     assert engine._dhcp_lease_state["TEST-01"]["mac"] == kwargs["mac"]
+    assert (
+        engine._dhcp_lease_state["TEST-01"]["next_renewal"]
+        == kwargs["time"].timestamp() + kwargs["renewal_interval"]
+    )
+
+
+def test_storyline_dhcp_lease_time_in_hour_finds_authored_event(tmp_path):
+    """Baseline DHCP scheduling should be able to defer to an authored DHCP event."""
+    scenario = _scenario_with_storyline_dhcp()
+    engine = GenerationEngine(scenario, tmp_path)
+    engine.start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+    event_time = engine._storyline_dhcp_lease_time_in_hour("TEST-01", engine.start_time)
+
+    assert event_time == datetime(2024, 1, 15, 10, 0, 30, tzinfo=UTC)
+    assert (
+        engine._storyline_dhcp_lease_time_in_hour(
+            "OTHER-01",
+            engine.start_time,
+        )
+        is None
+    )
 
 
 def test_emit_dhcp_leases_skips_static_infrastructure_servers(tmp_path):

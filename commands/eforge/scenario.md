@@ -31,7 +31,11 @@ EvidenceForge uses a two-phase approach:
 
 The engine does NOT embellish or fill in details. Whatever you put in the scenario YAML is exactly what drives generation. This means you need to generate realistic, specific technical details: actual command lines, realistic file paths, proper IP addresses, correct process names. Vague or placeholder content produces vague logs.
 
-Your job is to understand what the user wants, ask smart questions to fill gaps, and produce a valid, technically detailed scenario YAML file — plus an ENVIRONMENT.md companion document.
+Your job is to understand what the user wants, ask smart questions to fill gaps,
+and produce either reusable organization context, a complete scenario YAML file,
+or both, depending on the user's request. Complete scenarios should include a
+valid, technically detailed scenario definition plus an `ENVIRONMENT.md`
+companion document.
 
 Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
@@ -47,8 +51,15 @@ under that one directory:
 scenarios/<slug>/
   scenario.yaml
   ENVIRONMENT.md
-  artifacts/                 # Optional authored collateral only, such as phishing .eml files
+  includes/                  # Optional authored YAML fragments for large scenarios
+    storyline.yaml
+    red_herrings.yaml
+  ARTIFACTS_MANIFEST.json    # Created by generation when artifacts exist
+  artifacts/                 # Generated sidecar artifacts and optional authored collateral
+    email/
+      <artifact-id>.eml
   GROUND_TRUTH.md            # Created by generation
+  GROUND_TRUTH.json          # Created by generation
   OBSERVATION_MANIFEST.json  # Created by generation
   OUTPUT_TARGET.txt          # Created by generation
   data/                      # Created by generation for every output target
@@ -58,6 +69,58 @@ Do not write a single YAML file directly under `scenarios/`, repo-root environme
 repo-root artifact directories, generic output directories, or target-named dataset directories. The output target
 (`default` or `sof-elk`) changes source-native file rendering inside the bundle only; it must not
 change the scenario root or create target-named directories.
+
+## Organization vs Scenario Creation
+
+Users may ask for an organization, environment, or org. Treat that as reusable
+context: the network, systems, users, personas, baseline behavior, observation
+profile, and any standard behaviors that should be shared across multiple
+scenarios. An organization is not a generated dataset by itself.
+
+Users may ask for a scenario in an existing organization. Treat that as the
+storyline, red herrings, time window, output formats, and any local copies of
+organization include files that must differ for this one exercise.
+
+Preferred large-scenario layout:
+
+```text
+scenarios/
+  organizations/<org>/
+    ENVIRONMENT.md
+    includes/
+      environment.yaml
+      personas.yaml
+      baseline.yaml
+      observation.yaml
+
+  <scenario>/
+    scenario.yaml
+    includes/
+      storyline.yaml
+      red_herrings.yaml
+      # optional local override copies of org include files
+```
+
+`ENVIRONMENT.md` is the standard human-authored documentation file for reusable
+organization context. Do not create a separate `ORG.md` or `SCENARIO.md`
+convention.
+
+Scenario `includes` paths are resolved relative to the YAML file that declares
+them. A scenario can include organization files with paths such as
+`../organizations/<org>/includes/environment.yaml`. If a scenario needs to
+change a shared organization section, copy the relevant organization include
+into the scenario's local `includes/` directory and include the local copy
+instead of the shared one. Do not include both versions of the same section:
+duplicate fields are validation errors, not overrides.
+
+Use a monolithic `scenario.yaml` when the scenario is small, one-off, and
+unlikely to share an environment with future exercises. Use `includes/` when the
+YAML is large enough that sections are hard to review, when multiple scenarios
+will share one organization, or when the user explicitly asks to create an org
+first and scenarios later. Keep includes section-oriented: shared organization
+files should own whole top-level sections such as `environment`, `personas`,
+`baseline_activity`, or `observation_profile`; scenario-local includes should
+own `storyline` and `red_herrings`.
 
 ## Interview Flow
 
@@ -81,7 +144,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call. Every user must have a `primary_system` assigned — ensure there are enough workstations for all users (users can share systems, but each user needs a designated primary).
 
-**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with CONNECT tunnels and full URLs).
+**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with CONNECT tunnels and full URLs). Zeek includes `zeek_smtp` when a network sensor can see modeled SMTP traffic.
 
 **System roles** — Assign `roles` to systems in the environment to drive both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives). Roles like `web_server`, `database`, `mail_server`, `file_server`, `domain_controller` each have specific traffic profiles. For example, a `web_server` generates outbound database queries AND receives inbound HTTPS from external clients and internal users. A `database` generates outbound replication AND receives inbound SQL queries from web/app servers.
 
@@ -106,6 +169,19 @@ config registry for reusable domain libraries. For web affinities, prefer
 route-owned profiles where each path declares its valid methods, statuses, body
 sizes, and content type instead of independent random method/status pools.
 
+**Email evidence** — For phishing, business-email compromise, prompt-injection
+via email, or realistic SMTP background, add explicit `environment.email`.
+Do not rely on `roles: [mail_server]` alone. Define `accepted_domains`,
+`mail_servers`, `default_mailbox_servers`, optional group mailbox overrides,
+outbound/inbound routes, distribution groups, TLS settings, and artifact mode.
+Use typed `email_message` storyline events for specific messages. Any rich body
+text or AI-generated corpus must be authored now in the scenario or companion
+corpus files; `eforge generate` is deterministic and must not call an LLM.
+Client submission is plaintext SMTP on 587 in V1; server relay is port 25; server
+STARTTLS visibility is controlled by `allow_inbound_starttls` and
+`attempt_outbound_starttls`. Use `email_read` for opaque TLS mailbox access
+sessions; IMAPS uses 993 and OWA-style access uses 443.
+
 **Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how many top-level visitor actions web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). Human page views automatically fan out into required page assets (JS, CSS, images, fonts, same-origin API calls) without consuming additional `web` budget. If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
 
 **Observation profile** — Default to `observation_profile: complete`. This preserves training-friendly perfect source coverage and correlation. Only choose another named profile such as `enterprise_standard` or `messy_collection` when the user explicitly wants source-native gaps, ingestion delays, or blind-review realism; do not invent per-source rates in scenario YAML.
@@ -117,6 +193,11 @@ sizes, and content type instead of independent random method/status pools.
 ### Persona Selection
 
 EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Custom personas in the project overlay (`.eforge/config/personas/`) are also available. Only define personas inline if you need to customize behavior for a single scenario. Run `eforge info personas` to see the full list of available persona names (including any overlay additions), or `eforge info --fields` to see all available queries.
+
+For external IPs, public domains, and email addresses that are part of the
+storyline or environment, author them explicitly in the scenario. Reusable
+fallback/background pools live in config overlays (`eforge info identity_pools`),
+but scenario-authored IPs/domains and `environment.network_identities` always win.
 
 | Persona | Work Hours | Risk Profile | Typical Role |
 |---------|-----------|--------------|-------------|
@@ -276,6 +357,29 @@ environment:
       # nat_rules, threat_detection_rate.
       # See /eforge:references:scenario-reference for the full firewall schema.
 
+  email:                          # Optional; required for email_message events
+    accepted_domains: [example.com]
+    mail_servers:
+      - name: primary
+        hostname: mail.example.com
+        system: MAIL-01           # Must reference an environment.systems hostname
+        platform: generic_smtp    # generic_smtp | exchange
+        allow_inbound_starttls: false
+        attempt_outbound_starttls: false
+    default_mailbox_servers: [primary]
+    mailbox_overrides: []         # Optional group -> server overrides
+    outbound_routes:
+      - name: default
+        servers: [primary]
+    inbound_route: [primary]
+    isp_relays: []                # Optional ISP relay hostnames for outbound mail
+    distribution_groups: []       # One-level only; no nested distribution groups
+    artifacts:
+      mode: storyline             # none | storyline | selected | all
+      selected_ids: []
+    background_messages_per_user_per_day: 0.0
+    corpus: email_corpus.yaml     # Optional scenario-relative content corpus
+
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer               # Only needed for custom personas; pre-built ones resolve by name
     description: "Software developer"
@@ -319,6 +423,19 @@ storyline:                        # The attack events to bury in the data
         process_name: "C:\\Windows\\System32\\whoami.exe"
         command_line: "whoami"
         technique: "T1033 - System Owner/User Discovery"
+      # Email example:
+      # - type: email_message
+      #   to: [victim@example.com]
+      #   subject: "Quarterly forecast review"
+      #   body: |
+      #     Please review the attached notes.
+      #   # Or use corpus_id: phishing-note with body/attachments in email_corpus.yaml
+      #   verdict: phishing       # clean | spam | phishing | malware | suspicious
+      #   mail_action: deliver    # deliver | reject | quarantine | strip_attachment
+      # - type: email_read
+      #   mailbox: victim@example.com
+      #   protocol: imaps         # imaps | owa; defaults from mailbox server platform
+      #   message_ids: []         # Documentation/correlation only; reads are TLS opaque
 
 red_herrings:                     # Optional: suspicious-but-benign events
   - id: rh-afterhours
@@ -575,13 +692,14 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 
 ## Output Workflow
 
-After the interview, generate both files:
+After the interview, generate the files that match the user's intent:
 
-1. **Scenario root** — Create/use `scenarios/<slug>/` unless the user explicitly requested a different bundle root
-2. **Scenario YAML** — Write to `scenarios/<slug>/scenario.yaml`
-3. **ENVIRONMENT.md** — Write to `scenarios/<slug>/ENVIRONMENT.md`
-4. **Optional authored artifacts** — If you create exercise collateral such as a phishing email message (`.eml`), write it under `scenarios/<slug>/artifacts/`. Do not put standard files such as `ENVIRONMENT.md`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, or `OUTPUT_TARGET.txt` in `artifacts/`.
-5. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
+1. **Organization root** — If creating reusable organization context, create/use `scenarios/organizations/<org>/`, write `ENVIRONMENT.md`, and put shared YAML fragments under `scenarios/organizations/<org>/includes/`.
+2. **Scenario root** — If creating a concrete scenario, create/use `scenarios/<slug>/` unless the user explicitly requested a different bundle root.
+3. **Scenario YAML** — Write to `scenarios/<slug>/scenario.yaml`; for large or organization-backed scenarios, keep storyline/red-herring sections in `scenarios/<slug>/includes/`.
+4. **ENVIRONMENT.md** — For standalone scenarios, write to `scenarios/<slug>/ENVIRONMENT.md`. For organization-backed scenarios, reuse the organization's `ENVIRONMENT.md` unless the user requests scenario-specific student context.
+5. **Optional authored artifacts** — If you create exercise collateral such as a phishing email message (`.eml`), write it under `scenarios/<slug>/artifacts/`. Do not put standard generated files such as `ARTIFACTS_MANIFEST.json`, `ENVIRONMENT.md`, `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, or `OUTPUT_TARGET.txt` in `artifacts/`.
+6. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
    - **Attack realism**: Does the attack chain make sense? Would a real attacker do this in this order? Are there missing steps (e.g., no reconnaissance before lateral movement, no persistence after initial access)?
    - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
    - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts, scheduled tasks, services, staging archives) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
@@ -630,4 +748,4 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 
 If the user wants to immediately generate logs, suggest using `/eforge generate` or running `eforge generate <scenario-file>`.
 
-When generation completes, the scenario root will contain `GROUND_TRUTH.md` with the full attack timeline, IOCs, and answer key, plus `data/` for logs. Let the user know these exist and where to find them.
+When generation completes, the scenario root will contain generated sidecars such as `GROUND_TRUTH.md`, `GROUND_TRUTH.json`, `OBSERVATION_MANIFEST.json`, optional `ARTIFACTS_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` for logs. Let the user know these exist and where to find them.

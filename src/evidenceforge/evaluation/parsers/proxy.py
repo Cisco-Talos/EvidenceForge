@@ -30,8 +30,9 @@ from urllib.parse import urlsplit
 
 from . import LogParser, ParsedRecord, register_parser
 
-# Apache/Nginx combined format:
+# Apache/Nginx combined format plus optional proxy key-value metadata:
 # client_ip - username [timestamp] "method url protocol" status bytes "referer" "user_agent"
+# client_ip - username [timestamp] "method url protocol" status bytes "referer" "user_agent" "proxy_action=ssl-inspect ssl_bump=bump"
 _COMBINED_PROXY_PATTERN = re.compile(
     r"^(\S+)\s+"  # client_ip
     r"\S+\s+"  # ident (always -)
@@ -42,6 +43,7 @@ _COMBINED_PROXY_PATTERN = re.compile(
     r"(\S+)\s+"  # bytes_sent (or -)
     r'"([^"]*)"\s+'  # "referer"
     r'"([^"]*)"'  # "user_agent"
+    r'(?:\s+"([^"]*)")?\s*$'  # optional proxy metadata
 )
 
 
@@ -57,6 +59,25 @@ def _proxy_host_from_request_target(method: str, request_target: str) -> str | N
     except ValueError:
         return None
     return parsed.hostname
+
+
+def _parse_proxy_metadata(metadata: str) -> dict[str, str]:
+    """Return supported proxy metadata fields from a key-value tail column."""
+    fields: dict[str, str] = {}
+    for token in metadata.split():
+        key, separator, value = token.partition("=")
+        if not separator or not value:
+            continue
+        if key == "proxy_action":
+            fields["proxy_action"] = value
+        elif key == "ssl_bump":
+            fields["ssl_bump_action"] = value
+        elif key in {"cs_bytes", "sc_bytes"}:
+            try:
+                fields[key] = int(value)
+            except ValueError:
+                fields[key] = value
+    return fields
 
 
 @register_parser
@@ -100,6 +121,7 @@ class ProxyAccessParser(LogParser):
                 bytes_sent,
                 referrer,
                 user_agent,
+                proxy_metadata,
             ) = match.groups()
 
             try:
@@ -126,6 +148,8 @@ class ProxyAccessParser(LogParser):
                 fields["referrer"] = referrer
             if user_agent != "-":
                 fields["user_agent"] = user_agent
+            if proxy_metadata and proxy_metadata != "-":
+                fields.update(_parse_proxy_metadata(proxy_metadata))
             host = _proxy_host_from_request_target(method, request_target)
             if host:
                 fields["host"] = host

@@ -220,6 +220,47 @@ def test_transfer_variant_keeps_static_resource_bytes_stable_across_clients():
     )
 
 
+def test_transfer_variant_varies_html_document_bytes_across_clients():
+    base = response_size_for_status(200, "portal.example.com", "/")
+    client_a = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="portal.example.com",
+        uri="/",
+        content_type="text/html",
+        variant_key="10.10.1.10:chrome",
+    )
+    client_a_repeat = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="portal.example.com",
+        uri="/",
+        content_type="text/html",
+        variant_key="10.10.1.10:chrome",
+    )
+    client_b = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="portal.example.com",
+        uri="/",
+        content_type="text/html",
+        variant_key="10.10.1.11:firefox",
+    )
+    index_b = apply_transfer_size_variance(
+        response_size_for_status(200, "portal.example.com", "/index.html"),
+        status_code=200,
+        host="portal.example.com",
+        uri="/index.html",
+        content_type="text/html",
+        variant_key="10.10.1.11:firefox",
+    )
+
+    assert client_a == client_a_repeat
+    assert client_a != base
+    assert client_a != client_b
+    assert index_b != response_size_for_status(200, "portal.example.com", "/index.html")
+
+
 def test_transfer_variant_does_not_change_static_download_object_bytes():
     base = response_size_for_status(200, "dbeaver.io", "/files/dbeaver-ce-latest-x86_64-setup.exe")
     client_a = apply_transfer_size_variance(

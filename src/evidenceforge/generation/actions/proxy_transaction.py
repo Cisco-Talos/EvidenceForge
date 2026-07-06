@@ -292,6 +292,7 @@ class ProxyTransactionActionBundle:
             proxy_sys=proxy_sys,
             http=request.http,
             explicit_mode=True,
+            time=request.time,
         )
         tunnel_key = (
             request.src_ip,
@@ -461,7 +462,7 @@ class ProxyTransactionActionBundle:
             file_transfer=client_file_transfer,
             pe=client_pe,
             proxy=proxy_context,
-            hostname=executor._proxy_fqdn(proxy_sys),
+            hostname="",
             proxy_bypass=True,
             preserve_http_outcome=True,
             process_image=client_process_image,
@@ -486,9 +487,10 @@ class ProxyTransactionActionBundle:
             executor._emit_dns_lookup(
                 proxy_sys.ip,
                 dst_ip,
-                egress_time,
+                egress_time - timedelta(seconds=2),
                 hostname=proxy_context.host,
                 force_address=True,
+                bypass_cache=True,
             )
 
         egress_conn_state = request.conn_state

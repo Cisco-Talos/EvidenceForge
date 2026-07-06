@@ -130,53 +130,57 @@ class TestFilesFormatAccuracy:
             assert data["is_orig"] is False
             assert data["timedout"] is False
 
-    def test_local_orig_follows_transmitting_host(self):
-        """Zeek files.local_orig describes the file transmitter, not the connection originator."""
+    def test_local_orig_follows_parent_connection_view(self):
+        """Zeek files.local_orig follows the canonical connection's locality view."""
         fmt = load_format("zeek_files")
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
-            emitter.emit_event(
-                {
-                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
-                    "fuid": "FExternalCert123",
-                    "tx_hosts": ["91.189.91.39"],
-                    "rx_hosts": ["10.10.3.20"],
-                    "conn_uids": ["CExternalCert123"],
-                    "source": "SSL",
-                    "depth": 0,
-                    "analyzers": ["X509"],
-                    "mime_type": "application/pkix-cert",
-                    "duration": None,
-                    "local_orig": True,
-                    "is_orig": False,
-                    "seen_bytes": 1024,
-                    "total_bytes": 1024,
-                    "missing_bytes": 0,
-                    "overflow_bytes": 0,
-                    "timedout": False,
-                }
+            emitter.emit(
+                SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    event_type="connection",
+                    network=NetworkContext(
+                        zeek_uid="CInboundSmtpFile1",
+                        src_ip="198.51.100.77",
+                        src_port=25,
+                        dst_ip="10.55.10.31",
+                        dst_port=25,
+                        protocol="tcp",
+                        local_orig=False,
+                        local_resp=True,
+                    ),
+                    file_transfer=FileTransferContext(
+                        fuid="FInboundBodyPart1",
+                        source="SMTP",
+                        is_orig=True,
+                        mime_type="text/plain",
+                        seen_bytes=1024,
+                    ),
+                )
             )
-            emitter.emit_event(
-                {
-                    "ts": datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
-                    "fuid": "FLocalServerCert",
-                    "tx_hosts": ["10.10.3.10"],
-                    "rx_hosts": ["113.160.39.29"],
-                    "conn_uids": ["CLocalServerCert"],
-                    "source": "SSL",
-                    "depth": 0,
-                    "analyzers": ["X509"],
-                    "mime_type": "application/pkix-cert",
-                    "duration": None,
-                    "local_orig": False,
-                    "is_orig": False,
-                    "seen_bytes": 1024,
-                    "total_bytes": 1024,
-                    "missing_bytes": 0,
-                    "overflow_bytes": 0,
-                    "timedout": False,
-                }
+            emitter.emit(
+                SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+                    event_type="connection",
+                    network=NetworkContext(
+                        zeek_uid="COutboundSmtpFile1",
+                        src_ip="10.55.20.25",
+                        src_port=25,
+                        dst_ip="203.0.113.88",
+                        dst_port=25,
+                        protocol="tcp",
+                        local_orig=True,
+                        local_resp=False,
+                    ),
+                    file_transfer=FileTransferContext(
+                        fuid="FOutboundBodyPart1",
+                        source="SMTP",
+                        is_orig=True,
+                        mime_type="text/plain",
+                        seen_bytes=1024,
+                    ),
+                )
             )
             emitter.close()
 

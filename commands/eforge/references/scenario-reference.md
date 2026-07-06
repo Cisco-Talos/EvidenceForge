@@ -28,6 +28,90 @@ red_herrings: [...]          # Optional: suspicious-but-benign events for analys
 output: ...
 ```
 
+## Includes
+
+Large scenarios can be split across multiple YAML files with a top-level
+`includes` key. Include paths are resolved relative to the YAML file that
+declares them, not relative to the current shell directory.
+
+```yaml
+includes:
+  - common/environment.yaml
+  - common/personas.yaml
+
+version: "1.0"
+name: credential-access-lab
+description: Scenario-specific attack narrative
+time_window: ...
+baseline_activity: ...
+storyline: ...
+output: ...
+```
+
+Included files contain ordinary scenario YAML fragments, usually with the same
+top-level section wrapper they would have in `scenario.yaml`:
+
+```yaml
+# common/environment.yaml
+environment:
+  description: Shared branch-office environment
+  users: [...]
+  systems: [...]
+```
+
+Includes are expanded before schema validation. Mappings are merged recursively
+only when fields are disjoint, so this is composition rather than override
+inheritance. If `scenario.yaml` and an included file both define
+`environment.users`, or two included files both define `time_window.duration`,
+EvidenceForge reports a validation-time input error that names the conflicting
+field and source files. Lists such as `storyline`, `users`, and `systems` are
+owned as whole fields and are not automatically concatenated.
+
+Nested includes are allowed and are resolved relative to the file that declares
+them:
+
+```yaml
+# common/environment.yaml
+includes:
+  - network.yaml
+
+environment:
+  users: [...]
+  systems: [...]
+```
+
+The singular `include` key is accepted as a convenience for one file, but
+`includes` is the preferred form for new scenarios.
+
+For larger exercise families, keep reusable organization context separate from
+scenario-specific narrative files:
+
+```text
+scenarios/
+  organizations/<org>/
+    ENVIRONMENT.md
+    includes/
+      environment.yaml
+      personas.yaml
+      baseline.yaml
+      observation.yaml
+
+  <scenario>/
+    scenario.yaml
+    includes/
+      storyline.yaml
+      red_herrings.yaml
+      # optional local override copies of org include files
+```
+
+In this layout, `scenario.yaml` can include files from the organization directory
+using paths relative to the scenario file, such as
+`../organizations/<org>/includes/environment.yaml`. If a scenario needs to
+change a shared organization section, copy that organization include into the
+scenario's local `includes/` directory and include the local copy instead of the
+shared one. Do not include both copies of the same section, because duplicate
+fields are validation errors rather than overrides.
+
 ## Environment
 
 ```yaml
@@ -190,6 +274,87 @@ Machine/service-account proxy usernames are not emitted routinely; set
 `service_account_probability` only for environments that intentionally
 authenticate non-human proxy clients. `mode: legacy` preserves the older
 machine-context User-Agent behavior for compatibility datasets.
+
+### Email Topology
+
+Use `environment.email` when the scenario needs modeled on-prem SMTP delivery,
+Zeek `smtp.log`, or generated email artifacts. The email topology is explicit:
+`roles: [mail_server]` alone does not enable email-message generation.
+
+```yaml
+email:
+  accepted_domains: [corp.example]
+  mail_servers:
+    - name: eng
+      hostname: mail-eng.corp.example
+      system: MAIL-ENG
+      platform: generic_smtp          # generic_smtp | exchange
+      allow_inbound_starttls: false
+      attempt_outbound_starttls: true
+  default_mailbox_servers: [eng]
+  mailbox_overrides:
+    - group: finance
+      server: fin
+  outbound_routes:
+    - name: default
+      servers: [eng]
+  inbound_route: [eng]
+  isp_relays: []                      # Optional global ISP relay hostnames
+  distribution_groups:
+    - address: finance@corp.example
+      members: [bob@corp.example]
+  artifacts:
+    mode: storyline                   # none | storyline | selected | all
+    selected_ids: []
+  background_messages_per_user_per_day: 0.0
+  corpus: email_corpus.yaml           # Optional scenario-relative content corpus
+```
+
+V1 supports on-prem/local email only. User mail clients submit plaintext SMTP on
+587 to the user's mailbox server; SMTP servers relay on port 25. Server-to-server
+STARTTLS is negotiated when the sending server has `attempt_outbound_starttls:
+true` and the receiving server has `allow_inbound_starttls: true`. If STARTTLS
+protects message transfer, Zeek SMTP rows omit protected header/body/file fields.
+Mailbox reads are modeled separately with `email_read`; V1 emits only opaque
+TLS access sessions using IMAPS on 993 or OWA-style HTTPS on 443.
+
+Internal mail routes from the sender's mailbox server to each recipient's mailbox
+server, collapsing same-server hops. Outbound internet mail uses the default
+route plus optional sender group overrides; by default org mail servers deliver
+directly to destination MX hosts, or through `isp_relays` when configured.
+Inbound internet mail uses `inbound_route` for all accepted domains. Distribution
+groups are one-level only; nested groups are validation errors.
+
+Email artifact metadata is written to top-level `ARTIFACTS_MANIFEST.json` under
+`email.messages`; selected materialized messages are written as `.eml` files
+under `artifacts/email/`. Manifest rows include blind-safe export status fields
+so metadata-only messages are explicit. Storyline email artifacts are also
+referenced from `GROUND_TRUTH.json` and `GROUND_TRUTH.md`. Generation is deterministic: any
+AI-authored message bodies or corpora must be prepared during scenario creation,
+not during `eforge generate`.
+
+Optional `email_corpus.yaml` files contain deterministic content entries:
+
+```yaml
+messages:
+  - id: phishing-note
+    subject: Quarterly forecast review
+    body: |
+      Please review the attached notes.
+    user_agent: Microsoft Outlook 16.0
+    headers:
+      X-Campaign-ID: q1-finance
+    attachments:
+      - filename: forecast.txt
+        content_type: text/plain
+        content: Synthetic attachment text
+    background: false
+    storyline: true
+```
+
+`email_message.corpus_id` uses the corpus entry for content while the storyline
+event remains authoritative for routing fields such as sender, To, Cc, and Bcc.
+For V1, do not combine `corpus_id` with inline `body` or `attachments`.
 
 ### System Roles
 
@@ -645,6 +810,8 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
 | `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `profile`, `http_sequence`, `jitter` (default: 0.15) |
 | `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
+| `email_message` | SMTP route evidence: Zeek conn/dns/smtp/files, artifacts, ground truth | at least one of `to`/`cc`/`bcc` | `sender`, `subject`, `body`, `corpus_id`, `artifact_id`, `user_agent`, `verdict`, `mail_action`, `outcome`, `attachments` |
+| `email_read` | Opaque TLS mailbox access: DNS + conn/ssl/x509 evidence only | | `mailbox`, `server`, `protocol` (`imaps`/`owa`), `message_ids`, `count`, `duration`, `user_agent` |
 | `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4) |
 | `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` (default: 0.5) |
 | `dga_queries` | Zeek dns.log + conn.log (bulk DGA) | `interval`, one of `end_time`/`duration`/`count` | `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`, `source_ip`, `jitter` (default: 0.3) |
@@ -728,6 +895,11 @@ automated, interval-driven, or explicitly minutes/hours apart.
 **Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, lock state, source endpoints, validation evidence, and termination ordering. DC-side Kerberos ticket evidence uses the internal Kerberos/DC bundle so TGT/TGS timing, source IP/port, TGT cache behavior, and service-principal identity stay aligned. Windows audit/account-management events use internal Windows audit bundles so subject session ownership, target identity, source timing, and Sysmon/eCAR process-access context stay aligned. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
+
+The target pools behind those ambient network red herrings live in
+`activity/suspicious_benign.yaml`. If a scenario needs a specific malicious or
+benign IP/domain, author it explicitly in the scenario; config identity pools
+are only fallback/background data.
 
 **Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
 

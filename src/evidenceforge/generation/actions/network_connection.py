@@ -24,12 +24,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
 from evidenceforge.events.contexts import (
     DnsContext,
+    EmailContext,
     FileTransferContext,
     FirewallContext,
     HttpContext,
@@ -37,6 +38,9 @@ from evidenceforge.events.contexts import (
     OcspContext,
     PeContext,
     ProxyContext,
+    SmtpContext,
+    SslContext,
+    X509Context,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
@@ -86,9 +90,15 @@ class NetworkConnectionRequest:
     source_system: System | None = None
     conn_state: str | None = None
     dns: DnsContext | None = None
+    email: EmailContext | None = None
+    smtp: SmtpContext | None = None
+    ssl: SslContext | None = None
+    x509: X509Context | None = None
+    x509_chain: list[X509Context] = field(default_factory=list)
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
+    file_transfers: list[FileTransferContext] = field(default_factory=list)
     pe: PeContext | None = None
     ocsp: OcspContext | None = None
     proxy: ProxyContext | None = None
@@ -99,9 +109,12 @@ class NetworkConnectionRequest:
     preserve_dst_ip: bool = False
     preserve_http_outcome: bool = False
     suppress_application_side_effects: bool = False
+    suppress_source_pid_inference: bool = False
     preserve_explicit_payload: bool = False
+    suppress_prereq_dns: bool = False
     packet_overhead_bytes: int | None = None
     responding_pid: int = -1
+    ssh_attempted_username: str | None = None
     source: str = "activity_generator"
 
     @property
@@ -115,15 +128,18 @@ class NetworkConnectionRequest:
             f"{self.proto}:{self.service or ''}:{self.duration or ''}:"
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:{self.src_port or ''}:"
             f"{self.emit_dns}:{self.pid}:{source_hostname}:{self.conn_state or ''}:"
-            f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ids)}:"
+            f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ssl)}:"
+            f"{_context_fingerprint(self.ids)}:"
             f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
+            f"{_context_fingerprint(self.file_transfers)}:"
             f"{_context_fingerprint(self.pe)}:{_context_fingerprint(self.ocsp)}:"
             f"{_context_fingerprint(self.proxy)}:"
             f"{_context_fingerprint(self.firewall)}:{self.hostname or ''}:"
             f"{self.proxy_bypass}:{self.process_image or ''}:{self.preserve_dst_ip}:"
             f"{self.preserve_http_outcome}:{self.suppress_application_side_effects}:"
-            f"{self.preserve_explicit_payload}:{self.packet_overhead_bytes or ''}:"
-            f"{self.responding_pid}:{self.source}"
+            f"{self.suppress_source_pid_inference}:{self.preserve_explicit_payload}:"
+            f"{self.suppress_prereq_dns}:{self.packet_overhead_bytes or ''}:"
+            f"{self.responding_pid}:{self.ssh_attempted_username or ''}:{self.source}"
         )
         return f"network-connection-{seed:016x}"
 

@@ -23,6 +23,7 @@
 """Unit tests for Phase 5.1.2: Baseline logoff generation."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -73,6 +74,24 @@ def linux_system():
 @pytest.fixture
 def timestamp():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+
+
+def _emitted_syslog_events(mock_emitters: dict[str, Any]) -> list[Any]:
+    """Return syslog-dispatched events from the mocked syslog emitter."""
+    return [
+        call.args[0]
+        for call in mock_emitters["syslog"].emit.call_args_list
+        if call.args[0].syslog is not None
+    ]
+
+
+def _emitted_pam_close_event(mock_emitters: dict[str, Any]) -> Any:
+    """Return the SSH PAM close event from mocked syslog calls."""
+    return next(
+        event
+        for event in _emitted_syslog_events(mock_emitters)
+        if event.syslog.message.startswith("pam_unix(sshd:session): session closed")
+    )
 
 
 class TestLogoffWindows:
@@ -227,7 +246,14 @@ class TestLogoffLinux:
             transport_pid=6505,
         )
         close_time = timestamp + timedelta(minutes=8)
-        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        state_manager.update_session_metadata(
+            logon_id,
+            network_close_time=close_time,
+            session_id=12345,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        expected_session_id = session.session_id
         session_obj_id = state_manager.get_session_object_id(logon_id)
         mock_emitters["syslog"].reset_mock()
         mock_emitters["ecar"].reset_mock()
@@ -240,8 +266,17 @@ class TestLogoffLinux:
             logon_type=10,
         )
 
-        event = mock_emitters["syslog"].emit.call_args[0][0]
-        ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
+        event = _emitted_pam_close_event(mock_emitters)
+        removed_event = next(
+            event
+            for event in _emitted_syslog_events(mock_emitters)
+            if event.syslog.message == f"Removed session {expected_session_id}."
+        )
+        ecar_event = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "logoff"
+        )
         expected_delta = sample_timing_delta(
             "windows.logoff_after_last_activity",
             seed_parts=(linux_system.hostname, logon_id, close_time),
@@ -253,6 +288,8 @@ class TestLogoffLinux:
         assert ecar_event.edr.object_id == session_obj_id
         assert ecar_event.auth.source_ip == "10.0.10.50"
         assert ecar_event.auth.source_port == 51111
+        assert removed_event.timestamp > event.timestamp
+        assert removed_event.timestamp <= event.timestamp + timedelta(seconds=1)
 
     def test_ssh_logoff_binds_late_cleanup_to_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
@@ -284,7 +321,7 @@ class TestLogoffLinux:
             logon_type=10,
         )
 
-        event = mock_emitters["syslog"].emit.call_args[0][0]
+        event = _emitted_pam_close_event(mock_emitters)
         expected_delta = sample_timing_delta(
             "windows.logoff_after_last_activity",
             seed_parts=(linux_system.hostname, logon_id, close_time),
@@ -326,7 +363,7 @@ class TestLogoffLinux:
             "windows.logoff_after_last_activity",
             seed_parts=(linux_system.hostname, logon_id, close_time),
         )
-        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        syslog_event = _emitted_pam_close_event(mock_emitters)
         ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
         assert syslog_event.timestamp == close_time + expected_delta
         assert ecar_event.timestamp == close_time + expected_delta
@@ -360,7 +397,7 @@ class TestLogoffLinux:
             from_storyline=True,
         )
 
-        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        syslog_event = _emitted_pam_close_event(mock_emitters)
         ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
         assert syslog_event.timestamp == logoff_time
         assert ecar_event.timestamp == logoff_time
@@ -389,7 +426,7 @@ class TestLogoffLinux:
             logon_type=10,
         )
 
-        event = mock_emitters["syslog"].emit.call_args[0][0]
+        event = _emitted_pam_close_event(mock_emitters)
         assert event.syslog.message == (
             "pam_unix(sshd:session): session closed for user alice.smith"
         )

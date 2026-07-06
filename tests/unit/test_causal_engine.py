@@ -391,27 +391,48 @@ class TestKerberosBeforeLogon:
 class TestProcessAccessAfterRemoteThread:
     def test_matches_crt_targeting_lsass(self):
         rule = ProcessAccessAfterRemoteThread()
-        ctx = _make_ctx(target_image=r"C:\Windows\System32\lsass.exe")
+        ctx = _make_ctx(
+            source_pid=1234,
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
         assert rule.matches("create_remote_thread", ctx) is True
 
     def test_matches_lsass_case_insensitive(self):
         rule = ProcessAccessAfterRemoteThread()
-        ctx = _make_ctx(target_image=r"C:\Windows\System32\LSASS.EXE")
+        ctx = _make_ctx(
+            source_pid=1234,
+            target_pid=636,
+            target_image=r"C:\Windows\System32\LSASS.EXE",
+        )
         assert rule.matches("create_remote_thread", ctx) is True
 
-    def test_skips_non_lsass_target(self):
+    def test_matches_non_lsass_target(self):
         rule = ProcessAccessAfterRemoteThread()
-        ctx = _make_ctx(target_image=r"C:\Windows\System32\svchost.exe")
-        assert rule.matches("create_remote_thread", ctx) is False
+        ctx = _make_ctx(
+            source_pid=4600,
+            target_pid=4796,
+            target_image=r"C:\Windows\System32\svchost.exe",
+        )
+        assert rule.matches("create_remote_thread", ctx) is True
 
     def test_skips_non_crt_event(self):
         rule = ProcessAccessAfterRemoteThread()
-        ctx = _make_ctx(target_image=r"C:\Windows\System32\lsass.exe")
+        ctx = _make_ctx(
+            source_pid=1234,
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
         assert rule.matches("process_create", ctx) is False
 
     def test_skips_no_target_image(self):
         rule = ProcessAccessAfterRemoteThread()
-        ctx = _make_ctx(target_image=None)
+        ctx = _make_ctx(source_pid=1234, target_pid=636, target_image=None)
+        assert rule.matches("create_remote_thread", ctx) is False
+
+    def test_skips_missing_pid_context(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(target_image=r"C:\Windows\System32\lsass.exe")
         assert rule.matches("create_remote_thread", ctx) is False
 
     def test_expand_returns_process_access(self):
@@ -434,6 +455,32 @@ class TestProcessAccessAfterRemoteThread:
         assert ev.timing.position == "before"
         assert ev.timing.min_ms == 1
         assert ev.timing.max_ms == 75
+
+    def test_expand_non_lsass_returns_lower_friction_process_access(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(
+            actor="SYSTEM",
+            target_system="WS-01",
+            source_pid=4600,
+            source_image=(
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform"
+                r"\4.18.2301.6-0\MsMpEng.exe"
+            ),
+            target_pid=4796,
+            target_image=r"C:\Windows\System32\RuntimeBroker.exe",
+        )
+
+        result = rule.expand("create_remote_thread", ctx)
+
+        assert len(result) == 1
+        ev = result[0]
+        assert ev.method == "generate_process_access"
+        assert ev.kwargs["granted_access"] == "0x1010"
+        assert ev.kwargs["source_pid"] == 4600
+        assert ev.kwargs["target_pid"] == 4796
+        assert ev.timing.position == "before"
+        assert ev.timing.min_ms == 8
+        assert ev.timing.max_ms == 180
 
 
 # --- SupplementaryAuditEvents rule ---

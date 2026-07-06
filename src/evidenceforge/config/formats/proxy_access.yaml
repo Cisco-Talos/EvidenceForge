@@ -90,6 +90,11 @@ fields:
     required: false
     description: "Proxy policy/action hint (forward, tunnel, tunnel-setup, ssl-inspect, deny)"
 
+  - name: ssl_bump_action
+    type: string
+    required: false
+    description: "TLS inspection action hint for HTTPS proxy rows (peek, bump, terminate)"
+
   - name: referrer
     type: string
     required: false
@@ -100,4 +105,4 @@ output:
   file_extension: ".log"
   encoding: utf-8
   template: |
-    {{ client_ip }} - {{ username if username else '-' }} [{{ timestamp.strftime('%d/%b/%Y:%H:%M:%S %z') }}] "{{ method }} {{ url }} {{ protocol if protocol else '-' }}" {{ status_code }} {{ sc_bytes if sc_bytes else '-' }} "{{ referrer if referrer else '-' }}" "{{ user_agent if user_agent else '-' }}"
+    {{ client_ip }} - {{ username if username else '-' }} [{{ timestamp.strftime('%d/%b/%Y:%H:%M:%S %z') }}] "{{ method }} {{ url }} {{ protocol if protocol else '-' }}" {{ status_code }} {{ sc_bytes if sc_bytes else '-' }} "{{ referrer if referrer else '-' }}" "{{ user_agent if user_agent else '-' }}"{% if proxy_metadata %} "{{ proxy_metadata }}"{% endif %}

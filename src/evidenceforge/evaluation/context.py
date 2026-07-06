@@ -24,3 +24,7 @@ class EvaluationContext:
     # verify each labeled payload landed in the expected source without re-running
     # synthesis (matched against the source's raw text so a CRLF split still matches).
     adversarial_payload_ground_truth: dict[str, dict] | None = None
+    # storyline_id -> generated email identifiers from GROUND_TRUTH.json. Lets the
+    # causality pillar match email artifacts without leaking storyline labels into
+    # ARTIFACTS_MANIFEST.json.
+    email_ground_truth: dict[str, dict] | None = None

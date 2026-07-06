@@ -22,11 +22,13 @@
 
 """Unit tests for generation engine."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
@@ -64,11 +66,11 @@ class TestGenerationEngine:
 
     @pytest.fixture(autouse=True)
     def mock_new_emitters(self):
-        """Mock the 5 emitter classes added in Phase 2.2.
+        """Mock emitter classes outside the original Phase 1 test surface.
 
-        Tests were written for Phase 1 (2 emitters). The engine now creates
-        7 emitters. This fixture mocks the 5 new ones so existing tests
-        that only patch WindowsEventEmitter and ZeekEmitter still work.
+        Tests were written for Phase 1 (2 emitters). The engine now creates many
+        emitters, so this fixture keeps tests that patch only WindowsEventEmitter
+        and ZeekEmitter focused on engine behavior.
         """
         with (
             patch("evidenceforge.generation.engine.emitter_setup.EcarEmitter") as m1,
@@ -76,8 +78,9 @@ class TestGenerationEngine:
             patch("evidenceforge.generation.engine.emitter_setup.BashHistoryEmitter") as m3,
             patch("evidenceforge.generation.engine.emitter_setup.SnortEmitter") as m4,
             patch("evidenceforge.generation.engine.emitter_setup.WebEmitter") as m5,
+            patch("evidenceforge.generation.engine.emitter_setup.ZeekSmtpEmitter") as m6,
         ):
-            yield m1, m2, m3, m4, m5
+            yield m1, m2, m3, m4, m5, m6
 
     @pytest.fixture
     def minimal_scenario(self):
@@ -211,10 +214,10 @@ class TestGenerationEngine:
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
 
-        # Verify emitters created: windows (2: security + sysmon) + zeek (13) = 15
+        # Verify emitters created: windows (2: security + sysmon) + zeek (14) = 16
         assert mock_windows.called
         assert mock_zeek.called
-        assert len(engine.emitters) == 15
+        assert len(engine.emitters) == 16
         assert "windows_event_security" in engine.emitters
         assert "zeek_conn" in engine.emitters
         assert "zeek_http" in engine.emitters
@@ -968,12 +971,28 @@ class TestGenerationEngine:
 
         ground_truth = tmp_path / "GROUND_TRUTH.md"
         manifest = tmp_path / OBSERVATION_MANIFEST_FILENAME
+        collection_profile = tmp_path / COLLECTION_PROFILE_FILENAME
         target_marker = tmp_path / OUTPUT_TARGET_FILENAME
         assert ground_truth.exists()
         assert manifest.exists()
+        assert collection_profile.exists()
         assert target_marker.read_text(encoding="utf-8") == "default\n"
         assert "No malicious activities" in ground_truth.read_text()
         assert "No malicious events were generated" in ground_truth.read_text()
+        profile = json.loads(collection_profile.read_text(encoding="utf-8"))
+        assert "storyline_events" not in profile
+        assert "red_herring_events" not in profile
+        profile_text = json.dumps(profile)
+        assert "stable replay" not in profile_text
+        assert "storyline" not in profile_text.lower()
+        assert "verdict" not in profile_text.lower()
+        assert profile["output_target"] == "default"
+        endpoint_family = next(
+            family
+            for family in profile["source_families"]
+            if family["family"] == "endpoint_telemetry"
+        )
+        assert "lifecycle closure rows after the primary window" in endpoint_family["tail_policy"]
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

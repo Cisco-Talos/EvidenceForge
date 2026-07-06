@@ -1618,7 +1618,25 @@ class TestValidateConfig:
                     "backoff_probability": 0.10,
                     "backoff_seconds_min": 900,
                     "backoff_seconds_max": 3600,
-                }
+                },
+                "service_account_delegation": {
+                    "hourly_probability": 0.3,
+                    "caller_profiles": [
+                        {
+                            "name": "default",
+                            "account_terms": ["svc"],
+                            "weight": 1,
+                            "processes": [
+                                {
+                                    "image": r"C:\Windows\System32\taskhostw.exe",
+                                    "command_line": "taskhostw.exe /Run",
+                                    "parent_key": "services",
+                                    "weight": 1,
+                                }
+                            ],
+                        }
+                    ],
+                },
             }
 
         monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
@@ -1653,7 +1671,25 @@ class TestValidateConfig:
                     "backoff_probability": 0.10,
                     "backoff_seconds_min": 900,
                     "backoff_seconds_max": 3600,
-                }
+                },
+                "service_account_delegation": {
+                    "hourly_probability": 0.3,
+                    "caller_profiles": [
+                        {
+                            "name": "default",
+                            "account_terms": ["svc"],
+                            "weight": 1,
+                            "processes": [
+                                {
+                                    "image": r"C:\Windows\System32\taskhostw.exe",
+                                    "command_line": "taskhostw.exe /Run",
+                                    "parent_key": "services",
+                                    "weight": 1,
+                                }
+                            ],
+                        }
+                    ],
+                },
             }
 
         monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
@@ -1664,6 +1700,49 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "auth_noise.yaml"
             and "account_base_names entries must match scenario username syntax" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_empty_service_account_delegation_processes(self, monkeypatch):
+        from evidenceforge.generation.activity import auth_noise
+
+        def load_invalid_auth_noise_config():
+            return {
+                "scheduled_stale_credentials": {
+                    "account_base_names": ["svc_backup"],
+                    "host_count_min": 1,
+                    "host_count_max": 1,
+                    "interval_ranges": [{"min_minutes": 60, "max_minutes": 120, "weight": 1}],
+                    "first_occurrence_seconds_min": 0,
+                    "first_occurrence_seconds_max": 2700,
+                    "jitter_seconds_min": -420,
+                    "jitter_seconds_max": 780,
+                    "skip_probability": 0.10,
+                    "backoff_probability": 0.10,
+                    "backoff_seconds_min": 900,
+                    "backoff_seconds_max": 3600,
+                },
+                "service_account_delegation": {
+                    "hourly_probability": 0.3,
+                    "caller_profiles": [
+                        {
+                            "name": "default",
+                            "account_terms": ["svc"],
+                            "weight": 1,
+                            "processes": [],
+                        }
+                    ],
+                },
+            }
+
+        monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "auth_noise.yaml"
+            and "processes" in issue.message
             for issue in result.issues
         )
 
@@ -2632,5 +2711,32 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "web_session_profiles.yaml"
             and "must be a non-empty single-line string" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_generic_kube_probe_health_check_ua(self, monkeypatch):
+        from evidenceforge.generation.activity import web_session_profiles
+
+        real_loader = web_session_profiles.load_web_session_profiles
+
+        def load_invalid_web_session_profiles():
+            data = real_loader()
+            user_agent_pools = dict(data["user_agent_pools"])
+            user_agent_pools["health_check_windows"] = [
+                *user_agent_pools["health_check_windows"],
+                "kube-probe/1.28",
+            ]
+            return {**data, "user_agent_pools": user_agent_pools}
+
+        monkeypatch.setattr(
+            web_session_profiles, "load_web_session_profiles", load_invalid_web_session_profiles
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "kube-probe only with a Kubernetes-scoped source_role_any" in issue.message
             for issue in result.issues
         )

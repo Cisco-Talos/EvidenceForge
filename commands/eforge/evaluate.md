@@ -39,10 +39,13 @@ The user needs to provide (or you can infer) the scenario directory. The standar
 scenarios/<scenario-name>/
   scenario.yaml
   ENVIRONMENT.md
-  artifacts/         ← optional authored collateral, not eval input
+  ARTIFACTS_MANIFEST.json  ← optional, generated when artifacts exist
+  artifacts/
+    email/           ← generated .eml files when email artifacts are materialized
   GROUND_TRUTH.md
   GROUND_TRUTH.json  ← canonical machine-readable ground-truth document
   OBSERVATION_MANIFEST.json  ← optional, generated for source-observation-aware eval
+  OUTPUT_TARGET.txt
   data/              ← this is the output_dir for eforge eval
 ```
 
@@ -60,7 +63,17 @@ payload spans two physical lines and is matched against the source's raw text, s
 the whole forged-line span must be present.) Keep `GROUND_TRUTH.json` next to (or one
 level above) the data directory.
 
-Ignore optional `artifacts/` contents for evaluation; they are exercise collateral, not generated log output.
+Email artifacts are generated sidecars: use top-level `ARTIFACTS_MANIFEST.json`
+and `.eml` files under `artifacts/email/` when investigating `email_message`
+ground truth. Other optional `artifacts/` contents may still be authored exercise
+collateral rather than log input. The evaluator discovers
+`ARTIFACTS_MANIFEST.json` as a sibling of the `data/` directory and parses one
+`email_artifacts` record per `email.messages` entry.
+
+`eforge eval` does not need special parser changes for generated identity pools.
+If realism findings point at repetitive or obviously fake fallback identities,
+inspect `eforge info identity_pools` and the corresponding project overlay files
+before proposing scenario changes.
 
 If they don't specify, look for scenario directories under `scenarios/`. Ask if you can't find it.
 
@@ -100,7 +113,7 @@ For each pillar, explain what the score means in practical terms:
 - Value & OS Plausibility: Are field values and OS/platform combinations realistic? (bash_history from a Windows host, Linux paths in Windows process events, IPs outside expected subnets — all failures here.)
 - Co-occurrence Rules: Do field combinations make sense? (Network logons have IP addresses; TLS version matches cipher suite; no body in CONNECT tunnels.)
 - Distribution Fit: Are event-type proportions realistic for each format?
-- Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins defined in `cross_source_pairs.yaml` — pairs include Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+host → same process name), zeek_conn ↔ Cisco ASA (same 4-tuple), web_access/proxy ↔ zeek_http (same client+URI+10s bucket → same status/method), zeek_ssl ↔ zeek_x509 (cert chain fuids → server_name ∈ SAN). A score below 100 means real field disagreements were found.
+- Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins defined in `cross_source_pairs.yaml` plus built-in email checks — pairs include Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+host → same process name), zeek_conn ↔ Cisco ASA (same 4-tuple), web_access/proxy ↔ zeek_http (same client+URI+10s bucket → same status/method), zeek_ssl ↔ zeek_x509 (cert chain fuids → server_name ∈ SAN), and email checks where SMTP UIDs join to conn.log, visible SMTP FUIDs join to files.log, and plaintext SMTP subject metadata agrees with `ARTIFACTS_MANIFEST.json` email records. A score below 100 means real field disagreements were found.
 - User Behavioral Diversity: Do different users behave differently, or are they cookie-cutter clones?
 - Benign Anomaly Rate: Is there a realistic 1–5% rate of anomalous-but-benign events? Zero anomalies is as implausible as 50%.
 

@@ -243,6 +243,44 @@ class TestSystemProcessProtection:
         assert squid.username == "proxy"
         assert "apache2" not in pids
 
+    def test_linux_database_services_seed_listener_processes(self, state_manager, mock_emitters):
+        """Linux database service inventory should seed matching listener processes."""
+        system = System(
+            hostname="DB-LNX-01",
+            ip="10.0.20.10",
+            os="CentOS 8",
+            type="server",
+            services=["mysql", "postgresql"],
+            roles=["database"],
+        )
+        _engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, system)
+
+        assert "mysqld" in pids
+        assert "postgres" in pids
+        mysqld = state_manager.get_process(system.hostname, pids["mysqld"])
+        postgres = state_manager.get_process(system.hostname, pids["postgres"])
+        assert mysqld is not None
+        assert postgres is not None
+        assert mysqld.username == "mysql"
+        assert postgres.username == "postgres"
+
+    def test_windows_mssql_service_seeds_listener_process(self, state_manager, mock_emitters):
+        """Windows MSSQL service inventory should seed sqlservr.exe."""
+        system = System(
+            hostname="DB-WIN-01",
+            ip="10.0.20.11",
+            os="Windows Server 2022",
+            type="server",
+            services=["mssql"],
+            roles=["database"],
+        )
+        _engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, system)
+
+        assert "sqlservr" in pids
+        process = state_manager.get_process(system.hostname, pids["sqlservr"])
+        assert process is not None
+        assert process.username == r"NT SERVICE\MSSQLSERVER"
+
     def test_user_processes_still_terminate(self, state_manager, mock_emitters, win_system):
         """Non-system user processes should still be terminated normally."""
         engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, win_system)
@@ -300,6 +338,7 @@ class TestProtectionListCompleteness:
             r"C:\Windows\explorer.exe",
             r"C:\Windows\System32\dwm.exe",
             r"C:\Windows\System32\RuntimeBroker.exe",
+            r"C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQL\Binn\sqlservr.exe",
         ]
 
         # Import the actual patterns from baseline code
@@ -320,6 +359,7 @@ class TestProtectionListCompleteness:
             "taskhostw",
             "searchindexer",
             "msmpeng",
+            "sqlservr",
             "systemd",
             "cron",
             "crond",
@@ -361,6 +401,8 @@ class TestProtectionListCompleteness:
             "/usr/lib/snapd/snapd",
             "/usr/lib/systemd/systemd-timesyncd",
             "/bin/bash",
+            "/usr/sbin/mysqld",
+            "/usr/bin/postgres",
         ]
 
         system_patterns = (
@@ -379,6 +421,7 @@ class TestProtectionListCompleteness:
             "taskhostw",
             "searchindexer",
             "msmpeng",
+            "sqlservr",
             "systemd",
             "cron",
             "crond",
@@ -393,6 +436,8 @@ class TestProtectionListCompleteness:
             "dbus-daemon",
             "bash",
             "agetty",
+            "mysqld",
+            "postgres",
         )
 
         for image in seeded_images:

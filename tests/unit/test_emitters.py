@@ -577,6 +577,36 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
 
+    def test_logoff_shifted_after_same_session_logon(self, format_def, temp_output):
+        """A short network session must not render 4634 before its matching 4624."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_time = logoff_time + timedelta(milliseconds=67)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "LogonType": 3,
+            },
+        ]
+
+        emitter._shift_logoffs_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", logon_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == logon_time + expected_delta
+
     def test_storyline_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
         """Storyline logoffs still need source-native ordering against rendered dependents."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -738,6 +768,39 @@ class TestWindowsEventEmitter:
         )
         assert events[1]["EventID"] == 4634
         assert events[1]["TimeCreated"] == process_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
+    def test_spooled_logoff_shifted_after_same_session_logon(self, format_def, temp_output):
+        """Spooled Security 4634 rows should stay after matching 4624 rows."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_time = logoff_time + timedelta(milliseconds=67)
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "LogonType": 3,
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_logoffs_after_dependents_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", logon_time),
+        )
+        assert events[1]["EventID"] == 4634
+        assert events[1]["TimeCreated"] == logon_time + expected_delta
         emitter._cleanup_spool_unlocked()
 
     def test_spooled_process_termination_shifted_after_visible_child_create(
@@ -1082,6 +1145,69 @@ class TestWindowsEventEmitter:
         privilege = next(event for event in emitter._event_dicts if event["EventID"] == 4672)
         assert logon["TimeCreated"] == expected_logon_time
         assert privilege["TimeCreated"] == expected_logon_time + expected_privilege_delta
+
+    def test_flush_repairs_transport_shifted_logon_before_process_create(
+        self, format_def, temp_output, monkeypatch
+    ):
+        """Flush should move remote 4624 rows before repairing same-session 4688 rows."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logon_time + timedelta(milliseconds=250)
+        wfp_time = logon_time + timedelta(milliseconds=450)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "LogonType": 3,
+                "IpAddress": "10.10.1.35",
+                "IpPort": "59430",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SubjectLogonId": "0xf63a33e",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "FILE-SRV-01.corp.local",
+                "SourceAddress": "10.10.1.35",
+                "SourcePort": "59430",
+                "DestAddress": "10.10.2.20",
+                "DestPort": "445",
+                "Protocol": "6",
+                "Direction": "%%14592",
+            },
+        ]
+        calls: list[str] = []
+        rendered: list[dict] = []
+        shift_network = emitter._shift_network_logons_after_transport
+        shift_process = emitter._shift_process_creates_after_logons
+
+        def wrapped_network() -> None:
+            calls.append("network")
+            shift_network()
+
+        def wrapped_process() -> None:
+            calls.append("process")
+            shift_process()
+
+        monkeypatch.setattr(emitter, "_shift_network_logons_after_transport", wrapped_network)
+        monkeypatch.setattr(emitter, "_shift_process_creates_after_logons", wrapped_process)
+        monkeypatch.setattr(
+            emitter, "_render_event", lambda event: rendered.append(dict(event)) or ""
+        )
+
+        emitter._flush_unlocked()
+
+        assert calls.index("network") < calls.index("process")
+        logon = next(event for event in rendered if event["EventID"] == 4624)
+        process = next(event for event in rendered if event["EventID"] == 4688)
+        assert process["TimeCreated"] > logon["TimeCreated"]
 
     def test_reused_source_port_far_transport_does_not_shift_logon(self, format_def, temp_output):
         """Remote logon repair should not pair unrelated later source-port reuse."""
@@ -2581,6 +2707,45 @@ class TestWindowsEventEmitter:
         timestamps = re.findall(r'SystemTime="[^"]+\.(\d{7})Z"', content)
         assert len(timestamps) == 20
         assert len({fraction[-1] for fraction in timestamps}) > 1
+
+    def test_kerberos_service_ticket_target_username_is_account_name(self, format_def, temp_output):
+        """4769 renders account/domain fields separately instead of UPN-style TargetUserName."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="domain_controller",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="kerberos_service",
+            dst_host=host,
+            kerberos=KerberosContext(
+                target_username="alice@CORP.LOCAL",
+                target_domain="CORP.LOCAL",
+                service_name="cifs/FILE-01",
+                service_sid="S-1-5-21-123-456-789-1104",
+                ticket_options="0x40810010",
+                ticket_status="0x0",
+                encryption_type="0x12",
+                source_ip="::ffff:10.0.0.50",
+                source_port=55961,
+                reporting_pid=732,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>4769</EventID>" in content
+        assert '<Data Name="TargetUserName">alice</Data>' in content
+        assert '<Data Name="TargetDomainName">CORP.LOCAL</Data>' in content
+        assert "alice@CORP.LOCAL" not in content
 
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
         """Test emitting 4771 (Kerberos pre-auth failed)."""

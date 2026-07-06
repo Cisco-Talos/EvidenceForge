@@ -13,7 +13,11 @@ from evidenceforge.generation.activity.traffic_profiles import (
     get_role_inbound_connections,
     load_traffic_profiles,
 )
-from evidenceforge.generation.engine.baseline import BaselineMixin
+from evidenceforge.generation.engine.baseline import (
+    BaselineMixin,
+    _baseline_database_service_supported,
+)
+from evidenceforge.models.scenario import System
 
 
 class TestTrafficProfileSchema:
@@ -98,6 +102,25 @@ class TestInboundProfiles:
         roles = {c["role"] for c in conns}
         assert "_external" in roles  # from web_server
         assert "web_server" in roles  # from database
+
+    def test_database_inbound_entries_filter_to_declared_engine(self):
+        """A MySQL-only database host should not receive MSSQL/PostgreSQL profile rows."""
+        mysql_db = System(
+            hostname="DB-MY-01",
+            ip="10.0.20.10",
+            os="CentOS 8",
+            type="server",
+            services=["mysql"],
+            roles=["database"],
+        )
+
+        conns = [
+            conn
+            for conn in get_role_inbound_connections(["database"], "linux")
+            if _baseline_database_service_supported(mysql_db, conn.get("service"))
+        ]
+
+        assert {conn["port"] for conn in conns} == {3306}
 
 
 class TestEnsureConnectionProcessCommandLine:

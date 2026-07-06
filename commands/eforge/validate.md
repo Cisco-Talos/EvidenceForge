@@ -40,6 +40,26 @@ Requesting `zeek`, concrete `zeek_*`, `snort_alert`, or `cisco_asa` without a
 matching sensor/firewall is an error. `proxy_access` comes from
 `forward_proxy` systems and does not need a placeholder Zeek sensor.
 
+Email validation is explicit. `email_message` and `email_read` events require
+`environment.email`; `roles: [mail_server]` is not enough. Common blocking
+errors include unknown mail server names in `default_mailbox_servers`,
+`mailbox_overrides`, `outbound_routes`, or `inbound_route`; distribution groups
+that contain nested groups; group members that are not known user email
+addresses; mailbox overrides that reference unknown `environment.groups`;
+missing or malformed `environment.email.corpus` files; unknown
+`email_message.corpus_id` values; and `email_read` mailbox/server combinations
+where the named server does not host the mailbox. Fix these by adding the
+explicit mail topology/corpus sidecar or by changing the storyline to use
+non-email evidence.
+
+Config validation is separate. If `eforge validate-config` reports errors in
+`email_background.yaml`, `mail_public_identities.yaml`,
+`external_actor_profiles.yaml`, `suspicious_benign.yaml`, or
+`command_parameter_pools.yaml`, fix the project overlay rather than the scenario.
+Common failures include empty pools, duplicate domains/hosts/IPs, malformed IPs
+or domains, reserved documentation domains in public realism-bound pools,
+non-positive weights, and command URL values without HTTP(S) hosts.
+
 Network identity warnings are advisory unless they describe an actual conflict.
 Custom hostnames in storyline/red-herring/domain-aware fields should normally be
 declared under `environment.network_identities`; undeclared custom domains warn

@@ -27,27 +27,40 @@ activity events (logon, logoff, process creation, network connections) and
 coordinates them across multiple log formats for consistency.
 """
 
+import base64
+import hashlib
 import heapq
+import io
 import ipaddress
 import itertools
 import logging
 import math
 import ntpath
+import quopri
 import random
 import re
 import shlex
+import uuid
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
+import yaml
+
+from evidenceforge.events.artifacts_manifest import (
+    ARTIFACTS_MANIFEST_SCHEMA_VERSION,
+)
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
     EdrContext,
+    EmailContext,
     FileContext,
     FileTransferContext,
     FirewallContext,
@@ -64,8 +77,11 @@ from evidenceforge.events.contexts import (
     ProxyContext,
     RegistryContext,
     RemoteThreadContext,
+    SmtpContext,
+    SslContext,
+    X509Context,
 )
-from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -81,6 +97,11 @@ from evidenceforge.generation.actions import (
     DhcpLeaseRequest,
     DnsLookupActionBundle,
     DnsLookupRequest,
+    EmailAccessActionBundle,
+    EmailAccessRequest,
+    EmailDeliveryActionBundle,
+    EmailDeliveryRequest,
+    EmailDeliveryResult,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -152,6 +173,11 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
+from evidenceforge.generation.activity.mail_public_identities import (
+    generate_public_mail_ip,
+    public_mail_ptr_name,
+    public_safe_mail_hostname,
+)
 from evidenceforge.generation.activity.proxy_uri import (
     get_proxy_domain_class,
     is_browser_like_proxy_domain,
@@ -177,7 +203,7 @@ from evidenceforge.generation.identity import IdentityDirectory, default_linux_u
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
-from evidenceforge.models.scenario import ProxyAuthPolicyConfig, System, User
+from evidenceforge.models.scenario import EmailMessageEventSpec, ProxyAuthPolicyConfig, System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -192,6 +218,7 @@ from .network import (
     EXTERNAL_IPS,
     REVERSE_DNS,
     _generate_internal_hostname,
+    _generate_random_external_ip,
     _generate_random_hostname,
     _generate_rdns_name,
     _get_http_status,
@@ -225,6 +252,45 @@ def _format_windows_account_attribute_time(value: datetime) -> str:
     hour = timestamp.hour % 12 or 12
     meridiem = "AM" if timestamp.hour < 12 else "PM"
     return f"{timestamp.month}/{timestamp.day}/{timestamp.year} {hour}:{timestamp:%M:%S} {meridiem}"
+
+
+def _is_modeled_local_ip(executor: Any, ip: str) -> bool:
+    """Return whether an IP belongs to the modeled organization/network."""
+    if hasattr(executor, "_ip_to_system") and ip in executor._ip_to_system:
+        return True
+    environment = getattr(executor, "_scenario_environment", None)
+    network = getattr(environment, "network", None)
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if network is not None:
+        for segment in getattr(network, "segments", []) or []:
+            if getattr(segment, "exposure", "internal") not in {"internal", "both"}:
+                continue
+            try:
+                if address in ipaddress.ip_network(segment.cidr, strict=False):
+                    return True
+            except ValueError:
+                continue
+        for rule in getattr(network, "nat_rules", []) or []:
+            if ip in {
+                str(getattr(rule, "mapped_ip", "") or ""),
+                str(getattr(rule, "real_ip", "") or ""),
+            }:
+                return True
+    dispatcher = getattr(executor, "dispatcher", None)
+    visibility = getattr(dispatcher, "visibility_engine", None)
+    if visibility is not None:
+        resolve_segments = getattr(visibility, "_resolve_ip_segments", None)
+        if callable(resolve_segments) and resolve_segments(ip):
+            return True
+        vip_to_real = getattr(visibility, "_vip_to_real_ip", {})
+        if ip in vip_to_real or ip in set(vip_to_real.values()):
+            return True
+    if network is None and visibility is None:
+        return _is_private_ip(ip)
+    return False
 
 
 @dataclass(slots=True)
@@ -525,6 +591,26 @@ def _is_tool_http_user_agent(user_agent: str) -> bool:
             "powershell/",
         )
     )
+
+
+_BROWSER_HTTP_USER_AGENT_FAMILY_TOKENS = (
+    "chrome/",
+    "chromium/",
+    "firefox/",
+    "edg/",
+    "opr/",
+    "opera/",
+    "version/",
+    "safari/",
+)
+
+
+def _is_browser_family_http_user_agent(user_agent: str) -> bool:
+    """Return true when the UA looks like a full browser-family string."""
+    ua = user_agent.strip().lower()
+    if not ua.startswith("mozilla/"):
+        return False
+    return any(token in ua for token in _BROWSER_HTTP_USER_AGENT_FAMILY_TOKENS)
 
 
 def _source_native_http_referrer(
@@ -830,6 +916,14 @@ def _linux_ssh_client_command_line(
         f"ssh -p 22 {username}@{host}",
     )
     return rng.choice(variants)
+
+
+def _ssh_command_target(target_host: str, attempted_username: str | None) -> str:
+    """Return a source-native SSH target token with the remote user when known."""
+    username = (attempted_username or "").strip()
+    if username:
+        return f"{username}@{target_host}"
+    return target_host
 
 
 def _http_response_requires_file_transfer(http: HttpContext) -> bool:
@@ -1197,6 +1291,50 @@ def _extract_network_command_target(command_line: str, service: str) -> str | No
     return None
 
 
+def _extract_ssh_attempted_username(command_line: str) -> str | None:
+    """Extract the username a source-native SSH client command attempted."""
+
+    tokens = _command_tokens(command_line)
+    if not tokens:
+        return None
+    option_args = {
+        "-b",
+        "-c",
+        "-e",
+        "-f",
+        "-i",
+        "-j",
+        "-l",
+        "-m",
+        "-o",
+        "-p",
+        "-s",
+        "-w",
+    }
+    skip_next = False
+    for idx, token in enumerate(tokens[1:], start=1):
+        lower = token.lower()
+        if skip_next:
+            skip_next = False
+            continue
+        if lower == "-l" and idx + 1 < len(tokens):
+            candidate = tokens[idx + 1].strip()
+            return candidate or None
+        if lower.startswith("-l") and len(token) > 2:
+            candidate = token[2:].strip()
+            return candidate or None
+        if lower in option_args:
+            skip_next = True
+            continue
+        if lower.startswith("-"):
+            continue
+        if "@" not in token:
+            continue
+        candidate = token.rsplit("@", 1)[0].rsplit("\\", 1)[-1].strip()
+        return candidate or None
+    return None
+
+
 def _normalize_database_command_target(value: str) -> str:
     """Normalize a database client target while preserving the user-visible host."""
     host = _normalize_command_host_token(value)
@@ -1359,6 +1497,16 @@ _WINDOWS_ONE_SHOT_CLI_EXES = {
 }
 _WINDOWS_BROWSER_EXES = frozenset(
     {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe", "opera.exe"}
+)
+_PERSISTENT_USER_APP_EXES = frozenset(
+    {
+        "evolution",
+        "outlook.exe",
+        "onedrive.exe",
+        "teams.exe",
+        "thunderbird",
+        "thunderbird.exe",
+    }
 )
 _WINDOWS_BROWSER_CHILD_MARKERS = (
     "--type=",
@@ -2786,6 +2934,9 @@ def _dns_reverse_query(ip: str) -> str:
 def _public_dns_ptr_response(ip: str, forward_hostname: str | None) -> tuple[str, int, list[str]]:
     """Return a resolver-visible public PTR response for companion lookups."""
     rng = random.Random(_stable_seed(f"public_dns_ptr:{ip}:{forward_hostname or ''}"))
+    mail_ptr = public_mail_ptr_name(ip, forward_hostname)
+    if mail_ptr:
+        return "NOERROR", 0, [mail_ptr]
     # Public reverse DNS is often absent for SaaS/CDN destinations observed
     # through enterprise resolvers. Keep that incompleteness stable per tuple.
     if rng.random() < 0.28:
@@ -2975,6 +3126,42 @@ def _dns_hostname_allows_mx(hostname: str) -> bool:
         return False
     service_labels = {"cdn", "static", "assets", "media", "img", "js", "css"}
     return lowered.split(".", 1)[0] not in service_labels
+
+
+def _dns_companion_kind_distribution_for_source(
+    src_system: Any | None,
+) -> tuple[list[str], list[int]]:
+    """Return source-appropriate low-volume DNS companion query choices."""
+
+    source_roles = {str(role).lower() for role in (getattr(src_system, "roles", None) or [])}
+    source_services = {
+        str(service).lower() for service in (getattr(src_system, "services", None) or [])
+    }
+    authoritative_source = bool(
+        source_roles
+        & {
+            "dns_server",
+            "domain_controller",
+            "mail_server",
+            "security_sensor",
+        }
+        or source_services
+        & {
+            "dns",
+            "dns-server",
+            "bind",
+            "named",
+            "smtp",
+            "exchange",
+            "postfix",
+        }
+    )
+    companion_choices = ["AAAA", "PTR"]
+    companion_weights = [65, 35]
+    if authoritative_source:
+        companion_choices.extend(["NS", "MX", "SOA"])
+        companion_weights.extend([10, 10, 5])
+    return companion_choices, companion_weights
 
 
 def _linux_uid_for_user(username: str) -> int:
@@ -3290,6 +3477,33 @@ def _dns_base_ttl(query: str, is_internal: bool) -> int:
     if is_internal:
         return domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
     return domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
+
+
+def _dns_cache_window(value: object) -> tuple[float, float]:
+    """Return a DNS client-cache validity window from current or legacy state."""
+    if isinstance(value, tuple) and len(value) == 2:
+        return float(value[0]), float(value[1])
+    if isinstance(value, (int, float)):
+        return 0.0, float(value)
+    return 0.0, 0.0
+
+
+def _dns_observation_cache_key(
+    src_ip: str,
+    resolver_ip: str,
+    dns: "DnsContext",
+) -> tuple[str, str, str, str] | None:
+    """Return the cache key for suppressing repeated visible DNS observations."""
+    qtype_name = (dns.query_type or str(dns.qtype)).upper()
+    if qtype_name not in {"A", "AAAA", "MX", "SRV"}:
+        return None
+    if dns.rcode != "NOERROR" or not dns.answers or not dns.TTLs:
+        return None
+    normalized_query = (dns.query or "").rstrip(".").lower()
+    if not normalized_query:
+        return None
+    normalized_answers = "|".join(sorted(str(answer) for answer in dns.answers))
+    return (src_ip, resolver_ip, normalized_query, f"{qtype_name}:{normalized_answers}")
 
 
 def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
@@ -3853,6 +4067,21 @@ def _tls_signature_algorithm_for_issuer(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class EmailCorpusEntry:
+    """Scenario-authored deterministic email content."""
+
+    entry_id: str
+    subject: str
+    body: str
+    user_agent: str = ""
+    headers: dict[str, str] | None = None
+    attachments: tuple[dict[str, Any], ...] = ()
+    tags: tuple[str, ...] = ()
+    background: bool = False
+    storyline: bool = True
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -3918,6 +4147,7 @@ class ActivityGenerator:
         self._proxy_listener_port = 8080
         self._proxy_auth_policy = ProxyAuthPolicyConfig()
         self._proxy_service_accounts: list[str] = []
+        self._proxy_auth_session_deadlines: dict[tuple[str, str], datetime] = {}
         self._explicit_proxy_tunnels: dict[
             tuple[str, str, str, str, int, str], tuple[datetime, str]
         ] = {}
@@ -3929,10 +4159,13 @@ class ActivityGenerator:
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
+        self._visible_account_created_at: dict[str, datetime] = {}
+        self._visible_account_kerberos_transport_emitted: set[tuple[str, str, str]] = set()
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
-        self._dns_cache: dict[tuple[str, str, str, str], float] = {}
+        self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
+        self._dns_observation_cache: dict[tuple[str, str, str, str], list[tuple[float, float]]] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
         ] = {}
@@ -3967,6 +4200,7 @@ class ActivityGenerator:
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int], datetime] = {}
         self._process_source_terminate_times: dict[tuple[str, int], datetime] = {}
+        self._process_connection_hold_until: dict[tuple[str, int], datetime] = {}
         self._source_timing_planner = SourceTimingPlanner(clock_profile_name=source_timing_profile)
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
@@ -3989,6 +4223,49 @@ class ActivityGenerator:
                 for terminated_host, terminated_pid, _ in self._terminated_process_keys
             )
         return (hostname, pid, start_time) in self._terminated_process_keys
+
+    def _remember_process_connection_hold(
+        self,
+        *,
+        system: System,
+        pid: int,
+        close_time: datetime | None,
+    ) -> None:
+        """Keep process lifecycle compatible with a process-owned transport interval."""
+        if pid <= 0 or close_time is None:
+            return
+        close_time = ensure_utc(close_time)
+        key = (system.hostname, pid)
+        previous = self._process_connection_hold_until.get(key)
+        if previous is None or close_time > previous:
+            self._process_connection_hold_until[key] = close_time
+        self.state_manager.update_process_activity_time(system.hostname, pid, close_time)
+        running = self.state_manager.get_process(system.hostname, pid)
+        if running is not None and running.logon_id:
+            self.state_manager.update_session_activity_time(running.logon_id, close_time)
+
+    def _held_process_termination_time(
+        self,
+        *,
+        system: System,
+        pid: int,
+        requested_time: datetime,
+    ) -> datetime:
+        """Move process termination after any active process-owned transport hold."""
+        hold_until = self._process_connection_hold_until.get((system.hostname, pid))
+        if hold_until is None:
+            return requested_time
+        hold_until = ensure_utc(hold_until)
+        requested_time = ensure_utc(requested_time)
+        if requested_time > hold_until:
+            return requested_time
+        delay_rng = random.Random(
+            _stable_seed(
+                "process_terminate_after_connection_hold:"
+                f"{system.hostname}:{pid}:{hold_until.isoformat()}"
+            )
+        )
+        return hold_until + timedelta(seconds=delay_rng.uniform(1.0, 12.0))
 
     def _remember_foreground_process_finalizer(
         self,
@@ -4078,6 +4355,9 @@ class ActivityGenerator:
                 process_name=process_name,
                 logon_id=logon_id,
             )
+            source_termination_time = self.process_source_terminate_time(system.hostname, pid)
+            if source_termination_time is not None:
+                return max(termination_time, source_termination_time)
         return termination_time
 
     def _is_within_scenario_window(self, event_time: datetime) -> bool:
@@ -4102,7 +4382,8 @@ class ActivityGenerator:
         image = (proc.image or "").rsplit("/", 1)[-1].lower()
         if image not in {"bash", "sh", "zsh"}:
             return None
-        return (system.hostname, username, logon_id, parent_pid)
+        shell_logon_id = proc.logon_id or logon_id
+        return (system.hostname, username, shell_logon_id, parent_pid)
 
     def _reserve_foreground_shell_time(
         self,
@@ -4673,6 +4954,12 @@ class ActivityGenerator:
                 and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
                 and session.session_kind not in {"network", "service"}
                 and _session_started_by(session, time)
+                and not self._workstation_logon_locked_at(
+                    system,
+                    session.username,
+                    session.logon_id,
+                    time,
+                )
             )
         ]
         if not candidates:
@@ -4705,6 +4992,7 @@ class ActivityGenerator:
                 and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
                 and session.session_kind not in {"network", "service"}
                 and _session_started_by(session, time)
+                and not self._workstation_session_locked_at(session, user, system, time)
             )
         ]
         if not candidates:
@@ -4794,6 +5082,31 @@ class ActivityGenerator:
         if not candidates:
             return None
         return max(candidates, key=lambda candidate: candidate[0])
+
+    def _workstation_session_locked_at(
+        self,
+        session: ActiveSession,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> bool:
+        """Return whether a local workstation session is visibly locked at ``time``."""
+        if not _is_windows_workstation_session(session):
+            return False
+        return self._workstation_logon_locked_at(system, user.username, session.logon_id, time)
+
+    def _workstation_logon_locked_at(
+        self,
+        system: System,
+        username: str,
+        logon_id: str,
+        time: datetime,
+    ) -> bool:
+        """Return whether a workstation logon ID is visibly locked at ``time``."""
+        lock_time = getattr(self, "_last_workstation_lock_time", {}).get(
+            (system.hostname, username, logon_id)
+        )
+        return lock_time is not None and ensure_utc(lock_time) <= ensure_utc(time)
 
     def _near_future_user_interactive_windows_session(
         self,
@@ -5041,14 +5354,42 @@ class ActivityGenerator:
         return (source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."))
 
     @staticmethod
+    def _kerberos_principal_key(username: str) -> str:
+        """Return the stable account principal key used for Kerberos/account lifecycle state."""
+        principal = username.strip().rsplit("\\", 1)[-1].split("@", 1)[0]
+        return principal.upper()
+
+    @staticmethod
     def _kerberos_tgt_cache_key(
         username: str,
         source_ip: str,
         dc_hostname: str,
     ) -> tuple[str, str, str]:
         """Return the source-native TGT cache identity for one client/DC account."""
-        principal = username.split("@", 1)[0].upper()
+        principal = ActivityGenerator._kerberos_principal_key(username)
         return (principal, source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."))
+
+    def _remember_visible_account_created(self, username: str, time: datetime) -> None:
+        """Remember a visible account creation and invalidate impossible pre-create TGT cache."""
+        principal = self._kerberos_principal_key(username)
+        if not principal:
+            return
+        created_at = ensure_utc(time)
+        existing = self._visible_account_created_at.get(principal)
+        if existing is None or created_at < existing:
+            self._visible_account_created_at[principal] = created_at
+        for key in list(self._kerberos_tgt_cache_until):
+            if key[0] == principal:
+                self._kerberos_tgt_cache_until.pop(key, None)
+        self._visible_account_kerberos_transport_emitted = {
+            key for key in self._visible_account_kerberos_transport_emitted if key[0] != principal
+        }
+
+    def _visible_account_created_before(self, username: str, time: datetime) -> bool:
+        """Return whether an account principal was created during the visible window."""
+        principal = self._kerberos_principal_key(username)
+        created_at = self._visible_account_created_at.get(principal)
+        return created_at is not None and created_at <= ensure_utc(time)
 
     @staticmethod
     def _kerberos_source_time(
@@ -5125,6 +5466,9 @@ class ActivityGenerator:
         if cached_until is not None and cached_until > current_time:
             return rng.random() < 0.08
 
+        if self._visible_account_created_before(username, current_time):
+            return True
+
         pre_window_cache_probability = 0.55 if username.endswith("$") else 0.35
         if rng.random() < pre_window_cache_probability:
             self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
@@ -5154,6 +5498,83 @@ class ActivityGenerator:
             source_port=source_port,
         )
         return True
+
+    def _ensure_visible_created_account_kerberos_exchange(
+        self,
+        *,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        source_port: int,
+        domain: str,
+    ) -> None:
+        """Ensure first visible TGS for a newly-created account has TGT and KDC flow."""
+        service_time = ensure_utc(time)
+        if not self._visible_account_created_before(username, service_time):
+            return
+
+        principal = self._kerberos_principal_key(username)
+        source_ip_key = source_ip.removeprefix("::ffff:")
+        dc_key = dc_hostname.lower().rstrip(".")
+        cache_key = self._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
+        transport_key = (principal, source_ip_key, dc_key)
+        rng = random.Random(
+            _stable_seed(
+                "visible_created_account_kerberos_exchange:"
+                f"{principal}:{source_ip_key}:{dc_key}:{service_time.isoformat()}"
+            )
+        )
+
+        cached_until = self._kerberos_tgt_cache_until.get(cache_key)
+        if cached_until is None or cached_until <= service_time:
+            tgt_time = service_time - timedelta(
+                milliseconds=rng.randint(45, 260),
+                microseconds=rng.randint(103, 941),
+            )
+            self._maybe_generate_kerberos_tgt(
+                username=username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgt_time,
+                rng=rng,
+                source_port=source_port,
+                domain=domain,
+            )
+
+        if transport_key in self._visible_account_kerberos_transport_emitted:
+            return
+
+        dc_system = self._dc_system_for_hostname(dc_hostname)
+        source_system = self._ip_to_system.get(source_ip_key) or self._ip_to_system.get(source_ip)
+        if dc_system is None or source_system is None:
+            return
+        dc_ip = str(getattr(dc_system, "ip", "") or "")
+        if not dc_ip:
+            return
+
+        conn_time = service_time - timedelta(
+            milliseconds=rng.randint(1200, 1850),
+            microseconds=rng.randint(43, 937),
+        )
+        if conn_time >= service_time:
+            conn_time = service_time - timedelta(microseconds=733)
+        self.generate_connection(
+            src_ip=source_ip_key,
+            dst_ip=dc_ip,
+            time=conn_time,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=rng.uniform(1.25, 2.1),
+            orig_bytes=rng.randint(520, 1600),
+            resp_bytes=rng.randint(1800, 5200),
+            src_port=source_port,
+            source_system=source_system,
+            conn_state="SF",
+            suppress_prereq_dns=True,
+        )
+        self._visible_account_kerberos_transport_emitted.add(transport_key)
 
     @staticmethod
     def _is_domain_controller_system(system: Any | None) -> bool:
@@ -5339,7 +5760,13 @@ class ActivityGenerator:
             requested_ts_us,
             self._next_icmp_observation_ts_us.get(tuple_key, requested_ts_us),
         )
-        self._next_icmp_observation_ts_us[tuple_key] = adjusted_ts_us + 11_000
+        gap_seed = _stable_seed(
+            f"icmp_observation_gap:{src_ip}:{zeek_type}:{dst_ip}:{zeek_code}:{adjusted_ts_us}"
+        )
+        # High-rate ICMP sweeps can create many Zeek rows for the same type/code tuple.
+        # Keep duplicate observations monotonic without leaving a fixed inter-row cadence.
+        next_gap_us = 7_000 + (gap_seed % 77_000)
+        self._next_icmp_observation_ts_us[tuple_key] = adjusted_ts_us + next_gap_us
         if adjusted_ts_us == requested_ts_us:
             return time
         return time + timedelta(microseconds=adjusted_ts_us - requested_ts_us)
@@ -5397,6 +5824,572 @@ class ActivityGenerator:
                 return pid
         return -1
 
+    def _ensure_high_confidence_connection_owner(
+        self,
+        *,
+        source_system: System | None,
+        time: datetime,
+        service: str | None,
+        dst_port: int,
+        proto: str,
+        hostname: str | None,
+        http: HttpContext | None,
+        ssh_attempted_username: str | None = None,
+    ) -> tuple[int, str | None]:
+        """Create or reuse canonical process ownership for high-signal outbound flows."""
+        if source_system is None or proto != "tcp":
+            return -1, None
+
+        if self._high_confidence_connection_should_remain_unattributed(
+            service=service,
+            dst_port=dst_port,
+            http=http,
+        ):
+            return -1, None
+
+        os_category = _get_os_category(source_system.os)
+        if self._source_should_use_service_connection_owner(source_system, dst_port):
+            return self._ensure_service_connection_owner_process(
+                source_system=source_system,
+                time=time,
+                service=service,
+                dst_port=dst_port,
+                os_category=os_category,
+                hostname=hostname,
+                http=http,
+            )
+
+        return self._ensure_user_connection_owner_process(
+            source_system=source_system,
+            time=time,
+            service=service,
+            dst_port=dst_port,
+            os_category=os_category,
+            hostname=hostname,
+            ssh_attempted_username=ssh_attempted_username,
+        )
+
+    @staticmethod
+    def _high_confidence_connection_should_remain_unattributed(
+        *,
+        service: str | None,
+        dst_port: int,
+        http: HttpContext | None,
+    ) -> bool:
+        """Return whether a flow is too low-confidence to synthesize process ownership."""
+        service_name = (service or "").lower()
+        high_signal_services = {"http", "https", "ssl", "ssh", "smb", "ldap", "kerberos", "mysql"}
+        high_signal_ports = {22, 80, 88, 389, 443, 445, 8080, 8443, 3306, 5432}
+        if service_name in high_signal_services or dst_port in high_signal_ports:
+            return False
+        return http is None
+
+    @staticmethod
+    def _source_should_use_service_connection_owner(
+        source_system: System,
+        dst_port: int,
+    ) -> bool:
+        """Return whether a source host should model daemon/service ownership."""
+        roles = {str(role).lower() for role in (getattr(source_system, "roles", []) or [])}
+        server_roles = {
+            "app_server",
+            "database",
+            "dns_server",
+            "domain_controller",
+            "file_server",
+            "forward_proxy",
+            "log_server",
+            "mail_server",
+            "monitoring",
+            "web_server",
+        }
+        if roles & server_roles:
+            return True
+        system_type = (getattr(source_system, "type", "") or "").lower()
+        if system_type in {"server", "domain_controller"}:
+            return True
+        return dst_port in {88, 389}
+
+    def _ensure_service_connection_owner_process(
+        self,
+        *,
+        source_system: System,
+        time: datetime,
+        service: str | None,
+        dst_port: int,
+        os_category: str,
+        hostname: str | None,
+        http: HttpContext | None,
+    ) -> tuple[int, str | None]:
+        """Create or reuse a daemon/client process for server-originated flows."""
+        spec = self._service_connection_owner_spec(
+            source_system=source_system,
+            service=service,
+            dst_port=dst_port,
+            os_category=os_category,
+            hostname=hostname,
+            http=http,
+        )
+        if spec is None:
+            return -1, None
+        key, image, command_line, username = spec
+        return self._ensure_system_connection_owner_process(
+            source_system=source_system,
+            time=time,
+            key=key,
+            image=image,
+            command_line=command_line,
+            username=username,
+        )
+
+    def _service_connection_owner_spec(
+        self,
+        *,
+        source_system: System,
+        service: str | None,
+        dst_port: int,
+        os_category: str,
+        hostname: str | None,
+        http: HttpContext | None,
+    ) -> tuple[str, str, str, str] | None:
+        """Return source-native process metadata for a service-owned connection."""
+        service_name = (service or "").lower()
+        roles = {str(role).lower() for role in (getattr(source_system, "roles", []) or [])}
+        target = hostname or "internal-service"
+
+        if os_category == "windows":
+            if service_name in {"kerberos", "ldap"} or dst_port in {88, 389}:
+                return (
+                    "lsass",
+                    r"C:\Windows\System32\lsass.exe",
+                    "lsass.exe",
+                    "SYSTEM",
+                )
+            if dst_port in {80, 443, 8080, 8443} or service_name in {"http", "ssl", "https"}:
+                return (
+                    f"service_healthcheck:{target}",
+                    r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe",
+                    rf'"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe" '
+                    rf'--target "{target}"',
+                    "SYSTEM",
+                )
+            if dst_port == 445 or service_name == "smb":
+                return (
+                    "lanmanworkstation",
+                    r"C:\Windows\System32\svchost.exe",
+                    "svchost.exe -k NetworkService -p -s LanmanWorkstation",
+                    "NETWORK SERVICE",
+                )
+            return None
+
+        if os_category != "linux":
+            return None
+
+        if dst_port in {3306, 5432} or service_name in {"mysql", "postgres", "postgresql"}:
+            if "app_server" in roles:
+                return (
+                    "gunicorn",
+                    "/opt/meridian/venv/bin/gunicorn",
+                    "gunicorn meridian.wsgi:application --bind 0.0.0.0:8080",
+                    "www-data",
+                )
+            if "web_server" in roles:
+                return (
+                    "apache2",
+                    "/usr/sbin/apache2",
+                    "/usr/sbin/apache2 -DFOREGROUND",
+                    "www-data",
+                )
+            return (
+                f"db_client_service:{target}:{dst_port}",
+                "/usr/bin/mysqladmin",
+                f"mysqladmin --host={target} --port={dst_port} ping",
+                "root",
+            )
+
+        if service_name == "ldap" or dst_port == 389:
+            if "mail_server" in roles:
+                return (
+                    "postfix",
+                    "/usr/lib/postfix/sbin/smtpd",
+                    "smtpd -n smtp -t inet -u",
+                    "postfix",
+                )
+            if "app_server" in roles or "web_server" in roles:
+                return (
+                    "gunicorn",
+                    "/opt/meridian/venv/bin/gunicorn",
+                    "gunicorn meridian.wsgi:application --bind 0.0.0.0:8080",
+                    "www-data",
+                )
+            return (
+                "sssd",
+                "/usr/sbin/sssd",
+                "/usr/sbin/sssd -i --logger=files",
+                "root",
+            )
+
+        if service_name == "smb" or dst_port == 445:
+            return (
+                "backup_agent",
+                "/usr/sbin/rsyncd",
+                "/usr/sbin/rsyncd --daemon --config=/etc/rsyncd.conf",
+                "root",
+            )
+
+        if dst_port in {80, 443, 8080, 8443} or service_name in {"http", "ssl", "https"}:
+            user_agent = (http.user_agent if http is not None else "") or ""
+            user_agent_lower = user_agent.lower()
+            if "mail_server" in roles:
+                return (
+                    "postfix",
+                    "/usr/lib/postfix/sbin/smtp",
+                    "smtp -n smtp -t unix -u",
+                    "postfix",
+                )
+            if "forward_proxy" in roles:
+                return (
+                    "squid",
+                    "/usr/sbin/squid",
+                    "/usr/sbin/squid -N -f /etc/squid/squid.conf",
+                    "proxy",
+                )
+            if "curl/" in user_agent_lower:
+                return (
+                    f"curl_proxy_client:{target}",
+                    "/usr/bin/curl",
+                    f"curl -fsS --proxy http://proxy:8080 https://{target}/",
+                    "root",
+                )
+            if "wget/" in user_agent_lower:
+                return (
+                    f"wget_proxy_client:{target}",
+                    "/usr/bin/wget",
+                    f"wget -q -e use_proxy=yes -O - https://{target}/",
+                    "root",
+                )
+            if "python-requests/" in user_agent_lower:
+                return (
+                    f"python_requests_proxy_client:{target}",
+                    "/usr/bin/python3",
+                    f"/usr/bin/python3 /opt/meridian/bin/proxy_healthcheck.py --target {target}",
+                    "root",
+                )
+            if "apache-httpclient" in user_agent_lower:
+                return (
+                    f"integration_worker:{target}",
+                    "/usr/bin/java",
+                    f"/usr/bin/java -jar /opt/meridian/integration-worker.jar --check-url https://{target}/",
+                    "www-data",
+                )
+            return (
+                f"service_healthcheck:{target}",
+                "/usr/bin/java",
+                f"/usr/bin/java -jar /opt/meridian/service-healthcheck.jar --target {target}",
+                "root",
+            )
+
+        return None
+
+    def _ensure_system_connection_owner_process(
+        self,
+        *,
+        source_system: System,
+        time: datetime,
+        key: str,
+        image: str,
+        command_line: str,
+        username: str,
+    ) -> tuple[int, str | None]:
+        """Reuse or create a source-native system process for connection attribution."""
+        sys_pids = getattr(self, "_system_pids", {}).setdefault(source_system.hostname, {})
+        pid = self._active_matching_process_pid(
+            source_system=source_system,
+            time=time,
+            key=key,
+            image=image,
+            username=username,
+            command_line=command_line,
+        )
+        if pid > 0:
+            self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+            return pid, image
+
+        process_rng = random.Random(
+            _stable_seed(
+                "high_confidence_connection_owner:"
+                f"{source_system.hostname}:{key}:{image}:{username}:{time.isoformat()}"
+            )
+        )
+        lead_seconds = process_rng.uniform(45.0, 420.0)
+        process_time = time - timedelta(seconds=lead_seconds)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            visible_start = ensure_utc(scenario_start) + timedelta(
+                seconds=15 + (process_rng.randint(0, 75))
+            )
+            if process_time < visible_start < time:
+                process_time = visible_start
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=120)
+
+        if _get_os_category(source_system.os) == "windows":
+            parent_pid = self._windows_system_parent_fallback(source_system, process_time)
+        else:
+            parent_pid = self._linux_system_parent_fallback(source_system, process_time)
+        pid = self.generate_system_process(
+            source_system,
+            process_time,
+            image,
+            command_line,
+            parent_pid=parent_pid,
+            username=username,
+            emit_linux_syslog=False,
+        )
+        if pid > 0:
+            sys_pids[key] = pid
+            self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+            self.state_manager.set_current_time(time)
+            running = self.state_manager.get_process(source_system.hostname, pid)
+            return pid, running.image if running is not None else image
+        self.state_manager.set_current_time(time)
+        return -1, None
+
+    def _active_matching_process_pid(
+        self,
+        *,
+        source_system: System,
+        time: datetime,
+        key: str,
+        image: str,
+        username: str,
+        command_line: str,
+    ) -> int:
+        """Return an active process matching a role key or exact image/user owner."""
+        sys_pids = getattr(self, "_system_pids", {}).get(source_system.hostname, {})
+        candidate_pids = [pid for pid in (sys_pids.get(key),) if pid]
+        image_lower = image.lower()
+        require_exact_command = self._connection_owner_requires_exact_command_line(
+            image,
+            command_line,
+        )
+        for proc in self.state_manager.get_processes_on_system(source_system.hostname):
+            if proc.image.lower() == image_lower and proc.username == username:
+                if require_exact_command and proc.command_line != command_line:
+                    continue
+                candidate_pids.append(proc.pid)
+
+        for candidate_pid in candidate_pids:
+            proc = self.state_manager.get_process(source_system.hostname, candidate_pid)
+            if proc is None:
+                continue
+            if require_exact_command and proc.command_line != command_line:
+                continue
+            if proc.start_time is not None and ensure_utc(proc.start_time) > ensure_utc(time):
+                continue
+            if self._process_termination_recorded(
+                source_system.hostname,
+                candidate_pid,
+                proc.start_time,
+            ):
+                continue
+            if self._foreground_process_expired_for_attribution(source_system, proc, time):
+                continue
+            return candidate_pid
+        return -1
+
+    @staticmethod
+    def _connection_owner_requires_exact_command_line(
+        image: str,
+        command_line: str,
+    ) -> bool:
+        """Return whether a process command line carries per-target network semantics."""
+        image_lower = image.lower()
+        command_lower = command_line.lower()
+        target_bearing_images = {
+            "curl",
+            "curl.exe",
+            "wget",
+            "wget.exe",
+            "python",
+            "python.exe",
+            "python3",
+            "python3.exe",
+            "service-healthcheck",
+            "service-healthcheck.exe",
+            "ssh",
+            "ssh.exe",
+            "scp",
+            "scp.exe",
+            "sftp",
+            "sftp.exe",
+            "gvfsd-smb-browse",
+            "java",
+            "java.exe",
+            "mysqladmin",
+        }
+        exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        if exe in target_bearing_images:
+            return any(
+                token in command_lower
+                for token in (
+                    "--target",
+                    "--url",
+                    "--check-url",
+                    "http://",
+                    "https://",
+                    "requests.get",
+                    "mysqladmin",
+                    "ssh ",
+                    "ssh.exe ",
+                    "scp ",
+                    "scp.exe ",
+                    "sftp ",
+                    "sftp.exe ",
+                    "smb://",
+                )
+            )
+        return False
+
+    def _ensure_user_connection_owner_process(
+        self,
+        *,
+        source_system: System,
+        time: datetime,
+        service: str | None,
+        dst_port: int,
+        os_category: str,
+        hostname: str | None,
+        ssh_attempted_username: str | None,
+    ) -> tuple[int, str | None]:
+        """Create or reuse a user process for high-confidence workstation flows."""
+        spec = self._user_connection_owner_spec(
+            service=service,
+            dst_port=dst_port,
+            os_category=os_category,
+            hostname=hostname,
+            ssh_attempted_username=ssh_attempted_username,
+        )
+        if spec is None:
+            return -1, None
+        image, command_line = spec
+        session_info = self._select_explicit_proxy_client_session(source_system, time)
+        if session_info is None:
+            return -1, None
+        user, session = session_info
+
+        image_lower = image.lower()
+        require_exact_command = self._connection_owner_requires_exact_command_line(
+            image,
+            command_line,
+        )
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(source_system.hostname)
+            if proc.username == user.username
+            and proc.image.lower() == image_lower
+            and (not require_exact_command or proc.command_line == command_line)
+            and proc.start_time is not None
+            and ensure_utc(proc.start_time) <= ensure_utc(time)
+            and not self._foreground_process_expired_for_attribution(source_system, proc, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(
+                source_system.hostname,
+                proc.pid,
+                time,
+            )
+            return proc.pid, proc.image
+
+        process_rng = random.Random(
+            _stable_seed(
+                "high_confidence_user_connection_owner:"
+                f"{source_system.hostname}:{user.username}:{image}:{time.isoformat()}"
+            )
+        )
+        process_lifetime = (
+            _windows_foreground_lifetime(image, command_line)
+            if os_category == "windows"
+            else _linux_foreground_lifetime(image, command_line)
+        )
+        if process_lifetime is None:
+            lead_seconds = process_rng.uniform(3.0, 30.0)
+        else:
+            lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
+        process_time = time - timedelta(seconds=lead_seconds)
+        min_process_time = ensure_utc(session.start_time) + timedelta(milliseconds=500)
+        if process_time < min_process_time:
+            process_time = min_process_time
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+
+        parent_pid = self._select_parent_pid(
+            source_system,
+            user,
+            image,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        if os_category == "linux":
+            parent_pid = (
+                self._linux_non_shell_session_parent_pid(
+                    system=source_system,
+                    time=process_time,
+                    logon_id=session.logon_id,
+                )
+                or parent_pid
+            )
+        pid = self.generate_process(
+            user=user,
+            system=source_system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+        self._record_user_process(source_system, user, pid, image)
+        self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+        self.state_manager.set_current_time(time)
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        if running is not None:
+            return pid, running.image
+        return pid, image
+
+    @staticmethod
+    def _user_connection_owner_spec(
+        *,
+        service: str | None,
+        dst_port: int,
+        os_category: str,
+        hostname: str | None,
+        ssh_attempted_username: str | None = None,
+    ) -> tuple[str, str] | None:
+        """Return user-process metadata for source-owned workstation connections."""
+        service_name = (service or "").lower()
+        target = hostname or "internal-host"
+        if os_category == "windows":
+            if service_name == "ssh" or dst_port == 22:
+                image = r"C:\Windows\System32\OpenSSH\ssh.exe"
+                return image, f"ssh.exe {_ssh_command_target(target, ssh_attempted_username)}"
+            if service_name == "smb" or dst_port == 445:
+                image = r"C:\Windows\explorer.exe"
+                return image, rf"explorer.exe \\{target}\shared"
+            return None
+        if os_category == "linux":
+            if service_name == "ssh" or dst_port == 22:
+                image = "/usr/bin/ssh"
+                return image, f"ssh {_ssh_command_target(target, ssh_attempted_username)}"
+            if service_name == "smb" or dst_port == 445:
+                image = "/usr/bin/gvfsd-smb-browse"
+                return image, f"gvfsd-smb-browse smb://{target}/shared"
+            return None
+        return None
+
     def _build_dc_host_context(self, dc_hostname: str) -> HostContext:
         """Build a HostContext for a domain controller from raw hostname string.
 
@@ -5423,6 +6416,16 @@ class ActivityGenerator:
             proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
         return proxy_fqdn
 
+    def set_proxy_auth_session_deadlines(
+        self,
+        deadlines: dict[tuple[str, str], datetime],
+    ) -> None:
+        """Publish planned visible session-end times for proxy username attribution."""
+
+        self._proxy_auth_session_deadlines = {
+            key: ensure_utc(value) for key, value in deadlines.items()
+        }
+
     def _proxy_username_for_source(
         self,
         *,
@@ -5430,6 +6433,7 @@ class ActivityGenerator:
         user_agent: str,
         cache_result: str,
         hostname: str | None = None,
+        time: datetime | None = None,
     ) -> str:
         """Return the source-native authenticated proxy username for a client request."""
         if source_system is None or cache_result.upper() == "AUTH_REQUIRED":
@@ -5482,6 +6486,33 @@ class ActivityGenerator:
         if system_type != "workstation":
             return ""
 
+        if time is not None:
+            current_time = ensure_utc(time)
+            source_hostname = getattr(source_system, "hostname", "")
+            sessions_at_time = self.state_manager.get_sessions_for_user_at(
+                assigned_user,
+                current_time,
+            )
+            has_active_user_session = any(
+                session.system == source_hostname
+                and session.logon_type in {2, 7, 10, 11}
+                and ensure_utc(session.start_time) <= current_time
+                for session in sessions_at_time
+            )
+            if not has_active_user_session:
+                return ""
+
+            deadline = self._proxy_auth_session_deadlines.get((source_hostname, assigned_user))
+            if deadline is not None and ensure_utc(time) >= deadline:
+                newer_session_started = any(
+                    session.system == source_hostname
+                    and ensure_utc(session.start_time) > deadline
+                    and ensure_utc(session.start_time) <= current_time
+                    for session in sessions_at_time
+                )
+                if not newer_session_started:
+                    return ""
+
         if os_category == "windows":
             if _is_machine_context_proxy_user_agent(user_agent):
                 if auth_policy.mode == "realistic" and not auth_policy.non_human_principals:
@@ -5510,6 +6541,109 @@ class ActivityGenerator:
             return f"{assigned_user}@{ad_domain}"
         return assigned_user
 
+    def _proxy_user_agent_for_context(
+        self,
+        rng: random.Random,
+        source_system: Optional["System"],
+        *,
+        hostname: str | None,
+        domain_tags: list[str] | None,
+        existing_user_agent: str = "",
+        override_user_agent: str | None = None,
+        apply_domain_override: bool = True,
+    ) -> str:
+        """Return a source-sticky proxy User-Agent for one logical client context."""
+
+        def normalize_selected_user_agent(
+            selected_user_agent: str,
+            normalizer_rng: random.Random = rng,
+        ) -> str:
+            normalized = normalize_proxy_user_agent_for_os(
+                normalizer_rng,
+                source_system,
+                selected_user_agent,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+            if self._is_proxy_server_like_source(
+                source_system
+            ) and _is_browser_family_http_user_agent(normalized):
+                return normalize_proxy_user_agent_for_os(
+                    normalizer_rng,
+                    source_system,
+                    "Go-http-client/1.1",
+                    hostname=hostname,
+                    domain_tags=domain_tags,
+                )
+            return normalized
+
+        host = hostname or ""
+        host_is_browser_like = is_browser_like_proxy_domain(host, domain_tags=domain_tags)
+        existing_is_browser_family = _is_browser_family_http_user_agent(existing_user_agent)
+        browser_identity_scope = host_is_browser_like or existing_is_browser_family
+        if apply_domain_override:
+            domain_user_agent = pick_proxy_domain_user_agent(
+                rng,
+                source_system,
+                hostname=hostname,
+            )
+            if domain_user_agent:
+                return normalize_selected_user_agent(domain_user_agent)
+
+        if override_user_agent:
+            return normalize_selected_user_agent(override_user_agent)
+
+        if existing_user_agent and existing_is_browser_family and source_system is None:
+            return normalize_selected_user_agent(existing_user_agent)
+
+        if existing_user_agent and not existing_is_browser_family:
+            return normalize_selected_user_agent(existing_user_agent)
+
+        domain_class = get_proxy_domain_class(host) or ""
+        source_key = "unknown"
+        os_category = ""
+        if source_system is not None:
+            os_category = _get_os_category(getattr(source_system, "os", ""))
+            roles = ",".join(sorted(str(role) for role in (source_system.roles or [])))
+            source_key = (
+                f"{getattr(source_system, 'hostname', '')}:"
+                f"{getattr(source_system, 'ip', '')}:"
+                f"{getattr(source_system, 'os', '')}:"
+                f"{getattr(source_system, 'type', '')}:{roles}"
+            )
+
+        if self._is_proxy_server_like_source(source_system):
+            scope = "server:generic"
+        elif browser_identity_scope:
+            scope = f"{os_category or 'unknown'}:browser"
+        elif domain_class:
+            scope = f"class:{domain_class}"
+        else:
+            scope = f"{os_category or 'unknown'}:tooling"
+
+        stable_rng = random.Random(_stable_seed(f"proxy_ua_context:{source_key}:{scope}"))
+        user_agent = pick_proxy_user_agent(
+            stable_rng,
+            source_system,
+            hostname=host,
+            domain_tags=domain_tags,
+        )
+        if (
+            source_system is not None
+            and str(getattr(source_system, "type", "") or "").lower() == "workstation"
+            and browser_identity_scope
+        ):
+            for _ in range(12):
+                if not _is_tool_http_user_agent(user_agent):
+                    break
+                user_agent = pick_proxy_user_agent(
+                    stable_rng,
+                    source_system,
+                    hostname=host,
+                    domain_tags=domain_tags,
+                )
+        return normalize_selected_user_agent(user_agent, stable_rng)
+
     def _build_proxy_context(
         self,
         *,
@@ -5525,6 +6659,7 @@ class ActivityGenerator:
         proxy_sys: "System",
         http: Optional["HttpContext"] = None,
         explicit_mode: bool = False,
+        time: datetime | None = None,
     ) -> ProxyContext:
         """Build a proxy access context from the logical origin request."""
         rng = _get_rng()
@@ -5561,6 +6696,8 @@ class ActivityGenerator:
                 proxy_content_type = "text/html"
             user_agent = http.user_agent
             proxy_referrer = http.referrer
+            if _is_browser_family_http_user_agent(user_agent):
+                proxy_ua_override = user_agent
         elif explicit_mode and dst_port == 443:
             proxy_method = "CONNECT"
             url = f"{proxy_hostname}:443"
@@ -5604,33 +6741,14 @@ class ActivityGenerator:
             not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
-        domain_user_agent = (
-            pick_proxy_domain_user_agent(
-                rng,
-                source_system,
-                hostname=proxy_hostname,
-            )
-            if apply_domain_user_agent
-            else None
-        )
-        if domain_user_agent:
-            user_agent = domain_user_agent
-        elif not user_agent:
-            if proxy_ua_override:
-                user_agent = proxy_ua_override
-            else:
-                user_agent = pick_proxy_user_agent(
-                    rng,
-                    source_system,
-                    hostname=proxy_hostname,
-                    domain_tags=domain_tags,
-                )
-        user_agent = normalize_proxy_user_agent_for_os(
+        user_agent = self._proxy_user_agent_for_context(
             rng,
             source_system,
-            user_agent,
             hostname=proxy_hostname,
             domain_tags=domain_tags,
+            existing_user_agent=user_agent,
+            override_user_agent=proxy_ua_override,
+            apply_domain_override=apply_domain_user_agent,
         )
         proxy_referrer = _source_native_http_referrer(
             user_agent,
@@ -5755,6 +6873,7 @@ class ActivityGenerator:
                 user_agent=user_agent,
                 cache_result=cache_result,
                 hostname=proxy_hostname,
+                time=time,
             ),
             method=proxy_method,
             url=url,
@@ -5951,6 +7070,57 @@ class ActivityGenerator:
             if package_family != "rpm":
                 return None
             return "/usr/bin/dnf", "dnf makecache --timer"
+        return None
+
+    def _linux_proxy_helper_system_owner_spec(
+        self,
+        *,
+        source_system: System,
+        image: str,
+        command_line: str,
+    ) -> tuple[str, str, str, str] | None:
+        """Return system-owned process metadata for Linux proxy helper traffic."""
+        if _get_os_category(source_system.os) != "linux":
+            return None
+
+        image_lower = image.lower()
+        command_lower = command_line.lower()
+        exe_name = image_lower.rsplit("/", 1)[-1]
+
+        if image_lower.startswith("/usr/lib/apt/methods/"):
+            method = exe_name or "http"
+            return (
+                f"apt_proxy_method:{method}:{command_line}",
+                image,
+                command_line,
+                "root",
+            )
+        if exe_name in {"dnf", "yum"} and any(
+            token in command_lower for token in ("makecache", "check-update", "update")
+        ):
+            return (
+                f"{exe_name}_proxy_refresh:{command_line}",
+                image,
+                command_line,
+                "root",
+            )
+
+        if not self._is_proxy_server_like_source(source_system):
+            return None
+        if exe_name == "service-healthcheck":
+            return (
+                f"service_healthcheck_proxy:{command_line}",
+                image,
+                command_line,
+                "root",
+            )
+        if exe_name == "java" and "integration-worker" in command_lower:
+            return (
+                f"integration_worker_proxy:{command_line}",
+                image,
+                command_line,
+                "www-data",
+            )
         return None
 
     @staticmethod
@@ -6169,6 +7339,12 @@ class ActivityGenerator:
             and not session.username.endswith("$")
             and session.logon_type in {2, 7, 10, 11}
             and _session_started_by(session, time)
+            and not self._workstation_logon_locked_at(
+                source_system,
+                session.username,
+                session.logon_id,
+                time,
+            )
         ]
         if not sessions:
             return None
@@ -6209,6 +7385,27 @@ class ActivityGenerator:
             return -1, None
 
         image, command_line = hint
+        os_category = _get_os_category(source_system.os)
+        system_owner_spec = self._linux_proxy_helper_system_owner_spec(
+            source_system=source_system,
+            image=image,
+            command_line=command_line,
+        )
+        if system_owner_spec is not None:
+            key, owner_image, owner_command_line, owner_username = system_owner_spec
+            return self._ensure_system_connection_owner_process(
+                source_system=source_system,
+                time=time,
+                key=key,
+                image=owner_image,
+                command_line=owner_command_line,
+                username=owner_username,
+            )
+
+        require_exact_command = self._connection_owner_requires_exact_command_line(
+            image,
+            command_line,
+        )
         session_info = self._select_explicit_proxy_client_session(source_system, time)
         if session_info is None:
             return -1, None
@@ -6220,6 +7417,7 @@ class ActivityGenerator:
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
             if proc.username == user.username
             and proc.image.lower() == image_lower
+            and (not require_exact_command or proc.command_line == command_line)
             and proc.start_time is not None
             and proc.start_time <= time
             and not self._foreground_process_expired_for_attribution(source_system, proc, time)
@@ -6233,7 +7431,6 @@ class ActivityGenerator:
             )
             return proc.pid, proc.image
 
-        os_category = _get_os_category(source_system.os)
         if os_category == "windows" and image_lower.endswith(tuple(_WINDOWS_BROWSER_EXES)):
             parsed_url = urlsplit(proxy_context.url or "")
             proxy_uri = parsed_url.path or "/"
@@ -6277,6 +7474,15 @@ class ActivityGenerator:
             time=process_time,
             logon_id=session.logon_id,
         )
+        if os_category == "linux":
+            parent_pid = (
+                self._linux_non_shell_session_parent_pid(
+                    system=source_system,
+                    time=process_time,
+                    logon_id=session.logon_id,
+                )
+                or parent_pid
+            )
         pid = self.generate_process(
             user=user,
             system=source_system,
@@ -6292,6 +7498,69 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         return pid, image
+
+    def _linux_non_shell_session_parent_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> int | None:
+        """Return a live non-shell parent for Linux session-bound helper processes."""
+        if _get_os_category(system.os) != "linux" or not logon_id:
+            return None
+
+        def live_non_shell(candidate: int | None) -> int | None:
+            if not candidate:
+                return None
+            proc = self.state_manager.get_process(system.hostname, candidate)
+            if proc is None or not self._linux_parent_usable_for_child_at(
+                system=system,
+                parent_pid=candidate,
+                time=time,
+                logon_id=logon_id,
+            ):
+                return None
+            exe = proc.image.rsplit("/", 1)[-1].lower()
+            if exe in {"bash", "sh", "zsh"}:
+                return None
+            return candidate
+
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            for candidate in (session.process_tree_root, session.transport_pid):
+                parent_pid = live_non_shell(candidate)
+                if parent_pid is not None:
+                    return parent_pid
+
+        session_user = session.username if session is not None else ""
+        preferred_images = {
+            "systemd",
+            "gnome-terminal-server",
+            "login",
+            "sshd",
+        }
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            if session_user and proc.username not in {session_user, "root"}:
+                continue
+            if proc.logon_id and proc.logon_id != logon_id:
+                continue
+            exe = proc.image.rsplit("/", 1)[-1].lower()
+            if exe not in preferred_images:
+                continue
+            parent_pid = live_non_shell(proc.pid)
+            if parent_pid is not None:
+                candidates.append(proc)
+        if candidates:
+            return max(candidates, key=lambda candidate: candidate.start_time or time).pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("systemd", "init", "sshd"):
+            parent_pid = live_non_shell(sys_pids.get(role))
+            if parent_pid is not None:
+                return parent_pid
+        return None
 
     def _ensure_browser_http_client_process(
         self,
@@ -6602,6 +7871,24 @@ class ActivityGenerator:
             )
             return
 
+        fallback_pid, fallback_image = self._ensure_high_confidence_connection_owner(
+            source_system=source_system,
+            time=time,
+            service=event.network.service,
+            dst_port=event.network.dst_port,
+            proto=event.network.protocol,
+            hostname=proxy_context.host,
+            http=event.http,
+        )
+        if fallback_pid > 0:
+            self._set_connection_process_context(
+                event,
+                source_system=source_system,
+                pid=fallback_pid,
+                image=fallback_image,
+            )
+            return
+
         self._set_connection_process_context(
             event,
             source_system=source_system,
@@ -6655,7 +7942,14 @@ class ActivityGenerator:
             return candidate_image
 
         expected_image = hint[0]
+        expected_command_line = hint[1]
+        require_exact_command = self._connection_owner_requires_exact_command_line(
+            expected_image,
+            expected_command_line,
+        )
         if candidate_image.lower() == expected_image.lower():
+            if require_exact_command and running.command_line != expected_command_line:
+                return None
             return candidate_image
         expected_exe = ntpath.basename(expected_image).lower()
         candidate_exe = ntpath.basename(candidate_image).lower()
@@ -6790,10 +8084,15 @@ class ActivityGenerator:
         # issued to private IPs. If explicit internal SNI exists, it remains
         # the certificate identity and SAN source of truth.
         internal_cert_name = ""
+        ad_domain = getattr(self, "_ad_domain", "")
+        server_name_is_internal = bool(server_name) and _dns_is_internal_name(
+            server_name,
+            ad_domain,
+        )
         if _is_private_ip(dst_ip):
-            if server_name:
+            if server_name_is_internal:
                 internal_cert_name = server_name
-            else:
+            elif not server_name:
                 dst_host = event.dst_host
                 if dst_host is None and hasattr(self, "_ip_to_system"):
                     dst_system = self._ip_to_system.get(dst_ip)
@@ -7463,7 +8762,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -7623,6 +8922,9 @@ class ActivityGenerator:
             logon_type = 2
             source_ip = None
         if logon_type == 10 and os_cat == "windows" and source_ip in (None, "", "-", system.ip):
+            logon_type = 2
+            source_ip = None
+        if logon_type == 3 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
             logon_type = 2
             source_ip = None
         if (
@@ -7949,6 +9251,26 @@ class ActivityGenerator:
                 auth_package=auth_package_name,
             )
 
+        if os_cat == "windows" and logon_type == 3 and auth_source_ip not in {"", "-", system.ip}:
+            ready_time = ensure_utc(time) + sample_timing_delta(
+                "windows.remote_logon_source_ready",
+                seed_parts=(
+                    system.hostname,
+                    user.username,
+                    logon_id,
+                    auth_source_ip,
+                    source_port or 0,
+                    time,
+                ),
+            )
+            session = self.state_manager.get_session(logon_id)
+            existing_ready_time = _session_source_ready_time(session) if session else None
+            if existing_ready_time is None or existing_ready_time < ready_time:
+                self.state_manager.update_session_metadata(
+                    logon_id,
+                    source_ready_time=ready_time,
+                )
+
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
@@ -8021,7 +9343,8 @@ class ActivityGenerator:
         if (
             session is None
             or session.logon_type not in _LINUX_LOCAL_SESSION_LOGON_TYPES
-            or session.session_kind in _LINUX_REMOTE_SESSION_KINDS
+            or session.session_kind in {"network", "service"}
+            or (session.session_kind == "ssh" and session.source_ip not in {"", "-", system.ip})
         ):
             return
 
@@ -8043,6 +9366,14 @@ class ActivityGenerator:
             message=f"New session {session_id} of user {user.username}.",
             pid=self._get_system_pid(system.hostname, "logind", 456),
             facility=10,
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                session_id=session_id,
+                logon_type=session.logon_type,
+                source_ip="-",
+            ),
         )
         self._linux_local_logon_syslog_sessions.add(logon_id)
 
@@ -8348,11 +9679,15 @@ class ActivityGenerator:
             ),
         )
 
-        # Attach SyslogContext for Linux hosts (sshd failed logon)
+        # Attach SyslogContext for Linux local auth failures. Remote SSH failures
+        # emit a tuple-scoped sshd lifecycle below so "Connection from" can
+        # precede authentication results and share the transport responder PID.
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            if source_ip and source_ip != "-":
+            if remote_linux_source:
+                pass
+            elif source_ip and source_ip != "-":
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
@@ -8383,13 +9718,24 @@ class ActivityGenerator:
                 )
 
         if remote_linux_source and source_ip is not None and linux_ssh_source_port is not None:
-            self._emit_failed_linux_ssh_network_connection(
+            connection_time, connection_duration = self._emit_failed_linux_ssh_network_connection(
                 system=system,
                 time=time,
                 source_ip=source_ip,
                 source_port=linux_ssh_source_port,
                 responding_pid=linux_ssh_responder_pid,
                 rng=rng,
+            )
+            self._emit_failed_linux_ssh_auth_syslog(
+                system=system,
+                connection_time=connection_time,
+                failure_time=time,
+                source_ip=source_ip,
+                source_port=linux_ssh_source_port,
+                responder_pid=linux_ssh_responder_pid,
+                attempted_username=effective_username,
+                known_account=known_account,
+                duration=connection_duration,
             )
 
         self.dispatcher.dispatch(event)
@@ -8601,9 +9947,13 @@ class ActivityGenerator:
         source_port: int,
         responding_pid: int | None,
         rng: random.Random,
-    ) -> None:
+    ) -> tuple[datetime, float]:
         """Emit source-matched Zeek SSH evidence for a failed Linux sshd logon."""
-        conn_time = time - timedelta(milliseconds=rng.randint(35, 450))
+        conn_time = time - timedelta(milliseconds=rng.randint(320, 950))
+        duration = max(
+            rng.uniform(0.9, 3.5),
+            (time - conn_time).total_seconds() + rng.uniform(0.2, 0.85),
+        )
         self.generate_connection(
             src_ip=source_ip,
             dst_ip=system.ip,
@@ -8611,13 +9961,100 @@ class ActivityGenerator:
             dst_port=22,
             proto="tcp",
             service="ssh",
-            duration=rng.uniform(0.12, 3.5),
+            duration=duration,
             orig_bytes=rng.randint(260, 1800),
             resp_bytes=rng.randint(240, 2600),
             src_port=source_port,
             conn_state=rng.choices(["SF", "RSTR"], weights=[78, 22], k=1)[0],
             responding_pid=responding_pid or -1,
         )
+        return conn_time, duration
+
+    def _emit_failed_linux_ssh_auth_syslog(
+        self,
+        *,
+        system: System,
+        connection_time: datetime,
+        failure_time: datetime,
+        source_ip: str,
+        source_port: int,
+        responder_pid: int | None,
+        attempted_username: str,
+        known_account: bool,
+        duration: float,
+    ) -> None:
+        """Emit source-native sshd failure rows for one remote auth tuple."""
+        if not source_ip or source_ip == "-" or source_port <= 0 or responder_pid is None:
+            return
+
+        seed = _stable_seed(
+            "failed_linux_ssh_auth_syslog:"
+            f"{system.hostname}:{source_ip}:{source_port}:{system.ip}:"
+            f"{attempted_username}:{failure_time.isoformat()}"
+        )
+        latest_connection_time = failure_time - timedelta(milliseconds=120 + (seed % 180))
+        connection_message_time = min(
+            connection_time + timedelta(milliseconds=45 + ((seed >> 8) % 120)),
+            latest_connection_time,
+        )
+        invalid_user_time = failure_time - timedelta(milliseconds=45 + ((seed >> 16) % 110))
+        close_time = max(
+            failure_time + timedelta(milliseconds=70 + ((seed >> 24) % 240)),
+            connection_time + timedelta(seconds=duration),
+        )
+
+        rows: list[tuple[datetime, int, str]] = [
+            (
+                connection_message_time,
+                6,
+                f"Connection from {source_ip} port {source_port} on {system.ip} port 22",
+            )
+        ]
+        if known_account:
+            rows.append(
+                (
+                    failure_time,
+                    4,
+                    f"Failed password for {attempted_username} "
+                    f"from {source_ip} port {source_port} ssh2",
+                )
+            )
+            close_subject = f"authenticating user {attempted_username}"
+        else:
+            rows.extend(
+                [
+                    (
+                        invalid_user_time,
+                        5,
+                        f"Invalid user {attempted_username} from {source_ip} port {source_port}",
+                    ),
+                    (
+                        failure_time,
+                        4,
+                        f"Failed password for invalid user {attempted_username} "
+                        f"from {source_ip} port {source_port} ssh2",
+                    ),
+                ]
+            )
+            close_subject = f"invalid user {attempted_username}"
+
+        rows.append(
+            (
+                close_time,
+                6,
+                f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
+            )
+        )
+        for row_time, severity, message in sorted(rows, key=lambda row: row[0]):
+            self.generate_syslog_event(
+                system,
+                row_time,
+                "sshd",
+                message,
+                pid=responder_pid,
+                facility=10,
+                severity=severity,
+            )
 
     def _maybe_emit_failed_logon_network_connection(
         self,
@@ -8857,6 +10294,40 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
+        if event.syslog is not None and event.dst_host and event.dst_host.os_category == "linux":
+            if is_ssh_session and session_id:
+                remove_seed = _stable_seed(
+                    "linux_ssh_logoff_logind_removed:"
+                    f"{system.hostname}:{user.username}:{logon_id}:{session_id}:"
+                    f"{time.isoformat()}"
+                )
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time
+                        + timedelta(
+                            milliseconds=120 + (remove_seed % 880),
+                            microseconds=701 + (remove_seed % 173),
+                        ),
+                        event_type="syslog",
+                        src_host=event.dst_host,
+                        auth=AuthContext(
+                            username=user.username,
+                            user_sid=self._get_sid(user.username),
+                            logon_id=logon_id,
+                            session_id=session_id,
+                            logon_type=logon_type,
+                            source_ip=session_source_ip,
+                            source_port=session_source_port,
+                        ),
+                        syslog=SyslogContext(
+                            app_name="systemd-logind",
+                            pid=self._get_system_pid(system.hostname, "logind", 456),
+                            facility=10,
+                            severity=6,
+                            message=f"Removed session {session_id}.",
+                        ),
+                    )
+                )
 
         logger.debug(
             f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})"
@@ -9013,6 +10484,28 @@ class ActivityGenerator:
         self._last_one_shot_cli_launch_by_command[command_key] = adjusted_time
         return adjusted_time
 
+    def _remember_one_shot_cli_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> None:
+        """Record the final launch timestamp for later one-shot CLI spacing."""
+        if _get_os_category(system.os) != "windows":
+            return
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
+            return
+        normalized_command = " ".join(command_line.lower().split())
+        exe_key = (system.hostname, username, logon_id, exe_name)
+        command_key = (*exe_key, normalized_command)
+        self._last_one_shot_cli_launch_by_exe[exe_key] = time
+        self._last_one_shot_cli_launch_by_command[command_key] = time
+
     @staticmethod
     def _is_top_level_browser_launch(process_name: str, command_line: str) -> bool:
         """Return whether a Windows browser command represents a user-facing process."""
@@ -9073,6 +10566,49 @@ class ActivityGenerator:
         chosen = max(same_exe or candidates, key=lambda candidate: candidate.start_time)
         self._preferred_browser_by_session[preferred_key] = (
             chosen.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        )
+        self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
+        return chosen.pid
+
+    def _existing_persistent_user_app_pid(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> int | None:
+        """Reuse already-open desktop apps that normally stay resident."""
+        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if requested_exe not in _PERSISTENT_USER_APP_EXES:
+            return None
+        command = f" {command_line.lower()} "
+        if requested_exe == "teams.exe" and any(
+            marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS
+        ):
+            return None
+
+        candidates: list[RunningProcess] = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            if proc.username != username:
+                continue
+            if proc.logon_id and logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            if self._foreground_process_expired_for_attribution(system, proc, time):
+                continue
+            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if proc_exe == requested_exe:
+                candidates.append(proc)
+
+        if not candidates:
+            return None
+        chosen = max(
+            candidates,
+            key=lambda candidate: candidate.last_activity_time or candidate.start_time,
         )
         self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
         return chosen.pid
@@ -9156,6 +10692,30 @@ class ActivityGenerator:
                 adjusted_time = previous + min_gap
         self._last_browser_launch_by_session[key] = adjusted_time
         return adjusted_time
+
+    @staticmethod
+    def _linux_process_is_system_background_helper(process_name: str, command_line: str) -> bool:
+        """Return whether a Linux helper should be modeled as daemon/timer-owned."""
+        image_lower = process_name.lower()
+        command_lower = command_line.lower()
+        exe_name = image_lower.rsplit("/", 1)[-1]
+        if image_lower.startswith("/usr/lib/apt/methods/"):
+            return True
+        if exe_name in {"dnf", "yum"} and any(
+            token in command_lower for token in ("makecache", "check-update", "update")
+        ):
+            return True
+        if exe_name == "service-healthcheck":
+            return True
+        return exe_name == "java" and "integration-worker" in command_lower
+
+    @staticmethod
+    def _linux_background_helper_username(process_name: str, command_line: str) -> str:
+        """Return the service principal for a Linux background helper process."""
+        exe_name = process_name.lower().rsplit("/", 1)[-1]
+        if exe_name == "java" and "integration-worker" in command_line.lower():
+            return "www-data"
+        return "root"
 
     def generate_process(
         self,
@@ -9307,6 +10867,23 @@ class ActivityGenerator:
             process_username = service_process_account
             process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_process_account]
             _integrity = "System"
+        linux_session_end_time = (
+            self.state_manager.get_session_end_time(process_logon_id)
+            if _get_os_category(system.os) == "linux" and process_logon_id
+            else None
+        )
+        if (
+            linux_session_end_time is not None
+            and ensure_utc(time) >= ensure_utc(linux_session_end_time)
+            and self._linux_process_is_system_background_helper(process_name, command_line)
+        ):
+            process_username = self._linux_background_helper_username(
+                process_name,
+                command_line,
+            )
+            process_logon_id = "0x3e7"
+            _integrity = "System"
+            parent_pid = self._linux_system_parent_fallback(system, time)
         session_end_time = self.state_manager.get_session_end_time(process_logon_id)
         if (
             session_end_time is not None
@@ -9364,7 +10941,15 @@ class ActivityGenerator:
                 if spaced_time != time:
                     time = spaced_time
                     self.state_manager.set_current_time(time)
-        if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
+        if (
+            process_username != user.username
+            and process_username not in _SYSTEM_ACCOUNTS
+            and not (
+                _get_os_category(system.os) == "linux"
+                and process_logon_id == "0x3e7"
+                and process_username in {"root", "www-data", "proxy", "postfix"}
+            )
+        ):
             _integrity = "Medium"
         if _get_os_category(system.os) == "windows" and process_logon_type == 5:
             _integrity = "High" if _integrity == "Medium" else _integrity
@@ -9408,6 +10993,18 @@ class ActivityGenerator:
                     running_proc.last_activity_time = time
             return singleton_pid
 
+        if not from_storyline:
+            persistent_app_pid = self._existing_persistent_user_app_pid(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if persistent_app_pid is not None:
+                return persistent_app_pid
+
         if not from_storyline and allow_existing_browser_reuse:
             browser_pid = self._existing_user_browser_pid(
                 system=system,
@@ -9449,6 +11046,23 @@ class ActivityGenerator:
         repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
         if repaired_parent is not None and time <= repaired_parent.start_time:
             time = repaired_parent.start_time + timedelta(milliseconds=50)
+        if not from_storyline:
+            spaced_time = self._space_interactive_shell_child_launch(
+                system=system,
+                process_name=process_name,
+                parent_pid=parent_pid,
+                time=time,
+            )
+            if spaced_time != time:
+                time = spaced_time
+            self._remember_one_shot_cli_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
         self.state_manager.set_current_time(time)
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
@@ -9917,9 +11531,14 @@ class ActivityGenerator:
             return
 
         process_start_time = proc.start_time or event.timestamp
+        session_ready_floor = self._process_session_source_ready_floor(host.hostname, proc)
 
         if host.os_category == "windows":
             sysmon_not_before = event.timestamp
+            ecar_not_before = process_start_time
+            if session_ready_floor is not None:
+                sysmon_not_before = max(sysmon_not_before, session_ready_floor)
+                ecar_not_before = max(ecar_not_before, session_ready_floor)
             if proc.parent_pid > 0:
                 parent_visible_time = self.process_source_create_time(
                     host.hostname, proc.parent_pid
@@ -9945,7 +11564,7 @@ class ActivityGenerator:
                 event,
                 "source.ecar_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
-                not_before=process_start_time,
+                not_before=ecar_not_before,
             )
             return
         else:
@@ -9957,6 +11576,23 @@ class ActivityGenerator:
             seed_parts=(host.hostname, proc.pid, process_start_time),
             not_before=ecar_not_before,
         )
+
+    def _process_session_source_ready_floor(
+        self,
+        hostname: str,
+        proc: ProcessContext,
+    ) -> datetime | None:
+        """Return the session-visible floor for process-owned source evidence."""
+        logon_id = str(getattr(proc, "logon_id", "") or "")
+        if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+            return None
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != hostname:
+            return None
+        ready_time = _session_source_ready_time(session)
+        if ready_time is None:
+            return None
+        return ready_time + timedelta(milliseconds=1)
 
     def _record_process_source_terminate_time(
         self,
@@ -9983,17 +11619,26 @@ class ActivityGenerator:
         proc = event.process
         if host is None or proc is None or proc.start_time is None:
             return
-        self._plan_process_source_create_times(event)
-        source_timing = event.source_timing
-        process_create_ts = proc.start_time
-        if source_timing is not None:
-            ecar_create_times = [
-                timestamp
-                for key, timestamp in source_timing.source_times.items()
-                if key.startswith("source.ecar_process_create|")
-            ]
-            if ecar_create_times:
-                process_create_ts = max(ecar_create_times)
+        process_create_ts = self.process_source_create_time(host.hostname, proc.pid)
+        if process_create_ts is None:
+            create_anchor_event = SecurityEvent(
+                timestamp=proc.start_time,
+                event_type="process_create",
+                src_host=host,
+                process=proc,
+            )
+            self._plan_process_source_create_times(create_anchor_event)
+            source_timing = create_anchor_event.source_timing
+            if source_timing is not None:
+                ecar_create_times = [
+                    timestamp
+                    for key, timestamp in source_timing.source_times.items()
+                    if key.startswith("source.ecar_process_create|")
+                ]
+                if ecar_create_times:
+                    process_create_ts = max(ecar_create_times)
+        if process_create_ts is None:
+            process_create_ts = proc.start_time
         canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
         self._source_timing_planner.source_time(
             event,
@@ -10238,6 +11883,7 @@ class ActivityGenerator:
         source_ip: str,
         source_port: int,
         sshd_pid: int,
+        attempted_username: str | None,
         duration: float | None,
     ) -> None:
         """Emit source-native sshd auth companions for generic preauth transport."""
@@ -10249,7 +11895,7 @@ class ActivityGenerator:
             f"{target_system.hostname}:{source_ip}:{source_port}:{target_system.ip}:"
             f"{sshd_pid}:{time.isoformat()}"
         )
-        connection_delta_ms = 45 + (seed % 90)
+        connection_delta_ms = 5 + (seed % 10)
         invalid_delta_ms = connection_delta_ms + 40 + ((seed >> 8) % 180)
         failed_delta_ms = invalid_delta_ms + 120 + ((seed >> 16) % 600)
         close_delta_ms = max(
@@ -10261,23 +11907,66 @@ class ActivityGenerator:
                 connection_delta_ms,
                 6,
                 f"Connection from {source_ip} port {source_port} on {target_system.ip} port 22",
-            ),
-            (
-                invalid_delta_ms,
-                5,
-                f"Invalid user unknown from {source_ip} port {source_port}",
-            ),
-            (
-                failed_delta_ms,
-                4,
-                f"Failed password for invalid user unknown from {source_ip} port {source_port} ssh2",
-            ),
+            )
+        ]
+        attempted_username = (attempted_username or "").strip()
+        if attempted_username:
+            known_account = (
+                attempted_username in getattr(self, "sid_registry", {})
+                or attempted_username in getattr(self, "_users_by_username", {})
+                or attempted_username in {"root", "admin", "apache"}
+            )
+            if known_account:
+                rows.append(
+                    (
+                        failed_delta_ms,
+                        4,
+                        f"Failed password for {attempted_username} "
+                        f"from {source_ip} port {source_port} ssh2",
+                    )
+                )
+                close_subject = f"authenticating user {attempted_username}"
+            else:
+                rows.extend(
+                    [
+                        (
+                            invalid_delta_ms,
+                            5,
+                            f"Invalid user {attempted_username} from {source_ip} port {source_port}",
+                        ),
+                        (
+                            failed_delta_ms,
+                            4,
+                            f"Failed password for invalid user {attempted_username} "
+                            f"from {source_ip} port {source_port} ssh2",
+                        ),
+                    ]
+                )
+                close_subject = f"invalid user {attempted_username}"
+        else:
+            rows.extend(
+                [
+                    (
+                        invalid_delta_ms,
+                        5,
+                        f"Invalid user unknown from {source_ip} port {source_port}",
+                    ),
+                    (
+                        failed_delta_ms,
+                        4,
+                        f"Failed password for invalid user unknown "
+                        f"from {source_ip} port {source_port} ssh2",
+                    ),
+                ]
+            )
+            close_subject = "invalid user unknown"
+        rows.append(
             (
                 close_delta_ms,
                 6,
-                f"Connection closed by invalid user unknown {source_ip} port {source_port} [preauth]",
-            ),
-        ]
+                f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
+            )
+        )
         for delta_ms, severity, message in rows:
             self.generate_syslog_event(
                 target_system,
@@ -10400,6 +12089,12 @@ class ActivityGenerator:
             command_line=command_line,
             parent_pid=parent_pid,
             suppress_command_file_effect=True,
+            concurrency_group_id=self._bash_history_process_group_id(
+                user,
+                source_system,
+                process_time,
+                command_line,
+            ),
         )
         self._record_user_process(source_system, user, pid, image)
         self._emit_bash_command_event(user, source_system, process_time, command_line)
@@ -10609,6 +12304,11 @@ class ActivityGenerator:
                 latest_allowed = running_proc.start_time + timedelta(milliseconds=100)
             if latest_allowed < session_end_time:
                 time = min(time, latest_allowed)
+        time = self._held_process_termination_time(
+            system=system,
+            pid=pid,
+            requested_time=time,
+        )
         if not process_logon_id:
             if process_username in _SYSTEM_ACCOUNTS:
                 process_logon_id = "0x3e7"
@@ -10834,8 +12534,11 @@ class ActivityGenerator:
             weights=[34, 36, 20, 10],
             k=1,
         )[0]
+        machine_service_principal = (
+            f"{machine_principal}@{getattr(self, '_ad_domain', 'corp.local').upper()}"
+        )
         self.generate_kerberos_service_ticket(
-            username=machine_principal,
+            username=machine_service_principal,
             service_name=service_name,
             source_ip=src_ip,
             dc_hostname=dc_hostname,
@@ -10860,9 +12563,15 @@ class ActivityGenerator:
         source_system: Optional["System"] = None,
         conn_state: str | None = None,
         dns: Optional["DnsContext"] = None,
+        email: Optional["EmailContext"] = None,
+        smtp: Optional["SmtpContext"] = None,
+        ssl: SslContext | None = None,
+        x509: X509Context | None = None,
+        x509_chain: list[X509Context] | None = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
+        file_transfers: list[FileTransferContext] | None = None,
         pe: PeContext | None = None,
         ocsp: OcspContext | None = None,
         proxy: Optional["ProxyContext"] = None,
@@ -10873,9 +12582,12 @@ class ActivityGenerator:
         preserve_dst_ip: bool = False,
         preserve_http_outcome: bool = False,
         suppress_application_side_effects: bool = False,
+        suppress_source_pid_inference: bool = False,
         preserve_explicit_payload: bool = False,
+        suppress_prereq_dns: bool = False,
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
+        ssh_attempted_username: str | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -10926,9 +12638,15 @@ class ActivityGenerator:
             source_system=source_system,
             conn_state=conn_state,
             dns=dns,
+            email=email,
+            smtp=smtp,
+            ssl=ssl,
+            x509=x509,
+            x509_chain=list(x509_chain or []),
             ids=ids,
             http=http,
             file_transfer=file_transfer,
+            file_transfers=list(file_transfers or []),
             pe=pe,
             ocsp=ocsp,
             proxy=proxy,
@@ -10939,14 +12657,4084 @@ class ActivityGenerator:
             preserve_dst_ip=preserve_dst_ip,
             preserve_http_outcome=preserve_http_outcome,
             suppress_application_side_effects=suppress_application_side_effects,
+            suppress_source_pid_inference=suppress_source_pid_inference,
             preserve_explicit_payload=preserve_explicit_payload,
+            suppress_prereq_dns=suppress_prereq_dns,
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
+            ssh_attempted_username=ssh_attempted_username,
         )
         return NetworkConnectionActionBundle(
             executor=self,
             request=request,
         ).execute()
+
+    def generate_email_message(
+        self,
+        *,
+        spec: EmailMessageEventSpec,
+        actor: "User",
+        system: "System",
+        time: datetime,
+        activity: str = "",
+        storyline_id: str = "",
+    ) -> EmailDeliveryResult:
+        """Generate SMTP delivery evidence for one modeled email message."""
+        request = EmailDeliveryRequest(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=time,
+            activity=activity,
+            storyline_id=storyline_id,
+        )
+        return EmailDeliveryActionBundle(executor=self, request=request).execute()
+
+    def generate_email_read(
+        self,
+        *,
+        spec: Any,
+        actor: "User",
+        system: "System",
+        time: datetime,
+        activity: str = "",
+        storyline_id: str = "",
+    ) -> dict[str, Any]:
+        """Generate opaque TLS mailbox access evidence for an email_read event."""
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("email_read requires environment.email to be configured")
+        mailbox = (spec.mailbox or actor.email).lower()
+        server_name = spec.server or self._email_server_for_user_address(mailbox)
+        server_system = self._email_system_for_server_name(server_name)
+        server_cfg = self._email_servers_by_name()[server_name]
+        protocol = spec.protocol or ("owa" if server_cfg.platform == "exchange" else "imaps")
+        uid = self.generate_email_access(
+            user=actor,
+            system=system,
+            server=server_system,
+            time=time,
+            platform=server_cfg.platform,
+            protocol=protocol,
+            duration=spec.duration,
+            user_agent=spec.user_agent or "",
+            message_ids=tuple(spec.message_ids),
+        )
+        return {
+            "mailbox": mailbox,
+            "server": server_name,
+            "protocol": protocol,
+            "message_ids": list(spec.message_ids),
+            "count": spec.count,
+            "uid": uid,
+        }
+
+    def generate_email_access(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        server: "System",
+        time: datetime,
+        platform: str = "generic_smtp",
+        protocol: str = "",
+        duration: float | None = None,
+        user_agent: str = "",
+        message_ids: tuple[str, ...] = (),
+    ) -> str:
+        """Generate an opaque TLS mailbox access session."""
+        request = EmailAccessRequest(
+            user=user,
+            system=system,
+            server=server,
+            time=time,
+            platform=platform,
+            protocol=protocol,
+            duration=duration,
+            user_agent=user_agent,
+            message_ids=message_ids,
+        )
+        return EmailAccessActionBundle(executor=self, request=request).execute()
+
+    def _execute_email_access_bundle(self, request: EmailAccessRequest) -> str:
+        """Expand one lightweight mailbox read/access session into network evidence."""
+        rng = random.Random(
+            _stable_seed(
+                "email_access:"
+                f"{request.user.username}:{request.system.hostname}:"
+                f"{request.server.hostname}:{request.time.isoformat()}"
+            )
+        )
+        protocol = request.protocol or ("owa" if request.platform == "exchange" else "imaps")
+        port = 443 if protocol == "owa" else 993
+        service = "ssl"
+        hostname = self._email_server_fqdn(request.server.hostname)
+        process_image = self._email_access_process_image(
+            request.system,
+            protocol,
+            request.user_agent,
+            rng,
+        )
+        process_pid, resolved_process_image = self._ensure_email_client_process(
+            user=request.user,
+            system=request.system,
+            time=request.time,
+            image=process_image,
+            command_line=self._email_access_process_command_line(
+                process_image,
+                protocol=protocol,
+                server_hostname=hostname,
+            ),
+        )
+        duration = request.duration or rng.uniform(12.0, 180.0)
+        orig_bytes = rng.randint(1200, 9000)
+        resp_bytes = rng.randint(15_000, 450_000)
+        responding_pid = self._email_responding_process_pid(
+            request.server,
+            time=request.time,
+            port=port,
+        )
+        uid = self.generate_connection(
+            src_ip=request.system.ip,
+            dst_ip=request.server.ip,
+            time=request.time,
+            dst_port=port,
+            proto="tcp",
+            service=service,
+            duration=duration,
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
+            conn_state="SF",
+            emit_dns=True,
+            source_system=request.system,
+            pid=process_pid,
+            hostname=hostname,
+            process_image=resolved_process_image or process_image,
+            suppress_source_pid_inference=process_pid <= 0,
+            responding_pid=responding_pid,
+        )
+        if protocol == "imaps" and self._is_linux_mail_server(request.server):
+            self._emit_dovecot_imap_syslog(
+                user=request.user,
+                client_system=request.system,
+                server=request.server,
+                time=request.time,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                message_ids=request.message_ids,
+                master_pid=responding_pid,
+            )
+        return uid
+
+    def _emit_dovecot_imap_syslog(
+        self,
+        *,
+        user: "User",
+        client_system: "System",
+        server: "System",
+        time: datetime,
+        duration: float,
+        orig_bytes: int,
+        resp_bytes: int,
+        message_ids: tuple[str, ...],
+        master_pid: int,
+    ) -> None:
+        """Emit Dovecot auth/session companions for an observed IMAPS read."""
+        seed = _stable_seed(
+            "dovecot_imap:"
+            f"{server.hostname}:{client_system.hostname}:{user.username}:{time.isoformat()}"
+        )
+        rng = random.Random(seed)
+        worker_pid = self.state_manager.allocate_transient_linux_pid(
+            server.hostname,
+            time + timedelta(milliseconds=rng.randint(35, 140)),
+        )
+        session_token = self._dovecot_session_token(seed)
+        message_count = max(1, len(message_ids) or rng.randint(1, 6))
+        hdr_count = max(message_count, rng.randint(message_count, message_count + 4))
+        body_count = rng.randint(0, message_count)
+        hdr_bytes = min(resp_bytes, hdr_count * rng.randint(650, 2200))
+        body_bytes = max(0, resp_bytes - hdr_bytes - rng.randint(1200, 9000))
+        login_time = self._smtp_lifecycle_time(time, duration, rng.uniform(0.03, 0.12))
+        logout_time = self._smtp_lifecycle_time(time, duration, rng.uniform(0.84, 0.98))
+        login_pid = master_pid if master_pid > 0 else None
+
+        self.generate_syslog_event(
+            server,
+            login_time,
+            "dovecot",
+            (
+                f"imap-login: Login: user=<{user.username}>, method=PLAIN, "
+                f"rip={client_system.ip}, lip={server.ip}, mpid={worker_pid}, TLS, "
+                f"session=<{session_token}>"
+            ),
+            pid=login_pid,
+        )
+        self.generate_syslog_event(
+            server,
+            logout_time,
+            "dovecot",
+            (
+                f"imap({user.username})<{worker_pid}><{session_token}>: "
+                f"Disconnected: Logged out in={orig_bytes} out={resp_bytes} "
+                "deleted=0 expunged=0 trashed=0 "
+                f"hdr_count={hdr_count} hdr_bytes={hdr_bytes} "
+                f"body_count={body_count} body_bytes={body_bytes}"
+            ),
+            pid=worker_pid,
+        )
+
+    def _dovecot_session_token(self, seed: int) -> str:
+        """Return a compact deterministic Dovecot-style session token."""
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        value = seed
+        chars: list[str] = []
+        while value and len(chars) < 11:
+            value, remainder = divmod(value, len(alphabet))
+            chars.append(alphabet[remainder])
+        token = "".join(reversed(chars)).rjust(10, "A")
+        return token[-11:]
+
+    def _email_access_process_image(
+        self,
+        system: "System",
+        protocol: str,
+        user_agent: str,
+        rng: random.Random,
+    ) -> str:
+        """Return lightweight client process attribution for mailbox reads."""
+        os_category = _get_os_category(system.os)
+        ua = user_agent.lower()
+        if protocol == "owa":
+            if os_category == "windows":
+                return rng.choice(
+                    [
+                        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    ]
+                )
+            return rng.choice(["/usr/bin/firefox", "/usr/bin/chromium"])
+        if "thunderbird" in ua:
+            return (
+                "/usr/bin/thunderbird"
+                if os_category == "linux"
+                else r"C:\Program Files\Mozilla Thunderbird\thunderbird.exe"
+            )
+        if os_category == "windows":
+            return r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"
+        return "/usr/bin/thunderbird"
+
+    def _email_access_process_command_line(
+        self,
+        image: str,
+        *,
+        protocol: str,
+        server_hostname: str,
+    ) -> str:
+        """Return a source-plausible command line for mailbox access ownership."""
+        exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name in {"chrome.exe", "msedge.exe", "firefox", "firefox.exe", "chromium"}:
+            scheme = "https"
+            path = "/owa/" if protocol == "owa" else "/mail/"
+            return (
+                f'"{image}" {scheme}://{server_hostname}{path}'
+                if "\\" in image
+                else (f"{image} {scheme}://{server_hostname}{path}")
+            )
+        if "thunderbird" in exe_name:
+            return f'"{image}" -mail' if "\\" in image else f"{image} -mail"
+        if exe_name == "outlook.exe":
+            return f'"{image}" /recycle'
+        return image
+
+    def _ensure_email_client_process(
+        self,
+        *,
+        user: "User",
+        system: "System",
+        time: datetime,
+        image: str,
+        command_line: str,
+    ) -> tuple[int, str | None]:
+        """Create or reuse a user mail client process for endpoint flow attribution."""
+        os_category = _get_os_category(system.os)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and _session_started_by(session, time)
+        ]
+        if os_category == "windows":
+            sessions = [
+                session
+                for session in sessions
+                if session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            ]
+        if not sessions:
+            return -1, None
+        session = max(sessions, key=lambda candidate: candidate.start_time)
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.username == user.username
+            and proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and not self._foreground_process_expired_for_attribution(system, proc, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+            return proc.pid, proc.image
+
+        rng = random.Random(
+            _stable_seed(
+                f"email_client_process:{system.hostname}:{user.username}:{image}:{time.isoformat()}"
+            )
+        )
+        lead_seconds = rng.uniform(3.0, 180.0)
+        process_time = time - timedelta(seconds=lead_seconds)
+        min_process_time = session.start_time + timedelta(milliseconds=500)
+        if process_time < min_process_time:
+            process_time = min_process_time
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+        parent_pid = self._select_parent_pid(
+            system,
+            user,
+            image,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        pid = self.generate_process(
+            user=user,
+            system=system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+        self._record_user_process(system, user, pid, image)
+        self.state_manager.update_process_activity_time(system.hostname, pid, time)
+        self.state_manager.set_current_time(time)
+        running = self.state_manager.get_process(system.hostname, pid)
+        if running is not None:
+            return pid, running.image
+        return pid, image
+
+    def _ensure_email_submission_session(
+        self,
+        *,
+        actor: "User",
+        system: "System",
+        time: datetime,
+    ) -> None:
+        """Ensure a sender has an interactive session before SMTP client activity."""
+        planner = getattr(self, "_world_planner", None)
+        if planner is None:
+            return
+        rng = random.Random(
+            _stable_seed(
+                f"email_submission_session:{system.hostname}:{actor.username}:{time.isoformat()}"
+            )
+        )
+        try:
+            planner.ensure_user_session(
+                actor,
+                system,
+                time,
+                rng,
+                session_kind="interactive",
+                allow_existing=True,
+                storyline_protected=True,
+                required_until=time + timedelta(seconds=30),
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            logger.debug(
+                "Unable to bootstrap email submission session for %s@%s: %s",
+                actor.username,
+                system.hostname,
+                exc,
+            )
+
+    def _email_source_process_attribution(
+        self,
+        *,
+        actor: "User",
+        src_system: "System",
+        hop: dict[str, Any],
+        time: datetime,
+        user_agent: str,
+    ) -> tuple[int, str | None]:
+        """Return source PID/image ownership for SMTP submission or relay hops."""
+        if "external_mail_server" in (src_system.roles or []):
+            return -1, None
+        if hop.get("submission"):
+            self._ensure_email_submission_session(actor=actor, system=src_system, time=time)
+            image = self._email_access_process_image(src_system, "smtp", user_agent, _get_rng())
+            command_line = self._email_access_process_command_line(
+                image,
+                protocol="smtp",
+                server_hostname=self._email_server_fqdn(hop["dst_system"].hostname),
+            )
+            return self._ensure_email_client_process(
+                user=actor,
+                system=src_system,
+                time=time,
+                image=image,
+                command_line=command_line,
+            )
+        if hop.get("server_to_server"):
+            if _get_os_category(src_system.os) == "linux":
+                pid = self._ensure_email_mta_outbound_process(src_system, time=time)
+                image = self._email_mta_outbound_process_image(src_system)
+                return pid, image if pid > 0 else None
+            pid = self._ensure_email_server_process(src_system, time=time, port=25)
+            image = self._email_server_process_image(src_system, port=25)
+            return pid, image if pid > 0 else None
+        return -1, None
+
+    def _email_responding_process_pid(
+        self,
+        system: "System",
+        *,
+        time: datetime,
+        port: int,
+    ) -> int:
+        """Return destination-side mail service ownership for endpoint evidence."""
+        if "external_mail_server" in (system.roles or []):
+            return -1
+        return self._ensure_email_server_process(system, time=time, port=port)
+
+    def _email_server_process_image(self, system: "System", *, port: int) -> str:
+        """Return platform-specific mail service process image for a local server."""
+        os_category = _get_os_category(system.os)
+        if os_category == "windows":
+            if port == 443:
+                return r"C:\Windows\System32\inetsrv\w3wp.exe"
+            if port == 993:
+                return r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe"
+            return r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe"
+        if port == 993:
+            return "/usr/sbin/dovecot"
+        if port == 443:
+            return "/usr/sbin/nginx"
+        return "/usr/lib/postfix/sbin/smtpd"
+
+    def _email_server_command_line(self, image: str, *, port: int) -> str:
+        """Return a stable service command line for a mail daemon process."""
+        exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name == "edgetransport.exe":
+            return f'"{image}" -service'
+        if exe_name == "microsoft.exchange.imap4.exe":
+            return f'"{image}"'
+        if exe_name == "w3wp.exe":
+            return f'{image} -ap "MSExchangeOWAAppPool"'
+        if exe_name == "smtp" and "postfix" in image:
+            return f"{image} -t unix -u -c"
+        if "postfix" in image:
+            return f"{image} -n smtpd"
+        if exe_name == "dovecot":
+            return f"{image} -F"
+        return image
+
+    def _ensure_email_server_process(
+        self,
+        system: "System",
+        *,
+        time: datetime,
+        port: int,
+    ) -> int:
+        """Create or reuse a local mail service process for flow ownership."""
+        image = self._email_server_process_image(system, port=port)
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and self._is_pid_active_at(system, proc.pid, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+            return proc.pid
+
+        os_category = _get_os_category(system.os)
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        if os_category == "windows":
+            username = "SYSTEM"
+            parent_pid = sys_pids.get("services", sys_pids.get("wininit", 4))
+        else:
+            username = "dovecot" if port == 993 else "postfix"
+            parent_pid = sys_pids.get("systemd", sys_pids.get("init", 1))
+        process_time = time - timedelta(
+            seconds=random.Random(
+                _stable_seed(f"email_server_process:{system.hostname}:{image}:{time.isoformat()}")
+            ).uniform(30.0, 900.0)
+        )
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+        pid = self.generate_system_process(
+            system=system,
+            time=process_time,
+            process_name=image,
+            command_line=self._email_server_command_line(image, port=port),
+            parent_pid=parent_pid,
+            username=username,
+            emit_linux_syslog=False,
+        )
+        if pid > 0:
+            self.state_manager.update_process_activity_time(system.hostname, pid, time)
+            self.state_manager.set_current_time(time)
+        return pid
+
+    def _email_mta_outbound_process_image(self, system: "System") -> str:
+        """Return the process image that owns outbound SMTP relay connections."""
+        if _get_os_category(system.os) == "windows":
+            return self._email_server_process_image(system, port=25)
+        return "/usr/lib/postfix/sbin/smtp"
+
+    def _ensure_email_mta_outbound_process(
+        self,
+        system: "System",
+        *,
+        time: datetime,
+    ) -> int:
+        """Create or reuse the local MTA delivery process for outbound flow ownership."""
+        image = self._email_mta_outbound_process_image(system)
+        if image == self._email_server_process_image(system, port=25):
+            return self._ensure_email_server_process(system, time=time, port=25)
+
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and self._is_pid_active_at(system, proc.pid, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+            return proc.pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        parent_pid = sys_pids.get("systemd", sys_pids.get("init", 1))
+        rng = random.Random(
+            _stable_seed(f"email_mta_outbound_process:{system.hostname}:{image}:{time.isoformat()}")
+        )
+        process_time = time - timedelta(milliseconds=rng.randint(180, 850))
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=50)
+        pid = self.generate_system_process(
+            system=system,
+            time=process_time,
+            process_name=image,
+            command_line=self._email_server_command_line(image, port=25),
+            parent_pid=parent_pid,
+            username="postfix",
+            emit_linux_syslog=False,
+        )
+        if pid > 0:
+            self.state_manager.update_process_activity_time(system.hostname, pid, time)
+            self.state_manager.set_current_time(time)
+        return pid
+
+    def _load_email_corpus(self) -> dict[str, EmailCorpusEntry]:
+        """Load and cache the optional scenario-created email corpus."""
+        cached = getattr(self, "_email_corpus_cache", None)
+        if cached is not None:
+            return cached
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None or not email_config.corpus:
+            self._email_corpus_cache = {}
+            return {}
+        corpus_path = Path(email_config.corpus)
+        if not corpus_path.is_absolute():
+            corpus_path = Path(getattr(self, "_scenario_root", Path.cwd())) / corpus_path
+        with corpus_path.open("r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        messages = raw.get("messages", raw if isinstance(raw, list) else [])
+        if not isinstance(messages, list):
+            raise ValueError("email_corpus.yaml must contain a top-level messages list")
+        entries: dict[str, EmailCorpusEntry] = {}
+        for idx, item in enumerate(messages):
+            if not isinstance(item, dict):
+                raise ValueError(f"email_corpus.yaml messages.{idx} must be a mapping")
+            entry_id = str(item.get("id") or "").strip()
+            if not entry_id:
+                raise ValueError(f"email_corpus.yaml messages.{idx}.id is required")
+            if entry_id in entries:
+                raise ValueError(f"email_corpus.yaml duplicate message id: {entry_id}")
+            subject = str(item.get("subject") or "").strip()
+            body = str(item.get("body") or "")
+            if not subject:
+                raise ValueError(f"email_corpus.yaml message {entry_id!r} requires subject")
+            if not body:
+                raise ValueError(f"email_corpus.yaml message {entry_id!r} requires body")
+            attachments = tuple(
+                self._normalize_email_attachment(att, entry_id, index)
+                for index, att in enumerate(item.get("attachments") or [])
+            )
+            headers_raw = item.get("headers") or {}
+            if not isinstance(headers_raw, dict):
+                raise ValueError(
+                    f"email_corpus.yaml message {entry_id!r} headers must be a mapping"
+                )
+            entries[entry_id] = EmailCorpusEntry(
+                entry_id=entry_id,
+                subject=subject,
+                body=body,
+                user_agent=str(item.get("user_agent") or ""),
+                headers={str(key): str(value) for key, value in headers_raw.items()},
+                attachments=attachments,
+                tags=tuple(str(tag) for tag in item.get("tags") or []),
+                background=bool(item.get("background", False)),
+                storyline=bool(item.get("storyline", True)),
+            )
+        self._email_corpus_cache = entries
+        return entries
+
+    def _email_corpus_entry(self, corpus_id: str | None) -> EmailCorpusEntry | None:
+        """Return one corpus entry or fail clearly if the scenario references an unknown ID."""
+        if not corpus_id:
+            return None
+        corpus = self._load_email_corpus()
+        entry = corpus.get(corpus_id)
+        if entry is None:
+            raise ValueError(f"email_message corpus_id {corpus_id!r} was not found")
+        return entry
+
+    def _email_background_corpus_entries(self) -> list[EmailCorpusEntry]:
+        """Return corpus entries eligible for deterministic background email."""
+        return [entry for entry in self._load_email_corpus().values() if entry.background]
+
+    @staticmethod
+    def _normalize_email_attachment(
+        attachment: Any,
+        entry_id: str,
+        index: int,
+    ) -> dict[str, Any]:
+        """Normalize one corpus attachment into EmailAttachmentSpec-compatible metadata."""
+        if not isinstance(attachment, dict):
+            raise ValueError(
+                f"email_corpus.yaml message {entry_id!r} attachments.{index} must be a mapping"
+            )
+        filename = str(attachment.get("filename") or "").strip()
+        if not filename:
+            raise ValueError(
+                f"email_corpus.yaml message {entry_id!r} attachments.{index}.filename is required"
+            )
+        content = attachment.get("content")
+        size = attachment.get("size")
+        if size is None:
+            size = len(str(content or "").encode("utf-8"))
+        return {
+            "filename": filename,
+            "content_type": str(attachment.get("content_type") or "application/octet-stream"),
+            "size": int(size),
+            "content": None if content is None else str(content),
+        }
+
+    def _execute_email_delivery_bundle(self, request: EmailDeliveryRequest) -> EmailDeliveryResult:
+        """Expand one email message into DNS, SMTP, artifact, and manifest evidence."""
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("email_message requires environment.email to be configured")
+
+        spec = request.spec
+        rng = random.Random(
+            _stable_seed(
+                "email_message:"
+                f"{request.storyline_id}:{request.actor.username}:"
+                f"{request.system.hostname}:{request.time.isoformat()}:{spec.subject or ''}"
+            )
+        )
+        corpus_entry = self._email_corpus_entry(spec.corpus_id)
+        sender = (spec.sender or request.actor.email).lower()
+        recipients_all = list(dict.fromkeys([*spec.to, *spec.cc, *spec.bcc]))
+        envelope_recipients = [recipient.lower() for recipient in recipients_all]
+        expanded_recipients = self._expand_email_recipients(recipients_all)
+        subject = (
+            spec.subject
+            or (corpus_entry.subject if corpus_entry is not None else "")
+            or self._deterministic_email_subject(sender, expanded_recipients, rng)
+        )
+        if corpus_entry is not None and not request.storyline_id and spec.subject is None:
+            subject = self._contextualize_background_email_subject(
+                subject,
+                sender=sender,
+                recipients=expanded_recipients,
+                event_time=request.time,
+            )
+        if spec.body is not None:
+            body = spec.body
+        elif corpus_entry is not None:
+            body = corpus_entry.body
+            if not request.storyline_id:
+                body = self._contextualize_background_email_body(
+                    body,
+                    subject=subject,
+                    sender=sender,
+                    recipients=expanded_recipients,
+                )
+        else:
+            body = self._deterministic_email_body(
+                subject,
+                rng,
+                sender=sender,
+                recipients=expanded_recipients,
+            )
+        attachments = (
+            [dict(attachment) for attachment in corpus_entry.attachments]
+            if corpus_entry is not None
+            else [att.model_dump() for att in spec.attachments]
+        )
+        artifact_id = spec.artifact_id or self._email_artifact_id(
+            request.storyline_id,
+            sender,
+            expanded_recipients,
+            request.time,
+        )
+        body = self._email_body_with_transport_footer(
+            body,
+            artifact_id=artifact_id,
+            sender=sender,
+            recipients=expanded_recipients,
+        )
+        corpus_user_agent = (
+            corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
+        )
+        raw_user_agent = (
+            spec.user_agent or corpus_user_agent or self._email_user_agent(request.system, rng)
+        )
+        user_agent = self._email_effective_user_agent(
+            sender,
+            raw_user_agent,
+            system=request.system,
+        )
+        message_id = self._email_message_id(artifact_id, sender, user_agent)
+        route = self._plan_email_route(sender, expanded_recipients, request.system)
+        delivery_succeeded = spec.outcome == "delivered"
+        if route and not delivery_succeeded:
+            route = route[:1]
+        if route and route[0].get("submission"):
+            route[0]["recipients"] = envelope_recipients
+        transport_body = body if delivery_succeeded else ""
+        transport_attachments = attachments if delivery_succeeded else []
+        transfer_sizes = self._smtp_transfer_sizes(
+            message_id=message_id,
+            body=transport_body,
+            attachments=transport_attachments,
+            route=route,
+        )
+        hop_times = self._email_smtp_hop_times(
+            route=route,
+            message_id=message_id,
+            time=request.time,
+            transfer_sizes=transfer_sizes,
+        )
+        date_header = self._email_date_header_for_route(
+            route=route,
+            sender=sender,
+            message_id=message_id,
+            time=request.time,
+        )
+        received_headers = self._received_headers_for_route(
+            route=route,
+            sender=sender,
+            message_id=message_id,
+            recipients=expanded_recipients,
+            time=request.time,
+            user_agent=user_agent,
+            transfer_sizes=transfer_sizes,
+            hop_times=hop_times,
+        )
+        email_ctx = EmailContext(
+            message_id=message_id,
+            artifact_id=artifact_id,
+            envelope_from=sender,
+            header_from=self._email_header_address(sender),
+            to=[self._email_header_address(addr) for addr in spec.to],
+            cc=[self._email_header_address(addr) for addr in spec.cc],
+            bcc=list(spec.bcc),
+            expanded_rcptto=expanded_recipients,
+            subject=subject,
+            date_header=date_header,
+            user_agent=user_agent,
+            body=body,
+            body_size=len(body.encode("utf-8")),
+            custom_headers=dict(corpus_entry.headers or {}) if corpus_entry is not None else {},
+            attachments=attachments,
+            verdict=spec.verdict,
+            mail_action=spec.mail_action,
+            outcome=spec.outcome,
+            received_headers=received_headers,
+            storyline_id=request.storyline_id,
+        )
+        smtp_uids: list[str] = []
+        route_summary: list[dict[str, str]] = []
+        sender_client_pid = -1
+
+        self._emit_email_route_dns(route, request.time)
+
+        for index, hop in enumerate(route):
+            hop_time = hop_times[index]
+            src_system = hop["src_system"]
+            dst_system = hop["dst_system"]
+            tls = self._smtp_hop_uses_starttls(
+                hop=hop,
+                src_system=src_system,
+                dst_system=dst_system,
+                message_id=message_id,
+                hop_index=index,
+                user_agent=user_agent,
+            )
+            delivery_reply = self._smtp_last_reply(
+                outcome=spec.outcome,
+                message_id=message_id,
+                hop_index=index,
+                src_system=src_system,
+                dst_system=dst_system,
+                submission=bool(hop["submission"]),
+                queue_id=self._postfix_queue_id(message_id, dst_system)
+                if self._is_linux_mail_server(dst_system)
+                else "",
+            )
+            last_reply = delivery_reply
+            if tls:
+                last_reply = self._smtp_starttls_reply(
+                    message_id=message_id,
+                    hop_index=index,
+                    src_system=src_system,
+                    dst_system=dst_system,
+                )
+            mime_file_transfers = (
+                self._email_mime_file_transfers(
+                    artifact_id=artifact_id,
+                    hop_index=index,
+                    body=body,
+                    attachments=attachments,
+                    duration=rng.uniform(0.04, 0.4),
+                )
+                if delivery_succeeded and not tls
+                else []
+            )
+            smtp_ctx = SmtpContext(
+                helo=self._email_server_fqdn(src_system.hostname),
+                mailfrom=sender,
+                rcptto=hop.get("recipients")
+                or (envelope_recipients if index == 0 else expanded_recipients),
+                date=date_header,
+                from_header=email_ctx.header_from,
+                to_header=email_ctx.to,
+                cc_header=email_ctx.cc,
+                msg_id=message_id,
+                subject=subject,
+                last_reply=last_reply,
+                path=self._smtp_observed_path(
+                    route,
+                    index,
+                    sender=sender,
+                    message_id=message_id,
+                ),
+                user_agent=user_agent,
+                tls=tls,
+                encrypted_message=tls,
+                fuids=[file_transfer.fuid for file_transfer in mime_file_transfers],
+            )
+            ssl_ctx = (
+                self._smtp_starttls_ssl_context(
+                    src_system=src_system,
+                    dst_system=dst_system,
+                    message_id=message_id,
+                    hop_index=index,
+                    event_time=hop_time,
+                    submission=bool(hop.get("submission")),
+                    server_to_server=bool(hop.get("server_to_server")),
+                )
+                if tls
+                else None
+            )
+            x509_chain = (
+                self._smtp_starttls_certificate_chain(
+                    ssl=ssl_ctx,
+                    dst_system=dst_system,
+                    message_id=message_id,
+                    hop_index=index,
+                    event_time=hop_time,
+                )
+                if ssl_ctx is not None
+                else []
+            )
+            if ssl_ctx is not None and x509_chain:
+                ssl_ctx.cert_chain_fuids = [cert.fuid for cert in x509_chain]
+            source_pid, source_process_image = self._email_source_process_attribution(
+                actor=request.actor,
+                src_system=src_system,
+                hop=hop,
+                time=hop_time,
+                user_agent=user_agent,
+            )
+            if hop.get("submission") and source_pid > 0:
+                sender_client_pid = source_pid
+            responding_pid = self._email_responding_process_pid(
+                dst_system,
+                time=hop_time,
+                port=587 if hop["submission"] else 25,
+            )
+            uid = self.generate_connection(
+                src_ip=src_system.ip,
+                dst_ip=dst_system.ip,
+                time=hop_time,
+                dst_port=587 if hop["submission"] else 25,
+                proto="tcp",
+                service="smtp",
+                duration=transfer_sizes[index]["duration"],
+                orig_bytes=transfer_sizes[index]["orig_bytes"],
+                resp_bytes=transfer_sizes[index]["resp_bytes"],
+                conn_state="SF",
+                emit_dns=True,
+                source_system=(
+                    None if "external_mail_server" in (src_system.roles or []) else src_system
+                ),
+                pid=source_pid,
+                hostname=self._email_server_fqdn(dst_system.hostname),
+                process_image=source_process_image,
+                email=email_ctx,
+                smtp=smtp_ctx,
+                ssl=ssl_ctx,
+                x509=x509_chain[0] if x509_chain else None,
+                x509_chain=x509_chain,
+                file_transfers=mime_file_transfers,
+                suppress_application_side_effects=True,
+                responding_pid=responding_pid,
+            )
+            visible_uid = self._visible_network_uid_for_format(
+                uid,
+                src_ip=src_system.ip,
+                dst_ip=dst_system.ip,
+                format_name="zeek_smtp",
+            )
+            if uid:
+                smtp_uids.append(visible_uid or uid)
+            if delivery_succeeded:
+                self._emit_email_mta_syslog(
+                    route=route,
+                    hop_index=index,
+                    hop=hop,
+                    time=hop_time,
+                    duration=float(transfer_sizes[index]["duration"]),
+                    message_id=message_id,
+                    sender=sender,
+                    actor=request.actor,
+                    smtp=smtp_ctx,
+                    delivery_reply=delivery_reply,
+                    size=int(transfer_sizes[index]["message_size"]),
+                    source_pid=source_pid,
+                )
+            else:
+                self._emit_email_mta_reject_syslog(
+                    hop=hop,
+                    time=hop_time,
+                    duration=float(transfer_sizes[index]["duration"]),
+                    sender=sender,
+                    smtp=smtp_ctx,
+                )
+            recipient_domains = sorted(
+                {self._email_domain(address) for address in hop.get("recipients", [])}
+            )
+            route_summary.append(
+                {
+                    "src": src_system.hostname,
+                    "dst": dst_system.hostname,
+                    "src_fqdn": self._email_server_fqdn(src_system.hostname),
+                    "dst_fqdn": self._email_server_fqdn(dst_system.hostname),
+                    "port": str(587 if hop["submission"] else 25),
+                    "tls": str(tls).lower(),
+                    "routing_mode": str(hop.get("external_routing_mode") or "internal"),
+                    "recipient_domains": ",".join(recipient_domains),
+                    "uid": visible_uid,
+                }
+            )
+
+        artifact_path = ""
+        if delivery_succeeded and self._should_materialize_email_artifact(
+            artifact_id, request.storyline_id
+        ):
+            artifact_path = self._write_email_artifact(email_ctx)
+            email_ctx.artifact_path = artifact_path
+        self._record_email_artifact_manifest(email_ctx, artifact_path)
+        self._emit_sender_email_endpoint_artifacts(
+            email_ctx=email_ctx,
+            user=request.actor,
+            system=request.system,
+            time=request.time,
+            pid=sender_client_pid,
+        )
+        self._maybe_generate_email_recipient_reads(
+            email_ctx=email_ctx,
+            delivery_time=request.time,
+            rng=rng,
+        )
+        return EmailDeliveryResult(
+            artifact_id=artifact_id,
+            message_id=message_id,
+            sender=sender,
+            recipients=expanded_recipients,
+            subject=subject,
+            outcome=spec.outcome,
+            artifact_path=artifact_path,
+            smtp_uids=smtp_uids,
+            route=route_summary,
+        )
+
+    def _email_server_fqdn(self, hostname: str) -> str:
+        """Return a stable mail host FQDN for DNS/SMTP headers."""
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is not None:
+            for server in email_config.mail_servers:
+                if (
+                    server.system == hostname
+                    or server.name == hostname
+                    or server.hostname == hostname
+                ):
+                    return server.hostname
+        ad_domain = getattr(self, "_ad_domain", "")
+        if ad_domain and "." not in hostname:
+            return f"{hostname}.{ad_domain}"
+        return hostname
+
+    def _visible_network_uid_for_format(
+        self,
+        uid: str,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        format_name: str,
+    ) -> str:
+        """Return the sensor-visible network UID for a rendered network format."""
+        if not uid:
+            return ""
+        dispatcher = getattr(self, "dispatcher", None)
+        visibility = getattr(dispatcher, "visibility_engine", None)
+        if visibility is None:
+            return uid
+        visible_formats = visibility.get_log_formats_for_connection(src_ip, dst_ip)
+        if format_name not in visible_formats:
+            return ""
+        sensors = visibility.get_observing_sensors(src_ip, dst_ip)
+        for sensor in sensors:
+            if format_name not in expand_formats(sensor.log_formats):
+                continue
+            from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+
+            sensor_hostname = sensor.hostname or sensor.name
+            return SensorMultiplexEmitter._derive_sensor_uid(uid, sensor_hostname)
+        return uid
+
+    @staticmethod
+    def _email_domain(address: str) -> str:
+        return address.rsplit("@", 1)[-1].lower().rstrip(".")
+
+    @staticmethod
+    def _email_header_address(address: str) -> str:
+        return f"<{address.lower()}>"
+
+    def _email_artifact_id(
+        self,
+        storyline_id: str,
+        sender: str,
+        recipients: list[str],
+        time: datetime,
+    ) -> str:
+        seed = _stable_seed(
+            f"email_artifact:{storyline_id}:{sender}:{','.join(recipients)}:{time.isoformat()}"
+        )
+        prefix = re.sub(r"[^a-zA-Z0-9_-]+", "-", storyline_id or "email").strip("-")[:40]
+        return f"{prefix or 'email'}-{seed:012x}"
+
+    def _email_message_id(self, artifact_id: str, sender: str, user_agent: str = "") -> str:
+        domain = self._email_domain(sender)
+        seed_hi = _stable_seed(f"email_message_id_hi:{artifact_id}:{sender}:{user_agent}")
+        seed_lo = _stable_seed(f"email_message_id_lo:{artifact_id}:{sender}:{user_agent}")
+        profile = self._email_mailer_profile(sender, user_agent)
+        if profile == "thunderbird":
+            return f"<{seed_hi}.{seed_lo % 1_000_000}.{seed_lo:08x}@{domain}>"
+        if profile == "apple_mail":
+            uuid_like = uuid.UUID(
+                bytes=hashlib.sha256(
+                    f"email-message-id:{artifact_id}:{sender}:{user_agent}:apple".encode()
+                ).digest()[:16]
+            )
+            return f"<{str(uuid_like).upper()}@{domain}>"
+        if profile == "service":
+            token = re.sub(r"[^a-z0-9]+", "-", sender.split("@", 1)[0].lower()).strip("-")
+            token = token or "notice"
+            queue_fragment = seed_hi & 0xFFFFFFFF
+            sequence_fragment = seed_lo % 10_000_000
+            return f"<{token}-{queue_fragment:08x}-{sequence_fragment:07d}@{domain}>"
+        rng = random.Random(_stable_seed(f"email_message_id_profile:{artifact_id}:{sender}"))
+        local_label = re.sub(r"[^a-z0-9-]+", "-", sender.split("@", 1)[0].lower()).strip("-")
+        local_label = (local_label or "mail")[:16]
+        style = rng.randrange(3)
+        if style == 0:
+            uuid_like = uuid.UUID(
+                bytes=hashlib.sha256(
+                    f"email-message-id:{artifact_id}:{sender}:{user_agent}:outlook".encode()
+                ).digest()[:16]
+            )
+            return f"<{str(uuid_like).upper()}@{domain}>"
+        if style == 1:
+            mailbox_id = 1000 + (seed_lo % 9000)
+            left = self._base36_nonzero(seed_hi, 10)
+            right = self._base36_nonzero(seed_lo >> 8, 7)
+            return f"<{left}.{right}.{mailbox_id}@{local_label}.{domain}>"
+        return f"<{self._base36_nonzero(seed_hi, 12)}.{self._base36_nonzero(seed_lo, 10)}@{domain}>"
+
+    def _smtp_last_reply(
+        self,
+        *,
+        outcome: str,
+        message_id: str,
+        hop_index: int,
+        src_system: Any,
+        dst_system: Any,
+        submission: bool,
+        queue_id: str = "",
+    ) -> str:
+        """Return a deterministic source-native SMTP DATA completion reply."""
+        seed = _stable_seed(
+            "smtp_last_reply:"
+            f"{outcome}:{message_id}:{hop_index}:"
+            f"{getattr(src_system, 'hostname', '')}:{getattr(dst_system, 'hostname', '')}:"
+            f"{submission}"
+        )
+        rng = random.Random(seed)
+        dst_hostname = getattr(dst_system, "hostname", "mail")
+        dst_roles = set(getattr(dst_system, "roles", None) or [])
+        dst_os = str(getattr(dst_system, "os", "")).lower()
+        queue_hex = f"{seed & 0xFFFFFFFFFFFF:012X}"
+        queue_short = f"{seed & 0xFFFFFFFFFF:010X}"
+        internal_id = 100000000 + (seed % 800000000)
+        if outcome != "delivered":
+            replies = [
+                "550 5.7.1 Message rejected",
+                "550 5.7.1 Delivery not authorized",
+                "554 5.7.1 Service unavailable; message refused",
+                "550 5.1.1 Recipient address rejected",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        if "external_mail_server" in dst_roles:
+            exim_id = (
+                f"{1 + seed % 2}"
+                f"{self._base36(seed >> 8, 5)}-"
+                f"{self._base36(seed >> 24, 6)}-"
+                f"{self._base36(seed >> 40, 2)}"
+            )
+            replies = [
+                f"250 OK id={exim_id}",
+                f"250 2.0.0 Ok: queued as {queue_short}",
+                f"250 2.0.0 {queue_hex[:8]} Message accepted for delivery",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        if "windows" in dst_os or "server 20" in dst_os:
+            replies = [
+                f"250 2.6.0 {message_id} [InternalId={internal_id}] Queued mail for delivery",
+                f"250 2.0.0 {queue_hex[:10]} Message accepted for delivery",
+                f"250 2.1.5 {queue_short} queued for delivery",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        if queue_id:
+            replies = [
+                f"250 2.0.0 Ok: queued as {queue_id}",
+                f"250 2.0.0 {queue_id} Message accepted for delivery",
+                f"250 2.0.0 queued as {queue_id} on {dst_hostname}",
+            ]
+            return replies[rng.randrange(len(replies))]
+
+        replies = [
+            f"250 2.0.0 Ok: queued as {queue_short}",
+            f"250 2.0.0 {queue_hex[:8]} Message accepted for delivery",
+            f"250 2.0.0 queued as {queue_short.lower()} on {dst_hostname}",
+        ]
+        return replies[rng.randrange(len(replies))]
+
+    def _smtp_starttls_reply(
+        self,
+        *,
+        message_id: str,
+        hop_index: int,
+        src_system: Any,
+        dst_system: Any,
+    ) -> str:
+        """Return a deterministic pre-encryption STARTTLS server reply."""
+        dst_hostname = getattr(dst_system, "hostname", "")
+        dst_fqdn = self._email_server_fqdn(dst_hostname) if dst_hostname else "mail.local"
+        dst_os = _get_os_category(getattr(dst_system, "os", ""))
+        dst_roles = set(getattr(dst_system, "roles", ()) or ())
+        server_seed = _stable_seed(
+            f"smtp_starttls_server_profile:{dst_hostname}:{dst_os}:{','.join(sorted(dst_roles))}"
+        )
+        message_seed = _stable_seed(
+            "smtp_starttls_reply:"
+            f"{message_id}:{hop_index}:"
+            f"{getattr(src_system, 'hostname', '')}:{dst_hostname}"
+        )
+        if "external_mail_server" in dst_roles:
+            replies = [
+                f"220 2.0.0 {dst_fqdn} ready for TLS",
+                "220 2.0.0 TLS go ahead",
+                "220 Go ahead with TLS",
+                "220 2.0.0 Begin TLS negotiation",
+                "220 2.0.0 STARTTLS command accepted",
+                "220 Ready to negotiate TLS",
+            ]
+        elif dst_os == "linux":
+            replies = [
+                "220 2.0.0 Ready to start TLS",
+                "220 2.0.0 TLS go ahead",
+                f"220 2.0.0 {dst_fqdn} ready for TLS",
+                "220 2.0.0 Begin TLS negotiation now",
+                "220 2.0.0 STARTTLS accepted",
+                "220 Ready to start TLS",
+            ]
+        elif dst_os == "windows":
+            replies = [
+                f"220 2.0.0 {dst_fqdn} Microsoft ESMTP MAIL Service ready for TLS",
+                f"220 2.0.0 {dst_fqdn} Ready to start TLS",
+                "220 2.0.0 STARTTLS accepted; continue",
+                "220 2.0.0 TLS negotiation accepted",
+                "220 2.0.0 Begin TLS negotiation",
+                "220 2.0.0 Ready for TLS",
+            ]
+        else:
+            replies = [
+                "220 2.0.0 Ready to start TLS",
+                "220 2.0.0 TLS go ahead",
+                "220 2.0.0 STARTTLS accepted",
+                "220 Ready to negotiate TLS",
+            ]
+
+        primary_index = server_seed % len(replies)
+        if message_seed % 100 < 70:
+            return replies[primary_index]
+        alternate_offset = 1 + ((message_seed >> 8) % (len(replies) - 1))
+        return replies[(primary_index + alternate_offset) % len(replies)]
+
+    def _smtp_observed_path(
+        self,
+        route: list[dict[str, Any]],
+        hop_index: int,
+        *,
+        sender: str = "",
+        message_id: str = "",
+    ) -> list[str]:
+        """Return a Received-chain-like path visible before the current SMTP hop."""
+        if hop_index <= 0:
+            external_path = self._external_sender_observed_path(
+                route=route,
+                sender=sender,
+                message_id=message_id,
+            )
+            if external_path:
+                return external_path
+            return []
+        prior_hops = route[:hop_index]
+        path = [hop["dst_system"].ip for hop in reversed(prior_hops)]
+        first_source_ip = prior_hops[0]["src_system"].ip
+        if first_source_ip not in path:
+            path.append(first_source_ip)
+        return path
+
+    @staticmethod
+    def _base36(value: int, width: int) -> str:
+        """Return an uppercase base36 token padded to width characters."""
+        alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if value <= 0:
+            token = "0"
+        else:
+            chars: list[str] = []
+            while value:
+                value, remainder = divmod(value, 36)
+                chars.append(alphabet[remainder])
+            token = "".join(reversed(chars))
+        return token[-width:].rjust(width, "0")
+
+    @staticmethod
+    def _base36_nonzero(value: int, width: int) -> str:
+        """Return a fixed-width base36 token that does not start with zero."""
+        if width <= 1:
+            return ActivityGenerator._base36(value or 1, max(width, 1))
+        floor = 36 ** (width - 1)
+        span = (36**width) - floor
+        return ActivityGenerator._base36(floor + (value % span), width)
+
+    @staticmethod
+    def _email_mailer_profile(sender: str, user_agent: str) -> str:
+        """Return a coarse source-native mailer profile for headers and IDs."""
+        agent = user_agent.lower()
+        local_part = sender.split("@", 1)[0].lower()
+        domain = ActivityGenerator._email_domain(sender)
+        if "thunderbird" in agent:
+            return "thunderbird"
+        if "apple mail" in agent:
+            return "apple_mail"
+        if any(marker in agent for marker in ("docflow", "mailer", "notification", "service")):
+            return "service"
+        if any(
+            marker in local_part
+            for marker in ("alert", "notice", "notification", "workspace", "billing", "support")
+        ):
+            return "service"
+        if any(marker in domain for marker in ("service", "notify", "news", "vendor")):
+            return "service"
+        return "outlook"
+
+    def _deterministic_email_subject(
+        self,
+        sender: str,
+        recipients: list[str],
+        rng: random.Random,
+    ) -> str:
+        verbs = [
+            "Follow up",
+            "Question",
+            "Update",
+            "Review",
+            "Schedule",
+            "Notes",
+            "Revised",
+            "Confirming",
+            "Reminder",
+            "Draft",
+            "Closeout",
+            "Heads up",
+        ]
+        nouns = [
+            "request",
+            "timeline",
+            "access",
+            "report",
+            "meeting",
+            "invoice",
+            "renewal",
+            "change window",
+            "vendor packet",
+            "forecast",
+            "approval",
+            "field note",
+            "shipping date",
+            "badge update",
+            "service ticket",
+            "training roster",
+        ]
+        qualifiers = [
+            "today",
+            "this week",
+            "before review",
+            "for closeout",
+            "from yesterday",
+            "for next steps",
+            "after the call",
+            "for the shared folder",
+            "before noon",
+        ]
+        if recipients:
+            domain = self._email_domain(recipients[0])
+        else:
+            domain = self._email_domain(sender)
+        style = rng.randrange(4)
+        if style == 0:
+            return f"{rng.choice(verbs)}: {rng.choice(nouns)} for {domain.split('.')[0]}"
+        if style == 1:
+            return f"{rng.choice(nouns).title()} {rng.randint(1040, 9980)} {rng.choice(qualifiers)}"
+        if style == 2:
+            return f"{rng.choice(verbs)} {rng.choice(nouns)} - {rng.choice(qualifiers)}"
+        return f"{domain.split('.')[0].title()} {rng.choice(nouns)} notes"
+
+    def _deterministic_email_body(
+        self,
+        subject: str,
+        rng: random.Random,
+        *,
+        sender: str = "",
+        recipients: list[str] | None = None,
+    ) -> str:
+        openings = ["Hi,", "Hello,", "Good morning,", "Team,", "Good afternoon,", "All,"]
+        closings = ["Thanks,", "Regards,", "Best,", "Thank you,", "Appreciate it,"]
+        details = [
+            "I added the latest notes to the shared folder.",
+            "The owner list changed after this morning's sync.",
+            "Please use the attached dates when you update your tracker.",
+            "The vendor asked for confirmation before they close the item.",
+            "I am waiting on one more answer, but the current version is usable.",
+            "No action is needed if the numbers still match your copy.",
+            "Please reply only if you see a mismatch in the current draft.",
+            "This is mostly a reminder so the handoff does not get lost.",
+        ]
+        followups = [
+            "I will check back after the next status call.",
+            "The next update should be ready later today.",
+            "We can fold any corrections into the Friday packet.",
+            "I will leave the ticket open until everyone has confirmed.",
+            "Please send changes directly to the group thread.",
+            "I will archive the old copy once the update is approved.",
+        ]
+        recipient_domains = sorted({self._email_domain(address) for address in recipients or []})
+        sender_domain = self._email_domain(sender) if sender else ""
+        context_seed = _stable_seed(
+            "email_body_context:"
+            f"{sender}:{','.join(recipients or [])}:{subject}:{rng.random():.12f}"
+        )
+        context_rng = random.Random(context_seed)
+        reference_terms = [
+            "tracker",
+            "handoff",
+            "thread",
+            "packet",
+            "review",
+            "queue",
+            "folder",
+            "ticket",
+        ]
+        reference = context_rng.choice(reference_terms)
+        context_line = ""
+        if sender_domain or recipient_domains:
+            domain_hint = recipient_domains[0] if recipient_domains else sender_domain
+            context_line = (
+                f"I marked the {reference} with ref "
+                f"{context_seed & 0xFFFF:04X}-{(context_seed >> 16) & 0xFFF:03X} "
+                f"for the {domain_hint.split('.')[0]} follow-up."
+            )
+        return (
+            f"{rng.choice(openings)}\n\n"
+            f"Please see the note below regarding {subject.lower()}. "
+            f"{rng.choice(details)} {context_line} {rng.choice(followups)}\n\n"
+            f"{rng.choice(closings)}\n"
+        )
+
+    def _contextualize_background_email_body(
+        self,
+        body: str,
+        *,
+        subject: str,
+        sender: str,
+        recipients: list[str],
+    ) -> str:
+        """Add deterministic per-message context to reused background corpus bodies."""
+        seed = _stable_seed(
+            f"background_email_corpus_body:{sender}:{','.join(recipients)}:{subject}:{len(body)}"
+        )
+        recipient_domain = (
+            self._email_domain(recipients[0]) if recipients else self._email_domain(sender)
+        )
+        context_line = (
+            f"\nReference: {recipient_domain.split('.')[0].upper()}-"
+            f"{seed & 0xFFFF:04X}-{(seed >> 16) & 0xFFF:03X}\n"
+        )
+        return body.rstrip() + context_line
+
+    def _contextualize_background_email_subject(
+        self,
+        subject: str,
+        *,
+        sender: str,
+        recipients: list[str],
+        event_time: datetime,
+    ) -> str:
+        """Return a deterministic per-message subject variant for reused background corpus."""
+        seed = _stable_seed(
+            "background_email_corpus_subject:"
+            f"{sender}:{','.join(recipients)}:{subject}:{event_time.isoformat()}"
+        )
+        rng = random.Random(seed)
+        recipient_domain = (
+            self._email_domain(recipients[0]) if recipients else self._email_domain(sender)
+        )
+        domain_label = recipient_domain.split(".", 1)[0].replace("-", " ").title()
+        month_day = f"{event_time:%b} {event_time.day}"
+        reference = f"{seed & 0xFFFF:04X}"
+        variants = [
+            f"{subject} - {domain_label} {reference}",
+            f"{subject} ({month_day}, ref {reference})",
+            f"Re: {subject} [{reference}]",
+            f"{subject} / ref {reference}",
+            f"{domain_label}: {subject} #{reference}",
+        ]
+        return variants[rng.randrange(len(variants))]
+
+    def _email_body_with_transport_footer(
+        self,
+        body: str,
+        *,
+        artifact_id: str,
+        sender: str,
+        recipients: list[str],
+    ) -> str:
+        """Add deterministic mail-client/gateway footer text to rendered messages."""
+        seed = _stable_seed(
+            "email_transport_footer:"
+            f"{artifact_id}:{sender}:{','.join(recipients)}:{len(body.encode('utf-8'))}"
+        )
+        rng = random.Random(seed)
+        ref = f"{seed & 0xFFFF:04X}-{(seed >> 16) & 0xFFFFFF:06X}"
+        org_label = self._email_domain(sender).split(".", 1)[0].upper() or "MAIL"
+        confidentiality = rng.choice(
+            [
+                "This message may contain confidential business information intended only for the listed recipients.",
+                "This email and any attachments are intended for the addressed recipients and may contain privileged information.",
+                "If you received this message in error, please notify the sender and delete it from your mailbox.",
+            ]
+        )
+        handling = rng.choice(
+            [
+                "Please do not forward externally without the document owner's approval.",
+                "Use the current shared-folder copy as the record of authority for follow-up changes.",
+                "Attachments are scanned by the company mail gateway before delivery.",
+                "Reply in the existing thread so the mail archive keeps the approval trail together.",
+            ]
+        )
+        classification = rng.choice(
+            ["Internal", "Internal Use", "Business Confidential", "Company Restricted"]
+        )
+        footer_lines = [
+            "-- ",
+            f"{org_label} Mail Gateway ref {ref}",
+            f"Classification: {classification}",
+            confidentiality,
+            handling,
+        ]
+        return body.rstrip() + "\n\n" + "\n".join(footer_lines) + "\n"
+
+    def _email_user_agent(self, system: "System", rng: random.Random) -> str:
+        os_category = _get_os_category(system.os)
+        client_rng = random.Random(
+            _stable_seed(
+                "email_user_agent:"
+                f"{system.hostname}:{getattr(system, 'assigned_user', '')}:{os_category}"
+            )
+        )
+        if os_category == "windows":
+            return client_rng.choice(
+                [
+                    "Microsoft Outlook 16.0",
+                    "Microsoft Office Outlook 12.0",
+                    "Microsoft Outlook 15.0",
+                ]
+            )
+        return client_rng.choice(
+            ["Thunderbird 115.0", "Evolution 3.44", "Apple Mail (2.3608.120.23.2.7)"]
+        )
+
+    def _email_effective_user_agent(
+        self,
+        sender: str,
+        user_agent: str,
+        *,
+        system: Any | None = None,
+    ) -> str:
+        """Return a profile-compatible mailer fingerprint for generated/corpus mail."""
+        profile = self._email_mailer_profile(sender, user_agent)
+        if system is not None and profile in {"outlook", "apple_mail"}:
+            os_category = _get_os_category(system.os)
+            if os_category == "windows":
+                return "Microsoft Outlook 16.0"
+            if os_category == "linux":
+                return "Thunderbird 115.0"
+        if profile != "service":
+            return user_agent
+        agent = user_agent.lower()
+        if not any(marker in agent for marker in ("outlook", "thunderbird", "apple mail")):
+            return user_agent
+        local_part = sender.split("@", 1)[0].lower()
+        domain_label = self._email_domain(sender).split(".", 1)[0]
+        label = re.sub(r"[^A-Za-z0-9]+", " ", local_part or domain_label).strip().title()
+        label = label or "Notification"
+        seed = _stable_seed(f"email_service_user_agent:{sender}")
+        return f"{label} Mailer {2 + seed % 4}.{seed % 10}"
+
+    def _smtp_hop_uses_starttls(
+        self,
+        *,
+        hop: dict[str, Any],
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        user_agent: str,
+    ) -> bool:
+        """Return whether a modeled SMTP hop upgrades to STARTTLS."""
+        if hop["submission"]:
+            return self._smtp_submission_uses_starttls(
+                src_system=src_system,
+                dst_system=dst_system,
+                message_id=message_id,
+                hop_index=hop_index,
+                user_agent=user_agent,
+            )
+        return bool(
+            hop["server_to_server"]
+            and hop["src_server_attempts_starttls"]
+            and hop["dst_server_allows_starttls"]
+        )
+
+    def _smtp_submission_uses_starttls(
+        self,
+        *,
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        user_agent: str,
+    ) -> bool:
+        """Return realistic client-submission STARTTLS behavior."""
+        if "external_mail_server" in (src_system.roles or []):
+            return False
+        os_category = _get_os_category(src_system.os)
+        if os_category not in {"windows", "linux"}:
+            return False
+        agent = user_agent.lower()
+        if any(marker in agent for marker in ("outlook", "thunderbird", "apple mail")):
+            return True
+        rng = random.Random(
+            _stable_seed(
+                "smtp_submission_starttls:"
+                f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
+            )
+        )
+        return rng.random() >= 0.08
+
+    def _smtp_starttls_ssl_context(
+        self,
+        *,
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        event_time: datetime,
+        submission: bool = False,
+        server_to_server: bool = True,
+    ) -> SslContext:
+        """Return Zeek SSL metadata for a successful SMTP STARTTLS upgrade."""
+        rng = random.Random(
+            _stable_seed(
+                "smtp_starttls:"
+                f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
+            )
+        )
+        ssl_server_name = self._smtp_starttls_server_name(
+            src_system=src_system,
+            dst_system=dst_system,
+            message_id=message_id,
+            hop_index=hop_index,
+            submission=submission,
+            server_to_server=server_to_server,
+        )
+        cert_server_name = self._email_server_fqdn(dst_system.hostname)
+        version = rng.choices(_TLS_VERSION_VALUES, weights=(70, 30), k=1)[0]
+        if version == "TLSv13":
+            cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+        else:
+            cert_profile = self._smtp_starttls_certificate_profile(
+                ssl_server_name=cert_server_name,
+                dst_system=dst_system,
+                event_time=event_time,
+            )
+            cipher_values, cipher_weights = self._tls12_cipher_pool_for_key_type(
+                str(cert_profile["key_type"])
+            )
+            cipher = rng.choices(cipher_values, weights=cipher_weights, k=1)[0]
+        resumed = rng.random() < 0.12
+        return SslContext(
+            version=version,
+            cipher=cipher,
+            server_name=ssl_server_name,
+            resumed=resumed,
+            established=True,
+            ssl_history=_choose_ssl_history(
+                rng,
+                tls_version=version,
+                established=True,
+                resumed=resumed,
+            ),
+        )
+
+    def _smtp_starttls_server_name(
+        self,
+        *,
+        src_system: "System",
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        submission: bool,
+        server_to_server: bool,
+    ) -> str:
+        """Return the client-advertised SNI for SMTP STARTTLS, if any."""
+        server_name = self._email_server_fqdn(dst_system.hostname)
+        if submission:
+            return server_name
+        if not server_to_server:
+            return server_name
+
+        seed = _stable_seed(
+            "smtp_starttls_sni:"
+            f"{src_system.hostname}:{dst_system.hostname}:{message_id}:{hop_index}"
+        )
+        rng = random.Random(seed)
+        src_roles = set(getattr(src_system, "roles", ()) or ())
+        dst_roles = set(getattr(dst_system, "roles", ()) or ())
+        if "external_mail_server" in src_roles or "external_mail_server" in dst_roles:
+            include_probability = 0.46
+        else:
+            include_probability = 0.72
+        return server_name if rng.random() < include_probability else ""
+
+    def _smtp_starttls_certificate_chain(
+        self,
+        *,
+        ssl: SslContext,
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        event_time: datetime,
+    ) -> list[X509Context]:
+        """Return passive Zeek certificate evidence for visible SMTP STARTTLS handshakes."""
+        if ssl.version == "TLSv13" or ssl.resumed:
+            return []
+        cert_profile = self._smtp_starttls_certificate_profile(
+            ssl_server_name=ssl.server_name,
+            dst_system=dst_system,
+            event_time=event_time,
+        )
+        cert_name = str(cert_profile["cert_name"])
+        issuer_cfg = cert_profile["issuer_cfg"]
+        key_type = str(cert_profile["key_type"])
+        key_length = int(cert_profile["key_length"])
+        internal_cert_name = str(cert_profile["internal_cert_name"])
+        cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
+        is_ecdsa = key_type == "ecdsa"
+
+        validity = self._tls_cert_validity.get(cert_name)
+        if validity is None:
+            fallback_days = issuer_cfg.get("validity_days", 397)
+            validity = _certificate_validity_window(
+                event_time,
+                cert_rng,
+                validity_days_min=int(issuer_cfg.get("validity_days_min", fallback_days)),
+                validity_days_max=int(issuer_cfg.get("validity_days_max", fallback_days)),
+                not_before_max_days=int(issuer_cfg.get("not_before_max_days", 300)),
+            )
+        validity = _bound_certificate_validity_to_issuer_window(
+            validity,
+            str(issuer_cfg["name"]),
+            event_time,
+        )
+        self._tls_cert_validity[cert_name] = validity
+        serial_seed = "|".join(
+            [
+                "smtp_tls_cert_serial",
+                cert_name,
+                str(issuer_cfg["name"]),
+                key_type,
+                str(key_length),
+                str(validity[0]),
+                str(validity[1]),
+            ]
+        )
+        serial_number = _tls_certificate_serial(serial_seed)
+        fingerprint = hashlib.sha1(
+            "|".join(
+                [
+                    "smtp_tls_cert",
+                    cert_name,
+                    serial_number,
+                    str(issuer_cfg["name"]),
+                    key_type,
+                    str(key_length),
+                    str(validity[0]),
+                    str(validity[1]),
+                ]
+            ).encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+        leaf = X509Context(
+            fuid=generate_stable_zeek_uid(
+                "F",
+                f"smtp_cert_fuid:{cert_name}:{message_id}:{hop_index}",
+            ),
+            fingerprint=fingerprint,
+            certificate_version=3,
+            certificate_serial=serial_number,
+            certificate_subject=f"CN={cert_name}",
+            certificate_issuer=str(issuer_cfg["name"]),
+            certificate_not_valid_before=validity[0],
+            certificate_not_valid_after=validity[1],
+            certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+            certificate_sig_alg=_tls_signature_algorithm_for_issuer(
+                str(issuer_cfg["name"]),
+                fallback_key_type=key_type,
+                fallback_key_length=key_length,
+            ),
+            certificate_key_type=key_type,
+            certificate_key_length=key_length,
+            certificate_exponent="65537" if not is_ecdsa else "",
+            san_dns=list(dict.fromkeys([cert_name, cert_name.split(".", 1)[0]]))
+            if internal_cert_name
+            else _tls_san_dns_names(cert_name),
+            basic_constraints_ca=False,
+            host_cert=True,
+            client_cert=False,
+        )
+        return self._build_tls_certificate_chain(
+            leaf=leaf,
+            cert_name=cert_name,
+            issuer_name=str(issuer_cfg["name"]),
+            event_time=event_time,
+            connection_uid=f"smtp-starttls:{message_id}:{hop_index}",
+            rng=cert_rng,
+        )
+
+    def _smtp_starttls_certificate_profile(
+        self,
+        *,
+        ssl_server_name: str,
+        dst_system: "System",
+        event_time: datetime,
+    ) -> dict[str, Any]:
+        """Return the stable SMTP certificate profile used by SSL and X.509 evidence."""
+        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+        server_name = ssl_server_name or self._email_server_fqdn(dst_system.hostname)
+        internal_cert_name = server_name if _is_private_ip(dst_system.ip) else ""
+        cert_name = server_name or internal_cert_name or dst_system.ip
+        cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
+        if internal_cert_name:
+            issuer_cfg = _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
+        elif _is_ip_literal(cert_name):
+            issuer_cfg = _raw_ip_tls_issuer(cert_name)
+        else:
+            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name, event_time=event_time)
+        key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
+        key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
+        return {
+            "cert_name": cert_name,
+            "internal_cert_name": internal_cert_name,
+            "issuer_cfg": issuer_cfg,
+            "key_type": key_type,
+            "key_length": key_length,
+        }
+
+    @staticmethod
+    def _tls12_cipher_pool_for_key_type(key_type: str) -> tuple[tuple[str, ...], tuple[int, ...]]:
+        """Return TLS 1.2 ciphers whose authentication algorithm matches the cert key."""
+        needs_ecdsa = key_type == "ecdsa"
+        matching = [
+            (cipher, weight)
+            for cipher, weight in _TLS12_CIPHER_DIST
+            if ("_ECDSA_" in cipher) == needs_ecdsa
+        ]
+        if not matching:
+            matching = list(_TLS12_CIPHER_DIST)
+        return (
+            tuple(cipher for cipher, _weight in matching),
+            tuple(weight for _cipher, weight in matching),
+        )
+
+    def _emit_email_mta_syslog(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        hop_index: int,
+        hop: dict[str, Any],
+        time: datetime,
+        duration: float,
+        message_id: str,
+        sender: str,
+        actor: "User",
+        smtp: SmtpContext,
+        delivery_reply: str,
+        size: int,
+        source_pid: int,
+    ) -> None:
+        """Emit source-native MTA lifecycle syslog companions for Linux mail hops."""
+        src_system = hop["src_system"]
+        dst_system = hop["dst_system"]
+        if self._is_linux_mail_server(dst_system):
+            downstream_recipients = self._email_route_future_recipients_from_system(
+                route,
+                hop_index,
+                dst_system,
+            )
+            downstream_set = set(downstream_recipients)
+            hop_recipients = self._postfix_recipient_list(hop.get("recipients") or smtp.rcptto)
+            local_recipients = [
+                recipient for recipient in hop_recipients if recipient not in downstream_set
+            ]
+            if not downstream_recipients and not local_recipients:
+                local_recipients = hop_recipients
+            queue_recipients = list(dict.fromkeys([*local_recipients, *downstream_recipients]))
+            if not queue_recipients:
+                queue_recipients = hop_recipients
+            self._emit_postfix_receive_syslog(
+                system=dst_system,
+                peer_system=src_system,
+                time=time,
+                duration=duration,
+                message_id=message_id,
+                sender=sender,
+                actor=actor,
+                smtp=smtp,
+                size=size,
+                submission=bool(hop["submission"]),
+                queue_recipients=queue_recipients,
+                local_recipients=local_recipients,
+                remove_after_local=not downstream_recipients,
+            )
+        if hop["server_to_server"] and self._is_linux_mail_server(src_system):
+            self._emit_postfix_delivery_syslog(
+                system=src_system,
+                peer_system=dst_system,
+                time=time,
+                duration=duration,
+                message_id=message_id,
+                smtp=smtp,
+                delivery_reply=delivery_reply,
+                port=25,
+                delivery_pid=source_pid if source_pid > 0 else None,
+            )
+
+    def _emit_email_mta_reject_syslog(
+        self,
+        *,
+        hop: dict[str, Any],
+        time: datetime,
+        duration: float,
+        sender: str,
+        smtp: SmtpContext,
+    ) -> None:
+        """Emit receive-side MTA evidence for an SMTP transaction rejected before DATA."""
+        dst_system = hop["dst_system"]
+        if not self._is_linux_mail_server(dst_system):
+            return
+        src_system = hop["src_system"]
+        smtpd_pid = self._email_responding_process_pid(
+            dst_system,
+            time=time,
+            port=587 if hop["submission"] else 25,
+        )
+        peer_name = self._postfix_peer_name(src_system)
+        connect_time = self._smtp_lifecycle_time(time, duration, 0.08)
+        reject_time = self._smtp_lifecycle_time(time, duration, 0.42)
+        recipient = self._postfix_recipient_list(smtp.rcptto)[:1]
+        to_address = recipient[0] if recipient else "undisclosed-recipients"
+        reply = smtp.last_reply or "550 5.7.1 Message rejected"
+        self.generate_syslog_event(
+            dst_system,
+            connect_time,
+            "postfix/smtpd",
+            f"connect from {peer_name}[{src_system.ip}]",
+            pid=smtpd_pid,
+        )
+        self.generate_syslog_event(
+            dst_system,
+            reject_time,
+            "postfix/smtpd",
+            (
+                f"NOQUEUE: reject: RCPT from {peer_name}[{src_system.ip}]: {reply}; "
+                f"from=<{sender}> to=<{to_address}> proto=ESMTP helo=<{smtp.helo}>"
+            ),
+            pid=smtpd_pid,
+        )
+
+    def _emit_postfix_receive_syslog(
+        self,
+        *,
+        system: "System",
+        peer_system: "System",
+        time: datetime,
+        duration: float,
+        message_id: str,
+        sender: str,
+        actor: "User",
+        smtp: SmtpContext,
+        size: int,
+        submission: bool,
+        queue_recipients: list[str],
+        local_recipients: list[str],
+        remove_after_local: bool,
+    ) -> None:
+        """Emit Postfix receive-side syslog rows for one accepted SMTP hop."""
+        queue_id = self._postfix_queue_id(message_id, system)
+        smtpd_pid = self._email_responding_process_pid(
+            system, time=time, port=587 if submission else 25
+        )
+        cleanup_pid = self._postfix_component_pid(system, "cleanup", time)
+        qmgr_pid = self._postfix_component_pid(system, "qmgr", time)
+        peer_name = self._postfix_peer_name(peer_system)
+        recipients = self._postfix_recipient_list(queue_recipients or smtp.rcptto)
+        connect_time = self._smtp_lifecycle_time(time, duration, 0.08)
+        client_time = self._smtp_lifecycle_time(time, duration, 0.16)
+        cleanup_time = self._smtp_lifecycle_time(time, duration, 0.28)
+        active_time = self._smtp_lifecycle_time(time, duration, 0.38)
+        queue_state = self._postfix_queue_state(system, queue_id)
+        queue_state["client_time"] = client_time
+        queue_state["active_time"] = active_time
+        queue_state["recipients"] = recipients
+        queue_state.setdefault("delivered_recipients", set())
+        queue_state["qmgr_pid"] = qmgr_pid
+
+        self.generate_syslog_event(
+            system,
+            connect_time,
+            "postfix/smtpd",
+            f"connect from {peer_name}[{peer_system.ip}]",
+            pid=smtpd_pid,
+        )
+        client_suffix = f", sasl_method=LOGIN, sasl_username={actor.username}" if submission else ""
+        self.generate_syslog_event(
+            system,
+            client_time,
+            "postfix/smtpd",
+            f"{queue_id}: client={peer_name}[{peer_system.ip}]{client_suffix}",
+            pid=smtpd_pid,
+        )
+        self.generate_syslog_event(
+            system,
+            cleanup_time,
+            "postfix/cleanup",
+            f"{queue_id}: message-id={message_id}",
+            pid=cleanup_pid,
+        )
+        self.generate_syslog_event(
+            system,
+            active_time,
+            "postfix/qmgr",
+            (
+                f"{queue_id}: from=<{sender}>, size={max(size, smtp.trans_depth)}, "
+                f"nrcpt={len(recipients)} (queue active)"
+            ),
+            pid=qmgr_pid,
+        )
+        if local_recipients:
+            local_pid = self._postfix_component_pid(system, "local", time)
+            latest_delivery_time = active_time
+            for offset, recipient in enumerate(local_recipients):
+                delivery_time = self._smtp_lifecycle_time(time, duration, 0.58 + 0.05 * offset)
+                delay = self._postfix_delay_between(client_time, delivery_time)
+                self.generate_syslog_event(
+                    system,
+                    delivery_time,
+                    "postfix/local",
+                    (
+                        f"{queue_id}: to=<{recipient}>, relay=local, delay={delay}, "
+                        f"delays={self._postfix_delays(delay)}, dsn=2.0.0, "
+                        "status=sent (delivered to maildir)"
+                    ),
+                    pid=local_pid,
+                )
+                self._postfix_mark_queue_recipient_delivered(queue_state, recipient)
+                latest_delivery_time = delivery_time
+            if remove_after_local:
+                self._emit_postfix_removed(
+                    system=system,
+                    queue_id=queue_id,
+                    qmgr_pid=qmgr_pid,
+                    time=max(
+                        self._smtp_lifecycle_time(time, duration, 0.88),
+                        latest_delivery_time + timedelta(milliseconds=12),
+                    ),
+                    queue_state=queue_state,
+                )
+        elif remove_after_local:
+            self.generate_syslog_event(
+                system,
+                self._smtp_lifecycle_time(time, duration, 0.88),
+                "postfix/qmgr",
+                f"{queue_id}: removed",
+                pid=qmgr_pid,
+            )
+            queue_state["removed"] = True
+
+    def _emit_postfix_delivery_syslog(
+        self,
+        *,
+        system: "System",
+        peer_system: "System",
+        time: datetime,
+        duration: float,
+        message_id: str,
+        smtp: SmtpContext,
+        delivery_reply: str,
+        port: int,
+        delivery_pid: int | None = None,
+    ) -> None:
+        """Emit Postfix outbound delivery rows for one Linux relay hop."""
+        queue_id = self._postfix_queue_id(message_id, system)
+        smtp_pid = delivery_pid or self._postfix_component_pid(system, "smtp", time)
+        qmgr_pid = self._postfix_component_pid(system, "qmgr", time)
+        peer_name = self._email_server_fqdn(peer_system.hostname)
+        recipients = self._postfix_recipient_list(smtp.rcptto)
+        remote_reply = delivery_reply or smtp.last_reply or "250 2.0.0 Ok: queued for delivery"
+        queue_state = self._postfix_queue_state(system, queue_id)
+        queue_state.setdefault("recipients", recipients)
+        queue_state.setdefault("delivered_recipients", set())
+        start_time = queue_state.get("client_time")
+        if not isinstance(start_time, datetime):
+            start_time = time
+        latest_delivery_time = time
+        for offset, recipient in enumerate(recipients):
+            delivery_time = self._smtp_lifecycle_time(time, duration, 0.70 + 0.04 * offset)
+            delay = self._postfix_delay_between(start_time, delivery_time)
+            self.generate_syslog_event(
+                system,
+                delivery_time,
+                "postfix/smtp",
+                (
+                    f"{queue_id}: to=<{recipient}>, relay={peer_name}[{peer_system.ip}]:{port}, "
+                    f"delay={delay}, delays={self._postfix_delays(delay)}, dsn=2.0.0, "
+                    f"status=sent ({remote_reply})"
+                ),
+                pid=smtp_pid,
+            )
+            self._postfix_mark_queue_recipient_delivered(queue_state, recipient)
+            latest_delivery_time = delivery_time
+        expected_recipients = set(queue_state.get("recipients") or recipients)
+        delivered_recipients = set(queue_state.get("delivered_recipients") or set())
+        if expected_recipients <= delivered_recipients:
+            self._emit_postfix_removed(
+                system=system,
+                queue_id=queue_id,
+                qmgr_pid=qmgr_pid,
+                time=max(
+                    self._smtp_lifecycle_time(time, duration, 0.92),
+                    latest_delivery_time + timedelta(milliseconds=12),
+                ),
+                queue_state=queue_state,
+            )
+
+    @staticmethod
+    def _email_route_future_recipients_from_system(
+        route: list[dict[str, Any]],
+        hop_index: int,
+        system: "System",
+    ) -> list[str]:
+        """Return later recipients relayed by the same mail server queue."""
+        hostname = str(system.hostname).lower()
+        recipients: list[str] = []
+        for future_hop in route[hop_index + 1 :]:
+            future_src = future_hop.get("src_system")
+            if str(getattr(future_src, "hostname", "")).lower() != hostname:
+                continue
+            recipients.extend(
+                str(recipient).lower() for recipient in future_hop.get("recipients", [])
+            )
+        return list(dict.fromkeys(recipients))
+
+    @staticmethod
+    def _postfix_recipient_list(recipients: list[str] | tuple[str, ...] | None) -> list[str]:
+        """Return a non-empty, source-normalized recipient list for queue accounting."""
+        normalized = [
+            str(recipient).lower() for recipient in (recipients or []) if str(recipient).strip()
+        ]
+        return list(dict.fromkeys(normalized)) or ["unknown"]
+
+    def _postfix_queue_state(self, system: "System", queue_id: str) -> dict[str, Any]:
+        """Return mutable lifecycle state for one Postfix queue on one host."""
+        states: dict[tuple[str, str], dict[str, Any]] | None = getattr(
+            self,
+            "_postfix_queue_states",
+            None,
+        )
+        if states is None:
+            states = {}
+            self._postfix_queue_states = states
+        return states.setdefault((system.hostname, queue_id), {})
+
+    @staticmethod
+    def _postfix_mark_queue_recipient_delivered(
+        queue_state: dict[str, Any],
+        recipient: str,
+    ) -> None:
+        """Record that a queue recipient has a visible delivery row."""
+        delivered = queue_state.setdefault("delivered_recipients", set())
+        if not isinstance(delivered, set):
+            delivered = set(delivered)
+            queue_state["delivered_recipients"] = delivered
+        delivered.add(recipient.lower())
+
+    def _emit_postfix_removed(
+        self,
+        *,
+        system: "System",
+        queue_id: str,
+        qmgr_pid: int,
+        time: datetime,
+        queue_state: dict[str, Any],
+    ) -> None:
+        """Emit a queue removal once all visible recipient deliveries have landed."""
+        if queue_state.get("removed"):
+            return
+        self.generate_syslog_event(
+            system,
+            time,
+            "postfix/qmgr",
+            f"{queue_id}: removed",
+            pid=qmgr_pid,
+        )
+        queue_state["removed"] = True
+
+    @staticmethod
+    def _is_linux_mail_server(system: "System") -> bool:
+        """Return whether a system should produce Linux MTA syslog evidence."""
+        return _get_os_category(system.os) == "linux" and (
+            "mail_server" in (system.roles or []) or "smtp" in (system.services or [])
+        )
+
+    def _postfix_component_pid(self, system: "System", component: str, time: datetime) -> int:
+        """Return a transient source-native PID for a Postfix helper process."""
+        if component == "qmgr":
+            cache = getattr(self, "_postfix_qmgr_pid_cache", None)
+            if cache is None:
+                cache = {}
+                self._postfix_qmgr_pid_cache = cache
+            cached_pid = cache.get(system.hostname)
+            if cached_pid is not None:
+                return cached_pid
+            event_time = time + timedelta(
+                milliseconds=_stable_seed(f"postfix_qmgr_pid:{system.hostname}") % 40
+            )
+            pid = self.state_manager.allocate_transient_linux_pid(system.hostname, event_time)
+            cache[system.hostname] = pid
+            return pid
+        seed = _stable_seed(f"postfix_component_pid:{system.hostname}:{component}:{time.date()}")
+        event_time = time + timedelta(milliseconds=seed % 40)
+        return self.state_manager.allocate_transient_linux_pid(system.hostname, event_time)
+
+    def _postfix_queue_id(self, message_id: str, system: "System") -> str:
+        """Return a stable Postfix-like queue identifier for a message on one server."""
+        seed = _stable_seed(f"postfix_queue:{system.hostname}:{message_id}")
+        width = 9 + (seed % 3)
+        token = f"{seed:X}"
+        if len(token) < width:
+            token = token.rjust(width, "0")
+        return token[-width:]
+
+    def _postfix_peer_name(self, system: "System") -> str:
+        """Return the peer label Postfix would show for an SMTP client/server."""
+        return self._email_server_fqdn(system.hostname)
+
+    @staticmethod
+    def _smtp_lifecycle_time(time: datetime, duration: float, fraction: float) -> datetime:
+        """Return a syslog timestamp bounded inside the SMTP hop interval."""
+        bounded_duration = max(0.25, duration)
+        offset = max(0.015, min(bounded_duration - 0.015, bounded_duration * fraction))
+        return time + timedelta(seconds=offset)
+
+    @staticmethod
+    def _postfix_delay(duration: float, offset: int = 0) -> str:
+        """Return a compact Postfix delay value."""
+        value = max(0.08, duration * 0.72 + offset * 0.04)
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _postfix_delay_between(start_time: datetime, end_time: datetime) -> str:
+        """Return a Postfix delay value derived from visible queue lifecycle time."""
+        value = max(0.01, (end_time - start_time).total_seconds())
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _postfix_delays(delay: str) -> str:
+        """Return a plausible Postfix delays tuple that sums near delay."""
+        total = float(delay)
+        before_qmgr = max(0.01, total * 0.18)
+        qmgr = max(0.01, total * 0.08)
+        connection = max(0.01, total * 0.22)
+        delivery = max(0.01, total - before_qmgr - qmgr - connection)
+        return f"{before_qmgr:.2f}/{qmgr:.2f}/{connection:.2f}/{delivery:.2f}"
+
+    def _email_smtp_hop_times(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        message_id: str,
+        time: datetime,
+        transfer_sizes: list[dict[str, float | int]],
+    ) -> list[datetime]:
+        """Return canonical SMTP hop start times shared by transport and headers."""
+        if not route:
+            return []
+        schedule_rng = random.Random(_stable_seed(f"email_smtp_hop_schedule:{message_id}"))
+        current = time + timedelta(seconds=schedule_rng.uniform(1.05, 1.75))
+        hop_times: list[datetime] = []
+        for index, _hop in enumerate(route):
+            hop_times.append(current)
+            duration = (
+                float(transfer_sizes[index]["duration"])
+                if index < len(transfer_sizes)
+                else schedule_rng.uniform(0.8, 3.5)
+            )
+            gap_rng = random.Random(_stable_seed(f"email_smtp_hop_gap:{message_id}:{index}"))
+            current = current + timedelta(seconds=max(0.15, duration) + gap_rng.uniform(0.65, 4.8))
+        return hop_times
+
+    def _smtp_transfer_sizes(
+        self,
+        *,
+        message_id: str,
+        body: str,
+        attachments: list[dict[str, Any]],
+        route: list[dict[str, Any]],
+    ) -> list[dict[str, float | int]]:
+        """Return deterministic SMTP transfer byte and duration estimates per route hop."""
+        body_size = len(body.encode("utf-8"))
+        attachment_size = sum(
+            len(self._email_attachment_payload_bytes(attachment, message_id))
+            for attachment in attachments
+        )
+        unique_recipients = list(
+            dict.fromkeys(address for hop in route for address in hop["recipients"])
+        )
+        queued_message_base = max(
+            600,
+            body_size
+            + attachment_size
+            + sum(len(address) + 12 for address in unique_recipients)
+            + 520,
+        )
+        sizes: list[dict[str, float | int]] = []
+        for index, hop in enumerate(route):
+            rng = random.Random(_stable_seed(f"smtp_transfer_size:{message_id}:{index}"))
+            is_submission = bool(hop["submission"])
+            is_external = bool(hop.get("external_hostname"))
+            control_overhead = rng.randint(360, 920) + 70 * len(hop["recipients"])
+            message_size = queued_message_base + rng.randint(80, 420) + index * rng.randint(18, 95)
+            if is_submission:
+                smtp_tls_overhead = rng.randint(700, 2600)
+                orig_bytes = message_size + control_overhead + smtp_tls_overhead
+                resp_bytes = rng.randint(260, 1300)
+                duration = rng.uniform(0.45, 4.2)
+            else:
+                relay_overhead = rng.randint(900, 2600) if is_external else rng.randint(650, 1800)
+                orig_bytes = message_size + control_overhead + relay_overhead
+                resp_bytes = rng.randint(420, 2400)
+                duration = rng.uniform(1.2, 8.5 if is_external else 5.5)
+            sizes.append(
+                {
+                    "message_size": int(message_size),
+                    "orig_bytes": int(orig_bytes),
+                    "resp_bytes": int(resp_bytes),
+                    "duration": round(float(duration), 6),
+                }
+            )
+        return sizes
+
+    def _email_servers_by_name(self) -> dict[str, Any]:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return {}
+        return {server.name: server for server in email_config.mail_servers}
+
+    def _email_system_for_server_name(self, server_name: str) -> "System":
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        servers = self._email_servers_by_name()
+        if server_name == "default" and email_config is not None:
+            server_name = email_config.default_mailbox_servers[0]
+        server = servers[server_name]
+        for system in self._scenario_environment.systems:
+            if system.hostname == server.system:
+                return system
+        raise ValueError(
+            f"Email server {server_name!r} references unknown system {server.system!r}"
+        )
+
+    def _email_dns_system_for_hostname(self, hostname: str | None) -> "System | None":
+        """Return the configured mail server system that owns an email DNS hostname."""
+        if not hostname:
+            return None
+        wanted = hostname.lower().rstrip(".")
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return None
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+        generic_mail_aliases = {
+            f"mail.{domain.lower().rstrip('.')}"
+            for domain in getattr(email_config, "accepted_domains", [])
+            if str(domain).strip()
+        }
+        if ad_domain:
+            generic_mail_aliases.add(f"mail.{ad_domain}")
+        if wanted in generic_mail_aliases:
+            route_server_names = list(getattr(email_config, "inbound_route", []) or [])
+            route_server_names.extend(
+                name
+                for name in getattr(email_config, "default_mailbox_servers", []) or []
+                if name not in route_server_names
+            )
+            if not route_server_names and email_config.mail_servers:
+                route_server_names.append(email_config.mail_servers[0].name)
+            if route_server_names:
+                return self._email_system_for_server_name(route_server_names[0])
+        for server in email_config.mail_servers:
+            candidates = {
+                str(server.hostname).lower().rstrip("."),
+                str(server.name).lower().rstrip("."),
+                str(server.system).lower().rstrip("."),
+            }
+            if wanted in candidates:
+                return self._email_system_for_server_name(server.name)
+        return None
+
+    def _email_server_for_user_address(self, address: str) -> str:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        user = next(
+            (
+                candidate
+                for candidate in self._scenario_environment.users
+                if candidate.email.lower() == address.lower()
+            ),
+            None,
+        )
+        if user is not None:
+            user_groups = set(user.groups or [])
+            for override in email_config.mailbox_overrides:
+                if override.group in user_groups:
+                    return override.server
+        seed = _stable_seed(f"email_mailbox_server:{address}")
+        return email_config.default_mailbox_servers[
+            seed % len(email_config.default_mailbox_servers)
+        ]
+
+    def _expand_email_recipients(self, recipients: list[str]) -> list[str]:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return recipients
+        groups = {group.address.lower(): group for group in email_config.distribution_groups}
+        expanded: list[str] = []
+        for recipient in recipients:
+            group = groups.get(recipient.lower())
+            if group is None:
+                expanded.append(recipient.lower())
+            else:
+                expanded.extend(member.lower() for member in group.members)
+        return list(dict.fromkeys(expanded))
+
+    def _plan_email_route(
+        self,
+        sender: str,
+        recipients: list[str],
+        client_system: "System",
+    ) -> list[dict[str, Any]]:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        accepted_domains = set(email_config.accepted_domains)
+        internal_recipients = [
+            address for address in recipients if self._email_domain(address) in accepted_domains
+        ]
+        external_recipients = [
+            address for address in recipients if self._email_domain(address) not in accepted_domains
+        ]
+        sender_is_internal = self._email_domain(sender) in accepted_domains
+        if not sender_is_internal:
+            inbound_server_name = (
+                email_config.inbound_route[0]
+                if email_config.inbound_route
+                else self._email_server_for_user_address(internal_recipients[0])
+            )
+            inbound_system = self._email_system_for_server_name(inbound_server_name)
+            external_mx = self._external_source_mail_system(sender)
+            inbound_hop = self._email_hop(
+                external_mx,
+                inbound_system,
+                submission=False,
+                server_to_server=True,
+                src_server_name="",
+                dst_server_name=inbound_server_name,
+                recipients=internal_recipients,
+            )
+            inbound_hop["external_routing_mode"] = "inbound"
+            inbound_hop["src_server_attempts_starttls"] = self._external_sender_attempts_starttls(
+                sender=sender,
+                src_system=external_mx,
+                dst_system=inbound_system,
+            )
+            route = [inbound_hop]
+            sender_server_name = inbound_server_name
+            sender_server_system = inbound_system
+        else:
+            sender_server_name = self._email_server_for_user_address(sender)
+            sender_server_system = self._email_system_for_server_name(sender_server_name)
+            route: list[dict[str, Any]] = [
+                self._email_hop(
+                    client_system,
+                    sender_server_system,
+                    submission=True,
+                    server_to_server=False,
+                    src_server_name="",
+                    dst_server_name=sender_server_name,
+                    recipients=recipients,
+                )
+            ]
+        for server_name in sorted(
+            {self._email_server_for_user_address(addr) for addr in internal_recipients}
+        ):
+            dst_system = self._email_system_for_server_name(server_name)
+            if dst_system.ip != sender_server_system.ip:
+                route.append(
+                    self._email_hop(
+                        sender_server_system,
+                        dst_system,
+                        submission=False,
+                        server_to_server=True,
+                        src_server_name=sender_server_name,
+                        dst_server_name=server_name,
+                        recipients=[
+                            address
+                            for address in internal_recipients
+                            if self._email_server_for_user_address(address) == server_name
+                        ],
+                    )
+                )
+        if external_recipients:
+            outbound_route = self._select_outbound_email_route(sender)
+            outbound_server_name = self._select_outbound_email_server_from_route(
+                sender,
+                outbound_route,
+                email_config,
+            )
+            outbound_system = self._email_system_for_server_name(outbound_server_name)
+            if outbound_system.ip != sender_server_system.ip:
+                merged = self._merge_email_route_hop_recipients(
+                    route,
+                    src_system=sender_server_system,
+                    dst_system=outbound_system,
+                    recipients=external_recipients,
+                )
+                if not merged:
+                    route.append(
+                        self._email_hop(
+                            sender_server_system,
+                            outbound_system,
+                            submission=False,
+                            server_to_server=True,
+                            src_server_name=sender_server_name,
+                            dst_server_name=outbound_server_name,
+                            recipients=external_recipients,
+                        )
+                    )
+            external_by_domain: dict[str, list[str]] = {}
+            for recipient in external_recipients:
+                external_by_domain.setdefault(self._email_domain(recipient), []).append(recipient)
+            relay_hosts = list(outbound_route.isp_relays or email_config.isp_relays)
+            for domain, domain_recipients in sorted(external_by_domain.items()):
+                if relay_hosts:
+                    relay_host = relay_hosts[
+                        _stable_seed(f"email_isp_relay:{sender}:{domain}") % len(relay_hosts)
+                    ]
+                    route.append(
+                        self._external_email_hop(
+                            outbound_system,
+                            relay_host,
+                            outbound_server_name,
+                            domain_recipients,
+                            routing_mode="smart_host",
+                        )
+                    )
+                    continue
+                mx_host = self._external_mx_for_domain(domain)
+                route.append(
+                    self._external_email_hop(
+                        outbound_system,
+                        mx_host,
+                        outbound_server_name,
+                        domain_recipients,
+                        routing_mode="mx",
+                    )
+                )
+        return route
+
+    @staticmethod
+    def _merge_email_route_hop_recipients(
+        route: list[dict[str, Any]],
+        *,
+        src_system: "System",
+        dst_system: "System",
+        recipients: list[str],
+    ) -> bool:
+        """Merge recipients into an existing same-hop SMTP transaction when possible."""
+        for hop in route:
+            if bool(hop.get("submission")):
+                continue
+            if not bool(hop.get("server_to_server")):
+                continue
+            hop_src = hop.get("src_system")
+            hop_dst = hop.get("dst_system")
+            if getattr(hop_src, "ip", None) != src_system.ip:
+                continue
+            if getattr(hop_dst, "ip", None) != dst_system.ip:
+                continue
+            hop["recipients"] = list(
+                dict.fromkeys(
+                    [
+                        *(str(recipient).lower() for recipient in hop.get("recipients", [])),
+                        *(str(recipient).lower() for recipient in recipients),
+                    ]
+                )
+            )
+            return True
+        return False
+
+    def _email_hop(
+        self,
+        src_system: "System",
+        dst_system: "System",
+        *,
+        submission: bool,
+        server_to_server: bool,
+        src_server_name: str,
+        dst_server_name: str,
+        recipients: list[str],
+    ) -> dict[str, Any]:
+        servers = self._email_servers_by_name()
+        src_cfg = servers.get(src_server_name)
+        dst_cfg = servers.get(dst_server_name)
+        return {
+            "src_system": src_system,
+            "dst_system": dst_system,
+            "submission": submission,
+            "server_to_server": server_to_server,
+            "src_server_attempts_starttls": bool(
+                src_cfg is not None and src_cfg.attempt_outbound_starttls
+            ),
+            "dst_server_allows_starttls": bool(
+                dst_cfg is not None and dst_cfg.allow_inbound_starttls
+            ),
+            "external_hostname": "",
+            "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
+        }
+
+    def _external_email_hop(
+        self,
+        src_system: "System",
+        dst_hostname: str,
+        src_server_name: str,
+        recipients: list[str],
+        *,
+        routing_mode: str,
+    ) -> dict[str, Any]:
+        servers = self._email_servers_by_name()
+        src_cfg = servers.get(src_server_name)
+        dst_hostname = public_safe_mail_hostname(dst_hostname)
+        dst_ip = generate_public_mail_ip(f"email_external_mx:{dst_hostname}", dst_hostname)
+        dst_system = type(src_system)(
+            hostname=dst_hostname,
+            ip=dst_ip,
+            os="Internet SMTP Server",
+            type="server",
+            services=["smtp"],
+            roles=["external_mail_server"],
+        )
+        return {
+            "src_system": src_system,
+            "dst_system": dst_system,
+            "submission": False,
+            "server_to_server": True,
+            "src_server_attempts_starttls": bool(
+                src_cfg is not None and src_cfg.attempt_outbound_starttls
+            ),
+            "dst_server_allows_starttls": True,
+            "external_hostname": dst_hostname,
+            "external_recipient_domain": self._email_domain(recipients[0]) if recipients else "",
+            "external_routing_mode": routing_mode,
+            "recipients": list(dict.fromkeys(address.lower() for address in recipients)),
+        }
+
+    def _external_sender_attempts_starttls(
+        self,
+        *,
+        sender: str,
+        src_system: "System",
+        dst_system: "System",
+    ) -> bool:
+        """Return realistic inbound STARTTLS policy for an external sender MTA."""
+        seed = _stable_seed(
+            "external_sender_starttls:"
+            f"{sender}:{getattr(src_system, 'hostname', '')}:{getattr(dst_system, 'hostname', '')}"
+        )
+        rng = random.Random(seed)
+        domain = self._email_domain(sender)
+        local_part = sender.split("@", 1)[0].lower()
+        if any(marker in local_part for marker in ("notice", "workspace", "support", "alert")):
+            return rng.random() < 0.48
+        if any(marker in domain for marker in ("serviceportal", "docflow", "vendorpost")):
+            return rng.random() < 0.46
+        if any(marker in domain for marker in ("partner", "benefits", "customermail")):
+            return rng.random() < 0.38
+        return rng.random() < 0.32
+
+    def _external_source_mail_system(self, sender: str) -> "System":
+        domain = self._email_domain(sender)
+        hostname = self._external_mx_for_domain(domain)
+        return type(next(iter(self._scenario_environment.systems)))(
+            hostname=hostname,
+            ip=generate_public_mail_ip(f"email_external_sender:{sender}", hostname),
+            os="Internet SMTP Server",
+            type="server",
+            services=["smtp"],
+            roles=["external_mail_server"],
+        )
+
+    def _select_outbound_email_route(self, sender: str) -> Any:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        user = next(
+            (
+                candidate
+                for candidate in self._scenario_environment.users
+                if candidate.email.lower() == sender.lower()
+            ),
+            None,
+        )
+        user_groups = set(user.groups if user is not None else [])
+        selected = email_config.outbound_routes[0]
+        for route in email_config.outbound_routes:
+            if route.sender_groups and user_groups.intersection(route.sender_groups):
+                selected = route
+                break
+            if route.name == "default" and not selected.sender_groups:
+                selected = route
+        return selected
+
+    def _select_outbound_email_server_from_route(
+        self,
+        sender: str,
+        route: Any,
+        email_config: Any,
+    ) -> str:
+        servers = route.servers
+        if servers == ["default"]:
+            servers = email_config.default_mailbox_servers
+        return servers[_stable_seed(f"email_outbound:{sender}") % len(servers)]
+
+    def _select_outbound_email_server(self, sender: str) -> str:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            raise ValueError("environment.email is not configured")
+        return self._select_outbound_email_server_from_route(
+            sender,
+            self._select_outbound_email_route(sender),
+            email_config,
+        )
+
+    def _email_date_header_for_route(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+        time: datetime,
+    ) -> str:
+        """Return a source-plausible Date header for the modeled sender."""
+        if route and "external_mail_server" in (route[0]["src_system"].roles or []):
+            sender_domain = public_safe_mail_hostname(self._email_domain(sender))
+            rng = random.Random(_stable_seed(f"email_external_date:{sender_domain}:{message_id}"))
+            date_time = time - timedelta(seconds=rng.uniform(95.0, 210.0))
+            return date_time.strftime("%a, %d %b %Y %H:%M:%S +0000")
+        return time.strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+    @staticmethod
+    def _external_mx_for_domain(domain: str) -> str:
+        safe = re.sub(r"[^a-z0-9.-]+", "", domain.lower()).strip(".")
+        safe = public_safe_mail_hostname(safe)
+        mx_answers = _public_dns_mx_answers(safe)
+        if mx_answers:
+            parts = mx_answers[0].split(maxsplit=1)
+            if len(parts) == 2:
+                return public_safe_mail_hostname(parts[1].rstrip("."))
+        return f"mail.{safe}"
+
+    def _received_headers_for_route(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+        recipients: list[str],
+        time: datetime,
+        user_agent: str,
+        transfer_sizes: list[dict[str, float | int]],
+        hop_times: list[datetime],
+    ) -> list[str]:
+        headers: list[str] = []
+        recipient_clause = f" for <{recipients[0]}>" if len(recipients) == 1 else ""
+        for index, hop in enumerate(route):
+            src_system = hop["src_system"]
+            dst_system = hop["dst_system"]
+            by_host = self._email_server_fqdn(hop["dst_system"].hostname)
+            from_host = self._email_server_fqdn(hop["src_system"].hostname)
+            from_ip = self._received_header_peer_ip(
+                hop,
+                src_system=src_system,
+                dst_system=dst_system,
+            )
+            duration = (
+                float(transfer_sizes[index]["duration"]) if index < len(transfer_sizes) else 1.0
+            )
+            hop_time = hop_times[index] if index < len(hop_times) else time
+            received_time = self._smtp_lifecycle_time(hop_time, duration, 0.86)
+            tls = self._smtp_hop_uses_starttls(
+                hop=hop,
+                src_system=src_system,
+                dst_system=dst_system,
+                message_id=message_id,
+                hop_index=index,
+                user_agent=user_agent,
+            )
+            transport_clause = self._received_header_transport_clause(
+                hop,
+                tls=tls,
+                message_id=message_id,
+                hop_index=index,
+                dst_system=dst_system,
+            )
+            headers.insert(
+                0,
+                (
+                    f"from {from_host} ({from_ip}) by {by_host} "
+                    f"{transport_clause}{recipient_clause}; "
+                    f"{received_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+                ),
+            )
+        headers.extend(
+            self._external_sender_received_headers(
+                route=route,
+                sender=sender,
+                message_id=message_id,
+                time=time,
+            )
+        )
+        return headers
+
+    def _received_header_peer_ip(
+        self,
+        hop: dict[str, Any],
+        *,
+        src_system: "System",
+        dst_system: "System",
+    ) -> str:
+        """Return the source IP seen by the receiving MTA for a Received hop."""
+        src_ip = str(src_system.ip)
+        dst_roles = set(getattr(dst_system, "roles", ()) or ())
+        if not bool(hop.get("server_to_server")):
+            return src_ip
+        if "external_mail_server" not in dst_roles and not hop.get("external_hostname"):
+            return src_ip
+        if not _is_modeled_local_ip(self, src_ip):
+            return src_ip
+        mapped_ip = self._outbound_nat_mapped_source_ip(src_ip, str(dst_system.ip))
+        return mapped_ip or src_ip
+
+    def _outbound_nat_mapped_source_ip(self, src_ip: str, dst_ip: str) -> str:
+        """Return the first rule-selected outbound NAT source IP without consuming PAT state."""
+        src_segments = self._network_segments_for_ip(src_ip)
+        dst_segments = self._network_segments_for_ip(dst_ip)
+        if dst_segments:
+            return ""
+        network = getattr(getattr(self, "_scenario_environment", None), "network", None)
+        if network is None:
+            return ""
+        for sensor in getattr(network, "sensors", []) or []:
+            if getattr(sensor, "type", "") != "firewall" or not getattr(sensor, "nat_rules", []):
+                continue
+            sensor_segments = set(getattr(sensor, "monitoring_segments", []) or [])
+            if src_segments and not (sensor_segments & src_segments):
+                continue
+            for rule in sensor.nat_rules:
+                mapped_ip = str(getattr(rule, "mapped_ip", "") or "")
+                if not mapped_ip:
+                    continue
+                if getattr(rule, "type", "") == "dynamic_pat" and self._nat_rule_matches_source(
+                    src_ip,
+                    rule,
+                    src_segments,
+                ):
+                    return mapped_ip
+                if (
+                    getattr(rule, "type", "") == "static"
+                    and str(getattr(rule, "real_ip", "") or "") == src_ip
+                ):
+                    return mapped_ip
+        return ""
+
+    def _network_segments_for_ip(self, ip: str) -> set[str]:
+        """Return scenario segment names containing an IP address."""
+        visibility = getattr(getattr(self, "dispatcher", None), "visibility_engine", None)
+        resolve_segments = getattr(visibility, "_resolve_ip_segments", None)
+        if callable(resolve_segments):
+            return set(resolve_segments(ip))
+
+        network = getattr(getattr(self, "_scenario_environment", None), "network", None)
+        if network is None:
+            return set()
+        try:
+            address = ipaddress.ip_address(ip)
+        except ValueError:
+            return set()
+        segments: set[str] = set()
+        for segment in getattr(network, "segments", []) or []:
+            try:
+                if address in ipaddress.ip_network(segment.cidr, strict=False):
+                    segments.add(str(segment.name))
+            except ValueError:
+                continue
+        return segments
+
+    @staticmethod
+    def _nat_rule_matches_source(src_ip: str, rule: Any, src_segments: set[str]) -> bool:
+        """Return whether a NAT rule source selector matches an IP."""
+        try:
+            address = ipaddress.ip_address(src_ip)
+        except ValueError:
+            return False
+        for src_entry in getattr(rule, "src", []) or []:
+            entry = str(src_entry)
+            if entry in src_segments or entry == src_ip:
+                return True
+            try:
+                if address in ipaddress.ip_network(entry, strict=False):
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    @staticmethod
+    def _received_header_protocol(hop: dict[str, Any], *, tls: bool) -> str:
+        """Return the source-native SMTP protocol label for a Received hop."""
+        if hop.get("submission"):
+            return "ESMTPSA" if tls else "ESMTPA"
+        return "ESMTPS" if tls else "ESMTP"
+
+    def _received_header_transport_clause(
+        self,
+        hop: dict[str, Any],
+        *,
+        tls: bool,
+        message_id: str,
+        hop_index: int,
+        dst_system: "System",
+    ) -> str:
+        """Return the MTA-native transport clause for a Received header."""
+        relay_id = self._received_header_relay_id(
+            message_id=message_id,
+            hop_index=hop_index,
+            dst_system=dst_system,
+        )
+        if _get_os_category(dst_system.os) == "windows":
+            return f"with Microsoft SMTP Server id {relay_id}"
+        protocol = self._received_header_protocol(hop, tls=tls)
+        return f"with {protocol} id {relay_id}"
+
+    def _received_header_relay_id(
+        self,
+        *,
+        message_id: str,
+        hop_index: int,
+        dst_system: "System",
+    ) -> str:
+        """Return a relay token shaped by the receiving MTA family."""
+        os_category = _get_os_category(dst_system.os)
+        if os_category == "linux":
+            return self._postfix_queue_id(message_id, dst_system)
+        seed = _stable_seed(f"received:{message_id}:{hop_index}:{dst_system.hostname}")
+        if os_category == "windows":
+            exchange_builds = (
+                (15, 2, 1118, 7),
+                (15, 2, 1258, 12),
+                (15, 2, 1544, 4),
+                (15, 2, 1748, 10),
+                (15, 2, 2214, 13),
+                (15, 1, 2507, 6),
+                (15, 1, 2686, 8),
+            )
+            major, minor, build, revision_base = exchange_builds[seed % len(exchange_builds)]
+            revision = revision_base + ((seed >> 24) % 12)
+            return f"{major}.{minor}.{build}.{revision}"
+        return self._base36(seed, 10)
+
+    def _external_sender_received_headers(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+        time: datetime,
+    ) -> list[str]:
+        """Return stable pre-recipient Received headers for inbound public mail."""
+        if not route:
+            return []
+        first_hop = route[0]
+        src_system = first_hop["src_system"]
+        if "external_mail_server" not in (src_system.roles or []):
+            return []
+
+        edge_host = self._email_server_fqdn(src_system.hostname)
+        edge_ip = src_system.ip
+        sender_domain = public_safe_mail_hostname(self._email_domain(sender))
+        rng = random.Random(_stable_seed(f"email_external_received:{sender_domain}:{message_id}"))
+        upstream_hops = self._external_sender_public_hops(
+            sender=sender,
+            message_id=message_id,
+        )
+
+        edge_time = time - timedelta(seconds=rng.uniform(14.0, 55.0))
+        headers: list[str] = []
+        receiver_host = edge_host
+        receiver_ip = edge_ip
+        received_time = edge_time
+        for index, hop in enumerate(upstream_hops):
+            relay_id = _stable_seed(f"received-external-hop:{message_id}:{index}") & 0xFFFFFFFF
+            protocol = (
+                "ESMTPSA" if index == len(upstream_hops) - 1 and rng.random() < 0.18 else "ESMTPS"
+            )
+            headers.append(
+                f"from {hop['host']} ({hop['ip']}) by {receiver_host} ({receiver_ip}) "
+                f"with {protocol} id {relay_id:08x}; "
+                f"{received_time.strftime('%a, %d %b %Y %H:%M:%S +0000')}"
+            )
+            receiver_host = str(hop["host"])
+            receiver_ip = str(hop["ip"])
+            received_time -= timedelta(seconds=rng.uniform(4.0, 26.0))
+        return headers
+
+    def _external_sender_observed_path(
+        self,
+        *,
+        route: list[dict[str, Any]],
+        sender: str,
+        message_id: str,
+    ) -> list[str]:
+        """Return the visible upstream public relay path for an inbound SMTP hop."""
+        if not route:
+            return []
+        first_hop = route[0]
+        src_system = first_hop["src_system"]
+        if "external_mail_server" not in (src_system.roles or []):
+            return []
+        return [
+            str(hop["ip"])
+            for hop in self._external_sender_public_hops(sender=sender, message_id=message_id)
+        ]
+
+    def _external_sender_public_hops(
+        self,
+        *,
+        sender: str,
+        message_id: str,
+    ) -> list[dict[str, str]]:
+        """Return upstream public SMTP hops ordered newest to oldest."""
+        sender_domain = public_safe_mail_hostname(self._email_domain(sender))
+        local_part = sender.split("@", 1)[0].lower()
+        preserve_app_host = self._email_mailer_profile(sender, "") == "service"
+        rng = random.Random(_stable_seed(f"email_external_received:{sender_domain}:{message_id}"))
+        app_prefixes = (
+            ["notify", "worker", "app", "mailer"]
+            if any(marker in local_part for marker in ("notice", "workspace", "alert", "support"))
+            else ["smtp", "mail", "relay", "outbound"]
+        )
+        app_label = re.sub(r"[^a-z0-9-]+", "-", local_part).strip("-")[:18] or "mailer"
+        app_host = rng.choice(
+            [
+                f"{rng.choice(app_prefixes)}-{1 + rng.randrange(6):02d}.{sender_domain}",
+                f"{app_label}-app-{1 + rng.randrange(8):02d}.{sender_domain}",
+                f"worker{1 + rng.randrange(8)}.{sender_domain}",
+            ]
+        )
+        mta_host = rng.choice(
+            [
+                f"mailout-{1 + rng.randrange(4):02d}.{sender_domain}",
+                f"smtp-out-{1 + rng.randrange(4):02d}.{sender_domain}",
+                f"mta{1 + rng.randrange(4)}.{sender_domain}",
+                f"mx-relay-{1 + rng.randrange(6):02d}.{sender_domain}",
+            ]
+        )
+        hops = [
+            {
+                "host": mta_host,
+                "ip": generate_public_mail_ip(
+                    f"email_external_received_mta:{sender_domain}:{message_id}",
+                    mta_host,
+                ),
+            },
+            {
+                "host": app_host,
+                "ip": generate_public_mail_ip(
+                    f"email_external_received_app:{sender_domain}:{message_id}",
+                    app_host,
+                ),
+            },
+        ]
+        if rng.random() < 0.42:
+            transit_host = rng.choice(
+                [
+                    f"inbound-{1 + rng.randrange(6):02d}.{sender_domain}",
+                    f"edge-mta-{1 + rng.randrange(5):02d}.{sender_domain}",
+                    f"relaypool-{1 + rng.randrange(7):02d}.{sender_domain}",
+                ]
+            )
+            hops.insert(
+                0,
+                {
+                    "host": transit_host,
+                    "ip": generate_public_mail_ip(
+                        f"email_external_received_transit:{sender_domain}:{message_id}",
+                        transit_host,
+                    ),
+                },
+            )
+        for hop in hops:
+            ptr_name = public_mail_ptr_name(hop["ip"], hop["host"])
+            if (
+                ptr_name
+                and not (preserve_app_host and hop["host"] == app_host)
+                and rng.random() < 0.62
+            ):
+                hop["host"] = ptr_name
+        return hops
+
+    def _emit_email_route_dns(
+        self,
+        route: list[dict[str, Any]],
+        time: datetime,
+    ) -> None:
+        resolver_ips = getattr(self, "_dns_server_ips", []) or ["10.0.0.1"]
+        resolver_ip = resolver_ips[0]
+        for index, hop in enumerate(route):
+            source_system = hop["src_system"]
+            if not _is_modeled_local_ip(self, source_system.ip):
+                continue
+            dst_host = hop.get("external_hostname") or self._email_server_fqdn(
+                hop["dst_system"].hostname
+            )
+            qtype = (
+                "MX"
+                if hop.get("external_hostname") and hop.get("external_routing_mode") != "smart_host"
+                else "A"
+            )
+            answer = dst_host if qtype == "MX" else hop["dst_system"].ip
+            dns_rng = random.Random(
+                _stable_seed(
+                    "email_route_dns:"
+                    f"{source_system.ip}:{resolver_ip}:{dst_host}:{qtype}:{time.isoformat()}"
+                )
+            )
+            query = (
+                str(hop.get("external_recipient_domain") or self._email_domain(dst_host))
+                if qtype == "MX"
+                else dst_host
+            )
+            dns_ctx = DnsContext(
+                query=query,
+                trans_id=dns_rng.randint(1, 65535),
+                query_type=qtype,
+                qtype=15 if qtype == "MX" else 1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=[f"10 {answer}" if qtype == "MX" else answer],
+                TTLs=[float(dns_rng.choice([300, 450, 600, 900, 1200]))],
+                rtt=round(dns_rng.uniform(0.0022, 0.012), 6),
+            )
+            self.generate_connection(
+                src_ip=source_system.ip,
+                dst_ip=resolver_ip,
+                time=time - timedelta(seconds=max(0.1, 2.0 - index * 0.1)),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                duration=dns_ctx.rtt,
+                orig_bytes=60,
+                resp_bytes=120,
+                conn_state="SF",
+                dns=dns_ctx,
+                source_system=source_system,
+                suppress_application_side_effects=True,
+            )
+            if qtype == "MX":
+                a_ctx = DnsContext(
+                    query=answer,
+                    trans_id=dns_rng.randint(1, 65535),
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=[hop["dst_system"].ip],
+                    TTLs=[float(dns_rng.choice([300, 450, 600, 900, 1200]))],
+                    rtt=round(dns_rng.uniform(0.0025, 0.014), 6),
+                )
+                self.generate_connection(
+                    src_ip=source_system.ip,
+                    dst_ip=resolver_ip,
+                    time=time - timedelta(seconds=max(0.05, 1.0 - index * 0.1)),
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    duration=a_ctx.rtt,
+                    orig_bytes=60,
+                    resp_bytes=120,
+                    conn_state="SF",
+                    dns=a_ctx,
+                    source_system=source_system,
+                    suppress_application_side_effects=True,
+                )
+
+    def _email_mime_file_transfers(
+        self,
+        *,
+        artifact_id: str,
+        hop_index: int,
+        body: str,
+        attachments: list[dict[str, Any]],
+        duration: float,
+    ) -> list[FileTransferContext]:
+        """Return Zeek files.log metadata for all visible SMTP MIME parts."""
+        parts: list[dict[str, Any]] = [
+            {
+                "name": "",
+                "mime_type": "text/plain",
+                "content": body,
+                "size": len(body.encode("utf-8")),
+            }
+        ]
+        for attachment in attachments:
+            payload = self._email_attachment_payload_bytes(attachment, artifact_id)
+            parts.append(
+                {
+                    "name": str(attachment.get("filename") or "attachment.bin"),
+                    "mime_type": str(attachment.get("content_type") or "application/octet-stream"),
+                    "payload": payload,
+                    "size": len(payload),
+                }
+            )
+        transfers: list[FileTransferContext] = []
+        for depth, part in enumerate(parts):
+            content_seed = f"email-mime:{artifact_id}:{depth}:{part['name']}:{part['mime_type']}"
+            observation_seed = f"{content_seed}:hop:{hop_index}"
+            payload = part.get("payload")
+            if payload is None:
+                payload = str(part.get("content") or "").encode("utf-8")
+            size = max(0, int(part["size"]))
+            analyzers = ["MD5", "SHA1", "SHA256"]
+            transfers.append(
+                FileTransferContext(
+                    fuid=f"F{_stable_seed(observation_seed):017x}"[:18],
+                    source="SMTP",
+                    depth=depth,
+                    filename=str(part["name"]),
+                    analyzers=analyzers,
+                    mime_type=str(part["mime_type"]),
+                    duration=max(0.001, duration * (1.0 + depth * 0.15)),
+                    local_orig=True,
+                    is_orig=True,
+                    seen_bytes=size,
+                    total_bytes=size,
+                    missing_bytes=0,
+                    overflow_bytes=0,
+                    timedout=False,
+                    md5=hashlib.md5(payload, usedforsecurity=False).hexdigest(),
+                    sha1=hashlib.sha1(payload, usedforsecurity=False).hexdigest(),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                )
+            )
+        return transfers
+
+    @staticmethod
+    def _email_attachment_payload_bytes(
+        attachment: dict[str, Any],
+        artifact_id: str,
+    ) -> bytes:
+        """Return the canonical bytes for an email attachment payload."""
+        content = attachment.get("content")
+        if content is not None:
+            return str(content).encode("utf-8")
+        size = max(0, int(attachment.get("size") or 0))
+        if size == 0:
+            return b""
+        if ActivityGenerator._email_attachment_is_openxml_office(attachment):
+            return ActivityGenerator._openxml_office_attachment_bytes(attachment, artifact_id, size)
+        seed = (
+            f"email-attachment:{artifact_id}:"
+            f"{attachment.get('filename') or 'attachment.bin'}:"
+            f"{attachment.get('content_type') or 'application/octet-stream'}"
+        ).encode()
+        repeats = (size // len(seed)) + 1
+        return (seed * repeats)[:size]
+
+    @staticmethod
+    def _email_attachment_is_openxml_office(attachment: dict[str, Any]) -> bool:
+        """Return whether attachment metadata claims an OpenXML Office container."""
+        filename = str(attachment.get("filename") or "").lower()
+        content_type = str(attachment.get("content_type") or "").lower()
+        return filename.endswith((".docx", ".pptx", ".xlsx", ".xlsm")) or any(
+            marker in content_type
+            for marker in (
+                "openxmlformats-officedocument",
+                "application/vnd.ms-excel.sheet.macroenabled",
+            )
+        )
+
+    @staticmethod
+    def _openxml_office_attachment_bytes(
+        attachment: dict[str, Any],
+        artifact_id: str,
+        requested_size: int,
+    ) -> bytes:
+        """Return deterministic Office-like OOXML bytes for generated binary attachments."""
+        filename = str(attachment.get("filename") or "attachment.xlsx").lower()
+        is_macro_workbook = (
+            filename.endswith(".xlsm")
+            or "macroenabled" in str(attachment.get("content_type") or "").lower()
+        )
+        payload_seed = (
+            f"office-attachment:{artifact_id}:{filename}:"
+            f"{attachment.get('content_type') or 'application/octet-stream'}"
+        )
+        binary_size = max(1024, requested_size - 2200)
+        if not is_macro_workbook:
+            binary_size = max(256, min(binary_size, 8192))
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "[Content_Types].xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    b'<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                    b'<Default Extension="xml" ContentType="application/xml"/>'
+                    b'<Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/>'
+                    b'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    b"</Types>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "_rels/.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                    b"</Relationships>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/workbook.xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    b'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    b'<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>'
+                    b"</workbook>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/_rels/workbook.xml.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    b'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    b"</Relationships>"
+                ),
+            )
+            ActivityGenerator._write_deterministic_zip_member(
+                archive,
+                "xl/worksheets/sheet1.xml",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    b'<sheetData><row r="1"><c r="A1" t="str"><v>Invoice reference</v></c></row></sheetData>'
+                    b"</worksheet>"
+                ),
+            )
+            if is_macro_workbook:
+                ActivityGenerator._write_deterministic_zip_member(
+                    archive,
+                    "xl/vbaProject.bin",
+                    ActivityGenerator._deterministic_binary_bytes(payload_seed, binary_size),
+                )
+        return buffer.getvalue()
+
+    @staticmethod
+    def _write_deterministic_zip_member(
+        archive: zipfile.ZipFile,
+        name: str,
+        payload: bytes,
+    ) -> None:
+        """Write a ZIP member with stable metadata."""
+        info = zipfile.ZipInfo(name, (2024, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_STORED
+        info.external_attr = 0o600 << 16
+        archive.writestr(info, payload)
+
+    @staticmethod
+    def _deterministic_binary_bytes(seed: str, size: int) -> bytes:
+        """Return deterministic binary-looking bytes for source-native container members."""
+        chunks: list[bytes] = []
+        counter = 0
+        while sum(len(chunk) for chunk in chunks) < size:
+            chunks.append(hashlib.sha256(f"{seed}:{counter}".encode()).digest())
+            counter += 1
+        return b"".join(chunks)[:size]
+
+    def _maybe_generate_email_recipient_reads(
+        self,
+        *,
+        email_ctx: EmailContext,
+        delivery_time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Generate low-rate opaque mailbox reads after delivered internal mail."""
+        if email_ctx.outcome != "delivered":
+            return
+        users_by_email = {
+            user.email.lower(): user for user in self._scenario_environment.users if user.email
+        }
+        for recipient in email_ctx.expanded_rcptto[:8]:
+            user = users_by_email.get(recipient.lower())
+            if user is None:
+                continue
+            read_probability = 0.92 if email_ctx.attachments else 0.72
+            if rng.random() > read_probability:
+                continue
+            system = self._system_for_email_user(user)
+            if system is None:
+                continue
+            server_name = self._email_server_for_user_address(recipient)
+            server_system = self._email_system_for_server_name(server_name)
+            server_cfg = self._email_servers_by_name()[server_name]
+            read_delay = timedelta(seconds=rng.uniform(90.0, 2700.0))
+            read_time = delivery_time + read_delay
+            if not self._is_within_scenario_window(read_time):
+                continue
+            protocol = "owa" if server_cfg.platform == "exchange" else "imaps"
+            self.generate_email_access(
+                user=user,
+                system=system,
+                server=server_system,
+                time=read_time,
+                platform=server_cfg.platform,
+                protocol=protocol,
+                user_agent=email_ctx.user_agent,
+                message_ids=(email_ctx.message_id, email_ctx.artifact_id),
+            )
+            self._emit_recipient_email_endpoint_artifacts(
+                email_ctx=email_ctx,
+                user=user,
+                system=system,
+                server_system=server_system,
+                protocol=protocol,
+                time=read_time,
+                rng=rng,
+            )
+
+    def _emit_sender_email_endpoint_artifacts(
+        self,
+        *,
+        email_ctx: EmailContext,
+        user: "User",
+        system: "System",
+        time: datetime,
+        pid: int,
+    ) -> None:
+        """Emit sender-side attachment reads owned by the mail client process."""
+        if pid <= 0 or not email_ctx.attachments:
+            return
+        rng = random.Random(_stable_seed(f"email_sender_files:{email_ctx.message_id}"))
+        proc = self.state_manager.get_process(system.hostname, pid)
+        min_file_time = proc.start_time + timedelta(milliseconds=250) if proc else None
+        for index, attachment in enumerate(email_ctx.attachments[:4]):
+            filename = self._safe_email_attachment_filename(attachment)
+            file_time = time - timedelta(seconds=rng.uniform(1.5, 18.0))
+            if min_file_time is not None and file_time < min_file_time:
+                file_time = min_file_time + timedelta(milliseconds=index * 120)
+            if file_time >= time:
+                file_time = time - timedelta(milliseconds=max(100, 300 - index * 50))
+            self._emit_email_endpoint_file_event(
+                email_ctx=email_ctx,
+                user=user,
+                system=system,
+                time=file_time,
+                pid=pid,
+                path=self._email_sender_attachment_path(user, system, filename),
+                action="read",
+                sequence=f"sender:{index}",
+            )
+
+    def _emit_recipient_email_endpoint_artifacts(
+        self,
+        *,
+        email_ctx: EmailContext,
+        user: "User",
+        system: "System",
+        server_system: "System",
+        protocol: str,
+        time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Emit recipient-side mail cache and attachment file traces."""
+        access_rng = random.Random(
+            _stable_seed(
+                "email_access:"
+                f"{user.username}:{system.hostname}:{server_system.hostname}:{time.isoformat()}"
+            )
+        )
+        process_image = self._email_access_process_image(
+            system,
+            protocol,
+            email_ctx.user_agent,
+            access_rng,
+        )
+        command_line = self._email_access_process_command_line(
+            process_image,
+            protocol=protocol,
+            server_hostname=self._email_server_fqdn(server_system.hostname),
+        )
+        pid, _image = self._ensure_email_client_process(
+            user=user,
+            system=system,
+            time=time + timedelta(milliseconds=350),
+            image=process_image,
+            command_line=command_line,
+        )
+        if pid <= 0:
+            return
+        cache_time = time + timedelta(seconds=rng.uniform(1.5, 9.0))
+        self._emit_email_endpoint_file_event(
+            email_ctx=email_ctx,
+            user=user,
+            system=system,
+            time=cache_time,
+            pid=pid,
+            path=self._email_message_cache_path(user, system, email_ctx, process_image),
+            action="create",
+            sequence="message-cache",
+        )
+        for index, attachment in enumerate(email_ctx.attachments[:4]):
+            filename = self._safe_email_attachment_filename(attachment)
+            attachment_time = cache_time + timedelta(milliseconds=650 + index * 420)
+            self._emit_email_endpoint_file_event(
+                email_ctx=email_ctx,
+                user=user,
+                system=system,
+                time=attachment_time,
+                pid=pid,
+                path=self._email_recipient_attachment_path(
+                    user,
+                    system,
+                    filename,
+                    process_image,
+                    email_ctx.artifact_id,
+                ),
+                action="create",
+                sequence=f"recipient:{index}",
+            )
+
+    def _emit_email_endpoint_file_event(
+        self,
+        *,
+        email_ctx: EmailContext,
+        user: "User",
+        system: "System",
+        time: datetime,
+        pid: int,
+        path: str,
+        action: str,
+        sequence: str,
+    ) -> None:
+        """Emit one canonical endpoint file event associated with an email message."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None:
+            return
+        actor_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        action_name = action if action in _FILE_ACTION_EVENT_TYPES else "create"
+        self.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=time,
+                event_type=_FILE_ACTION_EVENT_TYPES[action_name],
+                src_host=self._build_host_context(system),
+                auth=AuthContext(
+                    username=user.username,
+                    user_sid=self._get_sid(user.username),
+                    logon_id=proc.logon_id,
+                ),
+                process=ProcessContext(
+                    pid=proc.pid,
+                    parent_pid=proc.parent_pid,
+                    image=proc.image,
+                    command_line=proc.command_line,
+                    username=proc.username,
+                    integrity_level=proc.integrity_level,
+                    logon_id=proc.logon_id,
+                    parent_image=self._lookup_process_name(
+                        system.hostname,
+                        proc.parent_pid,
+                        _get_os_category(system.os),
+                    ),
+                    start_time=proc.start_time,
+                ),
+                file=FileContext(path=path, action=action_name, pid=proc.pid),
+                edr=EdrContext(
+                    object_id=stable_uuid(
+                        "email-endpoint-file",
+                        system.hostname,
+                        proc.pid,
+                        email_ctx.message_id,
+                        path,
+                        action_name,
+                        sequence,
+                    ),
+                    actor_id=actor_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _safe_email_attachment_filename(attachment: dict[str, Any]) -> str:
+        """Return a source-safe attachment filename."""
+        raw = str(attachment.get("filename") or "attachment.bin")
+        name = re.sub(r'[<>:"/\\|?*]+', "-", raw)
+        name = re.sub(r"[\x00-\x1f]+", "-", name).strip(". ")
+        return name[:96] or "attachment.bin"
+
+    def _email_sender_attachment_path(self, user: "User", system: "System", filename: str) -> str:
+        """Return a plausible sender-side attachment source path."""
+        if _get_os_category(system.os) == "windows":
+            return rf"{self._user_profile_directory(user.username)}\Documents\{filename}"
+        return f"/home/{user.username}/Documents/{filename}"
+
+    def _email_message_cache_path(
+        self,
+        user: "User",
+        system: "System",
+        email_ctx: EmailContext,
+        process_image: str,
+    ) -> str:
+        """Return a source-native mail message cache path."""
+        token = self._base36_nonzero(_stable_seed(f"email-cache:{email_ctx.message_id}"), 10)
+        if _get_os_category(system.os) == "windows":
+            profile = self._user_profile_directory(user.username)
+            exe_name = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if "thunderbird" in exe_name:
+                return (
+                    rf"{profile}\AppData\Roaming\Thunderbird\Profiles\{token.lower()}.default-release"
+                    rf"\ImapMail\{self._email_domain(user.email)}\INBOX"
+                )
+            return rf"{profile}\AppData\Local\Microsoft\Outlook\RoamCache\{token}.dat"
+        return f"/home/{user.username}/.thunderbird/{token.lower()}.default-release/ImapMail/INBOX"
+
+    def _email_recipient_attachment_path(
+        self,
+        user: "User",
+        system: "System",
+        filename: str,
+        process_image: str,
+        artifact_id: str,
+    ) -> str:
+        """Return a recipient-side attachment/cache path with the original filename."""
+        token = self._base36_nonzero(_stable_seed(f"email-attachment-cache:{artifact_id}"), 8)
+        if _get_os_category(system.os) == "windows":
+            profile = self._user_profile_directory(user.username)
+            exe_name = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if "thunderbird" in exe_name:
+                return (
+                    rf"{profile}\AppData\Local\Thunderbird\Profiles\{token.lower()}.default-release"
+                    rf"\cache2\entries\{filename}"
+                )
+            return (
+                rf"{profile}\AppData\Local\Microsoft\Windows\INetCache"
+                rf"\Content.Outlook\{token}\{filename}"
+            )
+        return f"/home/{user.username}/.cache/thunderbird/{token.lower()}/{filename}"
+
+    def _system_for_email_user(self, user: "User") -> "System | None":
+        """Return a user's likely mailbox client system."""
+        if user.primary_system:
+            system = next(
+                (
+                    candidate
+                    for candidate in self._scenario_environment.systems
+                    if candidate.hostname == user.primary_system
+                ),
+                None,
+            )
+            if system is not None:
+                return system
+        return next(
+            (
+                candidate
+                for candidate in self._scenario_environment.systems
+                if candidate.assigned_user == user.username
+            ),
+            None,
+        )
+
+    def _should_materialize_email_artifact(self, artifact_id: str, storyline_id: str) -> bool:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None:
+            return False
+        mode = email_config.artifacts.mode
+        if mode == "none":
+            return False
+        if mode in {"storyline", "all"}:
+            return bool(storyline_id) or mode == "all"
+        return artifact_id in set(email_config.artifacts.selected_ids) or storyline_id in set(
+            email_config.artifacts.selected_ids
+        )
+
+    def _write_email_artifact(self, email_ctx: EmailContext) -> str:
+        artifact_dir = getattr(self, "_email_artifact_dir", None)
+        if artifact_dir is None:
+            return ""
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / f"{email_ctx.artifact_id}.eml"
+        path.write_bytes(self._render_email_artifact(email_ctx).encode("utf-8"))
+        return path.relative_to(artifact_dir.parent.parent).as_posix()
+
+    def _render_email_artifact(self, email_ctx: EmailContext) -> str:
+        """Render a deterministic MIME message with profile-specific header texture."""
+        profile = self._email_mailer_profile(email_ctx.envelope_from, email_ctx.user_agent)
+        has_attachments = bool(email_ctx.attachments)
+        boundary = self._email_mime_boundary(email_ctx.artifact_id, profile)
+        header_lines = self._email_artifact_header_lines(
+            email_ctx,
+            profile=profile,
+            boundary=boundary,
+            has_attachments=has_attachments,
+        )
+        if not has_attachments:
+            body = self._quoted_printable_text(email_ctx.body or "")
+            return "\r\n".join([*header_lines, "", body, ""])
+
+        parts = [
+            f"--{boundary}",
+            'Content-Type: text/plain; charset="utf-8"',
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            self._quoted_printable_text(email_ctx.body or ""),
+            "",
+        ]
+        for attachment in email_ctx.attachments:
+            payload = self._email_attachment_payload_bytes(attachment, email_ctx.artifact_id)
+            content_type = str(attachment.get("content_type") or "application/octet-stream")
+            filename = self._sanitize_email_header_value(
+                str(attachment.get("filename") or "attachment.bin")
+            )
+            parts.extend(
+                [
+                    f"--{boundary}",
+                    f'Content-Type: {content_type}; name="{filename}"',
+                    "Content-Transfer-Encoding: base64",
+                    f'Content-Disposition: attachment; filename="{filename}"',
+                    "",
+                    *self._base64_mime_lines(payload),
+                    "",
+                ]
+            )
+        parts.append(f"--{boundary}--")
+        parts.append("")
+        return "\r\n".join([*header_lines, "", *parts])
+
+    def _email_artifact_header_lines(
+        self,
+        email_ctx: EmailContext,
+        *,
+        profile: str,
+        boundary: str,
+        has_attachments: bool,
+    ) -> list[str]:
+        """Return source-native-ish ordered message headers for one mailer profile."""
+        header_values = {
+            "Return-Path": email_ctx.header_from,
+            "Date": email_ctx.date_header,
+            "From": email_ctx.header_from,
+            "To": ", ".join(email_ctx.to),
+            "Cc": ", ".join(email_ctx.cc),
+            "Subject": email_ctx.subject,
+            "Message-ID": email_ctx.message_id,
+            "MIME-Version": "1.0",
+            "Content-Type": (
+                f'multipart/mixed; boundary="{boundary}"'
+                if has_attachments
+                else 'text/plain; charset="utf-8"'
+            ),
+            "Content-Transfer-Encoding": "" if has_attachments else "quoted-printable",
+        }
+        generated_mailer_header = self._email_profile_mailer_header(
+            profile,
+            email_ctx.user_agent,
+        )
+        if generated_mailer_header is not None:
+            header_values[generated_mailer_header[0]] = generated_mailer_header[1]
+        if profile == "outlook":
+            header_values["Thread-Topic"] = email_ctx.subject
+            if has_attachments:
+                header_values["X-MS-Has-Attach"] = "yes"
+        if profile == "service":
+            header_values["Auto-Submitted"] = "auto-generated"
+            header_values["X-Auto-Response-Suppress"] = "All"
+
+        owned_headers = {
+            "return-path",
+            "received",
+            "date",
+            "from",
+            "to",
+            "cc",
+            "bcc",
+            "subject",
+            "message-id",
+            "mime-version",
+            "content-type",
+            "content-transfer-encoding",
+            "thread-topic",
+            "x-ms-has-attach",
+            "user-agent",
+            "x-mailer",
+            "auto-submitted",
+            "x-auto-response-suppress",
+        }
+        custom_headers = [
+            (str(header), str(value))
+            for header, value in email_ctx.custom_headers.items()
+            if str(header).lower() not in owned_headers
+        ]
+        custom_header_names = {header.lower() for header, _ in custom_headers}
+
+        lines = [
+            self._format_email_header("Received", received)
+            for received in email_ctx.received_headers
+        ]
+        order = self._email_profile_header_order(profile, has_attachments)
+        custom_inserted = False
+        for header in order:
+            if header == "_CUSTOM":
+                lines.extend(
+                    self._format_email_header(custom_header, custom_value)
+                    for custom_header, custom_value in custom_headers
+                )
+                custom_inserted = True
+                continue
+            if header in {"X-Mailer", "User-Agent"} and header.lower() in custom_header_names:
+                continue
+            value = header_values.get(header, "")
+            if value:
+                lines.append(self._format_email_header(header, value))
+        if not custom_inserted:
+            for header, value in custom_headers:
+                lines.append(self._format_email_header(header, value))
+        return lines
+
+    @staticmethod
+    def _email_profile_header_order(profile: str, has_attachments: bool) -> list[str]:
+        """Return the deterministic header order for a coarse mailer profile."""
+        if profile == "thunderbird":
+            return [
+                "Return-Path",
+                "Date",
+                "From",
+                "To",
+                "Cc",
+                "Subject",
+                "_CUSTOM",
+                "Message-ID",
+                "User-Agent",
+                "MIME-Version",
+                "Content-Type",
+                "Content-Transfer-Encoding",
+            ]
+        if profile == "apple_mail":
+            return [
+                "Return-Path",
+                "Date",
+                "From",
+                "To",
+                "Cc",
+                "Subject",
+                "X-Mailer",
+                "_CUSTOM",
+                "Message-ID",
+                "MIME-Version",
+                "Content-Type",
+                "Content-Transfer-Encoding",
+            ]
+        if profile == "service":
+            return [
+                "Return-Path",
+                "Date",
+                "From",
+                "To",
+                "Cc",
+                "Subject",
+                "Auto-Submitted",
+                "X-Auto-Response-Suppress",
+                "X-Mailer",
+                "_CUSTOM",
+                "Message-ID",
+                "MIME-Version",
+                "Content-Type",
+                "Content-Transfer-Encoding",
+            ]
+        return [
+            "Return-Path",
+            "Date",
+            "From",
+            "To",
+            "Cc",
+            "Subject",
+            "Thread-Topic",
+            "X-MS-Has-Attach",
+            "X-Mailer",
+            "_CUSTOM",
+            "Message-ID",
+            "MIME-Version",
+            "Content-Type",
+            "Content-Transfer-Encoding",
+        ]
+
+    @staticmethod
+    def _email_profile_mailer_header(
+        profile: str,
+        user_agent: str,
+    ) -> tuple[str, str] | None:
+        """Return the profile-appropriate visible mailer header."""
+        if not user_agent:
+            return None
+        if profile == "thunderbird":
+            return "User-Agent", user_agent
+        return "X-Mailer", user_agent
+
+    @staticmethod
+    def _email_mime_boundary(artifact_id: str, profile: str) -> str:
+        seed_hi = _stable_seed(f"email_mime_boundary:{profile}:{artifact_id}:hi")
+        seed_lo = _stable_seed(f"email_mime_boundary:{profile}:{artifact_id}:lo")
+        if profile == "outlook":
+            return f"_004_{seed_hi:016X}{seed_lo:016X}_"
+        if profile == "thunderbird":
+            return f"------------{seed_hi:012x}{seed_lo & 0xFFFFFF:06x}"
+        if profile == "apple_mail":
+            return f"Apple-Mail=_${seed_hi:08X}-{seed_lo:08X}"
+        return f"----=_Part_{seed_hi % 1000000}_{seed_lo}"
+
+    @staticmethod
+    def _sanitize_email_header_value(value: str) -> str:
+        return " ".join(value.replace("\r", " ").replace("\n", " ").split())
+
+    def _format_email_header(self, header: str, value: str) -> str:
+        safe_header = re.sub(r"[^A-Za-z0-9-]+", "-", header).strip("-") or "X-Header"
+        return f"{safe_header}: {self._sanitize_email_header_value(str(value))}"
+
+    @staticmethod
+    def _quoted_printable_text(text: str) -> str:
+        encoded = quopri.encodestring(text.encode("utf-8"), quotetabs=False).decode("ascii")
+        return encoded.replace("\n", "\r\n").rstrip("\r\n")
+
+    @staticmethod
+    def _base64_mime_lines(payload: bytes) -> list[str]:
+        if not payload:
+            return [""]
+        return [
+            base64.b64encode(payload[index : index + 57]).decode("ascii")
+            for index in range(0, len(payload), 57)
+        ]
+
+    def _record_email_artifact_manifest(
+        self,
+        email_ctx: EmailContext,
+        artifact_path: str,
+    ) -> None:
+        email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
+        if email_config is None or email_config.artifacts.mode == "none":
+            return
+        manifest = getattr(self, "_email_artifact_manifest", None)
+        if manifest is None:
+            self._email_artifact_manifest = []
+            manifest = self._email_artifact_manifest
+        eml_path = Path(artifact_path).name if artifact_path else ""
+        export_status, export_reason = self._email_artifact_export_state(
+            email_ctx,
+            artifact_path,
+        )
+        manifest.append(
+            {
+                "message_id": email_ctx.message_id,
+                "sender": email_ctx.envelope_from,
+                "to": email_ctx.to,
+                "cc": email_ctx.cc,
+                "bcc": email_ctx.bcc,
+                "subject": email_ctx.subject,
+                "date": email_ctx.date_header,
+                "eml_path": eml_path,
+                "artifact_export_status": export_status,
+                "artifact_export_reason": export_reason,
+            }
+        )
+
+    @staticmethod
+    def _email_artifact_export_state(
+        email_ctx: EmailContext,
+        artifact_path: str,
+    ) -> tuple[str, str]:
+        """Return blind-facing artifact export state for one manifest row."""
+        if artifact_path:
+            return "materialized", "selected_by_artifact_policy"
+        if email_ctx.outcome != "delivered":
+            return "metadata_only", "transport_not_completed"
+        return "metadata_only", "not_selected_by_artifact_policy"
+
+    def write_artifacts_manifest(self) -> None:
+        """Write the top-level artifact manifest when email artifact metadata exists."""
+        manifest = getattr(self, "_email_artifact_manifest", None)
+        manifest_path = getattr(self, "_artifacts_manifest_path", None)
+        if manifest_path is None or manifest is None:
+            return
+        import json
+
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": ARTIFACTS_MANIFEST_SCHEMA_VERSION,
+            "email": {
+                "messages": sorted(
+                    manifest,
+                    key=lambda item: (
+                        item.get("date") or "",
+                        item.get("message_id") or "",
+                        item.get("sender") or "",
+                    ),
+                ),
+            },
+        }
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def _execute_network_connection_bundle(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
@@ -10967,10 +16755,15 @@ class ActivityGenerator:
         source_system = request.source_system
         conn_state = request.conn_state
         dns = request.dns
+        email = request.email
+        smtp = request.smtp
+        x509 = request.x509
+        x509_chain = request.x509_chain
         ids = request.ids
         http = request.http
         caller_supplied_http = http is not None
         file_transfer = request.file_transfer
+        file_transfers = request.file_transfers
         pe = request.pe
         ocsp = request.ocsp
         proxy = request.proxy
@@ -10981,9 +16774,13 @@ class ActivityGenerator:
         preserve_dst_ip = request.preserve_dst_ip
         preserve_http_outcome = request.preserve_http_outcome
         suppress_application_side_effects = request.suppress_application_side_effects
+        suppress_source_pid_inference = request.suppress_source_pid_inference
         preserve_explicit_payload = request.preserve_explicit_payload
+        suppress_prereq_dns = request.suppress_prereq_dns
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
+        ssh_attempted_username = request.ssh_attempted_username
+        caller_supplied_pid = pid > 0
 
         from evidenceforge.events.contexts import NetworkContext
 
@@ -11278,23 +17075,31 @@ class ActivityGenerator:
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         # Only internal hosts generate DNS lookups — external source IPs (e.g.,
         # attacker IPs in storylines) don't query the victim's internal resolver.
+        src_ip_is_local = _is_modeled_local_ip(self, src_ip)
+        dst_ip_is_local = _is_modeled_local_ip(self, dst_ip)
         force_visible_prereq_dns = (
             source_system is not None
             and "forward_proxy" in (source_system.roles or [])
             and hostname_is_external
             and proto == "tcp"
             and dst_port in (80, 443)
-            and _is_private_ip(src_ip)
+            and src_ip_is_local
         )
         if force_visible_prereq_dns:
             self._emit_dns_lookup(
                 src_ip,
                 dst_ip,
-                time,
+                time - timedelta(seconds=2),
                 hostname=hostname,
                 force_address=True,
+                bypass_cache=True,
             )
-        elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
+        elif (
+            (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
+            and proto == "tcp"
+            and dst_port not in (53,)
+            and src_ip_is_local
+        ):
             self._expand_and_emit(
                 "connection",
                 time,
@@ -11408,7 +17213,7 @@ class ActivityGenerator:
             dns_pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
             if dns_pid > 0:
                 pid = dns_pid
-        elif pid <= 0:
+        elif pid <= 0 and not suppress_source_pid_inference:
             pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
 
         resolved_process = None
@@ -11427,6 +17232,7 @@ class ActivityGenerator:
 
         if pid > 0 and resolved_source_system:
             resolved_process = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            drop_explicit_pid_without_inference = False
             if (
                 resolved_process
                 and resolved_process.start_time
@@ -11444,6 +17250,22 @@ class ActivityGenerator:
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
+            elif self._process_termination_recorded(
+                resolved_source_system.hostname,
+                pid,
+                resolved_process.start_time if resolved_process is not None else None,
+            ):
+                logger.debug(
+                    "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
+                    resolved_source_system.hostname,
+                    pid,
+                    dst_ip,
+                    dst_port,
+                )
+                pid = -1
+                resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif (
                 resolved_process
                 and resolved_process.start_time
@@ -11464,6 +17286,7 @@ class ActivityGenerator:
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif resolved_process is None and pid != 4:
                 logger.debug(
                     "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
@@ -11473,6 +17296,34 @@ class ActivityGenerator:
                     dst_port,
                 )
                 pid = -1
+                drop_explicit_pid_without_inference = caller_supplied_pid
+            if drop_explicit_pid_without_inference:
+                suppress_source_pid_inference = True
+
+        if pid <= 0 and resolved_source_system is not None and not suppress_source_pid_inference:
+            pid, process_image = self._ensure_high_confidence_connection_owner(
+                source_system=resolved_source_system,
+                time=time,
+                service=service,
+                dst_port=dst_port,
+                proto=proto,
+                hostname=hostname,
+                http=http,
+                ssh_attempted_username=ssh_attempted_username,
+            )
+            if pid > 0:
+                resolved_process = self.state_manager.get_process(
+                    resolved_source_system.hostname,
+                    pid,
+                )
+
+        if (
+            ssh_attempted_username is None
+            and proto == "tcp"
+            and dst_port == 22
+            and resolved_process is not None
+        ):
+            ssh_attempted_username = _extract_ssh_attempted_username(resolved_process.command_line)
 
         if pid > 0 and resolved_source_system is not None and resolved_process is not None:
             time = self._clamp_after_visible_process_create(
@@ -11542,11 +17393,11 @@ class ActivityGenerator:
             dns_cache_key = (src_ip, dst_ip, hostname, "A")
             ts_epoch = time.timestamp()
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
-            last_query = self._dns_cache.get(dns_cache_key, 0)
-            if last_query and ts_epoch - last_query < cache_ttl:
+            cached_at, cached_until = _dns_cache_window(self._dns_cache.get(dns_cache_key))
+            if cached_at <= ts_epoch < cached_until:
                 self._last_connection_effective_dst_ip = dst_ip
                 return ""
-            self._dns_cache[dns_cache_key] = ts_epoch
+            self._dns_cache[dns_cache_key] = (ts_epoch, ts_epoch + cache_ttl)
 
         state_source_system = resolved_source_system.hostname if resolved_source_system else ""
         state_source_hostname = ""
@@ -11958,6 +17809,23 @@ class ActivityGenerator:
                 time,
                 duration=duration,
             )
+        if (
+            dns is None
+            and resolved_source_system is not None
+            and "forward_proxy" in (resolved_source_system.roles or [])
+            and hostname_is_external
+            and proto == "tcp"
+            and dst_port in (80, 443)
+            and src_ip_is_local
+        ):
+            self._emit_dns_lookup(
+                src_ip,
+                dst_ip,
+                time - timedelta(seconds=2),
+                hostname=hostname,
+                force_address=True,
+                bypass_cache=True,
+            )
         self.state_manager.update_connection_interval(
             conn_id,
             time,
@@ -11965,14 +17833,21 @@ class ActivityGenerator:
         )
 
         if pid > 0 and resolved_source_system:
-            activity_time = time
-            if duration is not None:
-                activity_time = time + timedelta(seconds=max(0.0, duration))
-            self.state_manager.update_process_activity_time(
-                resolved_source_system.hostname,
-                pid,
-                activity_time,
+            close_time = (
+                time + timedelta(seconds=max(0.0, duration)) if duration is not None else None
             )
+            if close_time is None:
+                self.state_manager.update_process_activity_time(
+                    resolved_source_system.hostname,
+                    pid,
+                    time,
+                )
+            else:
+                self._remember_process_connection_hold(
+                    system=resolved_source_system,
+                    pid=pid,
+                    close_time=close_time,
+                )
 
         # Port-based service correction (Zeek detects service from payload, not scenario labels)
         _PORT_SERVICE = {
@@ -12089,6 +17964,7 @@ class ActivityGenerator:
                     time=time,
                     source_ip=src_ip,
                     source_port=src_port,
+                    target_user=ssh_attempted_username,
                 )
                 generic_ssh_preauth_pid = responding_pid
             else:
@@ -12119,8 +17995,8 @@ class ActivityGenerator:
                 resp_ip_bytes=resp_ip_bytes,
                 conn_state=conn_state,
                 history=history,
-                local_orig=_is_private_ip(src_ip),
-                local_resp=_is_private_ip(dst_ip),
+                local_orig=src_ip_is_local,
+                local_resp=dst_ip_is_local,
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
@@ -12144,10 +18020,22 @@ class ActivityGenerator:
         # Caller-provided context overrides
         if ids is not None:
             event.ids = ids
+        if email is not None:
+            event.email = email
+        if smtp is not None:
+            event.smtp = smtp
+        if request.ssl is not None:
+            event.ssl = request.ssl
+        if x509 is not None:
+            event.x509 = x509
+        if x509_chain:
+            event.x509_chain = list(x509_chain)
         if http is not None:
             event.http = http
         if file_transfer is not None:
             event.file_transfer = file_transfer
+        if file_transfers:
+            event.file_transfers = list(file_transfers)
         if pe is not None:
             event.pe = pe
         if ocsp is not None:
@@ -12183,6 +18071,14 @@ class ActivityGenerator:
                     resolver_ip=dst_ip,
                     time=time,
                 )
+                if self._dns_observation_cache_hit_or_store(
+                    src_ip=src_ip,
+                    resolver_ip=dst_ip,
+                    dns=event.dns,
+                    time=time,
+                ):
+                    self._last_connection_effective_dst_ip = dst_ip
+                    return ""
         elif (
             service == "dns"
             and proto in ("udp", "tcp")
@@ -12217,6 +18113,14 @@ class ActivityGenerator:
                 rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
                 AA=dns_is_internal,
             )
+            if self._dns_observation_cache_hit_or_store(
+                src_ip=src_ip,
+                resolver_ip=dst_ip,
+                dns=event.dns,
+                time=time,
+            ):
+                self._last_connection_effective_dst_ip = dst_ip
+                return ""
             if not resp_bytes:
                 event.network.conn_state = "SF"
                 event.network.history = "Dd"
@@ -12282,6 +18186,7 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
                 domain_tags = get_domain_tags(proxy_hostname)
+                user_agent = ""
 
                 # When a pre-built HttpContext exists (from browsing session
                 # generator), derive proxy fields from it.  The proxy emitter
@@ -12355,40 +18260,20 @@ class ActivityGenerator:
                         if referrer_policy == "none"
                         else pick_referrer(rng, proxy_hostname, context="general", port=80)
                     )
-                # OS-aware proxy User-Agent selection (skip when session set it)
-                if event.http is None:
-                    if proxy_ua_override:
-                        user_agent = proxy_ua_override
-                    else:
-                        user_agent = pick_proxy_user_agent(
-                            rng,
-                            source_system,
-                            hostname=proxy_hostname,
-                            domain_tags=domain_tags,
-                        )
                 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
                 apply_domain_user_agent = event.http is None or (
                     not _is_tool_http_user_agent(event.http.user_agent)
                     and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
                 )
-                domain_user_agent = (
-                    pick_proxy_domain_user_agent(
-                        rng,
-                        source_system,
-                        hostname=proxy_hostname,
-                    )
-                    if apply_domain_user_agent
-                    else None
-                )
-                if domain_user_agent:
-                    user_agent = domain_user_agent
-                user_agent = normalize_proxy_user_agent_for_os(
+                user_agent = self._proxy_user_agent_for_context(
                     rng,
                     source_system,
-                    user_agent,
                     hostname=proxy_hostname,
                     domain_tags=domain_tags,
+                    existing_user_agent=user_agent,
+                    override_user_agent=proxy_ua_override,
+                    apply_domain_override=apply_domain_user_agent,
                 )
                 proxy_referrer = _source_native_http_referrer(
                     user_agent,
@@ -12453,6 +18338,7 @@ class ActivityGenerator:
                         user_agent=user_agent,
                         cache_result=cache_result,
                         hostname=proxy_hostname,
+                        time=event.timestamp,
                     ),
                     method=proxy_method,
                     url=url,
@@ -12524,7 +18410,6 @@ class ActivityGenerator:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
-                "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
             ]
             _USER_AGENTS_LINUX = [
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -12556,7 +18441,6 @@ class ActivityGenerator:
                 response_size_for_status,
             )
             from evidenceforge.generation.activity.proxy_uri import (
-                is_browser_like_proxy_domain,
                 pick_proxy_uri,
                 plaintext_http_redirect_status,
             )
@@ -12573,24 +18457,15 @@ class ActivityGenerator:
                 source_os=_src_os_http,
                 source_system_type=getattr(source_system, "type", None),
             )
-            domain_user_agent = pick_proxy_domain_user_agent(
+            ua = self._proxy_user_agent_for_context(
                 rng,
                 source_system,
                 hostname=web_host,
+                domain_tags=web_domain_tags,
+                existing_user_agent="",
+                override_user_agent=http_ua_override,
+                apply_domain_override=True,
             )
-            if domain_user_agent:
-                ua = domain_user_agent
-            elif http_ua_override:
-                ua = http_ua_override
-            elif self._is_proxy_server_like_source(
-                source_system
-            ) or not is_browser_like_proxy_domain(web_host, domain_tags=web_domain_tags):
-                ua = pick_proxy_user_agent(
-                    rng,
-                    source_system,
-                    hostname=web_host,
-                    domain_tags=web_domain_tags,
-                )
             redirect_status = plaintext_http_redirect_status(
                 web_host,
                 port=dst_port,
@@ -12949,6 +18824,7 @@ class ActivityGenerator:
                 source_ip=src_ip,
                 source_port=src_port,
                 sshd_pid=generic_ssh_preauth_pid,
+                attempted_username=ssh_attempted_username,
                 duration=event.network.duration,
             )
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
@@ -13191,15 +19067,21 @@ class ActivityGenerator:
         if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
             sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
 
-        session_sshd_pid = self.generate_system_process(
-            system=target_system,
-            time=sshd_time,
-            process_name="/usr/sbin/sshd",
-            command_line=f"sshd: {user.username} [priv]",
-            parent_pid=global_sshd,
-            username="root",
-            emit_linux_syslog=False,
+        session_sshd_pid = self._ssh_session_transport_process_parent(
+            session,
+            target_system,
+            user,
         )
+        if session_sshd_pid is None:
+            session_sshd_pid = self.generate_system_process(
+                system=target_system,
+                time=sshd_time,
+                process_name="/usr/sbin/sshd",
+                command_line=f"sshd: {user.username} [priv]",
+                parent_pid=global_sshd,
+                username="root",
+                emit_linux_syslog=False,
+            )
 
         bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
         effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
@@ -13222,6 +19104,26 @@ class ActivityGenerator:
         session.session_shell_pid = bash_pid
         session.process_tree_root = session_sshd_pid
         return bash_pid
+
+    def _ssh_session_transport_process_parent(
+        self,
+        session: ActiveSession,
+        target_system: System,
+        user: User,
+    ) -> int | None:
+        """Return the tuple-scoped sshd child when it can parent a login shell."""
+
+        transport_pid = session.transport_pid
+        if transport_pid is None or transport_pid <= 0:
+            return None
+        running = self.state_manager.get_process(target_system.hostname, transport_pid)
+        if running is None:
+            return None
+        if running.image != "/usr/sbin/sshd":
+            return None
+        if running.command_line != f"sshd: {user.username} [priv]":
+            return None
+        return transport_pid
 
     def _ensure_linux_local_session_shell_parent(
         self,
@@ -13409,6 +19311,9 @@ class ActivityGenerator:
                 continue
             if proc.logon_id:
                 session = self.state_manager.get_session(proc.logon_id)
+                session_end = self.state_manager.get_session_end_time(proc.logon_id)
+                if session_end is not None and activity_time >= ensure_utc(session_end):
+                    continue
                 if session is not None and not _session_active_for_activity(
                     session,
                     activity_time,
@@ -13686,6 +19591,20 @@ class ActivityGenerator:
             return _background_linux_shell_command_if_needed(command)
         return command
 
+    @staticmethod
+    def _bash_history_process_group_id(
+        user: User,
+        system: System,
+        time: datetime,
+        command: str,
+    ) -> str:
+        """Return the internal eCAR marker for bash-history-synchronized processes."""
+        seed = _stable_seed(
+            "bash_history_process_sync:"
+            f"{system.hostname}:{user.username}:{ensure_utc(time).isoformat()}:{command}"
+        )
+        return f"bash-history:{seed:016x}"
+
     def _emit_bash_command_event(
         self,
         user: User,
@@ -13750,14 +19669,12 @@ class ActivityGenerator:
 
         shell_release_times: list[tuple[int, datetime, str]] = []
         base_process_time: datetime | None = None
-        concurrency_group_id = ""
-        if len(processes) > 1 and _contains_unquoted_shell_pipe(command):
-            pipeline_seed = _stable_seed(
-                "linux_shell_pipeline:"
-                f"{system.hostname}:{user.username}:{session.logon_id}:"
-                f"{time.isoformat()}:{command}"
-            )
-            concurrency_group_id = f"linux-shell-pipeline-{pipeline_seed:016x}"
+        concurrency_group_id = self._bash_history_process_group_id(
+            user,
+            system,
+            time,
+            command,
+        )
         for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             if base_process_time is None:
@@ -13907,6 +19824,19 @@ class ActivityGenerator:
         )
         if scheduled_time is None:
             return None
+        scheduled_time = self._align_bash_history_with_foreground_process(
+            user,
+            system,
+            scheduled_time,
+            command,
+        )
+        scheduled_time = self._fit_bash_history_time_to_linux_session(
+            user,
+            system,
+            scheduled_time,
+        )
+        if scheduled_time is None:
+            return None
         dwell_seconds = _bash_command_dwell_seconds(command)
         jitter_rng = random.Random(
             _stable_seed(
@@ -13946,6 +19876,56 @@ class ActivityGenerator:
             completion_time,
         )
         return scheduled_time
+
+    def _align_bash_history_with_foreground_process(
+        self,
+        user: User,
+        system: System,
+        scheduled_time: datetime,
+        command: str,
+    ) -> datetime:
+        """Move bash history to the same foreground-shell slot as process telemetry."""
+        if _get_os_category(system.os) != "linux":
+            return scheduled_time
+        if not _linux_command_processes_from_shell(
+            command,
+            max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES,
+            username=user.username,
+        ):
+            return scheduled_time
+
+        activity_time = ensure_utc(scheduled_time)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type not in {3, 5}
+            and _session_active_for_activity(session, activity_time, margin_seconds=1.5)
+        ]
+        if not sessions:
+            return scheduled_time
+        session = max(sessions, key=lambda candidate: ensure_utc(candidate.start_time))
+
+        parent_pid = session.session_shell_pid
+        if parent_pid is None or not self._is_pid_active_at(system, parent_pid, activity_time):
+            parent_pid = self._active_session_shell_pid(
+                system,
+                user,
+                activity_time,
+                session.logon_id,
+            )
+        if parent_pid is None:
+            return scheduled_time
+
+        return self._reserve_foreground_shell_time(
+            system=system,
+            username=user.username,
+            logon_id=session.logon_id,
+            parent_pid=parent_pid,
+            requested_time=activity_time,
+            seed_text=command,
+        )
 
     def _remember_linux_bash_session_activity(
         self,
@@ -14214,14 +20194,12 @@ class ActivityGenerator:
         if singleton_service_pid is not None:
             return singleton_service_pid
 
+        system_logon_ids = {"SYSTEM": "0x3e7", "LOCAL SERVICE": "0x3e5", "NETWORK SERVICE": "0x3e4"}
+        logon_id = system_logon_ids.get(username, "0x3e7")
         parent_pid = self._repair_process_parent_pid(
             system=system,
             time=time,
-            logon_id={
-                "SYSTEM": "0x3e7",
-                "LOCAL SERVICE": "0x3e5",
-                "NETWORK SERVICE": "0x3e4",
-            }.get(username, "0x3e7"),
+            logon_id=logon_id,
             process_name=process_name,
             command_line=command_line,
             parent_pid=parent_pid,
@@ -14239,12 +20217,11 @@ class ActivityGenerator:
             command_line=command_line,
             username=username,
             integrity_level="System",
+            logon_id=logon_id,
         )
 
         # Determine system-level SID and logon ID
         sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
-        system_logon_ids = {"SYSTEM": "0x3e7", "LOCAL SERVICE": "0x3e5", "NETWORK SERVICE": "0x3e4"}
-        logon_id = system_logon_ids.get(username, "0x3e7")
 
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
@@ -14465,7 +20442,21 @@ class ActivityGenerator:
         qtype_name = (dns.query_type or "").upper()
         if qtype_name in {"A", "AAAA", "PTR", "MX", "NS", "SOA"}:
             dns.query = self._dns_canonical_internal_hostname(dns.query) or dns.query
-        is_internal = qtype_name == "SRV" or _dns_is_internal_name(dns.query, ad_domain)
+        email_dns_system = self._email_dns_system_for_hostname(dns.query)
+        email_dns_ip = str(getattr(email_dns_system, "ip", "") or "") if email_dns_system else ""
+        if email_dns_ip and qtype_name == "A":
+            dns.answers = [email_dns_ip]
+        elif email_dns_ip and qtype_name == "AAAA":
+            dns.answers = _public_dns_aaaa_answers(
+                dns.query,
+                email_dns_ip,
+                is_internal=True,
+            )
+        is_internal = (
+            qtype_name == "SRV"
+            or _dns_is_internal_name(dns.query, ad_domain)
+            or email_dns_system is not None
+        )
         if is_internal:
             dns.AA = True
         elif qtype_name != "TXT":
@@ -14488,6 +20479,64 @@ class ActivityGenerator:
             base_ttl=base_ttl,
             time=time,
         )
+
+    def _dns_observation_cache_hit_or_store(
+        self,
+        *,
+        src_ip: str,
+        resolver_ip: str,
+        dns: DnsContext,
+        time: datetime,
+    ) -> bool:
+        """Return True when an identical DNS answer is already visible inside TTL."""
+        cache_key = _dns_observation_cache_key(src_ip, resolver_ip, dns)
+        if cache_key is None:
+            return False
+        if not self._dns_observation_time_is_visible(time):
+            return False
+        if not hasattr(self, "_dns_observation_cache"):
+            self._dns_observation_cache = {}
+
+        start = time.timestamp()
+        ttl = max(1.0, min(float(value) for value in dns.TTLs))
+        end = start + ttl
+        windows = self._dns_observation_cache.setdefault(cache_key, [])
+        cutoff = start - 86_400
+        if len(windows) > 32:
+            windows[:] = [
+                (old_start, old_end) for old_start, old_end in windows if old_end >= cutoff
+            ]
+        for old_start, old_end in windows:
+            if start < old_end and end > old_start:
+                return True
+        windows.append((start, end))
+        windows.sort()
+        if len(windows) > 32:
+            del windows[:-32]
+        return False
+
+    def _dns_observation_time_is_visible(self, time: datetime) -> bool:
+        """Return whether DNS evidence at time can reach source emitters."""
+        dispatcher = getattr(self, "dispatcher", None)
+        gate = getattr(dispatcher, "output_start_time", None)
+        if gate is None:
+            return True
+        ts = time
+        if ts.tzinfo is not None and gate.tzinfo is None:
+            ts = ts.replace(tzinfo=None)
+        elif ts.tzinfo is None and gate.tzinfo is not None:
+            gate = gate.replace(tzinfo=None)
+        return ts >= gate
+
+    def _dns_observation_epoch_is_visible(self, epoch: float) -> bool:
+        """Return whether a cached DNS observation epoch was inside the output window."""
+        dispatcher = getattr(self, "dispatcher", None)
+        gate = getattr(dispatcher, "output_start_time", None)
+        if gate is None:
+            return True
+        if gate.tzinfo is None:
+            return datetime.fromtimestamp(epoch) >= gate
+        return datetime.fromtimestamp(epoch, tz=gate.tzinfo) >= gate
 
     def _emit_dns_lookup(
         self,
@@ -14544,12 +20593,16 @@ class ActivityGenerator:
             else:
                 hostname = _generate_random_hostname(rng, dst_ip)
         hostname = self._dns_canonical_internal_hostname(hostname) or hostname
+        email_dns_system = self._email_dns_system_for_hostname(hostname)
+        email_dns_ip = str(getattr(email_dns_system, "ip", "") or "") if email_dns_system else ""
 
         # DNS caching: skip re-emission if this source/resolver/hostname tuple
-        # was queried recently. Real clients cache DNS responses (TTL typically
-        # 60-3600s), so not every connection is preceded by a DNS query.
+        # still has a client-visible address answer. Values are expiration
+        # epochs derived from the TTL actually returned in dns.log, not the
+        # authoritative TTL, so later TCP evidence does not depend on visibly
+        # expired DNS answers.
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
         if not hasattr(self, "_dns_cache_last_prune"):
             self._dns_cache_last_prune = 0.0
 
@@ -14558,10 +20611,11 @@ class ActivityGenerator:
         # Keep the cache bounded: drop entries older than the max TTL horizon,
         # and enforce a hard cap under high-cardinality/adversarial inputs.
         if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
-            max_ttl_window = 86_400
-            cutoff = ts_epoch - max_ttl_window
+            cutoff = ts_epoch
             self._dns_cache = {
-                key: cached_at for key, cached_at in self._dns_cache.items() if cached_at >= cutoff
+                key: cached_window
+                for key, cached_window in self._dns_cache.items()
+                if _dns_cache_window(cached_window)[1] >= cutoff
             }
             if len(self._dns_cache) > 50_000:
                 sorted_items = sorted(
@@ -14573,8 +20627,8 @@ class ActivityGenerator:
             self._dns_cache_last_prune = ts_epoch
 
         ad_domain = getattr(self, "_ad_domain", "corp.local")
-        is_internal = _dns_is_internal_name(hostname, ad_domain)
-        authoritative_ttl = _dns_base_ttl(hostname, is_internal)
+        is_email_internal_name = email_dns_system is not None
+        is_internal = _dns_is_internal_name(hostname, ad_domain) or is_email_internal_name
 
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies use a sticky configured resolver policy instead of rotating
@@ -14602,10 +20656,12 @@ class ActivityGenerator:
             dns_server_ip = _get_rng().choice(dns_ips)
 
         cache_key = (src_ip, dns_server_ip, hostname, "ADDR")
-        last_query = self._dns_cache.get(cache_key, 0)
-        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
-        if not request.bypass_cache and last_query and ts_epoch - last_query < cache_ttl:
-            return  # Cache hit — skip DNS emission
+        cached_at, cached_until = _dns_cache_window(self._dns_cache.get(cache_key))
+        if force_address and not request.bypass_cache and cached_at <= ts_epoch < cached_until:
+            if not self._dns_observation_time_is_visible(
+                time
+            ) or self._dns_observation_epoch_is_visible(cached_at):
+                return  # Cache hit — skip DNS emission
 
         _src_os = "windows"
         if src_system is not None:
@@ -14651,17 +20707,29 @@ class ActivityGenerator:
         if ":" in dst_ip and force_address:
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            answers = [dst_ip]
+            answers = [_IPV6_MAP.get(email_dns_ip, dst_ip) if email_dns_ip else dst_ip]
         elif qtype_roll < 0.65:
             # A record: hostname → IPv4
             qtype, qtype_name = 1, "A"
             query = hostname
-            answers = _dns_address_rrset(hostname, dst_ip, is_internal=is_internal)
+            answers = (
+                [email_dns_ip]
+                if email_dns_ip
+                else _dns_address_rrset(
+                    hostname,
+                    dst_ip,
+                    is_internal=is_internal,
+                )
+            )
         elif qtype_roll < 0.85:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            answers = _public_dns_aaaa_answers(hostname, dst_ip, is_internal=is_internal)
+            answers = _public_dns_aaaa_answers(
+                hostname,
+                email_dns_ip or dst_ip,
+                is_internal=is_internal,
+            )
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
@@ -14706,7 +20774,12 @@ class ActivityGenerator:
                 query, txt_answer, txt_ttl = _dns_txt_query_and_answer(rng, hostname)
                 answers = [txt_answer]
 
-        query_is_internal = qtype_name == "SRV" or _dns_is_internal_name(query, ad_domain)
+        query_email_system = self._email_dns_system_for_hostname(query)
+        query_is_internal = (
+            qtype_name == "SRV"
+            or _dns_is_internal_name(query, ad_domain)
+            or query_email_system is not None
+        )
         if query_is_internal and not _is_private_ip(dns_server_ip):
             dns_server_ip = _get_rng().choice(dns_ips)
             src_port = self._allocate_ephemeral_port(
@@ -14736,12 +20809,17 @@ class ActivityGenerator:
             base_ttl=base_ttl,
             time=dns_time,
         )
+        if force_address and qtype in (1, 28) and not is_internal and ttls:
+            min_client_ttl = max(30, math.ceil((time - dns_time).total_seconds()) + 1)
+            ttls = [max(float(min_client_ttl), ttl) for ttl in ttls]
 
         # Only address lookups for the requested hostname populate the client
         # DNS cache. PTR/SRV/MX companions should not hide future A/AAAA
         # evidence for high-volume proxy or browser destinations.
         if query == hostname and qtype in (1, 28):
-            self._dns_cache[cache_key] = ts_epoch
+            client_ttl = max(1.0, min(ttls) if ttls else float(base_ttl))
+            cached_at = dns_time.timestamp()
+            self._dns_cache[cache_key] = (cached_at, cached_at + client_ttl)
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(
@@ -14757,6 +20835,7 @@ class ActivityGenerator:
             AA=is_internal,
             RD=True,
             RA=True,
+            preserve_ttls=True,
         )
         self.generate_connection(
             src_ip=src_ip,
@@ -14776,13 +20855,16 @@ class ActivityGenerator:
         # resolver ecosystem. Add low-volume companion questions so Zeek DNS
         # does not collapse to only A/TXT/SRV in generated enterprise slices.
         if force_address and rng.random() < 0.25:
+            companion_choices, companion_weights = _dns_companion_kind_distribution_for_source(
+                src_system
+            )
             companion_time = dns_time + timedelta(milliseconds=rng.randint(1, 30))
             companion_src_port = self._allocate_ephemeral_port(
                 src_ip, dns_server_ip, 53, "udp", companion_time, _src_os
             )
             companion_kind = rng.choices(
-                ["AAAA", "PTR", "NS", "MX", "SOA"],
-                weights=[45, 30, 10, 10, 5],
+                companion_choices,
+                weights=companion_weights,
                 k=1,
             )[0]
             companion_query = hostname
@@ -14837,8 +20919,11 @@ class ActivityGenerator:
                     ]
                 else:
                     companion_answers = _public_dns_soa_answers(companion_query)
-            companion_is_internal = _dns_is_internal_name(companion_query, ad_domain) or (
-                companion_kind == "PTR" and _is_private_ip(dst_ip)
+            companion_email_system = self._email_dns_system_for_hostname(companion_query)
+            companion_is_internal = (
+                _dns_is_internal_name(companion_query, ad_domain)
+                or (companion_kind == "PTR" and _is_private_ip(dst_ip))
+                or companion_email_system is not None
             )
             companion_ttls = self._dns_observed_ttls(
                 resolver_ip=dns_server_ip,
@@ -14862,6 +20947,7 @@ class ActivityGenerator:
                 AA=companion_is_internal,
                 RD=True,
                 RA=True,
+                preserve_ttls=True,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -14876,6 +20962,78 @@ class ActivityGenerator:
                 src_port=companion_src_port,
                 dns=companion_ctx,
             )
+            if companion_kind == "MX" and companion_answers:
+                mx_hosts = [
+                    str(answer).split()[-1].rstrip(".")
+                    for answer in companion_answers
+                    if str(answer).split()[-1].rstrip(".") not in {"", "."}
+                ]
+                if mx_hosts:
+                    mx_host = mx_hosts[0]
+                    mx_a_time = companion_time + timedelta(milliseconds=rng.randint(2, 45))
+                    mx_a_src_port = self._allocate_ephemeral_port(
+                        src_ip,
+                        dns_server_ip,
+                        53,
+                        "udp",
+                        mx_a_time,
+                        _src_os,
+                    )
+                    mx_a_ip = (
+                        dst_ip
+                        if _dns_is_internal_name(mx_host, ad_domain)
+                        else _generate_random_external_ip(
+                            random.Random(_stable_seed(f"dns_mx_companion_a:{mx_host}"))
+                        )
+                    )
+                    mx_a_email_system = self._email_dns_system_for_hostname(mx_host)
+                    mx_a_email_ip = (
+                        str(getattr(mx_a_email_system, "ip", "") or "") if mx_a_email_system else ""
+                    )
+                    mx_a_is_internal = (
+                        _dns_is_internal_name(mx_host, ad_domain) or mx_a_email_system is not None
+                    )
+                    mx_a_answers = _dns_address_rrset(
+                        mx_host,
+                        mx_a_email_ip or mx_a_ip,
+                        is_internal=mx_a_is_internal,
+                    )
+                    mx_a_ctx = DnsContext(
+                        query=mx_host,
+                        trans_id=rng.randint(1, 65535),
+                        qtype=1,
+                        query_type="A",
+                        rcode="NOERROR",
+                        rcode_num=0,
+                        answers=mx_a_answers,
+                        TTLs=self._dns_observed_ttls(
+                            resolver_ip=dns_server_ip,
+                            query=mx_host,
+                            qtype_name="A",
+                            answers=mx_a_answers,
+                            is_internal=mx_a_is_internal,
+                            base_ttl=_dns_base_ttl(mx_host, mx_a_is_internal),
+                            time=mx_a_time,
+                        ),
+                        rtt=_dns_rtt(rng, dns_server_ip),
+                        AA=mx_a_is_internal,
+                        RD=True,
+                        RA=True,
+                        preserve_ttls=True,
+                    )
+                    self.generate_connection(
+                        src_ip=src_ip,
+                        dst_ip=dns_server_ip,
+                        time=mx_a_time,
+                        dst_port=53,
+                        proto="udp",
+                        service="dns",
+                        duration=rng.uniform(0.001, 0.02),
+                        orig_bytes=rng.randint(40, 100),
+                        resp_bytes=rng.randint(80, 500),
+                        src_port=mx_a_src_port,
+                        dns=mx_a_ctx,
+                    )
 
         # Occasional resolver search-suffix mistakes/background discovery probes.
         # Keep this low-volume and avoid doubling an already-qualified internal name.
@@ -15106,6 +21264,9 @@ class ActivityGenerator:
         dst_port = conn_info["dst_port"]
         service = conn_info["service"]
         command_target = _extract_network_command_target(command_line, service)
+        ssh_attempted_username = (
+            _extract_ssh_attempted_username(command_line) if service == "ssh" else None
+        )
         command_http_url = _extract_http_url_from_command(command_line)
 
         # Only emit ~60% of ambient app launches. Commands that name a concrete
@@ -15265,6 +21426,7 @@ class ActivityGenerator:
             hostname=ext_hostname,
             source_system=system,
             conn_state=failure_conn_state,
+            ssh_attempted_username=ssh_attempted_username,
         )
 
     def _baseline_type3_source_ip(
@@ -15481,6 +21643,11 @@ class ActivityGenerator:
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
             os_category = _get_os_category(system.os)
+            if (
+                os_category == "windows"
+                and self._locked_user_interactive_windows_session(user, system, time) is not None
+            ):
+                return
             # Get or create session for this user (with login cooldown)
             if os_category == "windows":
                 active_session = self._active_user_interactive_windows_session(
@@ -15600,6 +21767,16 @@ class ActivityGenerator:
                         )
                         if not self._is_within_scenario_window(process_time):
                             return
+                    bash_history_group_id = (
+                        self._bash_history_process_group_id(
+                            user,
+                            system,
+                            process_time,
+                            shell_command_line,
+                        )
+                        if os_category == "linux"
+                        else ""
+                    )
                     pid = -1
                     created_processes: list[tuple[int, str, str, datetime]] = []
                     for process_index, (
@@ -15619,6 +21796,7 @@ class ActivityGenerator:
                             source_process_name,
                             source_command_line,
                             parent_pid=parent_pid,
+                            concurrency_group_id=bash_history_group_id,
                         )
                         if pid < 0:
                             pid = source_pid
@@ -15831,6 +22009,12 @@ class ActivityGenerator:
                         process_name,
                         command_line,
                         parent_pid=parent_pid,
+                        concurrency_group_id=self._bash_history_process_group_id(
+                            user,
+                            system,
+                            process_time,
+                            command_line,
+                        ),
                     )
                     self._record_user_process(system, user, pid, process_name)
                     if active_session:
@@ -15906,6 +22090,8 @@ class ActivityGenerator:
                         purpose_tags=(tag,),
                     )
             elif activity_type == "connection_email":
+                if getattr(getattr(self, "_scenario_environment", None), "email", None) is not None:
+                    return
                 service = "smtp"
                 # Route through internal Exchange if detected (P1-15)
                 exchange_ip = getattr(self, "_exchange_ip", None)
@@ -16280,6 +22466,15 @@ class ActivityGenerator:
             time,
             source_port,
         )
+        if source_port > 0:
+            self._ensure_visible_created_account_kerberos_exchange(
+                username=username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=time,
+                source_port=source_port,
+                domain=domain,
+            )
         time = self._kerberos_source_time(
             time,
             event_type="kerberos_service",
@@ -16295,7 +22490,11 @@ class ActivityGenerator:
             event_type="kerberos_service",
             dst_host=self._build_dc_host_context(dc_hostname),
             kerberos=KerberosContext(
-                target_username=f"{username}@{domain}",
+                target_username=(
+                    username
+                    if "@" in username and username.split("@", 1)[0].endswith("$")
+                    else username.split("@", 1)[0]
+                ),
                 target_domain=domain,
                 service_name=service_name,
                 service_sid=(
@@ -16453,6 +22652,12 @@ class ActivityGenerator:
 
         explicit_source_ip = source_ip.strip()
         if explicit_source_ip in {"", "-"}:
+            target_system = self._explicit_credentials_target_system(target_server)
+            if target_system is not None and (
+                target_system.ip != system.ip
+                and target_system.hostname.lower() != system.hostname.lower()
+            ):
+                return target_system.ip
             return "-"
 
         normalized_source_ip = explicit_source_ip.removeprefix("::ffff:")
@@ -16468,6 +22673,24 @@ class ActivityGenerator:
         ):
             return "-"
         return normalized_source_ip
+
+    def _explicit_credentials_target_system(self, target_server: str) -> System | None:
+        """Resolve a 4648 target server to a known scenario system when possible."""
+        target = target_server.strip()
+        if not target or target in {"-", "localhost", "127.0.0.1", "::1"}:
+            return None
+        normalized_target = target.removeprefix("::ffff:")
+        systems_by_ip = getattr(self, "_ip_to_system", {})
+        target_system = systems_by_ip.get(normalized_target)
+        if target_system is not None:
+            return target_system
+        world_model = getattr(self, "_world_model", None)
+        if world_model is None:
+            return None
+        hostname_key = normalized_target.split(".", 1)[0]
+        return world_model.systems_by_hostname.get(normalized_target) or (
+            world_model.systems_by_hostname.get(hostname_key) if hostname_key else None
+        )
 
     def _ensure_explicit_credentials_subject_logon(
         self,
@@ -17827,6 +24050,7 @@ class ActivityGenerator:
                 user_account_control="\n\t\t\t%%2080\n\t\t\t%%2082\n\t\t\t%%2084",
             ),
         )
+        self._remember_visible_account_created(target_username, time)
         self.dispatcher.dispatch(event)
 
     def generate_account_deleted(
@@ -17986,6 +24210,16 @@ class ActivityGenerator:
         target_image: str,
     ) -> bool:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        self._expand_and_emit(
+            "create_remote_thread",
+            time,
+            actor=user,
+            target_system=system,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
+            target_image=target_image,
+        )
         request = CreateRemoteThreadRequest(
             user=user,
             system=system,
@@ -18026,7 +24260,7 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import ProcessContext
 
-        time = self._clamp_time_after_process_start(system, source_pid, time)
+        time = self._clamp_time_after_process_start(system, source_pid, time, offset_ms=180)
         rng = random.Random(
             _stable_seed(
                 "remote_thread:"
@@ -18443,6 +24677,7 @@ class ActivityGenerator:
         uid: str = "",
         msg_types: list[str] | None = None,
         domain: str | None = None,
+        renewal_interval: float | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         request = DhcpLeaseRequest(
@@ -18454,6 +24689,7 @@ class ActivityGenerator:
             uid=uid,
             msg_types=msg_types,
             domain=domain,
+            renewal_interval=renewal_interval,
         )
         DhcpLeaseActionBundle(executor=self, request=request).execute()
 
@@ -18467,6 +24703,7 @@ class ActivityGenerator:
         uid = request.uid
         msg_types = request.msg_types
         domain = request.domain
+        renewal_interval = request.renewal_interval
 
         from evidenceforge.events.contexts import DhcpContext
 
@@ -18537,7 +24774,13 @@ class ActivityGenerator:
         if "syslog" in dispatcher_emitters and _get_os_category(system.os) == "linux":
             dhclient_pid = 500 + (_stable_seed(f"dhclient:{system.hostname}") % 59000)
             interface = linux_primary_interface(system)
-            renewal = max(60, int(lease_time / 2))
+            bound_message_index = 4 if is_initial_acquisition else 2
+            bound_message_offset = bound_message_index * 1.5
+            if renewal_interval is None:
+                displayed_renewal_interval = lease_time / 2
+            else:
+                displayed_renewal_interval = renewal_interval - bound_message_offset
+            renewal = max(60, int(round(displayed_renewal_interval)))
             if is_initial_acquisition:
                 messages = [
                     f"DHCPDISCOVER on {interface} to 255.255.255.255 port 67 interval 3",
@@ -18607,6 +24850,15 @@ class ActivityGenerator:
                 conn_state="SF",
                 source_system=source_system,
             )
+        logon_id = self.state_manager.allocate_logon_id(system.hostname, time)
+        session_obj_id = stable_uuid(
+            "anonymous-network-session",
+            system.hostname,
+            logon_id,
+            source_ip,
+            source_port,
+            time.isoformat(),
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -18614,7 +24866,7 @@ class ActivityGenerator:
             auth=AuthContext(
                 username="ANONYMOUS LOGON",
                 user_sid="S-1-5-7",
-                logon_id=self.state_manager.allocate_logon_id(system.hostname, time),
+                logon_id=logon_id,
                 logon_type=3,
                 auth_package="NTLM",
                 logon_process="NtLmSsp",
@@ -18628,8 +24880,28 @@ class ActivityGenerator:
                 source_port=source_port,
                 workstation_name=workstation_name,
             ),
+            edr=EdrContext(object_id=session_obj_id),
         )
         self.dispatcher.dispatch(event)
+        logoff_delay = rng.uniform(1.0, 30.0)
+        self.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=time + timedelta(seconds=logoff_delay),
+                event_type="logoff",
+                dst_host=self._build_host_context(system),
+                auth=AuthContext(
+                    username="ANONYMOUS LOGON",
+                    user_sid="S-1-5-7",
+                    logon_id=event.auth.logon_id,
+                    logon_type=3,
+                    auth_package="NTLM",
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    workstation_name=workstation_name,
+                ),
+                edr=EdrContext(object_id=session_obj_id),
+            )
+        )
 
     def generate_syslog_event(
         self,
@@ -18640,6 +24912,7 @@ class ActivityGenerator:
         pid: int | None = None,
         facility: int = 3,
         severity: int = 6,
+        auth: AuthContext | None = None,
     ) -> None:
         """Generate a standalone syslog event via canonical SecurityEvent dispatch.
 
@@ -18661,6 +24934,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="syslog",
             src_host=self._build_host_context(system),
+            auth=auth,
             syslog=SyslogContext(
                 app_name=app_name,
                 message=message,
@@ -19865,6 +26139,43 @@ class ActivityGenerator:
             return False
         return self._is_one_shot_shell_command(proc.image, proc.command_line)
 
+    def _is_bare_interactive_windows_shell(self, process_name: str, command_line: str) -> bool:
+        """Return whether a shell is an interactive prompt rather than an inline command."""
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
+            return False
+        return not self._is_one_shot_shell_command(process_name, command_line)
+
+    def _space_interactive_shell_child_launch(
+        self,
+        *,
+        system: System,
+        process_name: str,
+        parent_pid: int,
+        time: datetime,
+    ) -> datetime:
+        """Add human-scale dwell time before visible children of bare shells."""
+        if _get_os_category(system.os) != "windows":
+            return time
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if process_exe in self._WINDOWS_SHELL_NAMES or process_exe == "conhost.exe":
+            return time
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_proc is None or parent_proc.start_time is None:
+            return time
+        if not self._is_bare_interactive_windows_shell(parent_proc.image, parent_proc.command_line):
+            return time
+        rng = random.Random(
+            _stable_seed(
+                f"interactive_shell_child_gap:{system.hostname}:{parent_pid}:"
+                f"{process_exe}:{parent_proc.start_time.isoformat()}"
+            )
+        )
+        minimum_child_time = parent_proc.start_time + timedelta(seconds=rng.uniform(8.0, 45.0))
+        if time < minimum_child_time:
+            return minimum_child_time
+        return time
+
     def _windows_remote_command_owner_pid(
         self,
         *,
@@ -19880,11 +26191,14 @@ class ActivityGenerator:
         owner_keys: tuple[str, ...]
 
         if exe == "schtasks.exe" or "schtasks" in command:
-            owner_keys = ("taskhostw", "svchost_local_system", "services")
+            if "/create" in command or " /create" in command:
+                owner_keys = ("wmiprvse", "svchost_dcom", "services")
+            else:
+                owner_keys = ("taskhostw", "svchost_local_system", "services")
         elif exe in {"wmic.exe", "wmic"} or "wmic " in command:
             owner_keys = ("wmiprvse", "svchost_dcom", "services")
         elif exe in {"sc.exe", "sc"} or "sc.exe create" in command or " sc create" in command:
-            owner_keys = ("services", "svchost_dcom", "wmiprvse")
+            owner_keys = ("wmiprvse", "svchost_dcom", "services")
         elif exe in {"wevtutil.exe", "wevtutil", "net.exe", "net1.exe", "net", "net1"}:
             owner_keys = ("wmiprvse", "taskhostw", "services")
         elif "powershell" in command or "winrm" in command or "invoke-command" in command:
@@ -20086,6 +26400,15 @@ class ActivityGenerator:
                 logon_id=logon_id,
                 os_category=os_category,
             )
+            and (
+                os_category != "linux"
+                or self._linux_parent_usable_for_child_at(
+                    system=system,
+                    parent_pid=pid,
+                    time=time,
+                    logon_id=logon_id,
+                )
+            )
         ]
         self._user_process_history[key] = pruned[-10:]
         return self._user_process_history[key]
@@ -20099,10 +26422,60 @@ class ActivityGenerator:
                 return pid
         return 4
 
+    def _linux_parent_usable_for_child_at(
+        self,
+        *,
+        system: System,
+        parent_pid: int,
+        time: datetime,
+        logon_id: str = "",
+    ) -> bool:
+        """Return whether a Linux parent process is usable at a child timestamp."""
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_proc is None:
+            return False
+        if not self._is_pid_active_at(system, parent_pid, time):
+            return False
+        if self._process_termination_recorded(
+            system.hostname,
+            parent_pid,
+            parent_proc.start_time,
+        ):
+            return False
+
+        parent_logon_id = parent_proc.logon_id or ""
+        if parent_logon_id:
+            parent_session_end = self.state_manager.get_session_end_time(parent_logon_id)
+            if parent_session_end is not None and ensure_utc(time) >= ensure_utc(
+                parent_session_end
+            ):
+                return False
+            if logon_id and parent_logon_id != logon_id:
+                parent_username = parent_proc.username or ""
+                parent_exe = parent_proc.image.rsplit("/", 1)[-1].lower()
+                is_linux_ssh_priv_parent = (
+                    parent_username == "root"
+                    and parent_exe == "sshd"
+                    and parent_proc.command_line.startswith("sshd: ")
+                    and parent_proc.command_line.endswith(" [priv]")
+                )
+                if (
+                    not is_linux_ssh_priv_parent
+                    and parent_username not in _SYSTEM_ACCOUNTS
+                    and not parent_username.endswith("$")
+                ):
+                    return False
+
+        if logon_id and logon_id != "0x3e7":
+            child_session_end = self.state_manager.get_session_end_time(logon_id)
+            if child_session_end is not None and ensure_utc(time) >= ensure_utc(child_session_end):
+                return False
+        return True
+
     def _linux_system_parent_fallback(self, system: System, time: datetime) -> int:
         """Return a live Linux service ancestry fallback for system processes."""
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        for role in ("systemd", "init", "sshd", "bash"):
+        for role in ("systemd", "init", "cron", "crond"):
             pid = sys_pids.get(role)
             if pid and self._is_pid_active_at(system, pid, time):
                 return pid
@@ -20203,7 +26576,12 @@ class ActivityGenerator:
             parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
             if parent_proc is not None and ensure_utc(parent_proc.start_time) > ensure_utc(time):
                 return parent_pid
-            if self._is_valid_process_parent_at(system=system, parent_pid=parent_pid, time=time):
+            if self._linux_parent_usable_for_child_at(
+                system=system,
+                parent_pid=parent_pid,
+                time=time,
+                logon_id=logon_id,
+            ):
                 return parent_pid
             session_shell = self._active_session_shell_pid(system, repair_user, time, logon_id)
             if session_shell is not None:
@@ -20216,9 +26594,19 @@ class ActivityGenerator:
                 process_name,
                 command_line,
             )
-            if self._is_valid_process_parent_at(system=system, parent_pid=resolved, time=time):
+            if self._linux_parent_usable_for_child_at(
+                system=system,
+                parent_pid=resolved,
+                time=time,
+                logon_id=logon_id,
+            ):
                 return resolved
-        if self._is_valid_process_parent_at(system=system, parent_pid=parent_pid, time=time):
+        if self._linux_parent_usable_for_child_at(
+            system=system,
+            parent_pid=parent_pid,
+            time=time,
+            logon_id=logon_id,
+        ):
             return parent_pid
         return self._linux_system_parent_fallback(system, time)
 
@@ -20431,10 +26819,11 @@ class ActivityGenerator:
         rng = _get_rng()
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         os_cat = _get_os_category(system.os)
+        effective_time = time or self.state_manager.state.current_time or datetime.now(UTC)
         history = self._prune_user_process_history(
             system=system,
             username=user.username,
-            time=time or self.state_manager.state.current_time or datetime.now(UTC),
+            time=effective_time,
             logon_id=logon_id,
         )
         # Filter history to only include still-running processes
@@ -20459,8 +26848,6 @@ class ActivityGenerator:
                 if "\\" in process_name
                 else process_name.lower()
             )
-            effective_time = time or self.state_manager.state.current_time
-
             # Check if the user's active session on this system is a network
             # logon (type 3). Network logons never spawn explorer.exe — processes
             # are parented by svchost.exe or services.exe instead.
@@ -20571,7 +26958,16 @@ class ActivityGenerator:
             shells = [(pid, name) for pid, name in alive_history if name in self._LINUX_SHELLS]
             if shells:
                 return shells[-1][0]
-            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+            for role in ("bash", "sshd"):
+                candidate = sys_pids.get(role)
+                if candidate and self._linux_parent_usable_for_child_at(
+                    system=system,
+                    parent_pid=candidate,
+                    time=effective_time or datetime.now(UTC),
+                    logon_id=logon_id,
+                ):
+                    return candidate
+            return self._linux_system_parent_fallback(system, effective_time or datetime.now(UTC))
 
     def _resolve_parent(
         self,
@@ -20813,6 +27209,13 @@ class ActivityGenerator:
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
             if proc and proc.start_time <= time:
+                if os_cat == "linux" and not self._linux_parent_usable_for_child_at(
+                    system=system,
+                    parent_pid=pid,
+                    time=time,
+                    logon_id=logon_id,
+                ):
+                    continue
                 if not self._parent_process_matches_logon(
                     hostname=system.hostname,
                     parent_pid=pid,
@@ -20935,7 +27338,12 @@ class ActivityGenerator:
                 and not self._is_one_shot_shell_parent(system, parent_pid)
             ):
                 return parent_pid
-        elif parent_proc is not None and self._is_pid_active_at(system, parent_pid, time):
+        elif parent_proc is not None and self._linux_parent_usable_for_child_at(
+            system=system,
+            parent_pid=parent_pid,
+            time=time,
+            logon_id=logon_id,
+        ):
             parent_exe = parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
             if parent_exe in {"bash", "sh", "zsh"}:
                 session = self.state_manager.get_session(logon_id)
@@ -20970,16 +27378,26 @@ class ActivityGenerator:
                 and self._is_pid_active_at(system, resolved, time)
             ):
                 return resolved
-        elif resolved_proc is not None and self._is_pid_active_at(system, resolved, time):
+        elif resolved_proc is not None and self._linux_parent_usable_for_child_at(
+            system=system,
+            parent_pid=resolved,
+            time=time,
+            logon_id=logon_id,
+        ):
             return resolved
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         if os_category == "linux":
             for role in ("bash", "sshd", "systemd"):
                 candidate = sys_pids.get(role)
-                if candidate and self._is_pid_active_at(system, candidate, time):
+                if candidate and self._linux_parent_usable_for_child_at(
+                    system=system,
+                    parent_pid=candidate,
+                    time=time,
+                    logon_id=logon_id,
+                ):
                     return candidate
-            return parent_pid
+            return self._linux_system_parent_fallback(system, time)
         for role in ("explorer", "winlogon", "services", "svchost_dcom"):
             candidate = sys_pids.get(role)
             candidate_proc = self.state_manager.get_process(system.hostname, candidate or -1)

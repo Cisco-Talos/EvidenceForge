@@ -1498,6 +1498,105 @@ class AdversarialPayloadEventSpec(_EventSpecBase):
         return self
 
 
+class EmailAttachmentSpec(BaseModel):
+    """Attachment metadata for artifact-backed email messages."""
+
+    filename: str
+    content_type: str = "application/octet-stream"
+    size: int = Field(default=0, ge=0)
+    content: str | None = Field(
+        default=None,
+        description="Optional literal text content for small synthetic attachments.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailMessageEventSpec(_EventSpecBase):
+    """SMTP email delivery event with optional full message artifact."""
+
+    type: Literal["email_message"] = "email_message"
+    sender: str | None = Field(
+        default=None,
+        description="Envelope/header sender. Defaults to actor.email for internal users.",
+    )
+    to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    subject: str | None = None
+    body: str | None = None
+    corpus_id: str | None = None
+    artifact_id: str | None = None
+    user_agent: str | None = None
+    verdict: Literal["clean", "spam", "phishing", "malware", "suspicious"] = "clean"
+    mail_action: Literal["deliver", "reject", "quarantine", "strip_attachment"] = "deliver"
+    outcome: Literal["delivered", "rejected", "deferred", "bounced"] = "delivered"
+    attachments: list[EmailAttachmentSpec] = Field(default_factory=list)
+
+    @field_validator("sender")
+    @classmethod
+    def validate_sender(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not re.match(r"^[a-zA-Z0-9._%+$-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v):
+            raise ValueError(f"Invalid sender email address: {v}")
+        return v.lower()
+
+    @field_validator("to", "cc", "bcc")
+    @classmethod
+    def validate_recipients(cls, v: list[str], info: ValidationInfo) -> list[str]:
+        normalized: list[str] = []
+        for address in v:
+            if not re.match(r"^[a-zA-Z0-9._%+$-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", address):
+                raise ValueError(f"Invalid {info.field_name} email address: {address}")
+            normalized.append(address.lower())
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_email_message(self) -> "EmailMessageEventSpec":
+        if not (self.to or self.cc or self.bcc):
+            raise ValueError("email_message requires at least one to, cc, or bcc recipient")
+        if self.body is not None and self.corpus_id is not None:
+            raise ValueError("email_message cannot specify both body and corpus_id")
+        if self.attachments and self.corpus_id is not None:
+            raise ValueError("email_message cannot specify both attachments and corpus_id")
+        return self
+
+
+class EmailReadEventSpec(_EventSpecBase):
+    """Opaque TLS mailbox access/read event."""
+
+    type: Literal["email_read"] = "email_read"
+    mailbox: str | None = Field(
+        default=None,
+        description="Mailbox email address. Defaults to actor.email.",
+    )
+    server: str | None = Field(
+        default=None,
+        description="Optional environment.email mail server name.",
+    )
+    protocol: Literal["imaps", "owa"] | None = Field(
+        default=None,
+        description="TLS-only mailbox access protocol. Defaults from server platform.",
+    )
+    message_ids: list[str] = Field(
+        default_factory=list,
+        description="Optional message/artifact IDs documented for storyline correlation only.",
+    )
+    count: int = Field(default=1, ge=1, le=500)
+    duration: float | None = Field(default=None, gt=0.0)
+    user_agent: str | None = None
+
+    @field_validator("mailbox")
+    @classmethod
+    def validate_mailbox(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not re.match(r"^[a-zA-Z0-9._%+$-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v):
+            raise ValueError(f"Invalid mailbox email address: {v}")
+        return v.lower()
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -1541,6 +1640,8 @@ EventSpec = Annotated[
     | WorkstationUnlockEventSpec
     | SpillageEventSpec
     | AdversarialPayloadEventSpec
+    | EmailMessageEventSpec
+    | EmailReadEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]
@@ -1965,6 +2066,115 @@ class ProxyAuthPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class EmailArtifactsConfig(BaseModel):
+    """Email artifact emission settings."""
+
+    mode: Literal["none", "storyline", "selected", "all"] = Field(
+        default="storyline",
+        description=(
+            "Which messages receive full RFC 5322 .eml artifacts. Background messages still "
+            "receive metadata in ARTIFACTS_MANIFEST.json when artifacts are enabled."
+        ),
+    )
+    selected_ids: list[str] = Field(
+        default_factory=list,
+        description="Optional email_message ids or artifact ids to materialize when mode=selected.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailServerConfig(BaseModel):
+    """On-prem mail server participating in SMTP routing."""
+
+    name: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    hostname: str
+    system: str = Field(..., description="Scenario system hostname that hosts this mail server")
+    platform: Literal["generic_smtp", "exchange"] = "generic_smtp"
+    allow_inbound_starttls: bool = False
+    attempt_outbound_starttls: bool = False
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_server_hostname(cls, v: str) -> str:
+        return _validate_hostname(v, "environment.email.mail_servers.hostname")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailMailboxOverride(BaseModel):
+    """Mailbox server override for a user group."""
+
+    group: str
+    server: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailRouteConfig(BaseModel):
+    """SMTP route policy for a sender scope."""
+
+    name: str = Field(default="default")
+    sender_groups: list[str] = Field(default_factory=list)
+    servers: list[str] = Field(..., min_length=1)
+    isp_relays: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailDistributionGroup(BaseModel):
+    """One-level email distribution group."""
+
+    address: str
+    members: list[str] = Field(..., min_length=1)
+
+    @field_validator("address")
+    @classmethod
+    def validate_group_address(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9._%+$-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v):
+            raise ValueError(f"Invalid distribution group address: {v}")
+        return v.lower()
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmailConfig(BaseModel):
+    """Explicit on-prem email topology and generation settings."""
+
+    accepted_domains: list[str] = Field(..., min_length=1)
+    mail_servers: list[EmailServerConfig] = Field(..., min_length=1)
+    default_mailbox_servers: list[str] = Field(..., min_length=1)
+    mailbox_overrides: list[EmailMailboxOverride] = Field(default_factory=list)
+    outbound_routes: list[EmailRouteConfig] = Field(
+        default_factory=lambda: [EmailRouteConfig(name="default", servers=["default"])]
+    )
+    inbound_route: list[str] = Field(default_factory=list)
+    isp_relays: list[str] = Field(default_factory=list)
+    distribution_groups: list[EmailDistributionGroup] = Field(default_factory=list)
+    artifacts: EmailArtifactsConfig = Field(default_factory=EmailArtifactsConfig)
+    background_messages_per_user_per_day: float = Field(default=0.0, ge=0.0, le=200.0)
+    corpus: str | None = Field(
+        default=None,
+        description="Optional scenario-created email_corpus.yaml path, relative to scenario root.",
+    )
+
+    @field_validator("accepted_domains")
+    @classmethod
+    def validate_accepted_domains(cls, v: list[str]) -> list[str]:
+        domains: list[str] = []
+        seen: set[str] = set()
+        for domain in v:
+            normalized = domain.lower().rstrip(".")
+            _validate_hostname(normalized, "environment.email.accepted_domains")
+            if normalized in seen:
+                raise ValueError(f"duplicate accepted domain: {domain}")
+            seen.add(normalized)
+            domains.append(normalized)
+        return domains
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class StaleAccount(BaseModel):
     """Stale/inactive account that generates background failed logon noise.
 
@@ -2034,6 +2244,10 @@ class Environment(BaseModel):
     proxy: ProxyConfig = Field(
         default_factory=ProxyConfig,
         description="Forward proxy deployment semantics for proxy_access generation.",
+    )
+    email: EmailConfig | None = Field(
+        default=None,
+        description="Explicit on-prem SMTP/mailbox topology. Required for email_message events.",
     )
     identity: IdentityConfig = Field(
         default_factory=IdentityConfig,

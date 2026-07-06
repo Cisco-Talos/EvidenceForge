@@ -474,13 +474,22 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             # For inbound static NAT: dst main=real_ip, dst parens=VIP
             # For outbound PAT: src main=real_ip, src parens=mapped_ip
             nat = event.nat
+            pre_nat_dst_ip = getattr(nat, "pre_nat_dst_ip", "") if nat is not None else ""
+            pre_nat_dst_port = getattr(nat, "pre_nat_dst_port", 0) if nat is not None else 0
             is_inbound_nat = (
                 nat is not None
                 and nat.nat_type == "static"
-                and nat.mapped_dst_ip
-                and nat.mapped_dst_ip != net.dst_ip
+                and (
+                    (nat.mapped_dst_ip and nat.mapped_dst_ip != net.dst_ip) or bool(pre_nat_dst_ip)
+                )
             )
-            if is_inbound_nat:
+            if is_inbound_nat and pre_nat_dst_ip:
+                # Canonical tuple is already post-NAT. Keep the real IP as
+                # the ASA local address and render the public VIP in parens.
+                display_dst_ip, display_dst_port = net.dst_ip, net.dst_port
+                paren_dst_ip = pre_nat_dst_ip
+                paren_dst_port = pre_nat_dst_port or net.dst_port
+            elif is_inbound_nat:
                 # Inbound: dst shows real_ip (post-NAT) as main, VIP in parens
                 display_dst_ip, display_dst_port = nat.mapped_dst_ip, nat.mapped_dst_port
                 paren_dst_ip, paren_dst_port = net.dst_ip, net.dst_port

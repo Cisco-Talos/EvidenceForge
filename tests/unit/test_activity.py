@@ -30,7 +30,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext
+from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
@@ -1372,6 +1372,118 @@ class TestActivityGenerator:
         assert emitted_logons[0].auth.session_id == sessions[0].session_id
         assert sessions[0].session_id > 1
         assert any("New session" in msg and test_user.username in msg for msg in syslog_messages)
+        logind_events = [
+            call.args[0]
+            for call in syslog_emitter.emit.call_args_list
+            if call.args[0].syslog.message.startswith("New session")
+        ]
+        assert logind_events
+        assert logind_events[0].auth is not None
+        assert logind_events[0].auth.logon_id == logon_id
+        assert logind_events[0].auth.session_id == sessions[0].session_id
+
+    def test_linux_local_logon_with_stale_ssh_kind_gets_logind_companion(
+        self, state_manager, test_user
+    ):
+        """Local-looking Linux sessions should get logind evidence before eCAR rendering."""
+        syslog_emitter = Mock()
+        syslog_emitter.can_handle.side_effect = lambda event: event.syslog is not None
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.side_effect = lambda event: event.event_type == "logon"
+        emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        linux_system = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_time = datetime(2024, 1, 15, 12, 26, 0, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="ssh",
+            start_time=logon_time,
+        )
+
+        rendered_logon_id = activity_gen.generate_logon(
+            test_user,
+            linux_system,
+            logon_time,
+            logon_type=2,
+            source_ip="-",
+            logon_id=logon_id,
+        )
+
+        session = state_manager.get_session(logon_id)
+        emitted_logons = [
+            call.args[0]
+            for call in ecar_emitter.emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        logind_events = [
+            call.args[0]
+            for call in syslog_emitter.emit.call_args_list
+            if call.args[0].syslog.message.startswith("New session")
+        ]
+        assert rendered_logon_id == logon_id
+        assert session is not None
+        assert session.session_id > 0
+        assert emitted_logons
+        assert emitted_logons[0].auth.session_id == session.session_id
+        assert logind_events
+        assert logind_events[0].auth.session_id == session.session_id
+
+    def test_linux_self_sourced_type3_logon_is_local_logind_session(self, state_manager, test_user):
+        """Linux self-sourced Type 3 compatibility calls should render as local logind sessions."""
+        syslog_emitter = Mock()
+        syslog_emitter.can_handle.side_effect = lambda event: event.syslog is not None
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.side_effect = lambda event: event.event_type == "logon"
+        emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        linux_system = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.20",
+            os="CentOS 8",
+            type="server",
+        )
+        logon_time = datetime(2024, 1, 15, 14, 30, 0, tzinfo=UTC)
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            linux_system,
+            logon_time,
+            logon_type=3,
+            source_ip=linux_system.ip,
+        )
+
+        session = state_manager.get_session(logon_id)
+        emitted_logons = [
+            call.args[0]
+            for call in ecar_emitter.emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        logind_events = [
+            call.args[0]
+            for call in syslog_emitter.emit.call_args_list
+            if call.args[0].syslog.message.startswith("New session")
+        ]
+        assert session is not None
+        assert session.logon_type == 2
+        assert session.source_ip == "-"
+        assert session.session_id > 0
+        assert emitted_logons
+        assert emitted_logons[0].auth.logon_type == 2
+        assert emitted_logons[0].auth.source_ip == "-"
+        assert emitted_logons[0].auth.session_id == session.session_id
+        assert logind_events
+        assert logind_events[0].auth.logon_id == logon_id
+        assert logind_events[0].auth.session_id == session.session_id
 
     def test_overlapping_linux_local_sessions_keep_distinct_ecar_session_ids(
         self, state_manager, test_user
@@ -3021,6 +3133,52 @@ class TestActivityGenerator:
         )
         assert unlock_logon.auth.source_ip == "-"
 
+    def test_locked_workstation_session_does_not_own_foreground_process_activity(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Foreground user-app activity should not launch while the session is locked."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x4f2a1b"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=5),
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+        locked_time = lock_time + timedelta(minutes=2)
+
+        assert (
+            activity_gen._active_user_interactive_windows_session(
+                test_user,
+                test_system,
+                locked_time,
+            )
+            is None
+        )
+        assert activity_gen._active_interactive_windows_session(test_system, locked_time) is None
+        assert (
+            activity_gen._locked_user_interactive_windows_session(
+                test_user,
+                test_system,
+                locked_time,
+            )
+            is not None
+        )
+
+        activity_gen.generate_process = Mock(return_value=4242)
+        activity_gen.execute_baseline_activity(
+            test_user,
+            test_system,
+            locked_time,
+            "process_user_apps",
+        )
+
+        activity_gen.generate_process.assert_not_called()
+
     def test_workstation_unlock_reauth_precedes_4801_with_varied_gap(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -3332,6 +3490,8 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.kerberos.service_name == "krbtgt/example.local"
         assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
+        assert event.kerberos.target_username == "alice"
+        assert event.kerberos.target_domain == "EXAMPLE.LOCAL"
 
     def test_machine_account_logon_emits_nearby_dc_kerberos_audit(
         self, activity_gen, state_manager, mock_emitters
@@ -4219,6 +4379,551 @@ class TestActivityGenerator:
         assert network_events
         assert network_events[-1].network.dst_ip == web_server.ip
         assert network_events[-1].network.dst_port == 22
+
+    def test_ssh_process_network_effect_passes_command_username(self, activity_gen, test_user):
+        """SSH process-network correlation should pass the attempted username."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.1.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        app_server = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
+        activity_gen._all_system_ips = [workstation.ip, app_server.ip]
+        activity_gen.generate_connection = Mock(return_value="")
+
+        activity_gen._emit_process_network_correlation(
+            workstation,
+            "/usr/bin/ssh",
+            f"ssh -l {test_user.username} APP-INT-01",
+            timestamp,
+            4242,
+            random.Random(1),
+        )
+
+        assert activity_gen.generate_connection.called
+        assert (
+            activity_gen.generate_connection.call_args.kwargs["ssh_attempted_username"]
+            == test_user.username
+        )
+
+    def test_generic_ssh_preauth_syslog_uses_attempted_username(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Generic destination sshd failure rows should use the source command username."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.1.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        app_server = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+            services=["ssh"],
+        )
+        mock_emitters["syslog"] = Mock()
+        activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
+        activity_gen._all_system_ips = [workstation.ip, app_server.ip]
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen.sid_registry[test_user.username] = "S-1-5-21-1-2-3-1001"
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=0,
+            image="/usr/bin/ssh",
+            command_line=f"ssh {test_user.username}@APP-INT-01",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+
+        activity_gen.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip=app_server.ip,
+            time=timestamp,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=1.2,
+            orig_bytes=500,
+            resp_bytes=900,
+            src_port=52876,
+            pid=pid,
+            source_system=workstation,
+            conn_state="SF",
+            ssh_attempted_username=test_user.username,
+        )
+
+        messages = [
+            call.args[0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None and call.args[0].syslog.app_name == "sshd"
+        ]
+        assert any(
+            message.startswith("Connection from 10.0.1.10 port 52876 ") for message in messages
+        )
+        assert any(f"Failed password for {test_user.username} " in message for message in messages)
+        assert any(
+            f"Connection closed by authenticating user {test_user.username} " in message
+            for message in messages
+        )
+        assert not any("unknown" in message for message in messages)
+
+    def test_web_to_database_connection_materializes_service_owner(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Known web-to-DB service flows should not render as actorless endpoint telemetry."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        db_server = System(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database"],
+        )
+        activity_gen._ip_to_system = {web_server.ip: web_server, db_server.ip: db_server}
+        activity_gen._all_system_ips = [web_server.ip, db_server.ip]
+        activity_gen._scenario_start_time = timestamp - timedelta(hours=1)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=web_server.ip,
+            dst_ip=db_server.ip,
+            time=timestamp,
+            dst_port=3306,
+            proto="tcp",
+            service="mysql",
+            duration=0.45,
+            orig_bytes=420,
+            resp_bytes=3600,
+            conn_state="SF",
+            source_system=web_server,
+            hostname=db_server.hostname,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3306
+        )
+        assert connection_event.network.initiating_pid > 0
+        assert connection_event.process is not None
+        assert connection_event.process.image == "/usr/sbin/apache2"
+        assert connection_event.process.username == "www-data"
+
+    def test_proxy_service_owner_is_not_reused_across_targets(self, activity_gen, state_manager):
+        """Target-bearing service-health owners should match the current proxy host."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {dc_system.ip: dc_system}
+        state_manager.set_current_time(timestamp)
+        first_http = HttpContext(
+            method="CONNECT",
+            host="config.zscaler.net",
+            uri="config.zscaler.net:443",
+            user_agent="Go-http-client/1.1",
+        )
+        second_http = HttpContext(
+            method="CONNECT",
+            host="secure-client-updates.cisco.com",
+            uri="secure-client-updates.cisco.com:443",
+            user_agent="Go-http-client/1.1",
+        )
+
+        first_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=dc_system,
+            time=timestamp,
+            service="http",
+            dst_port=8080,
+            proto="tcp",
+            hostname=first_http.host,
+            http=first_http,
+        )
+        second_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=dc_system,
+            time=timestamp + timedelta(seconds=3),
+            service="http",
+            dst_port=8080,
+            proto="tcp",
+            hostname=second_http.host,
+            http=second_http,
+        )
+
+        first_proc = state_manager.get_process(dc_system.hostname, first_pid)
+        second_proc = state_manager.get_process(dc_system.hostname, second_pid)
+        assert first_proc is not None
+        assert second_proc is not None
+        assert first_pid != second_pid
+        assert "config.zscaler.net" in first_proc.command_line
+        assert "secure-client-updates.cisco.com" in second_proc.command_line
+
+    def test_service_connection_owner_command_lines_do_not_leak_planning_notes(self, activity_gen):
+        """Rendered endpoint command lines should not contain hidden generation labels."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        mail_server = System(
+            hostname="MAIL-CLIN-01",
+            ip="10.10.2.25",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["mail_server"],
+        )
+        db_server = System(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database"],
+        )
+
+        mail_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=mail_server,
+            time=timestamp,
+            service="http",
+            dst_port=8080,
+            proto="tcp",
+            hostname="api.github.com",
+            http=HttpContext(
+                method="CONNECT",
+                host="api.github.com",
+                uri="api.github.com:443",
+                user_agent="python-requests/2.31.0",
+            ),
+        )
+        smb_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=db_server,
+            time=timestamp,
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname="FILE-SRV-01.meridianhcs.local",
+            http=None,
+        )
+
+        for system, pid in ((mail_server, mail_pid), (db_server, smb_pid)):
+            proc = activity_gen.state_manager.get_process(system.hostname, pid)
+            assert proc is not None
+            assert "#" not in proc.command_line
+
+    def test_workstation_ssh_connection_materializes_user_owner(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """User-owned SSH flows should carry the interactive user's client process."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        app_server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
+        activity_gen._all_system_ips = [workstation.ip, app_server.ip]
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip=app_server.ip,
+            time=timestamp,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=8.0,
+            orig_bytes=1500,
+            resp_bytes=3000,
+            conn_state="SF",
+            source_system=workstation,
+            hostname=app_server.hostname,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 22
+        )
+        assert connection_event.network.initiating_pid > 0
+        assert connection_event.process is not None
+        assert connection_event.process.image == r"C:\Windows\System32\OpenSSH\ssh.exe"
+        assert connection_event.process.username == test_user.username
+
+    def test_workstation_ssh_owner_is_scoped_to_command_target(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Target-bearing SSH client processes should not be reused across hosts."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        app_server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+            services=["ssh"],
+        )
+        proxy_server = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {
+            workstation.ip: workstation,
+            app_server.ip: app_server,
+            proxy_server.ip: proxy_server,
+        }
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        app_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp,
+            service="ssh",
+            dst_port=22,
+            proto="tcp",
+            hostname=app_server.hostname,
+            http=None,
+        )
+        proxy_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp + timedelta(seconds=3),
+            service="ssh",
+            dst_port=22,
+            proto="tcp",
+            hostname=proxy_server.hostname,
+            http=None,
+        )
+        app_reuse_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp + timedelta(seconds=6),
+            service="ssh",
+            dst_port=22,
+            proto="tcp",
+            hostname=app_server.hostname,
+            http=None,
+        )
+
+        app_proc = state_manager.get_process(workstation.hostname, app_pid)
+        proxy_proc = state_manager.get_process(workstation.hostname, proxy_pid)
+        assert app_proc is not None
+        assert proxy_proc is not None
+        assert app_pid != proxy_pid
+        assert app_reuse_pid == app_pid
+        assert app_proc.command_line == "ssh.exe APP-INT-01"
+        assert proxy_proc.command_line == "ssh.exe PROXY-01"
+
+    def test_ssh_session_windows_client_command_names_remote_user(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Successful SSH sessions should expose alternate remote users in client commands."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        source_user = User(
+            username="priya.patel",
+            full_name="Priya Patel",
+            email="priya.patel@example.local",
+        )
+        remote_user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+        )
+        workstation = System(
+            hostname="WS-PPATEL-01",
+            ip="10.10.1.32",
+            os="Windows 11",
+            type="workstation",
+            assigned_user=source_user.username,
+        )
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, web_server.ip: web_server}
+        activity_gen._all_system_ips = [workstation.ip, web_server.ip]
+        activity_gen._users_by_username = {
+            source_user.username: source_user,
+            remote_user.username: remote_user,
+        }
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=source_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_ssh_session(
+            user=remote_user,
+            target_system=web_server,
+            time=timestamp,
+            source_ip=workstation.ip,
+            source_system=workstation,
+            duration=30.0,
+        )
+
+        ssh_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(workstation.hostname)
+            if proc.image == r"C:\Windows\System32\OpenSSH\ssh.exe"
+        ]
+        assert ssh_processes
+        ssh_proc = ssh_processes[-1]
+        assert ssh_proc.username == source_user.username
+        assert ssh_proc.command_line == "ssh.exe aisha.johnson@WEB-EXT-01"
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 22
+        )
+        assert connection_event.process is not None
+        assert connection_event.process.username == source_user.username
+        assert connection_event.process.command_line == ssh_proc.command_line
+
+    def test_linux_smb_browse_owner_is_scoped_to_command_target(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Target-bearing Linux SMB browse clients should not be reused across hosts."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-MRIVERA-02",
+            ip="10.10.1.50",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.2.20",
+            os="Windows Server 2022",
+            type="server",
+            roles=["file_server"],
+            services=["smb"],
+        )
+        dc_server = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+            services=["smb"],
+        )
+        activity_gen._ip_to_system = {
+            workstation.ip: workstation,
+            file_server.ip: file_server,
+            dc_server.ip: dc_server,
+        }
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        file_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp,
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname=file_server.hostname,
+            http=None,
+        )
+        dc_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp + timedelta(seconds=3),
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname=dc_server.hostname,
+            http=None,
+        )
+        file_reuse_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp + timedelta(seconds=6),
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname=file_server.hostname,
+            http=None,
+        )
+
+        file_proc = state_manager.get_process(workstation.hostname, file_pid)
+        dc_proc = state_manager.get_process(workstation.hostname, dc_pid)
+        assert file_proc is not None
+        assert dc_proc is not None
+        assert file_pid != dc_pid
+        assert file_reuse_pid == file_pid
+        assert file_proc.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
+        assert dc_proc.command_line == "gvfsd-smb-browse smb://DC-01/shared"
 
     def test_sqlcmd_unresolved_host_emits_failed_network_attempt(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -5491,11 +6196,22 @@ class TestActivityGenerator:
         )
 
         assert emitted is True
-        event = [
-            call[0][0]
-            for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call[0][0].event_type == "create_remote_thread"
+        emitted_events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_access = [
+            event for event in emitted_events if event.event_type == "process_access"
         ][-1]
+        event = [
+            emitted_event
+            for emitted_event in emitted_events
+            if emitted_event.event_type == "create_remote_thread"
+        ][-1]
+        assert process_access.timestamp < event.timestamp
+        assert process_access.process_access is not None
+        assert process_access.process_access.target_pid == target_pid
+        assert process_access.process_access.target_process_object_id == target_obj_id
+        assert process_access.edr.actor_id == source_obj_id
         assert event.remote_thread is not None
         assert event.remote_thread.target_pid == target_pid
         assert event.remote_thread.target_process_object_id == target_obj_id
@@ -6727,6 +7443,43 @@ class TestActivityGenerator:
         assert explicit.auth.source_ip == "-"
         assert explicit.auth.source_port == 0
 
+    def test_generate_explicit_credentials_resolves_known_remote_target_endpoint(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Known remote 4648 targets should render joinable destination endpoint metadata."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        target_system = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.0.50",
+            os="Windows Server 2022",
+            type="server",
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            target_system.ip: target_system,
+        }
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={target_system.hostname: target_system}
+        )
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server=target_system.hostname,
+            process_name=r"C:\Windows\System32\mmc.exe",
+            process_pid=4242,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == target_system.ip
+        assert 49152 <= explicit.auth.source_port <= 65535
+
     def test_generate_explicit_credentials_ignores_unrelated_source_ip_override(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -7100,6 +7853,96 @@ class TestActivityGenerator:
         child = process_events[-1]
         assert child.process.parent_pid != one_shot_parent_pid
 
+    def test_generate_process_spaces_bare_shell_child_commands(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Human-entered commands should not spawn immediately after an interactive shell."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x44444"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp)
+        shell_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Users\testuser\.cargo\bin\cargo.exe",
+            "cargo.exe build --release",
+            parent_pid=shell_pid,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == shell_pid
+        assert child.timestamp >= timestamp + timedelta(seconds=8)
+
+    def test_storyline_process_preserves_bare_shell_child_timing(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Explicit storyline timing remains authoritative for shell child commands."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x55555"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp)
+        shell_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        requested_time = timestamp + timedelta(seconds=1)
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            requested_time,
+            logon_id,
+            r"C:\Users\testuser\.cargo\bin\cargo.exe",
+            "cargo.exe build --release",
+            parent_pid=shell_pid,
+            from_storyline=True,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == shell_pid
+        assert child.timestamp == requested_time
+
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -7163,6 +8006,50 @@ class TestActivityGenerator:
             "tcp",
             "ssh",
         )
+
+    def test_generate_connection_drops_recorded_terminated_process_pid(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        test_user,
+        test_system,
+    ):
+        """Connections should not inherit PID identity from a terminated process instance."""
+        start_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line="chrome.exe --type=renderer",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+        running = state_manager.get_process(test_system.hostname, pid)
+        assert running is not None
+        activity_gen._terminated_process_keys.add((test_system.hostname, pid, running.start_time))
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="93.184.216.34",
+            time=start_time + timedelta(minutes=20),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            pid=pid,
+            source_system=test_system,
+            process_image=running.image,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.process is None
+        assert event.network.initiating_pid == -1
 
     def test_generate_connection_preserves_public_vip_for_inbound_web_host(
         self,
@@ -7400,6 +8287,86 @@ class TestActivityGenerator:
         assert service.timestamp < connection.timestamp
         assert service.kerberos.target_username == "WEB-EXT-01$@CORP.LOCAL"
         assert service.kerberos.source_port == connection.network.src_port
+
+    def test_newly_created_account_service_ticket_emits_visible_tgt_and_kdc_flow(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """First visible TGS for a visible-created account should not use pre-window cache."""
+        created_at = datetime(2024, 3, 18, 16, 15, 24, tzinfo=UTC)
+        service_time = datetime(2024, 3, 18, 17, 1, 29, 335000, tzinfo=UTC)
+        state_manager.set_current_time(created_at)
+        actor = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.com",
+        )
+        source = System(
+            hostname="WS-AJOHNSON",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds", "kerberos"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_account_created(
+            actor=actor,
+            system=dc,
+            time=created_at,
+            target_username="svc_mhsync",
+            target_sid="S-1-5-21-1000-1000-1000-1901",
+        )
+        mock_emitters["windows_event_security"].emit.reset_mock()
+        mock_emitters["zeek_conn"].emit.reset_mock()
+
+        activity_gen.generate_kerberos_service_ticket(
+            username="svc_mhsync",
+            service_name="cifs/FILE-SRV-01",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=service_time,
+            source_port=55466,
+        )
+
+        win_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        kerberos_events = [
+            event
+            for event in win_events
+            if event.event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+        assert [event.event_type for event in kerberos_events] == [
+            "kerberos_tgt",
+            "kerberos_service",
+        ]
+        tgt, service = kerberos_events
+        assert tgt.timestamp < service.timestamp
+        assert tgt.kerberos.target_username == "svc_mhsync"
+        assert service.kerberos.target_username == "svc_mhsync"
+        assert tgt.kerberos.source_port == 55466
+        assert service.kerberos.source_port == 55466
+
+        conn_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert len(conn_events) == 1
+        connection = conn_events[0]
+        assert connection.timestamp < service.timestamp
+        assert connection.network.src_ip == source.ip
+        assert connection.network.dst_ip == dc.ip
+        assert connection.network.src_port == 55466
+        assert connection.network.dst_port == 88
+        assert connection.network.service == "kerberos"
 
     def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters
@@ -8871,6 +9838,273 @@ class TestActivityGenerator:
         assert npm_create.process.parent_pid == bash_pid
         assert npm_create.timestamp > blocked_until
 
+    def test_generate_bash_command_moves_history_with_busy_foreground_shell(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Bash history and process telemetry should share the foreground-shell slot."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc458"
+        state_manager.set_current_time(command_time - timedelta(seconds=60))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=30),
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+        blocked_until = command_time + timedelta(minutes=30)
+        activity_gen._foreground_shell_next_time[
+            (linux.hostname, test_user.username, logon_id, bash_pid)
+        ] = blocked_until
+
+        scheduled = activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "hostname -f",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        bash_event = next(
+            event
+            for event in events
+            if event.event_type == "bash_command"
+            and event.shell is not None
+            and event.shell.command == "hostname -f"
+        )
+        hostname_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/hostname"
+        )
+
+        assert scheduled == bash_event.timestamp
+        assert bash_event.timestamp > blocked_until
+        assert hostname_create.process.parent_pid == bash_pid
+        assert hostname_create.process.concurrency_group_id.startswith("bash-history:")
+        assert (
+            timedelta(0) < hostname_create.timestamp - bash_event.timestamp < timedelta(seconds=1)
+        )
+
+    def test_foreground_termination_uses_source_visible_release_time(
+        self, activity_gen, test_user, state_manager, monkeypatch
+    ):
+        """Foreground shell availability should follow rendered endpoint completion."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc459"
+        state_manager.set_current_time(command_time)
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        child_pid = state_manager.create_process(
+            linux.hostname,
+            bash_pid,
+            "/usr/bin/python3",
+            "python3 -m pytest",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        source_visible_done = command_time + timedelta(minutes=7)
+
+        def source_terminate_time(hostname: str, pid: int) -> datetime | None:
+            if hostname == linux.hostname and pid == child_pid:
+                return source_visible_done
+            return None
+
+        monkeypatch.setattr(
+            activity_gen,
+            "process_source_terminate_time",
+            source_terminate_time,
+        )
+
+        release_time = activity_gen._generate_bounded_foreground_process_termination(
+            user=test_user,
+            system=linux,
+            start_time=command_time,
+            pid=child_pid,
+            process_name="/usr/bin/python3",
+            logon_id=logon_id,
+            lifetime=(1.0, 1.0),
+            rng=random.Random(7),
+        )
+        activity_gen._remember_foreground_shell_available(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=bash_pid,
+            termination_time=release_time,
+            seed_text="python3 -m pytest",
+        )
+        reserved = activity_gen.reserve_linux_foreground_process_start(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=bash_pid,
+            requested_time=command_time + timedelta(seconds=2),
+            process_name="/usr/bin/hostname",
+            command_line="hostname -f",
+        )
+
+        assert release_time == source_visible_done
+        assert reserved > source_visible_done
+
+    def test_linux_proxy_client_process_uses_non_shell_session_parent(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Synthetic Linux proxy socket owners should not occupy the foreground shell."""
+        request_time = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        logon_id = "0xabc460"
+        state_manager.set_current_time(request_time - timedelta(minutes=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        user_systemd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --user",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        terminal_pid = state_manager.create_process(
+            linux.hostname,
+            user_systemd_pid,
+            "/usr/libexec/gnome-terminal-server",
+            "/usr/libexec/gnome-terminal-server",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            terminal_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=request_time - timedelta(minutes=9),
+            session_kind="interactive",
+        )
+        session.process_tree_root = terminal_pid
+        session.session_shell_pid = bash_pid
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+        proxy_context = ProxyContext(
+            client_ip=linux.ip,
+            username=test_user.username,
+            method="GET",
+            url="https://api.gitlab.com/",
+            host="api.gitlab.com",
+            status_code=200,
+            user_agent="python-requests/2.31.0",
+            proxy_fqdn="PROXY-01.meridianhcs.local",
+        )
+
+        pid, image = activity_gen._ensure_explicit_proxy_client_process(
+            source_system=linux,
+            time=request_time,
+            proxy_context=proxy_context,
+            proxy_sys=proxy,
+            dst_port=443,
+        )
+
+        proc = state_manager.get_process(linux.hostname, pid)
+        assert image == "/usr/bin/python3"
+        assert proc is not None
+        assert proc.parent_pid == terminal_pid
+        assert proc.parent_pid != bash_pid
+
     def test_process_user_apps_bash_pool_respects_database_role(
         self, activity_gen, test_user, monkeypatch, mock_emitters
     ):
@@ -9726,8 +10960,8 @@ def activity_gen():
     return ActivityGenerator(sm, mock_emitters)
 
 
-def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
-    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+def test_disambiguate_icmp_observation_time_uses_monotonic_varied_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe or use fixed spacing."""
 
     class CountingDict(dict[tuple[str, int, str, int], int]):
         """Dictionary that counts next-timestamp lookups."""
@@ -9755,8 +10989,16 @@ def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity
         for _ in range(1000)
     ]
 
+    gaps = [
+        (current - previous).total_seconds()
+        for previous, current in zip(adjusted_times[:-1], adjusted_times[1:], strict=True)
+    ]
+
     assert adjusted_times[0] == base_time
-    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert all(gap > 0 for gap in gaps)
+    assert min(gaps) >= timedelta(milliseconds=7).total_seconds()
+    assert max(gaps) < timedelta(milliseconds=84).total_seconds()
+    assert len({round(gap, 6) for gap in gaps}) > 100
     assert next_timestamps.get_calls == len(adjusted_times)
     assert len(next_timestamps) == 1
 
@@ -9767,16 +11009,20 @@ def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
     ts_now = now.timestamp()
 
     activity_gen._dns_cache = {
-        (f"10.0.0.{i % 255}", f"host-{i}.example.com"): ts_now - 5 for i in range(50_100)
+        (f"10.0.0.{i % 255}", "10.0.0.1", f"host-{i}.example.com", "ADDR"): (
+            ts_now - 35,
+            ts_now - 5,
+        )
+        for i in range(50_100)
     }
-    hot_key = ("10.0.0.5", "active.example.com")
-    activity_gen._dns_cache[hot_key] = ts_now - 1
+    hot_key = ("10.0.0.5", "10.0.0.1", "active.example.com", "ADDR")
+    activity_gen._dns_cache[hot_key] = (ts_now - 1, ts_now + 30)
     activity_gen._dns_cache_last_prune = 0.0
 
-    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[1])
+    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[2])
 
     assert hot_key in activity_gen._dns_cache
-    assert len(activity_gen._dns_cache) <= 50_001
+    assert len(activity_gen._dns_cache) <= 2
 
 
 def test_ensure_file_event_skips_existing_linux_binaries(activity_gen):
@@ -9818,6 +11064,92 @@ def test_tls_key_metadata_follows_rsa_named_intermediates():
     assert generator_module._tls_key_for_certificate_name(
         "CN=Amazon RSA 2048 M01", "ecdsa", 256
     ) == ("rsa", 2048)
+
+
+def test_public_sni_on_private_destination_uses_public_ca(activity_gen, monkeypatch):
+    """Public SNI observed through private listener addresses should not use internal CA."""
+    monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (100, 0))
+    activity_gen._ad_domain = "corp.local"
+    event = SecurityEvent(
+        timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        event_type="connection",
+        network=NetworkContext(
+            src_ip="198.51.100.44",
+            src_port=49152,
+            dst_ip="10.0.3.10",
+            dst_port=443,
+            protocol="tcp",
+            service="ssl",
+            zeek_uid="Cpublicsni",
+            duration=2.0,
+            orig_bytes=900,
+            resp_bytes=9000,
+            orig_pkts=4,
+            resp_pkts=10,
+            orig_ip_bytes=1200,
+            resp_ip_bytes=9500,
+            conn_state="SF",
+            history="ShADadfF",
+            initiating_pid=-1,
+        ),
+    )
+
+    activity_gen._attach_ssl_context(
+        event,
+        hostname="portal.example.com",
+        dns=None,
+        dst_ip="10.0.3.10",
+        rng=random.Random(7),
+        allow_failure=False,
+    )
+
+    assert event.x509 is not None
+    assert event.x509.certificate_subject == "CN=portal.example.com"
+    assert "Enterprise Issuing CA" not in event.x509.certificate_issuer
+
+
+def test_internal_sni_on_private_destination_uses_enterprise_ca(activity_gen, monkeypatch):
+    """Internal SNI on private addresses should keep enterprise certificate semantics."""
+    monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (100, 0))
+    activity_gen._ad_domain = "corp.local"
+    event = SecurityEvent(
+        timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        event_type="connection",
+        network=NetworkContext(
+            src_ip="10.0.1.10",
+            src_port=49152,
+            dst_ip="10.0.3.10",
+            dst_port=443,
+            protocol="tcp",
+            service="ssl",
+            zeek_uid="Cinternalsni",
+            duration=2.0,
+            orig_bytes=900,
+            resp_bytes=9000,
+            orig_pkts=4,
+            resp_pkts=10,
+            orig_ip_bytes=1200,
+            resp_ip_bytes=9500,
+            conn_state="SF",
+            history="ShADadfF",
+            initiating_pid=-1,
+        ),
+    )
+
+    activity_gen._attach_ssl_context(
+        event,
+        hostname="portal.corp.local",
+        dns=None,
+        dst_ip="10.0.3.10",
+        rng=random.Random(7),
+        allow_failure=False,
+    )
+
+    assert event.x509 is not None
+    assert event.x509.certificate_subject == "CN=portal.corp.local"
+    assert (
+        event.x509.certificate_issuer == "CN=Enterprise Enterprise Issuing CA, O=Enterprise, C=US"
+    )
 
 
 def test_tcp_success_history_uses_varied_completed_flow_shapes():

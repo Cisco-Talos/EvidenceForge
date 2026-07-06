@@ -49,9 +49,9 @@ registry_noise:
 
 ecar_flow_identity:
   user_process_probability: 0.88
-  service_process_probability: 0.48
-  root_process_probability: 0.42
-  inbound_listener_probability: 0.36
+  service_process_probability: 0.98
+  root_process_probability: 0.96
+  inbound_listener_probability: 0.92
 
 ecar_file_churn:
   enabled: true

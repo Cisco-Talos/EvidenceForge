@@ -34,6 +34,14 @@ _DEFAULT_RUNMRU_COMMANDS = (
     "powershell.exe -NoExit Get-ChildItem",
     "notepad.exe",
 )
+_DEFAULT_GROUP_POLICY_EXTENSION_GUIDS = (
+    "35378EAC-683F-11D2-A89A-00C04FBBCFA2",
+    "42B5FAAE-6536-11D2-AE5A-0000F87571E3",
+    "827D319E-6EAC-11D2-A4EA-00C04F79F83A",
+    "C631DF4C-088F-4156-B058-4375F0853CD8",
+    "A2E30F80-D7DE-11D2-BBDE-00C04F86AE3B",
+    "E437BC1C-AA7D-11D2-A382-00C04F991E27",
+)
 _USERASSIST_RUNPATHS = (
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files\Mozilla Firefox\firefox.exe",
@@ -100,6 +108,14 @@ _LINUX_ROOT_ONLY_FILE_PREFIXES = (
     "/var/lib/dpkg/",
     "/var/log/apt/",
 )
+_WINDOWS_PROTECTED_EVENT_LOG_PREFIX = "c:\\windows\\system32\\winevt\\logs\\"
+_GUID_RE = re.compile(
+    r"^\{?[0-9A-Fa-f]{8}-"
+    r"[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{12}\}?$"
+)
 
 
 def _merge_edr_pools(default: dict, overlay: dict) -> dict:
@@ -139,6 +155,10 @@ def _is_valid_string_list(value: Any) -> bool:
     )
 
 
+def _is_valid_guid_string_list(value: Any) -> bool:
+    return _is_valid_string_list(value) and all(_GUID_RE.fullmatch(item.strip()) for item in value)
+
+
 def _is_valid_registry_pool(value: Any) -> bool:
     if not isinstance(value, list) or len(value) == 0:
         return False
@@ -172,6 +192,7 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "registry_keys_hkcu": _is_valid_registry_pool,
         "registry_keys_hklm": _is_valid_registry_pool,
         "installed_software_products": _is_valid_installed_software_products,
+        "group_policy_extension_guids": _is_valid_guid_string_list,
     }
     sanitized = dict(defaults)
     for key, validator in validators.items():
@@ -303,6 +324,31 @@ def _installed_product_guid(host_key: str, product_name: str) -> str:
     )
 
 
+def _group_policy_extension_guid(rng: random.Random, host_key: str) -> str:
+    """Return a realistic Group Policy client-side extension GUID."""
+    pool = load_edr_pools().get(
+        "group_policy_extension_guids",
+        list(_DEFAULT_GROUP_POLICY_EXTENSION_GUIDS),
+    )
+    if not _is_valid_string_list(pool):
+        pool = list(_DEFAULT_GROUP_POLICY_EXTENSION_GUIDS)
+
+    normalized = [str(guid).strip().strip("{}").upper() for guid in pool if str(guid).strip()]
+    if not normalized:
+        normalized = list(_DEFAULT_GROUP_POLICY_EXTENSION_GUIDS)
+
+    if not host_key:
+        return rng.choice(normalized)
+
+    host_seed = _stable_seed(f"group_policy_extension_subset:{host_key}")
+    stable_order = sorted(
+        normalized,
+        key=lambda guid: _stable_seed(f"group_policy_extension_subset:{host_key}:{guid}"),
+    )
+    subset_size = min(len(stable_order), 3 + (host_seed % 3))
+    return rng.choice(stable_order[:subset_size])
+
+
 def defender_platform_version(host_key: str) -> str:
     """Return one stable Windows Defender platform version for a host."""
     seed = _stable_seed(f"defender_platform_version:{host_key or 'default'}")
@@ -404,6 +450,15 @@ def _is_windows_prefetch_template(template: str) -> bool:
     return "\\windows\\prefetch\\" in normalized
 
 
+def _is_windows_protected_event_log_template(template: str) -> bool:
+    """Return whether a file template points at protected Windows event logs."""
+
+    normalized = template.replace("/", "\\").lower()
+    return normalized.startswith(_WINDOWS_PROTECTED_EVENT_LOG_PREFIX) and normalized.endswith(
+        ".evtx"
+    )
+
+
 def _runmru_value_name(rng: random.Random) -> str:
     """Return a plausible RunMRU value slot."""
     return chr(ord("a") + rng.randint(0, 15))
@@ -424,6 +479,7 @@ def materialize_edr_template(
     user: str = "SYSTEM",
     *,
     host_ip: str = "",
+    dns_server_ip: str = "",
     host_key: str = "",
     host_os: str = "",
     process_name: str = "",
@@ -442,6 +498,7 @@ def materialize_edr_template(
         "user": user,
         "username": user,
         "host_ip": host_ip,
+        "dns_server_ip": dns_server_ip or "10.0.0.1",
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
@@ -478,9 +535,15 @@ def materialize_edr_template(
         ),
         "version": version,
     }
+    group_policy_extension_guid: str | None = None
 
     def _replace(match: re.Match[str]) -> str:
+        nonlocal group_policy_extension_guid
         token = match.group(1)
+        if token == "group_policy_extension_guid":
+            if group_policy_extension_guid is None:
+                group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
+            return group_policy_extension_guid
         return str(replacements[token]) if token in replacements else match.group(0)
 
     materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
@@ -495,6 +558,7 @@ def materialize_edr_template_group(
     *,
     host_key: str = "",
     host_ip: str = "",
+    dns_server_ip: str = "",
     host_os: str = "",
     process_name: str = "",
 ) -> tuple[str, ...]:
@@ -512,6 +576,7 @@ def materialize_edr_template_group(
         "user": user,
         "username": user,
         "host_ip": host_ip,
+        "dns_server_ip": dns_server_ip or "10.0.0.1",
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
@@ -548,9 +613,15 @@ def materialize_edr_template_group(
         ),
         "version": version,
     }
+    group_policy_extension_guid: str | None = None
 
     def _replace(match: re.Match[str]) -> str:
+        nonlocal group_policy_extension_guid
         token = match.group(1)
+        if token == "group_policy_extension_guid":
+            if group_policy_extension_guid is None:
+                group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
+            return group_policy_extension_guid
         return str(replacements[token]) if token in replacements else match.group(0)
 
     return tuple(
@@ -671,7 +742,10 @@ def select_ambient_file_churn_effect(
     candidates = file_path_templates_for_user(path_templates, os_category, user)
     if os_category == "windows":
         candidates = [
-            candidate for candidate in candidates if not _is_windows_prefetch_template(candidate)
+            candidate
+            for candidate in candidates
+            if not _is_windows_prefetch_template(candidate)
+            and not _is_windows_protected_event_log_template(candidate)
         ]
     if not candidates:
         return None

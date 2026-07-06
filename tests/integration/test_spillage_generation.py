@@ -35,7 +35,13 @@ def _read(out: Path, pattern: str) -> str:
     return matches[0].read_text()
 
 
-_NON_LOG = ("GROUND_TRUTH", "OBSERVATION_MANIFEST", "OUTPUT_TARGET", "generation.log")
+_NON_LOG = (
+    "COLLECTION_PROFILE",
+    "GROUND_TRUTH",
+    "OBSERVATION_MANIFEST",
+    "OUTPUT_TARGET",
+    "generation.log",
+)
 
 
 def _data_files(out: Path) -> list[Path]:

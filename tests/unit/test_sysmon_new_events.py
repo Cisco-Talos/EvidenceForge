@@ -502,6 +502,36 @@ class TestRenderEvent3:
             == expected_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         )
 
+    def test_event3_normalizes_mail_hostname_to_port_family(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe",
+                username="NETWORK SERVICE",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="74.125.200.27",
+                src_port=49152,
+                dst_port=25,
+                protocol="tcp",
+                initiating_pid=4567,
+            ),
+        )
+        with patch(
+            "evidenceforge.generation.activity.network.REVERSE_DNS",
+            {"74.125.200.27": "pop.gmail.com"},
+        ):
+            emitter.emit(event)
+
+        assert emitter._event_dicts[0]["DestinationHostname"] == "smtp.gmail.com"
+        assert emitter._event_dicts[0]["DestinationPortName"] == "smtp"
+
 
 class TestRenderEvent7:
     """Test Event 7 (ImageLoaded) rendering."""
@@ -1462,6 +1492,31 @@ class TestUserFieldFormatting:
         emitter.flush()
         content = list(emitter._host_writers.values())[0].output_path.read_text()
         assert "CORP\\jsmith" in content
+
+    def test_event1_version5_includes_parent_user(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="admin", logon_id="0x46a3f"),
+            process=ProcessContext(
+                pid=4100,
+                parent_pid=4000,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="admin",
+                parent_image=r"C:\Windows\explorer.exe",
+                parent_command_line=r"C:\Windows\explorer.exe",
+            ),
+        )
+
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+
+        assert "<EventID>1</EventID>" in content
+        assert "<Version>5</Version>" in content
+        assert '<Data Name="ParentUser">CORP\\admin</Data>' in content
 
     def test_process_access_target_user_gets_domain(self, emitter):
         """Sysmon Event 10 target user should use source-native domain formatting."""

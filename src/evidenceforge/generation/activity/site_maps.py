@@ -14,6 +14,7 @@ import hashlib
 import random
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
@@ -166,6 +167,19 @@ def _replace_hex_tokens(
     return path
 
 
+def _request_month_start_iso(request_time: datetime | None) -> str:
+    """Return a UTC month-start timestamp for browser API path templates."""
+
+    if request_time is None:
+        request_time = datetime(2024, 1, 1, tzinfo=UTC)
+    elif request_time.tzinfo is None:
+        request_time = request_time.replace(tzinfo=UTC)
+    else:
+        request_time = request_time.astimezone(UTC)
+    month_start = request_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return month_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _substitute_vars(
     rng: random.Random,
     path: str,
@@ -173,6 +187,7 @@ def _substitute_vars(
     *,
     hostname: str = "",
     content_type: str | None = None,
+    request_time: datetime | None = None,
 ) -> str:
     """Replace template variables in a URI path."""
     stable_asset_tokens = _uses_stable_asset_tokens(path, content_type)
@@ -205,6 +220,8 @@ def _substitute_vars(
         path = path.replace("{slug}", rng.choice(slugs), 1)
     if "{n}" in path:
         path = path.replace("{n}", str(rng.randint(1, 20)), 1)
+    if "{calendar_time_min}" in path:
+        path = path.replace("{calendar_time_min}", _request_month_start_iso(request_time))
     return path
 
 
@@ -213,6 +230,7 @@ def _build_subresources(
     raw_list: list[dict[str, str]],
     data: dict[str, Any],
     hostname: str,
+    request_time: datetime | None = None,
 ) -> list[SubresourceDef]:
     """Convert raw YAML subresource dicts to SubresourceDef objects."""
     result = []
@@ -223,6 +241,7 @@ def _build_subresources(
             data,
             hostname=item.get("host") or hostname,
             content_type=item.get("type", "application/octet-stream"),
+            request_time=request_time,
         )
         result.append(
             SubresourceDef(
@@ -240,20 +259,25 @@ def _build_pages_from_curated(
     hostname: str,
     domain_entry: dict[str, Any],
     data: dict[str, Any],
+    request_time: datetime | None = None,
 ) -> list[PageDef]:
     """Build PageDef list from a curated domain entry."""
     pages = []
     for page_raw in domain_entry.get("pages", []):
-        nav_targets = [_substitute_vars(rng, t, data) for t in page_raw.get("nav_targets", [])]
+        nav_targets = [
+            _substitute_vars(rng, t, data, request_time=request_time)
+            for t in page_raw.get("nav_targets", [])
+        ]
         subresources = _build_subresources(
             rng,
             page_raw.get("subresources", []),
             data,
             hostname,
+            request_time,
         )
         pages.append(
             PageDef(
-                path=_substitute_vars(rng, page_raw["path"], data),
+                path=_substitute_vars(rng, page_raw["path"], data, request_time=request_time),
                 content_type=page_raw.get("content_type", "text/html"),
                 nav_targets=nav_targets,
                 subresources=subresources,
@@ -267,6 +291,7 @@ def _build_pages_from_tag(
     hostname: str,
     tag_entry: dict[str, Any],
     data: dict[str, Any],
+    request_time: datetime | None = None,
 ) -> list[PageDef]:
     """Build PageDef list from a tag-based synthesis template."""
     patterns = tag_entry.get("subresource_patterns", {})
@@ -274,11 +299,14 @@ def _build_pages_from_tag(
     for tmpl in tag_entry.get("page_templates", []):
         pattern_name = tmpl.get("subresource_pattern", "")
         raw_subs = patterns.get(pattern_name, [])
-        nav_targets = [_substitute_vars(rng, t, data) for t in tmpl.get("nav_targets", [])]
-        subresources = _build_subresources(rng, raw_subs, data, hostname)
+        nav_targets = [
+            _substitute_vars(rng, t, data, request_time=request_time)
+            for t in tmpl.get("nav_targets", [])
+        ]
+        subresources = _build_subresources(rng, raw_subs, data, hostname, request_time)
         pages.append(
             PageDef(
-                path=_substitute_vars(rng, tmpl["path"], data),
+                path=_substitute_vars(rng, tmpl["path"], data, request_time=request_time),
                 nav_targets=nav_targets,
                 subresources=subresources,
             )
@@ -290,6 +318,7 @@ def get_site_map(
     hostname: str,
     domain_tags: list[str],
     rng: random.Random | None = None,
+    request_time: datetime | None = None,
 ) -> SiteMap:
     """Look up or synthesize a site map for a hostname.
 
@@ -303,6 +332,8 @@ def get_site_map(
         domain_tags: Tags from dns_registry (e.g., ["saas", "email"])
         rng: Random instance for template variable substitution.
             If None, a default Random(0) is used.
+        request_time: Optional modeled request time for time-relative URI
+            template variables.
 
     Returns:
         SiteMap with pages, subresources, and CDN domains.
@@ -316,7 +347,7 @@ def get_site_map(
     domains = data.get("domains", {})
     if hostname in domains:
         entry = domains[hostname]
-        pages = _build_pages_from_curated(rng, hostname, entry, data)
+        pages = _build_pages_from_curated(rng, hostname, entry, data, request_time)
         cdn = entry.get("cdn_domains", [])
         return SiteMap(hostname=hostname, pages=pages, cdn_domains=cdn)
 
@@ -324,10 +355,10 @@ def get_site_map(
     tags = data.get("tags", {})
     for tag in domain_tags:
         if tag in tags:
-            pages = _build_pages_from_tag(rng, hostname, tags[tag], data)
+            pages = _build_pages_from_tag(rng, hostname, tags[tag], data, request_time)
             return SiteMap(hostname=hostname, pages=pages)
 
     # Tier 3: Generic fallback
     generic = data.get("generic", {})
-    pages = _build_pages_from_tag(rng, hostname, generic, data)
+    pages = _build_pages_from_tag(rng, hostname, generic, data, request_time)
     return SiteMap(hostname=hostname, pages=pages)

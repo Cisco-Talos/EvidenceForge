@@ -163,6 +163,7 @@ ZEEK_SPLUNK_SOURCETYPES: dict[str, str] = {
     "zeek_conn": "bro:conn:json",
     "zeek_dns": "bro:dns:json",
     "zeek_http": "bro:http:json",
+    "zeek_smtp": "bro:smtp:json",
     "zeek_ssl": "bro:ssl:json",
     "zeek_files": "bro:files:json",
     "zeek_dhcp": "bro:dhcp:json",

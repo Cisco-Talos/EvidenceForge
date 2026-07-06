@@ -297,8 +297,7 @@ class TestLogonIdSystemScoping:
         kwargs = engine.activity_generator.generate_create_remote_thread.call_args.kwargs
         assert kwargs["target_pid"] == 620
         assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
-        expand_kwargs = engine.activity_generator._expand_and_emit.call_args.kwargs
-        assert expand_kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
+        engine.activity_generator._expand_and_emit.assert_not_called()
 
     def test_storyline_process_access_with_stale_source_is_marked_skipped(
         self, state_manager, mock_emitters, system_a, attacker

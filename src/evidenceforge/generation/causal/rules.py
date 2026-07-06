@@ -176,28 +176,32 @@ class DnsBeforeConnection(ExpansionRule):
 
 @dataclass
 class ProcessAccessAfterRemoteThread(ExpansionRule):
-    """Emit Sysmon Event 10 (ProcessAccess) before CreateRemoteThread targeting lsass.
+    """Emit Sysmon Event 10 (ProcessAccess) before CreateRemoteThread.
 
-    When a process injects into lsass.exe via CreateRemoteThread (Sysmon Event 8),
-    it must first obtain a handle to the target process. Sysmon Event 10 is the
-    primary detection signal for that credential-dumping prerequisite. This rule
-    centralizes the lsass check that was previously inline in
-    StorylineMixin._execute_typed_event().
+    When a process creates a remote thread (Sysmon Event 8), it must first
+    obtain a handle to the target process. Sysmon Event 10 is the primary
+    source-native evidence for that prerequisite. LSASS targets keep the stronger
+    credential-dumping access mask; ordinary remote-thread activity gets a
+    lower-friction process-open companion.
     """
 
     name: str = field(default="process_access_after_remote_thread")
-    description: str = field(default="Emit ProcessAccess before CreateRemoteThread targeting lsass")
+    description: str = field(default="Emit ProcessAccess before CreateRemoteThread")
     priority: int = field(default=40)
 
     def matches(self, event_type: str, ctx: ExpansionContext) -> bool:
         if event_type != "create_remote_thread":
             return False
         target = ctx.target_image or ""
-        return "lsass" in target.lower()
+        source_pid = ctx.source_pid or -1
+        target_pid = ctx.target_pid or -1
+        return bool(target and source_pid > 0 and target_pid > 0)
 
     def expand(self, event_type: str, ctx: ExpansionContext) -> list[ExpandedEvent]:
         from evidenceforge.generation.causal.engine import ExpandedEvent
 
+        target = ctx.target_image or ""
+        is_lsass = "lsass" in target.lower()
         return [
             ExpandedEvent(
                 method="generate_process_access",
@@ -208,15 +212,17 @@ class ProcessAccessAfterRemoteThread(ExpansionRule):
                     "source_image": ctx.source_image,
                     "target_pid": ctx.target_pid,
                     "target_image": ctx.target_image,
-                    "granted_access": "0x1FFFFF",
+                    "granted_access": "0x1FFFFF" if is_lsass else "0x1010",
                 },
                 timing=_timing_spec(
-                    "process.remote_thread_lsass_access",
-                    default_min_ms=1,
-                    default_max_ms=75,
+                    "process.remote_thread_lsass_access"
+                    if is_lsass
+                    else "process.remote_thread_process_access",
+                    default_min_ms=1 if is_lsass else 8,
+                    default_max_ms=75 if is_lsass else 180,
                     default_position="before",
                 ),
-                description="ProcessAccess for lsass credential dumping detection",
+                description="ProcessAccess prerequisite for CreateRemoteThread",
             )
         ]
 

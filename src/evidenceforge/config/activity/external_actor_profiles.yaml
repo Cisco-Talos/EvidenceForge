@@ -1,0 +1,28 @@
+# Public IP pools used only when storyline events omit explicit external IPs.
+logon_source_ips:
+  - ip: 45.33.32.156
+    weight: 2
+  - ip: 185.220.101.34
+    weight: 2
+  - ip: 91.219.236.174
+    weight: 2
+  - ip: 23.129.64.210
+    weight: 1
+  - ip: 116.202.120.181
+    weight: 1
+
+failed_logon_source_ips:
+  - ip: 45.33.32.156
+    weight: 2
+  - ip: 185.220.101.34
+    weight: 2
+  - ip: 91.219.236.174
+    weight: 2
+
+connection_c2_ips:
+  - ip: 159.65.43.201
+    weight: 2
+  - ip: 134.209.29.115
+    weight: 2
+  - ip: 167.71.156.88
+    weight: 2

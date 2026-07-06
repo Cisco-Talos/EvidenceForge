@@ -466,6 +466,30 @@ class NetworkVisibilityEngine:
         src_segments = self._resolve_ip_segments(src_ip)
         dst_segments = self._resolve_ip_segments(dst_ip)
 
+        # Static VIPs inherit the real host's segment for visibility, but a
+        # connection aimed at the public VIP still needs DNAT context before
+        # endpoint sources render the host-local tuple.
+        for sensor in self._sensors:
+            if sensor.type != "firewall" or not sensor.nat_rules:
+                continue
+            sensor_segs = set(sensor.monitoring_segments)
+            if not (sensor_segs & src_segments or sensor_segs & dst_segments):
+                continue
+            for rule in sensor.nat_rules:
+                if (
+                    rule.type == "static"
+                    and rule.mapped_ip
+                    and rule.real_ip
+                    and dst_ip == rule.mapped_ip
+                ):
+                    return NatContext(
+                        nat_type="static",
+                        mapped_src_ip=src_ip,
+                        mapped_src_port=src_port,
+                        mapped_dst_ip=rule.real_ip,
+                        mapped_dst_port=dst_port,
+                    )
+
         # Same-segment traffic: no NAT
         if src_segments and dst_segments and src_segments & dst_segments:
             return None
@@ -525,6 +549,25 @@ class NetworkVisibilityEngine:
                             mapped_src_port=src_port,
                             mapped_dst_ip=rule.real_ip,
                             mapped_dst_port=dst_port,
+                        )
+                    # Inbound static with an already-translated canonical tuple:
+                    # some generators model the real DMZ host as the destination
+                    # while the firewall still needs the public VIP for ASA
+                    # source-native rendering.
+                    if (
+                        rule.mapped_ip
+                        and rule.real_ip
+                        and dst_ip == rule.real_ip
+                        and not src_segments
+                    ):
+                        return NatContext(
+                            nat_type="static",
+                            mapped_src_ip=src_ip,
+                            mapped_src_port=src_port,
+                            mapped_dst_ip=rule.real_ip,
+                            mapped_dst_port=dst_port,
+                            pre_nat_dst_ip=rule.mapped_ip,
+                            pre_nat_dst_port=dst_port,
                         )
 
         return None

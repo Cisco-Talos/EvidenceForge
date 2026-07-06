@@ -1,0 +1,146 @@
+# Role-specific public identity pools for external SMTP senders and relays.
+# These ranges intentionally stay separate from generic web/CDN pools so port 25
+# peers do not inherit browser/CDN-looking PTR and provider identities.
+reserved_replacement_domains:
+  - postrelay.net
+  - mailbridge.io
+  - relaygridmail.com
+  - inboxroute.net
+  - sendmesh.io
+  - edgepostmail.com
+
+providers:
+  - name: google_workspace
+    weight: 4
+    hostname_patterns:
+      - google.com
+      - googlemail.com
+      - aspmx.l.google.com
+    prefixes:
+      - [64, 233, 160, 191]
+      - [66, 102, 0, 15]
+      - [74, 125, 0, 255]
+      - [142, 250, 0, 255]
+      - [173, 194, 0, 255]
+      - [209, 85, 128, 255]
+    ptr_templates:
+      - "mail-{third}-{fourth}.google.com"
+      - "mx.google.com"
+      - "aspmx.l.google.com"
+  - name: microsoft_365
+    weight: 4
+    hostname_patterns:
+      - protection.outlook.com
+      - mail.protection.outlook.com
+      - outlook.com
+      - office365.com
+    prefixes:
+      - [40, 92, 0, 255]
+      - [40, 107, 0, 255]
+      - [52, 100, 0, 255]
+      - [104, 47, 0, 255]
+    ptr_templates:
+      - "mail-{third}-{fourth}.outbound.protection.outlook.com"
+      - "{third}-{fourth}.mail.protection.outlook.com"
+      - "mx.microsoft.com"
+  - name: proofpoint
+    weight: 4
+    hostname_patterns:
+      - pphosted.com
+      - pphostedmail.net
+    prefixes:
+      - [148, 163, 128, 191]
+      - [199, 255, 192, 195]
+    ptr_templates:
+      - "mx{slot}.{domain}"
+      - "mail{slot}.{domain}"
+      - "mta-{third}-{fourth}.pphostedmail.net"
+  - name: sendgrid
+    weight: 3
+    hostname_patterns:
+      - sendgrid.net
+      - outbound-mail
+    prefixes:
+      - [167, 89, 0, 127]
+      - [198, 37, 144, 159]
+    ptr_templates:
+      - "o{third}.outbound-mail.{domain}"
+      - "mta-{third}-{fourth}.sendgrid.net"
+      - "smtp{slot}.{domain}"
+  - name: mimecast
+    weight: 3
+    hostname_patterns:
+      - mimecast.com
+      - mimecast.net
+    prefixes:
+      - [103, 13, 68, 70]
+      - [185, 58, 84, 85]
+      - [207, 211, 30, 31]
+      - [216, 205, 24, 25]
+    ptr_templates:
+      - "us-smtp-inbound-{slot}.mimecast.com"
+      - "eu-smtp-inbound-{slot}.mimecast.com"
+      - "mx{slot}.mimecast.com"
+  - name: amazon_ses
+    weight: 2
+    hostname_patterns:
+      - amazonses.com
+      - amazonaws.com
+      - feedback-smtp
+      - inbound-smtp
+    prefixes:
+      - [23, 251, 224, 255]
+      - [54, 240, 0, 127]
+      - [69, 169, 224, 255]
+    ptr_templates:
+      - "a{third}-{fourth}.smtp-out.amazonses.com"
+      - "inbound-smtp.us-east-1.amazonaws.com"
+      - "feedback-smtp.us-west-2.amazonses.com"
+  - name: fastmail
+    weight: 2
+    hostname_patterns:
+      - messagingengine.com
+      - fastmail.com
+    prefixes:
+      - [66, 111, 4, 7]
+      - [103, 168, 172, 175]
+    ptr_templates:
+      - "in{slot}-smtp.messagingengine.com"
+      - "out{slot}-smtp.messagingengine.com"
+  - name: mailgun
+    weight: 2
+    hostname_patterns:
+      - mailgun.org
+      - mailgun.net
+    prefixes:
+      - [198, 61, 254, 255]
+      - [209, 61, 151, 151]
+    ptr_templates:
+      - "mxa.mailgun.org"
+      - "mxb.mailgun.org"
+      - "smtp-out-{third}-{fourth}.mailgun.org"
+  - name: zoho
+    weight: 2
+    hostname_patterns:
+      - zoho.com
+      - zoho.eu
+    prefixes:
+      - [136, 143, 176, 191]
+      - [204, 141, 32, 63]
+    ptr_templates:
+      - "mx.zoho.com"
+      - "mx{slot}.zoho.com"
+      - "smtp-{third}-{fourth}.zoho.com"
+  - name: hosted-mail
+    weight: 3
+    hostname_patterns:
+      - ionos.com
+      - secureserver.net
+      - emailsrvr.com
+    prefixes:
+      - [66, 96, 128, 191]
+      - [74, 208, 0, 255]
+    ptr_templates:
+      - "mx{slot}.{domain}"
+      - "smtp{slot}.{domain}"
+      - "mail-{third}-{fourth}.{domain}"

@@ -37,7 +37,7 @@ from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import ProcessContext
+from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
@@ -736,14 +736,17 @@ class SysmonEventEmitter(LogEmitter):
         return (pid, "-")
 
     @staticmethod
-    def _resolve_destination_hostname(ip: str) -> str:
+    def _resolve_destination_hostname(ip: str, dst_port: int = 0) -> str:
         """Resolve destination IP to hostname via REVERSE_DNS.
 
         Returns FQDN for known internal hosts (scenario systems), "-" for unknown.
         """
         from evidenceforge.generation.activity.network import REVERSE_DNS
 
-        return REVERSE_DNS.get(ip, "-")
+        hostname = REVERSE_DNS.get(ip, "-")
+        if dst_port == 25 and hostname in {"imap.gmail.com", "pop.gmail.com"}:
+            return "smtp.gmail.com"
+        return hostname
 
     def _get_stable_process_guid(
         self, hostname: str, pid: int, fallback_timestamp: datetime
@@ -972,6 +975,7 @@ class SysmonEventEmitter(LogEmitter):
         else:
             user = "NT AUTHORITY\\SYSTEM"
             logon_id = "0x3e7"
+        parent_user = self._sysmon_parent_user(host, parent_proc, proc, user)
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
 
@@ -1000,6 +1004,7 @@ class SysmonEventEmitter(LogEmitter):
             "ParentCommandLine": proc.parent_command_line
             if hasattr(proc, "parent_command_line") and proc.parent_command_line
             else "-",
+            "ParentUser": parent_user,
             "CurrentDirectory": proc.current_directory or self._default_current_directory(proc),
         }
         # Populate PE metadata from known binary lookup
@@ -1010,6 +1015,26 @@ class SysmonEventEmitter(LogEmitter):
         event_data["Company"] = company
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
+
+    def _sysmon_parent_user(
+        self,
+        host: HostContext,
+        parent_proc: Any | None,
+        proc: ProcessContext,
+        child_user: str,
+    ) -> str:
+        """Return Sysmon Event 1 ParentUser for the modeled parent process."""
+        parent_username = str(getattr(parent_proc, "username", "") or "")
+        if parent_username:
+            return self._format_user(parent_username, host.netbios_domain)
+        if proc.parent_pid in {0, 4}:
+            return "NT AUTHORITY\\SYSTEM"
+        parent_image = (proc.parent_image or "").lower()
+        if "\\windows\\system32\\services.exe" in parent_image or parent_image.endswith(
+            "\\services.exe"
+        ):
+            return "NT AUTHORITY\\SYSTEM"
+        return child_user or "-"
 
     @staticmethod
     def _default_current_directory(proc: ProcessContext) -> str:
@@ -1487,7 +1512,7 @@ class SysmonEventEmitter(LogEmitter):
             "SourcePortName": _PORT_NAMES.get(src_port, "-"),
             "DestinationIsIpv6": "true" if ":" in dst_ip else "false",
             "DestinationIp": dst_ip,
-            "DestinationHostname": self._resolve_destination_hostname(dst_ip),
+            "DestinationHostname": self._resolve_destination_hostname(dst_ip, dst_port),
             "DestinationPort": dst_port,
             "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
         }

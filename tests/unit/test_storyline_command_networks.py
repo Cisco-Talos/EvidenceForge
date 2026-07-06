@@ -743,6 +743,56 @@ class TestStorylineCommandNetworks:
             event.source_timing.source_times.values()
         )
 
+    def test_process_preplan_waits_for_session_source_ready_time(self):
+        captured: dict[str, Any] = {}
+
+        class _CapturingDispatcher:
+            @staticmethod
+            def dispatch(event: Any) -> None:
+                if event.event_type == "process_create":
+                    captured["event"] = event
+
+        state_manager = StateManager()
+        generator = ActivityGenerator(state_manager, {})
+        generator.dispatcher = _CapturingDispatcher()
+        actor = User(username="svc_mhsync", full_name="Sync Service", email="svc@example.com")
+        system = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.0.20",
+            os="Windows Server 2019",
+            type="server",
+        )
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        ready_time = event_time + timedelta(seconds=1)
+        state_manager.set_current_time(event_time)
+        logon_id = state_manager.create_session(
+            username=actor.username,
+            system=system.hostname,
+            logon_type=3,
+            source_ip="10.10.0.10",
+            start_time=event_time,
+        )
+        state_manager.update_session_metadata(logon_id, source_ready_time=ready_time)
+
+        generator.generate_process(
+            actor,
+            system,
+            event_time,
+            logon_id,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile -EncodedCommand SQBFAFgA",
+            parent_pid=4,
+        )
+
+        event = captured["event"]
+        assert event.source_timing is not None
+        source_times = event.source_timing.source_times
+        floor = ready_time + timedelta(milliseconds=1)
+        assert all(timestamp >= floor for timestamp in source_times.values())
+        assert generator.process_source_create_time(system.hostname, event.process.pid) == max(
+            source_times.values()
+        )
+
     def test_process_owned_windows_connection_waits_for_visible_process_create(self):
         captured: list[Any] = []
 
@@ -1912,6 +1962,10 @@ class TestStorylineCommandSideEffects:
                 description="Exfiltrate staged archive",
                 orig_bytes=314_782_613,
                 resp_bytes=2048,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                ),
             ),
             actor=actor,
             system=source,
@@ -1927,7 +1981,22 @@ class TestStorylineCommandSideEffects:
         assert smb_transfer["src_ip"] == source.ip
         assert smb_transfer["dst_ip"] == file_server.ip
         assert smb_transfer["pid"] > 0
-        assert smb_transfer["process_image"].endswith("chrome.exe")
+        assert smb_transfer["pid"] != upload["pid"]
+        assert smb_transfer["process_image"].endswith("powershell.exe")
+        copy_process = next(
+            process
+            for process in engine.activity_generator.processes
+            if "Copy-Item" in process["command_line"]
+        )
+        assert copy_process["process_name"].endswith("powershell.exe")
+        assert "Copy-Item" in copy_process["command_line"]
+        assert (
+            r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip" in copy_process["command_line"]
+        )
+        assert (
+            r"C:\Users\aisha.johnson\AppData\Local\Temp\cache_7f3a.zip"
+            in copy_process["command_line"]
+        )
         assert archive_time < smb_transfer["time"] < upload_time
         assert smb_transfer["resp_bytes"] > 300_000_000
         source_file_read = next(event for event in dispatched if event.event_type == "file_read")
@@ -1935,11 +2004,22 @@ class TestStorylineCommandSideEffects:
         assert source_file_read.auth.username == actor.username
         assert source_file_read.process.image.endswith("chrome.exe")
         assert source_file_read.file.path == (
-            r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip"
+            r"C:\Users\aisha.johnson\AppData\Local\Temp\cache_7f3a.zip"
         )
+        source_file_create = next(
+            event for event in dispatched if event.event_type == "file_create"
+        )
+        assert source_file_create.file.path == source_file_read.file.path
+        assert source_file_create.process.image.endswith("powershell.exe")
+        assert source_file_create.process.pid == smb_transfer["pid"]
+        assert smb_transfer["time"] < source_file_create.timestamp < source_file_read.timestamp
         assert smb_transfer["time"] < source_file_read.timestamp < upload_time
         assert upload["dst_port"] == 443
-        assert upload["pid"] == smb_transfer["pid"]
+        assert upload["pid"] == source_file_read.process.pid
+        assert upload["http"].user_agent == (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "Chrome/121.0.0.0 Safari/537.36"
+        )
 
         file_transfer = smb_transfer["file_transfer"]
         assert isinstance(file_transfer, FileTransferContext)
@@ -1956,6 +2036,7 @@ class TestStorylineCommandSideEffects:
                 "src_ip": source.ip,
             }
         ]
+        assert engine.activity_generator.process_terminations[0]["pid"] == smb_transfer["pid"]
 
     def test_compress_archive_exfil_handoff_uses_upload_host_source_read(self):
         staging_source = System(
@@ -2089,14 +2170,24 @@ class TestStorylineCommandSideEffects:
         smb_transfer, upload = engine.activity_generator.connections
         assert smb_transfer["src_ip"] == upload_source.ip
         assert smb_transfer["dst_ip"] == file_server.ip
-        assert smb_transfer["pid"] == upload["pid"]
+        assert smb_transfer["pid"] != upload["pid"]
+        assert smb_transfer["process_image"].endswith("powershell.exe")
         source_file_read = next(event for event in dispatched if event.event_type == "file_read")
         assert source_file_read.src_host.hostname == upload_source.hostname
         assert source_file_read.auth.username == upload_actor.username
         assert source_file_read.process.pid == upload["pid"]
         assert source_file_read.file.path == (
-            r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip"
+            r"C:\Users\aisha.johnson\AppData\Local\Temp\cache_7f3a.zip"
         )
+        source_file_create = next(
+            event for event in dispatched if event.event_type == "file_create"
+        )
+        assert source_file_create.file.path == source_file_read.file.path
+        assert source_file_create.process.pid == smb_transfer["pid"]
+        assert source_file_create.process.image.endswith("powershell.exe")
+        assert source_file_create.timestamp < source_file_read.timestamp
+        assert "Chrome/" in upload["http"].user_agent
+        assert "Firefox/" not in upload["http"].user_agent
         assert smb_logons == [
             {
                 "actor": upload_actor.username,
@@ -2970,3 +3061,8 @@ class TestStorylineCommandSideEffects:
         assert lease["mac"] == "f0:1f:af:b7:35:b2"
         assert lease["lease_time"] == 7200.0
         assert lease["msg_types"] == ["REQUEST", "ACK"]
+        assert lease["renewal_interval"] > 0
+        assert (
+            engine._dhcp_lease_state["ROGUE-LAPTOP"]["next_renewal"]
+            == lease["time"].timestamp() + lease["renewal_interval"]
+        )

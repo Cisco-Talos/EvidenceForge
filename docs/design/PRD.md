@@ -432,6 +432,7 @@ output/
     generation.log              # Detailed generation log
     GROUND_TRUTH.md            # Ground truth sidecar (empty for baseline-only scenarios)
     OBSERVATION_MANIFEST.json  # Source-observation sidecar
+    ARTIFACTS_MANIFEST.json    # Artifact manifest, when generated artifacts exist
     OUTPUT_TARGET.txt          # default or sof-elk output target
     windows_events.xml         # Windows Event Logs
     zeek_conn.log              # Zeek connection logs

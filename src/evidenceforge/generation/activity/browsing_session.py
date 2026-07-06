@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from datetime import datetime
 
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -312,6 +313,7 @@ def generate_browsing_session(
     port: int = 443,
     require_browser_like_domain: bool = True,
     transfer_variant_key: str | None = None,
+    request_time: datetime | None = None,
 ) -> list[BrowsingRequest]:
     """Generate a complete browsing session as a list of HTTP requests.
 
@@ -332,6 +334,8 @@ def generate_browsing_session(
         transfer_variant_key: Optional client/session key used to vary
             source-visible bytes for cacheable resources while keeping origin
             content stable.
+        request_time: Optional modeled session start time for time-relative API
+            path templates.
 
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
@@ -342,7 +346,7 @@ def generate_browsing_session(
     ):
         return []
 
-    site_map = get_site_map(hostname, domain_tags, rng)
+    site_map = get_site_map(hostname, domain_tags, rng, request_time=request_time)
     params = _INTENSITY_PARAMS.get(browsing_intensity, _INTENSITY_PARAMS["normal"])
 
     if not site_map.pages:

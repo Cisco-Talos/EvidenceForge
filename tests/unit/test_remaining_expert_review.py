@@ -4,6 +4,7 @@ import random
 import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
 from evidenceforge.generation.engine.baseline import (
@@ -11,6 +12,7 @@ from evidenceforge.generation.engine.baseline import (
     _pick_non_colliding_account_name,
     _scheduled_stale_failure_offsets,
 )
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import AccountCreatedEventSpec, AccountDeletedEventSpec
 from evidenceforge.utils.rng import _stable_seed
 
@@ -216,6 +218,125 @@ class TestStorylineAccountLifecycle:
             "svc_sqlreader",
             datetime(2024, 3, 18, 17, 1, tzinfo=UTC),
         )
+
+    def test_storyline_created_service_account_is_not_baseline_noise_eligible(self):
+        class Engine(BaselineMixin):
+            start_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+            def _parse_storyline_time(self, time_str):
+                hours = int(time_str.removeprefix("+").removesuffix("h"))
+                return self.start_time + timedelta(hours=hours)
+
+        engine = Engine()
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    time="+4h",
+                    events=[AccountCreatedEventSpec(target_username="svc_mhsync")],
+                )
+            ]
+        )
+
+        assert engine._service_account_available_at(
+            "svc_mhsync",
+            datetime(2024, 3, 18, 17, 0, tzinfo=UTC),
+        )
+        assert not engine._service_account_eligible_for_baseline_noise("svc_mhsync")
+        assert engine._service_account_eligible_for_baseline_noise("svc_backup")
+
+    def test_service_account_delegation_uses_role_specific_caller_process(self):
+        engine = object.__new__(BaselineMixin)
+        config = {
+            "caller_profiles": [
+                {
+                    "name": "backup_agents",
+                    "account_terms": ["backup"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Program Files\BackupAgent\backupsvc.exe",
+                            "command_line": r'"C:\Program Files\BackupAgent\backupsvc.exe"',
+                            "parent_key": "services",
+                            "weight": 1,
+                        }
+                    ],
+                },
+                {
+                    "name": "default_service_tasks",
+                    "account_terms": ["svc"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Windows\System32\taskhostw.exe",
+                            "command_line": "taskhostw.exe /Run",
+                            "parent_key": "svchost_netsvcs",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ]
+        }
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            choice = engine._pick_service_account_delegation_process(
+                "svc_backup",
+                random.Random(7),
+            )
+
+        assert choice["image"].endswith(r"BackupAgent\backupsvc.exe")
+        assert not choice["image"].lower().endswith(r"\services.exe")
+
+    def test_service_account_delegation_reuses_existing_agent_process(self):
+        engine = object.__new__(BaselineMixin)
+        engine.state_manager = StateManager()
+        engine.activity_generator = Mock()
+        timestamp = datetime(2024, 3, 18, 13, 0, tzinfo=UTC)
+        engine.state_manager.set_current_time(timestamp - timedelta(minutes=5))
+        pid = engine.state_manager.create_process(
+            system="WS-01",
+            parent_pid=0,
+            image=r"C:\Program Files\BackupAgent\backupsvc.exe",
+            command_line=r'"C:\Program Files\BackupAgent\backupsvc.exe"',
+            username="SYSTEM",
+            integrity_level="System",
+        )
+        system = SimpleNamespace(hostname="WS-01", os="Windows 10")
+        config = {
+            "caller_profiles": [
+                {
+                    "name": "backup_agents",
+                    "account_terms": ["backup"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Program Files\BackupAgent\backupsvc.exe",
+                            "command_line": r'"C:\Program Files\BackupAgent\backupsvc.exe"',
+                            "parent_key": "services",
+                            "weight": 1,
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            image, resolved_pid = engine._ensure_service_account_delegation_process(
+                system=system,
+                svc_name="svc_backup",
+                time=timestamp,
+                sys_pids={"services": 700},
+                rng=random.Random(11),
+            )
+
+        assert image.endswith(r"BackupAgent\backupsvc.exe")
+        assert resolved_pid == pid
+        engine.activity_generator.generate_system_process.assert_not_called()
 
 
 class TestIdsFalsePositiveSignatures:

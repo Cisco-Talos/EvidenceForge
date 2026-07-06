@@ -1,0 +1,34 @@
+# Command placeholder pools for URL and host values that surface in endpoint artifacts.
+general:
+  ssh_target:
+    - web-srv-01
+    - db-srv-01
+    - app-srv-02
+    - bastion-01
+    - 10.0.2.50
+  url:
+    - https://mail.google.com/mail/u/0/#inbox
+    - https://outlook.office365.com/mail/inbox
+    - https://app.slack.com/client/T01234567
+    - https://jira.corp.local/browse/PROJ-1234
+  internal_url:
+    - https://jira.corp.local/browse/PROJ-1234
+    - https://wiki.corp.local/display/ENG/Architecture
+    - https://gitlab.corp.local/team/project/-/pipelines
+    - https://grafana.corp.local/d/system-overview
+  external_api_url:
+    - https://api.github.com/rate_limit
+    - https://api.gitlab.com/version
+    - https://api.cloudflare.com/client/v4/user
+    - https://api.slack.com/methods/api.test
+    - https://api.snapcraft.io/v2/snaps/refresh
+
+query:
+  db_server:
+    - localhost
+    - DB-SRV-01
+    - sqlprod01
+    - 10.0.2.50
+    - SQLEXPRESS
+
+linux_query: {}

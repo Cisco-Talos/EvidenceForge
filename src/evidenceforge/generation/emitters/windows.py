@@ -1114,9 +1114,7 @@ class WindowsEventEmitter(LogEmitter):
             "Keywords": "0x8010000000000000" if is_failure else "0x8020000000000000",
             "ExecutionProcessID": krb.reporting_pid or 600,
             "ExecutionThreadID": rng.randint(100, 500),
-            "TargetUserName": krb.target_username
-            if "@" in krb.target_username
-            else f"{krb.target_username}@{krb.target_domain.upper()}",
+            "TargetUserName": krb.target_username.split("@", 1)[0],
             "TargetDomainName": krb.target_domain,
             "ServiceName": krb.service_name,
             "ServiceSid": krb.service_sid,
@@ -2073,15 +2071,21 @@ class WindowsEventEmitter(LogEmitter):
         self._update_spooled_events_unlocked(updates)
 
     def _shift_spooled_logoffs_after_dependents_unlocked(self) -> None:
-        """Prevent spooled 4634 records from preceding same-session dependents."""
+        """Prevent spooled 4634 records from preceding same-session source prerequisites."""
         latest_dependent: dict[tuple[str, str], datetime] = {}
         for _, event in self._iter_spooled_rows_unlocked():
             ts = event.get("TimeCreated")
             if not isinstance(ts, datetime):
                 continue
-            if event.get("EventID") not in {4688, 4689, 4801}:
+            event_id = event.get("EventID")
+            if event_id not in {4624, 4688, 4689, 4801}:
                 continue
-            logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
+            logon_id = str(
+                event.get("TargetLogonId" if event_id in {4624, 4801} else "SubjectLogonId")
+                or event.get("SubjectLogonId")
+                or event.get("TargetLogonId")
+                or ""
+            )
             if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
                 continue
             key = (str(event.get("Computer", "")), logon_id)
@@ -2297,10 +2301,10 @@ class WindowsEventEmitter(LogEmitter):
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
             self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
+            self._shift_spooled_network_logons_after_transport_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
             self._shift_spooled_process_dependents_after_create_unlocked()
-            self._shift_spooled_network_logons_after_transport_unlocked()
             self._shift_spooled_special_privileges_after_logons_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
@@ -2308,10 +2312,10 @@ class WindowsEventEmitter(LogEmitter):
             events = self._iter_spooled_events_unlocked()
         else:
             self._shift_kerberos_tgts_before_service_tickets()
+            self._shift_network_logons_after_transport()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
             self._shift_process_dependents_after_create()
-            self._shift_network_logons_after_transport()
             self._shift_special_privileges_after_logons()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()
@@ -2372,11 +2376,12 @@ class WindowsEventEmitter(LogEmitter):
         self._cleanup_spool_unlocked()
 
     def _shift_logoffs_after_dependents(self) -> None:
-        """Prevent visible 4634 records from preceding same-session dependents.
+        """Prevent visible 4634 records from preceding same-session source prerequisites.
 
         Sysmon and EDR sources render small source-native collection offsets after
         canonical process lifecycle events. A visible Security logoff needs to clear
-        that offset window, not just the Security 4688 timestamp.
+        that offset window and its own rendered 4624 row, not just the Security
+        4688 timestamp.
         """
         latest_dependent: dict[tuple[str, str], datetime] = {}
         logoffs: list[tuple[tuple[str, str], dict[str, Any]]] = []
@@ -2391,9 +2396,14 @@ class WindowsEventEmitter(LogEmitter):
                 if logon_id:
                     logoffs.append(((computer, logon_id), event))
                 continue
-            if event_id not in {4688, 4689, 4801}:
+            if event_id not in {4624, 4688, 4689, 4801}:
                 continue
-            logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
+            logon_id = str(
+                event.get("TargetLogonId" if event_id in {4624, 4801} else "SubjectLogonId")
+                or event.get("SubjectLogonId")
+                or event.get("TargetLogonId")
+                or ""
+            )
             if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
                 continue
             key = (computer, logon_id)

@@ -4,7 +4,7 @@
 """Tests for browsing session generator."""
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -72,6 +72,22 @@ class TestBrowsingSessionBasics:
                 port=80,
             )
             assert not any(req.referrer.startswith("https://") for req in requests)
+
+    def test_calendar_api_time_min_tracks_session_month(self):
+        """Calendar API subresources should not carry fixed future dates."""
+        requests = generate_browsing_session(
+            random.Random(0),
+            "calendar.google.com",
+            ["saas"],
+            browsing_intensity="heavy",
+            request_time=datetime(2024, 3, 18, 9, 30, tzinfo=UTC),
+        )
+
+        calendar_paths = [request.path for request in requests if "timeMin=" in request.path]
+
+        assert calendar_paths
+        assert all("timeMin=2024-03-01T00:00:00Z" in path for path in calendar_paths)
+        assert all("2026-01-01" not in path for path in calendar_paths)
 
 
 class TestBrowserSessionActionBundle:
@@ -176,6 +192,72 @@ class TestBrowserSessionActionBundle:
         assert emitted[0]["resp_bytes"] >= 4096 + 2048
         assert emitted[1]["http"].trans_depth == 2
         assert emitted[1]["http"].referrer == "https://www.google.com/"
+
+    def test_bundle_drops_requests_at_session_deadline(self, monkeypatch):
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/",
+                    method="GET",
+                    content_type="text/html",
+                    referrer="",
+                    trans_depth=1,
+                    is_page_load=True,
+                    response_body_len=4096,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=100,
+                    hostname=kwargs["hostname"],
+                    path="/assets/app.css",
+                    method="GET",
+                    content_type="text/css",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=2,
+                    is_page_load=False,
+                    response_body_len=2048,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+            ],
+        )
+        emitted = []
+        executor = MagicMock()
+        executor.state_manager = MagicMock()
+        executor.generate_connection.side_effect = lambda **kwargs: (
+            emitted.append(kwargs) or f"C{len(emitted)}"
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+
+        result = BrowserSessionActionBundle(
+            request=BrowserSessionRequest(
+                src_ip="10.0.10.50",
+                dst_ip="142.250.80.46",
+                time=base_time,
+                latest_request_time=base_time + timedelta(milliseconds=550),
+                hostname="www.google.com",
+                dst_port=443,
+                service="ssl",
+                source_system=SimpleNamespace(hostname="WKS-01"),
+                domain_tags=("web",),
+                user_agent="Mozilla/5.0",
+            ),
+            executor=executor,
+            rng=random.Random(11),
+        ).execute_with_result()
+
+        assert result.request_count == 1
+        assert result.page_load_count == 1
+        assert len(emitted) == 1
+        assert emitted[0]["time"] == base_time
+        assert emitted[0]["http"].trans_depth == 1
+        assert emitted[0]["http"].flow_transaction_count == 1
+        assert emitted[0]["resp_bytes"] < 4096 + 2048
 
     def test_plaintext_http_bundle_drops_https_subresource_referrer(self, monkeypatch):
         monkeypatch.setattr(
@@ -516,6 +598,38 @@ class TestResponseSizes:
 
         assert favicon_a.response_body_len == favicon_a_repeat.response_body_len
         assert favicon_a.response_body_len == favicon_b.response_body_len
+
+    def test_page_document_transfer_size_varies_across_session_variants(self):
+        requests_a = generate_browsing_session(
+            random.Random(9),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+            transfer_variant_key="10.10.1.10:chrome:2024-03-18T10:00:00Z",
+        )
+        requests_a_repeat = generate_browsing_session(
+            random.Random(9),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+            transfer_variant_key="10.10.1.10:chrome:2024-03-18T10:00:00Z",
+        )
+        requests_b = generate_browsing_session(
+            random.Random(9),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+            transfer_variant_key="10.10.1.10:chrome:2024-03-18T11:00:00Z",
+        )
+
+        page_a = next(r for r in requests_a if r.is_page_load and r.status_code == 200)
+        page_a_repeat = next(
+            r for r in requests_a_repeat if r.is_page_load and r.status_code == 200
+        )
+        page_b = next(r for r in requests_b if r.is_page_load and r.status_code == 200)
+
+        assert page_a.response_body_len == page_a_repeat.response_body_len
+        assert page_a.response_body_len != page_b.response_body_len
 
     def test_sessions_include_non_success_http_outcomes(self):
         statuses = []

@@ -34,6 +34,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,6 +181,11 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
                         if _is_safe_path(deepfile, output_root) and deepfile.is_file():
                             candidates.append(deepfile)
 
+    artifact_root = output_dir.parent.resolve()
+    artifacts_manifest = output_dir.parent / ARTIFACTS_MANIFEST_FILENAME
+    if artifacts_manifest.exists() and _is_safe_path(artifacts_manifest, artifact_root):
+        candidates.append(artifacts_manifest)
+
     for format_name, parser_cls in _PARSER_CLASSES.items():
         if format_name == "bash_history":
             continue  # Already handled above
@@ -195,6 +202,7 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
 from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.cisco_asa import CiscoAsaParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.email_artifacts import EmailArtifactsParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
@@ -215,6 +223,7 @@ from evidenceforge.evaluation.parsers.zeek_packet_filter import (  # noqa: E402
 )
 from evidenceforge.evaluation.parsers.zeek_pe import ZeekPeParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_reporter import ZeekReporterParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_smtp import ZeekSmtpParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_weird import ZeekWeirdParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_x509 import ZeekX509Parser  # noqa: E402,F401

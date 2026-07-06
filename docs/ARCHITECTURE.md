@@ -114,9 +114,13 @@ bundle represents a real-world activity that can produce several coordinated
 `SecurityEvent`s. For example, an SSH session may produce transport connection
 evidence, SSH auth syslog messages, endpoint `USER_SESSION` login/logout rows,
 sshd/bash process evidence, bash history commands, and close/teardown evidence.
-The bundle owns lifecycle, timing constraints, observation intent, and durable
-anchors across those events; each `SecurityEvent` remains the canonical evidence
-unit dispatched to state and emitters.
+An email delivery similarly routes through the email action bundle, which owns
+message identity, SMTP hop sequence, route-aware `Received` headers, artifacts,
+and TLS visibility while delegating DNS and TCP evidence to the existing DNS and
+network-connection bundles. The bundle owns lifecycle, timing constraints,
+observation intent, and durable anchors across those events; each
+`SecurityEvent` remains the canonical evidence unit dispatched to state and
+emitters.
 
 Bundle contracts compose only through canonical semantic layers. A higher-level
 bundle may call a lower-level bundle or generator entrypoint when that lower
@@ -434,6 +438,10 @@ the receiver-side endpoint file evidence after the SSH bundle owns transport,
 auth, and session timing. Large or download-scale HTTP responses attach the HTTP
 file-transfer bundle deterministically after canonical HTTP metadata is known,
 including caller-provided HTTP contexts from browser-session, proxy,
+and storyline paths. Email delivery uses the same canonical file-transfer
+context list for plaintext SMTP MIME parts, so `smtp.log.fuids` and `files.log`
+rows share the owning SMTP connection UID. STARTTLS-protected SMTP hops keep the
+message content opaque and do not attach MIME file contexts.
 process-command, or storyline paths. This keeps transport/session ownership
 separate from file evidence while preventing each caller from inventing transfer
 metadata independently.
@@ -550,7 +558,7 @@ SecurityEvent
     Matching emitters receive the event
 ```
 
-**Format groups** expand shorthand names: `"zeek"` expands to 13 individual emitters (zeek_conn, zeek_dns, zeek_http, etc.).
+**Format groups** expand shorthand names: `"zeek"` expands to 14 individual emitters (zeek_conn, zeek_dns, zeek_http, zeek_smtp, etc.).
 
 ### StateManager
 
@@ -800,6 +808,8 @@ The baseline generation engine includes several layers of realism beyond simple 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on environment topology — backup agents, monitoring, AD replication, app-to-database connections, config management, etc. Patterns are conditional on the infrastructure (file servers, DCs, Linux hosts) and gated by time-of-day (app traffic peaks during business hours, backup traffic peaks overnight).
 
 **Network-level red herrings:** Three suspicious-but-benign network patterns supplement the existing host-level red herrings: high-entropy DNS queries to CDNs/DoH providers, unusual outbound connections to dev tools/cloud regions/backup sync, and scheduled vulnerability scan bursts.
+
+**Data-driven identity pools:** Realism-sensitive fallback identities are owned by overlay-aware YAML files under `config/activity/`: baseline email domains/local-parts, public mail replacement domains, omitted storyline external IP pools, suspicious-benign DNS/connection targets, and command URL/host placeholder pools. Scenario-authored IPs/domains remain authoritative; config pools are used only for deterministic fallback and background generation.
 
 **Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
 

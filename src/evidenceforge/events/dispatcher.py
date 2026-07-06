@@ -57,6 +57,7 @@ FORMAT_GROUPS: dict[str, set[str]] = {
         "zeek_conn",
         "zeek_dns",
         "zeek_http",
+        "zeek_smtp",
         "zeek_ssl",
         "zeek_files",
         "zeek_x509",
@@ -89,6 +90,25 @@ def expand_formats(formats: list[str] | set[str]) -> set[str]:
         else:
             expanded.add(fmt)
     return expanded
+
+
+def _is_successful_remote_interactive_transport(event: SecurityEvent) -> bool:
+    """Return whether a network event is an established SSH/RDP session transport."""
+
+    network = event.network
+    if network is None:
+        return False
+    if str(network.protocol or "").lower() != "tcp" or network.dst_port not in {22, 3389}:
+        return False
+    state = str(network.conn_state or "").upper()
+    if state and state != "SF":
+        return False
+    if event.firewall is not None and event.firewall.action == "deny":
+        return False
+    service = str(network.service or "").lower()
+    if service and service not in {"ssh", "rdp"}:
+        return False
+    return True
 
 
 class EventDispatcher:
@@ -187,6 +207,16 @@ class EventDispatcher:
                 status = "delayed"
             event_to_emit._observed_formats = observed_formats
             event_to_emit = self.source_timing_planner.plan_event(event_to_emit)
+            if (
+                event_to_emit.event_type != "process_terminate"
+                and event_to_emit.process is not None
+                and event_to_emit.src_host is not None
+            ):
+                self.state_manager.update_process_activity_time(
+                    event_to_emit.src_host.hostname,
+                    event_to_emit.process.pid,
+                    event_to_emit.timestamp,
+                )
             self._record_observation(event, format_name, status)
             if event.raw is not None:
                 emitter.emit_raw(event_to_emit.raw.fields)
@@ -203,6 +233,24 @@ class EventDispatcher:
         self._promote_zeek_parent(decisions, "zeek_files", _ZEEK_FILES_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
         self._preserve_zeek_tls_certificate_companions(event, decisions)
+        self._preserve_remote_interactive_transport_companions(event, decisions)
+
+    @staticmethod
+    def _preserve_remote_interactive_transport_companions(
+        event: SecurityEvent,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Keep successful SSH/RDP network rows when endpoint transport telemetry survives."""
+
+        if not _is_successful_remote_interactive_transport(event):
+            return
+        endpoint_decision = decisions.get("ecar")
+        if endpoint_decision is None or endpoint_decision.status == "dropped":
+            return
+        for format_name in ("zeek_conn", "cisco_asa"):
+            decision = decisions.get(format_name)
+            if decision is not None and decision.status == "dropped":
+                decisions[format_name] = ObservationDecision(status="visible")
 
     @staticmethod
     def _preserve_zeek_tls_certificate_companions(
