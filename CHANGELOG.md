@@ -6,6 +6,63 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.10.0 (2026-07-06)
+
+This minor release adds full email evidence generation, reusable scenario YAML
+includes, and broad source-native realism improvements across endpoint, network,
+proxy, DHCP, SMTP, and public identity evidence.
+
+**Email evidence v1**
+
+- Added actual email message artifact generation as `.eml` files under
+  `artifacts/email/`, with artifact-manifest entries and email-aware ground
+  truth (`6d409963`, `0d38acfa`).
+- Added modeled internal, inbound, outbound, background, and read email
+  workflows with SMTP/STARTTLS, Zeek SMTP, mail server syslog/session evidence,
+  and parser/evaluation coverage (`6d409963`, `0d38acfa`, `85c30df9`).
+- Added mail topology, relay routing, public mail identities, DNS,
+  Received-header realism, corpus-backed message generation, MIME body and
+  attachment support, rejected-message handling, and service-email header
+  profiles (`cbbee899`, `1b2d916d`, `27143562`, `bc54a721`, `0fae1033`,
+  `8a6c7652`).
+- Improved email evidence realism across SMTP routing, DNS identity,
+  STARTTLS/certificate, MIME/body, subject/content, delivery reply, artifact
+  status, and endpoint-flow correlation (`37168702`, `a0fe58ac`, `7f6843aa`,
+  `38f9992a`, `49e7acd9`, `5527bacf`, `048c0ed3`).
+
+**Scenario YAML includes**
+
+- Added top-level `includes:` and singular `include:` support for reusable
+  scenario YAML fragments, including nested includes resolved relative to the
+  declaring file (`e619bf58`).
+- Added conflict diagnostics for duplicate fields, local/include overrides,
+  missing files, invalid include syntax, and circular include graphs, and wired
+  include expansion through `eforge validate`, `eforge generate`, and
+  `eforge eval` (`e619bf58`).
+- Updated scenario authoring docs and command references for
+  organization-backed and scenario-local include layouts (`e619bf58`).
+
+**Data-driven identity and activity pools**
+
+- Added configurable identity and parameter pools for generated evidence,
+  including public service identities, external actor profiles, command
+  parameter pools, and suspicious-but-benign activity (`cbbee899`).
+- Expanded config loading and validation for the new pools so malformed overlays
+  fail clearly (`cbbee899`, `a41e8c9b`).
+
+**Source-native realism improvements**
+
+- Improved eCAR flow actor attribution, process lifecycle timing, delayed source
+  observations, and collection-profile behavior so related endpoint, network,
+  and protocol evidence stays better correlated (`37705b4f`, `8953d4be`,
+  `0fb6e6bf`, `1b9509b8`, `4e5e5f4`, `ba6e7b35`).
+- Tightened DHCP renewal behavior, ICMP cadence, short-flow endpoint timing,
+  failed-flow texture, ASA/public VIP handling, public TLS policy, proxy
+  behavior, and public client texture (`f36d3e9a`, `7bcbe469`, `7154d123`,
+  `1a933b34`, `c7492ba4`, `8d12e257`, `4437eedb`).
+- Improved iteration-test realism and dev CI stability after the larger feature
+  integrations (`0e6350c`, `a41e8c9b`).
+
 ## v1.9.0 (2026-06-29)
 
 This minor release adds backward-compatible realism controls for proxy
