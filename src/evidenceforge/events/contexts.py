@@ -414,6 +414,7 @@ class HttpContext:
     uri: str = "/"
     version: str = "1.1"
     user_agent: str = ""
+    user_agent_known_absent: bool = False
     request_body_len: int = 0
     response_body_len: int = 0
     flow_request_body_len: int | None = None

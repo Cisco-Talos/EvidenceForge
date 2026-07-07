@@ -770,6 +770,17 @@ def _windows_stale_process_target_lifetime(
     )
 
 
+def _is_windows_singleton_service_image(image: str) -> bool:
+    """Return whether an image is a configured singleton Windows service."""
+    from evidenceforge.generation.activity.system_processes import (
+        get_windows_singleton_service_paths,
+    )
+
+    normalized = image.replace("/", "\\").lower()
+    exe_name = normalized.rsplit("\\", 1)[-1]
+    return normalized in get_windows_singleton_service_paths().get(exe_name, set())
+
+
 def _kernel_uptime_stamp(boot_uptime: float, scenario_start: datetime, timestamp: datetime) -> str:
     """Return source-native kernel monotonic uptime for a syslog timestamp."""
     event_time = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
@@ -4625,6 +4636,10 @@ class BaselineMixin:
 
                 # Never terminate seeded system processes (pattern match + PID safety net)
                 if any(p in image_lower for p in system_patterns):
+                    continue
+                if _get_os_category(system.os) == "windows" and _is_windows_singleton_service_image(
+                    proc.image
+                ):
                     continue
                 if proc.pid in protected_pids:
                     continue

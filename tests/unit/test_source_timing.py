@@ -236,6 +236,44 @@ def test_source_time_clamps_to_declared_bounds() -> None:
     assert event.timestamp <= planned <= latest
 
 
+def test_process_create_sources_keep_texture_after_shared_floor() -> None:
+    """A shared visibility floor must not collapse endpoint sources to one instant."""
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+    process_start = _base_time()
+    shared_floor = process_start + timedelta(seconds=10)
+    event = SecurityEvent(
+        timestamp=process_start,
+        event_type="process_create",
+        src_host=_host_context(),
+        process=_process_context(process_start),
+    )
+    seed = ("WIN-TEST-01", 4242, process_start)
+
+    source_times = {
+        source_key: planner.source_time(
+            event,
+            source_key,
+            seed_parts=seed,
+            not_before=shared_floor,
+        )
+        for source_key in (
+            "source.windows_security_process_create",
+            "source.sysmon_process_create",
+            "source.ecar_process_create",
+        )
+    }
+    values = list(source_times.values())
+    smallest_gap_ms = min(
+        abs((left - right).total_seconds() * 1000)
+        for index, left in enumerate(values)
+        for right in values[index + 1 :]
+    )
+
+    assert all(timestamp > shared_floor for timestamp in values)
+    assert len(set(values)) == len(values)
+    assert smallest_gap_ms >= 1
+
+
 def test_equal_canonical_timestamps_can_be_ordered_by_causal_edge() -> None:
     """Equal world times stay orderable when a source relationship requires it."""
     planner = SourceTimingPlanner()
@@ -429,6 +467,111 @@ def test_ecar_session_dependents_shift_after_visible_login() -> None:
     assert process["timestamp_ms"] > login_ms
     assert process["properties"]["logon_id"] == "0xf88578c"
     assert system_process["timestamp_ms"] == login_ms + 50
+
+
+def test_ecar_type7_unlock_does_not_reanchor_session_dependents() -> None:
+    """Type 7 unlock reauth rows are not original eCAR session creation anchors."""
+    unlock_ms = 1_710_770_188_500
+    rows = [
+        {
+            "timestamp_ms": unlock_ms - 60 * 60 * 1000,
+            "id": "process-event",
+            "hostname": "WS-AJOHNSON-01",
+            "object": "PROCESS",
+            "action": "CREATE",
+            "objectID": "process-object",
+            "pid": 5536,
+            "principal": "aisha.johnson",
+            "properties": {
+                "logon_id": "0x24de089",
+                "logon_type": "7",
+                "session_id": "2",
+                "image_path": r"C:\Windows\System32\mstsc.exe",
+            },
+        },
+        {
+            "timestamp_ms": unlock_ms,
+            "id": "unlock-session",
+            "hostname": "WS-AJOHNSON-01",
+            "object": "USER_SESSION",
+            "action": "LOGIN",
+            "objectID": "session-object",
+            "principal": "aisha.johnson",
+            "properties": {
+                "logon_id": "0x24de089",
+                "outcome": "success",
+                "logon_type": "7",
+                "session_id": "2",
+            },
+        },
+    ]
+
+    normalized = EcarEmitter._normalize_session_dependents_after_login(
+        [json.dumps(row, separators=(",", ":")) for row in rows]
+    )
+    process = json.loads(normalized[0])
+
+    assert process["timestamp_ms"] == unlock_ms - 60 * 60 * 1000
+
+
+def test_ecar_original_login_anchors_dependents_without_later_unlock() -> None:
+    """Original session logons still anchor dependents when a later type 7 row exists."""
+    login_ms = 1_710_770_000_000
+    unlock_ms = login_ms + 60 * 60 * 1000
+    rows = [
+        {
+            "timestamp_ms": login_ms - 200,
+            "id": "process-event",
+            "hostname": "WS-AJOHNSON-01",
+            "object": "PROCESS",
+            "action": "CREATE",
+            "objectID": "process-object",
+            "pid": 5536,
+            "principal": "aisha.johnson",
+            "properties": {
+                "logon_id": "0x24de089",
+                "session_id": "2",
+                "image_path": r"C:\Windows\System32\mstsc.exe",
+            },
+        },
+        {
+            "timestamp_ms": login_ms,
+            "id": "interactive-session",
+            "hostname": "WS-AJOHNSON-01",
+            "object": "USER_SESSION",
+            "action": "LOGIN",
+            "objectID": "session-object",
+            "principal": "aisha.johnson",
+            "properties": {
+                "logon_id": "0x24de089",
+                "outcome": "success",
+                "logon_type": "2",
+                "session_id": "2",
+            },
+        },
+        {
+            "timestamp_ms": unlock_ms,
+            "id": "unlock-session",
+            "hostname": "WS-AJOHNSON-01",
+            "object": "USER_SESSION",
+            "action": "LOGIN",
+            "objectID": "session-object",
+            "principal": "aisha.johnson",
+            "properties": {
+                "logon_id": "0x24de089",
+                "outcome": "success",
+                "logon_type": "7",
+                "session_id": "2",
+            },
+        },
+    ]
+
+    normalized = EcarEmitter._normalize_session_dependents_after_login(
+        [json.dumps(row, separators=(",", ":")) for row in rows]
+    )
+    process = json.loads(normalized[0])
+
+    assert login_ms < process["timestamp_ms"] < unlock_ms
 
 
 def test_ecar_type3_login_timestamp_follows_matching_inbound_flow(tmp_path: Path) -> None:

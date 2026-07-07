@@ -1963,6 +1963,8 @@ class EcarEmitter(HostMultiplexEmitter):
             props = record.get("properties") or {}
             if str(props.get("outcome") or "success") == "failure":
                 continue
+            if str(props.get("logon_type") or "") == "7":
+                continue
             logon_id = str(props.get("logon_id") or "")
             if not logon_id:
                 continue
@@ -2799,6 +2801,40 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @classmethod
+    def _normalize_flow_process_actor_visibility(cls, lines: list[str]) -> list[str]:
+        """Drop FLOW process actors that are not source-visible in the host stream."""
+        records: list[dict[str, Any] | None] = []
+        visible_process_ids: set[str] = set()
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "PROCESS" or record.get("action") != "CREATE":
+                continue
+            object_id = str(record.get("objectID") or "")
+            if object_id:
+                visible_process_ids.add(object_id)
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") != "FLOW" or record.get("action") != "CONNECT":
+                normalized.append(line)
+                continue
+            actor_id = str(record.get("actorID") or "")
+            if actor_id and actor_id not in visible_process_ids:
+                cls._drop_flow_process_identity(record)
+                normalized.append(json.dumps(record, separators=(",", ":")))
+                continue
+            normalized.append(line)
+        return normalized
+
     @staticmethod
     def _drop_flow_process_identity(record: dict[str, Any]) -> None:
         """Remove process attribution from a FLOW that cannot safely claim it."""
@@ -2895,6 +2931,8 @@ class EcarEmitter(HostMultiplexEmitter):
                         writer.buffer,
                         self._output_end_time,
                     )
+                    writer.buffer = self._normalize_flow_process_actor_visibility(writer.buffer)
+                    writer.buffer = self._deduplicate_semantic_events(writer.buffer)
                     writer.buffer = self._strip_internal_fields(writer.buffer)
         super().flush(force=force)
 

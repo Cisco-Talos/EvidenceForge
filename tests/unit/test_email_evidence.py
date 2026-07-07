@@ -831,6 +831,84 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     assert {row["fuid"] for row in file_records} >= set(plaintext_fuids)
 
 
+def test_smtp_starttls_certificate_files_fit_connection_response_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _tls12_starttls(self, *, dst_system, **_kwargs) -> SslContext:
+        return SslContext(
+            version="TLSv12",
+            cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            server_name=self._email_server_fqdn(dst_system.hostname),
+            resumed=False,
+            established=True,
+            ssl_history="Csxk",
+        )
+
+    def _tiny_smtp_transfer_sizes(
+        self,
+        *,
+        message_id: str,
+        body: str,
+        attachments: list[dict[str, object]],
+        route: list[dict[str, object]],
+    ) -> list[dict[str, float | int]]:
+        del self, message_id, body, attachments
+        return [
+            {
+                "message_size": 1200 + index,
+                "orig_bytes": 2600 + index,
+                "resp_bytes": 320,
+                "duration": 0.4,
+            }
+            for index, _hop in enumerate(route)
+        ]
+
+    monkeypatch.setattr(ActivityGenerator, "_smtp_starttls_ssl_context", _tls12_starttls)
+    monkeypatch.setattr(ActivityGenerator, "_smtp_hop_uses_starttls", lambda self, **_kwargs: True)
+    monkeypatch.setattr(ActivityGenerator, "_smtp_transfer_sizes", _tiny_smtp_transfer_sizes)
+    scenario = _email_scenario()
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    conn_by_uid = {
+        row["uid"]: row for row in _read_ndjson(tmp_path / "data" / "zeek-core" / "conn.json")
+    }
+    smtp_uids = {
+        row["uid"]
+        for row in _read_ndjson(tmp_path / "data" / "zeek-core" / "smtp.json")
+        if row["tls"]
+    }
+    ssl_records = _read_ndjson(tmp_path / "data" / "zeek-core" / "ssl.json")
+    ssl_file_by_fuid = {
+        row["fuid"]: row
+        for row in _read_ndjson(tmp_path / "data" / "zeek-core" / "files.json")
+        if row["source"] == "SSL"
+    }
+
+    checked = False
+    for ssl_row in ssl_records:
+        if ssl_row["uid"] not in smtp_uids:
+            continue
+        cert_fuids = ssl_row.get("cert_chain_fuids") or []
+        if not cert_fuids:
+            continue
+        cert_bytes = sum(int(ssl_file_by_fuid[fuid]["seen_bytes"]) for fuid in cert_fuids)
+        conn_row = conn_by_uid[ssl_row["uid"]]
+        assert conn_row["service"] == "smtp"
+        assert int(conn_row["resp_bytes"]) >= cert_bytes
+        assert int(conn_row["resp_ip_bytes"]) >= cert_bytes
+        assert float(conn_row["duration"]) >= 1.05 + (0.075 * len(cert_fuids))
+        checked = True
+    assert checked
+
+
 def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None

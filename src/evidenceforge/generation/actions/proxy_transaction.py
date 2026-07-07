@@ -612,6 +612,7 @@ class ProxyTransactionActionBundle:
                 uri=proxy_context.url,
                 version=request.http.version,
                 user_agent=request.http.user_agent,
+                user_agent_known_absent=request.http.user_agent_known_absent,
                 request_body_len=request.http.request_body_len,
                 response_body_len=response_body_len,
                 flow_request_body_len=request.http.flow_request_body_len,

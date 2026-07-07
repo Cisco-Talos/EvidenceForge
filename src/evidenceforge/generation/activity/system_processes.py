@@ -39,6 +39,7 @@ def load_system_processes() -> dict[str, Any]:
 
 _CACHED_BINARY_EXES: set[str] | None = None
 _CACHED_BINARY_PATHS: dict[str, str] | None = None
+_CACHED_SINGLETON_SERVICE_PATHS: dict[str, set[str]] | None = None
 
 
 def get_system_binary_exes() -> set[str]:
@@ -99,6 +100,35 @@ def get_system_binary_path(
     if path:
         path = _resolve_host_placeholders(path, host)
     return path
+
+
+def get_windows_singleton_service_paths() -> dict[str, set[str]]:
+    """Return Windows service-process paths that should be singleton per host.
+
+    The keys and path values are normalized to lowercase backslash paths. Entries
+    are driven by ``system_services`` records with ``singleton: true`` so
+    endpoint-agent lifecycle policy stays with the service catalog.
+    """
+    global _CACHED_SINGLETON_SERVICE_PATHS
+    if _CACHED_SINGLETON_SERVICE_PATHS is not None:
+        return _CACHED_SINGLETON_SERVICE_PATHS
+
+    data = load_system_processes()
+    singleton_paths: dict[str, set[str]] = {}
+    for entries in data.get("system_services", {}).values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("singleton"):
+                continue
+            image = str(entry.get("image") or "").replace("/", "\\").lower()
+            if not image:
+                continue
+            exe_name = image.rsplit("\\", 1)[-1]
+            singleton_paths.setdefault(exe_name, set()).add(image)
+
+    _CACHED_SINGLETON_SERVICE_PATHS = singleton_paths
+    return singleton_paths
 
 
 def _resolve_template(template: str, rng: random.Random, entry_params: dict | None) -> str:

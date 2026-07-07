@@ -311,6 +311,49 @@ def test_build_proxy_context_preserves_caller_browser_user_agent_for_api_domain(
     assert proxy_context.user_agent == chrome_user_agent
 
 
+def test_build_proxy_context_preserves_known_absent_http_user_agent():
+    generator = ActivityGenerator(StateManager(), {})
+    domain_controller = System(
+        hostname="DC-01",
+        ip="10.10.2.10",
+        os="Windows Server 2022",
+        type="domain_controller",
+        roles=["domain_controller"],
+    )
+    proxy = System(
+        hostname="PROXY-01",
+        ip="10.10.3.20",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["forward_proxy"],
+    )
+
+    proxy_context = generator._build_proxy_context(
+        src_ip=domain_controller.ip,
+        dst_ip="45.33.32.30",
+        dst_port=443,
+        service="ssl",
+        duration=2.5,
+        orig_bytes=600,
+        resp_bytes=4096,
+        hostname="api.westbridge-services.net",
+        source_system=domain_controller,
+        proxy_sys=proxy,
+        http=HttpContext(
+            method="GET",
+            host="api.westbridge-services.net",
+            uri="/v2/manifest",
+            user_agent="",
+            user_agent_known_absent=True,
+            response_body_len=4096,
+        ),
+        explicit_mode=True,
+        time=datetime(2024, 3, 18, 17, 42, tzinfo=UTC),
+    )
+
+    assert proxy_context.user_agent == ""
+
+
 def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
     generator = ActivityGenerator(StateManager(), {})
     domain_controller = System(
@@ -2433,6 +2476,88 @@ class TestExplicitProxyVisibility:
         image, command_line = hint
         assert image.endswith("service-healthcheck.exe")
         assert "status.example.com" in command_line
+
+    def test_windows_server_proxy_helper_uses_system_owner_despite_user_session(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+        domain_controller = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+        )
+        user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.org",
+        )
+        generator._users_by_username = {user.username: user}
+        start_time = datetime(2024, 1, 15, 9, 45, 0, tzinfo=UTC)
+        generator.state_manager.set_current_time(start_time)
+        services_pid = generator.state_manager.create_process(
+            system=domain_controller.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\services.exe",
+            command_line="services.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        logon_id = generator.state_manager.create_session(
+            username=user.username,
+            system=domain_controller.hostname,
+            logon_type=10,
+            source_ip="10.0.1.35",
+        )
+        explorer_pid = generator.state_manager.create_process(
+            system=domain_controller.hostname,
+            parent_pid=services_pid,
+            image=r"C:\Windows\explorer.exe",
+            command_line="explorer.exe",
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        session = generator.state_manager.get_session(logon_id)
+        assert session is not None
+        session.explorer_pid = explorer_pid
+        generator._system_pids = {domain_controller.hostname: {"services": services_pid}}
+        request_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        pid, image = generator._ensure_explicit_proxy_client_process(
+            source_system=domain_controller,
+            time=request_time,
+            proxy_context=ProxyContext(
+                client_ip=domain_controller.ip,
+                method="CONNECT",
+                url="status.example.com:443",
+                host="status.example.com",
+                status_code=200,
+                user_agent="Go-http-client/1.1",
+                proxy_fqdn="PROXY-01.example.org",
+            ),
+            proxy_sys=proxy,
+            dst_port=443,
+        )
+
+        proc = generator.state_manager.get_process(domain_controller.hostname, pid)
+        assert image == r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
+        assert proc is not None
+        assert proc.username == "SYSTEM"
+        assert proc.logon_id == "0x3e7"
+        assert proc.parent_pid == services_pid
+        assert proc.parent_pid != explorer_pid
 
     def test_one_shot_proxy_client_process_terminates_after_request(self):
         generator, _emitters = _generator(

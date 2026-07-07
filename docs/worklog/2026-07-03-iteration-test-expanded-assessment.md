@@ -2492,6 +2492,99 @@ original assessment history. This worktree is using branch
   - `uv run ruff check src/evidenceforge/events/observation.py src/evidenceforge/generation/actions/ssh_session.py src/evidenceforge/generation/activity/generator.py tests/unit/test_dispatcher.py tests/unit/test_zeek_activity_contexts.py tests/unit/test_phase5_logoff.py`
   - `uv run ruff format --check src/evidenceforge/events/observation.py src/evidenceforge/generation/actions/ssh_session.py src/evidenceforge/generation/activity/generator.py tests/unit/test_dispatcher.py tests/unit/test_zeek_activity_contexts.py tests/unit/test_phase5_logoff.py`
 
+## Loops 54-59 Continuation
+
+These entries continue the 10-loop run requested for the expanded iteration-test scenario
+(`scenarios/iteration-test-expanded/scenario.yaml`). Detailed reports and score artifacts live
+under `scenarios/iteration-test-expanded/blind-test/loop-N/`.
+
+### Loop 54
+
+- Fix target: eCAR type-7 unlock reanchoring for same-host process timing.
+- Owning layer: source timing / endpoint session anchoring, not source-specific string rendering.
+- Automated eval: `95.3745873581932` over `92,159` records.
+- Hard probe: clustered process creates immediately after type-7 unlock reduced from `6` to `0`.
+- Blind panel: deliberated mean synthetic-confidence `71.75`.
+
+### Loop 55
+
+- Fix target: Windows endpoint process source-timing floor around Security/Sysmon/eCAR process
+  observations.
+- Owning layer: source timing planner and endpoint process observation, so sibling Windows
+  process sources share the same minimum separation contract.
+- Automated eval: `95.36793932982212` over `92,159` records.
+- Hard probe: sub-1ms process timing collapses on MAIL-FIN and WS-EBROOKS reduced to `0`.
+- Blind panel: deliberated mean synthetic-confidence `30.75`.
+
+### Loop 56
+
+- Fix target: PowerShell WebClient proxy/User-Agent semantics.
+- Owning layer: storyline HTTP intent and canonical HTTP context; WebClient should express known
+  absent UA semantics once and have proxy/Zeek render that truth consistently.
+- Automated eval: `95.36793932982212` over `92,159` records.
+- Hard probe: proxy + Zeek WebClient bad User-Agent findings reduced from `2/2` to `0`, with
+  known-absent UA preserved for both.
+- Blind panel: deliberated mean synthetic-confidence `32.5`.
+
+### Loop 57
+
+- Fix target: Windows server/DC explicit-proxy helper process ownership.
+- Owning layer: explicit proxy client-process ownership in activity generation, not proxy emitter
+  postprocessing.
+- Automated eval: `95.70954774058356` over `99,522` records.
+- Hard probe: DC ServiceHealth `explorer.exe` parent findings reduced from `6` to `0`, human
+  principal findings from `6` to `0`, and human proxy-helper flows from `17` to `0`.
+- Blind panel: deliberated mean synthetic-confidence `32.75`.
+
+### Loop 58
+
+- Fix target: typed RDP storyline/session readiness.
+- Owning layer: storyline/session readiness and remote-session state reuse. Typed `rdp_session`
+  events now record the created target logon/session and delay follow-on same-host commands until
+  that remote session is usable.
+- Automated eval: `95.90845223387653` over `96,389` records.
+- Hard probe: RDP max 10-second clusters for source `mstsc.exe`, source FLOW, and DC Type 10
+  logons reduced from `3` to `1`.
+- Blind panel: deliberated mean synthetic-confidence `58.5`; the panel surfaced a new hard
+  network-source contradiction in SMTP STARTTLS byte accounting.
+
+### Loop 59
+
+- Fix target: SMTP STARTTLS certificate byte-budget coherence.
+- Owning layer: canonical network connection context/state. Caller-provided TLS/X.509 contexts
+  now run through the shared certificate-byte coverage invariant before dispatch, and repairs
+  update both connection interval and byte totals.
+- Automated eval: `95.90845223387653` over `96,389` records.
+- Hard probe `hard_probe_smtp_starttls_byte_budget.json`:
+  - Loop 58 offending SMTP STARTTLS UIDs: `26`.
+  - Loop 59 offending SMTP STARTTLS UIDs: `0`.
+  - Max response-byte deficit: `3171` -> `0`.
+  - Max response-IP-byte deficit: `2903` -> `0`.
+  - Minimum response-byte margin over certificate bytes: `-3171` -> `280`.
+- Blind panel:
+  - Initial mean synthetic-confidence: `38.25`; deliberated mean: `42.5`.
+  - Threat Hunter: Inconclusive, confidence `64`, synthetic-confidence `36`; deliberated to
+    Inconclusive, confidence `66`, synthetic-confidence `42`.
+  - Detection Engineer: Synthetic, confidence `68`, synthetic-confidence `62`; deliberated to
+    Synthetic, confidence `70`, synthetic-confidence `60`.
+  - Network Forensics: Real, confidence `64`, synthetic-confidence `28`; deliberated to
+    Inconclusive, confidence `60`, synthetic-confidence `36`.
+  - Host/EDR: Real, confidence `68`, synthetic-confidence `27`; deliberated to Real, confidence
+    `64`, synthetic-confidence `32`.
+- Highest-priority next findings:
+  - P1 ASA connection-ID hidden-volume model: bounded uniform gaps of exactly `1-5` in 6,048
+    built connection IDs.
+  - P1/P2 per-sensor Zeek observation texture: duplicated core/DMZ flows can share identical
+    nonzero `missed_bytes`.
+  - P2 eCAR FLOW thread/process attribution semantics.
+  - P2 Windows endpoint inbound network collection profile.
+  - P3 Zeek Kerberos analyzer coverage/profile clarity.
+- Verification for loop 59:
+  - `uv run pytest --no-cov -q tests/unit/test_email_evidence.py -k "smtp_starttls_certificate_files_fit_connection_response_budget or outbound_route_group_override_and_global_isp_relay or smtp_starttls_tls12_cipher"` (`3 passed`).
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `uv run pytest --no-cov -q` (`4874 passed, 19 skipped`).
+
 ## Loop 49 Fix Target
 
 - Selected family: canonical endpoint lifecycle/session ownership for process termination.
@@ -2572,6 +2665,297 @@ original assessment history. This worktree is using branch
     - Secondary targets: stable Sysmon `LogonGuid` per `(host, LogonId)`, source-native Windows
       4672 privilege lists, Linux local session-open anchoring, static web/proxy object byte
       stability, proxy CONNECT visibility contracts, and host-specific WFP device-volume mappings.
+
+## Loop 50 Fix Target
+
+- Selected family: Windows singleton service-agent lifecycle.
+- Owning abstraction: data-driven system service catalog plus canonical process/session state.
+- Invariant: a configured Windows service agent parented by `services.exe` must not overlap as
+  multiple active same-host executable instances. New launch requests reuse the active canonical
+  process unless stop/restart evidence exists.
+- Entry paths: workstation service-process noise, regular `generate_process()` calls with
+  `services.exe` parents, stale process cleanup, service catalog validation, and
+  Security/Sysmon/eCAR process lifecycle rendering.
+- Consumers: Host/EDR review, Windows process tree reconstruction, Sysmon Event ID 1/5, Security
+  4688/4689, eCAR process lifecycle rows, and singleton process hard probes.
+- Layer rationale: the blind-panel finding came from duplicate canonical process creation before
+  rendering. Fixing an emitter would have hidden only one source and left the canonical state free
+  to produce sibling contradictions.
+
+### Loop 50 implementation notes
+
+- Root cause: Program Files security agents such as `PanGPS.exe`, `vpnagent.exe`,
+  `ZSAService.exe`, and `ZSATunnel.exe` behaved like long-running SCM-managed service agents, but
+  only a small built-in `System32` executable set had singleton reuse semantics. Generic stale
+  cleanup could also terminate these product services and allow later overlapping creates.
+- Implemented changes:
+  - Added `singleton: true` to the system service catalog/schema and marked the relevant
+    workstation service agents.
+  - Loaded configured singleton service paths from YAML and merged them with built-in Windows
+    service singleton paths.
+  - Reused active same-host singleton service processes from both baseline service noise and
+    regular `generate_process()` calls with a `services.exe` parent, including out-of-order
+    generation reuse when the candidate is already planned.
+  - Protected configured singleton service agents from generic stale-process cleanup.
+  - Added config validation so singleton service declarations must be concrete Windows service
+    paths owned by the `services` parent.
+  - Added focused regressions for service reuse, regular process-path reuse, out-of-order reuse,
+    stale cleanup protection, and invalid singleton catalog entries.
+- Verification passed:
+  - `uv run pytest --no-cov tests/unit/test_spawn_rules.py -k "singleton_service"`
+  - `uv run pytest --no-cov tests/unit/test_phase5_system_traffic.py -k "singleton_windows_service or singleton_service_image"`
+  - `uv run pytest --no-cov tests/unit/test_validate_config.py -k "singleton_service or boot_only_process"`
+  - `uv run eforge validate-config`
+  - `uv run eforge validate scenarios/iteration-test-expanded/scenario.yaml`
+  - `uv run pytest --no-cov`
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+- Generated loop 50 output successfully.
+- Automated eval passed at `95.17680672823963` over 93,433 records.
+- Pillars:
+  - Parseability: `100.0`
+  - Plausibility: `96.11786257759402`
+  - Causality: `87.99630844954882`
+  - Timing: `95.74131985726953`
+- Hard probe `hard_probe_windows_singleton_service_overlap.json`:
+  - Loop 49 comparison: failed with `40` overlapping singleton service-agent creates.
+  - Loop 50: `passed` with `12` singleton service creates, `2` terminates, and `0` overlaps.
+- Blind review:
+  - Initial mean synthetic-confidence: `46.25`; deliberated mean: `55.25`
+    (`Mixed/Inconclusive`).
+  - Reviewer scores:
+    - Threat Hunter: Inconclusive, confidence `66`, synthetic-confidence `38`; deliberated to
+      Inconclusive synthetic-leaning, confidence `68`, synthetic-confidence `52`.
+    - Detection Engineer: Inconclusive, confidence `58`, synthetic-confidence `38`; deliberated
+      to Inconclusive synthetic-leaning, confidence `64`, synthetic-confidence `54`.
+    - Network Forensics: Inconclusive, confidence `64`, synthetic-confidence `42`; deliberated to
+      Inconclusive, confidence `66`, synthetic-confidence `45`.
+    - Host/EDR: Synthetic, confidence `62`, synthetic-confidence `67`; deliberated to Synthetic,
+      confidence `68`, synthetic-confidence `70`.
+  - Panel consensus and prioritized findings:
+    - The loop 49 singleton service-agent overlap family is fixed by hard probe.
+    - Highest-impact future target: Windows process-tree ownership for shell wrappers and command
+      tools. `FILE-SRV-01` contains a `cmd.exe /c net.exe` parent for child `net.exe` evidence with
+      command line `net view \\FILE-SRV-01`, an impossible parent/child command relationship.
+    - Secondary targets: Zeek network collection-window clipping, mail artifact/profile alignment,
+      static web/proxy asset byte stability, HTTP keep-alive timing, NTP/DHCP texture, Linux sudo
+      rhythms, and bash foreground timestamp texture.
+
+## Loop 51 Fix Target
+
+- Selected family: Windows shell-wrapper parent ownership.
+- Owning abstraction: Windows process parent selection plus canonical process/session state.
+- Invariant: a one-shot Windows shell wrapper parent must be command-compatible with the child
+  process it launches. A `cmd.exe /c <payload>` parent can own a child only when `<payload>` begins
+  with the child executable command signature, including meaningful command arguments.
+- Entry paths: typed storyline process events, spawn-rule parent resolution, service/network-logon
+  utility execution, parent sanitization, Sysmon/Security/eCAR process rendering, and process-tree
+  hard probes.
+- Consumers: Host/EDR review, Windows process tree reconstruction, Sysmon Event ID 1, Security
+  4688, eCAR `PROCESS CREATE`, and downstream command-line lineage analytics.
+- Layer rationale: the contradiction was introduced in canonical parent selection after the
+  correct shell wrapper had already been resolved. Fixing one emitter would have hidden only one
+  source and left sibling process evidence inconsistent.
+
+### Loop 51 implementation notes
+
+- Root cause: `_resolve_parent(..., command_line)` correctly created
+  `cmd.exe /c net view \\FILE-SRV-01`, but `_sanitize_user_parent_pid()` rejected one-shot shell
+  parents categorically and fell back to `_resolve_parent(..., process_name)` without the command
+  line. The fallback created a duplicate `cmd.exe /c net.exe` shell parent, which could not have
+  launched the rendered child command line.
+- Implemented changes:
+  - Added command-signature helpers for one-shot Windows shell wrapper payloads.
+  - Allowed a one-shot shell wrapper parent only when its payload directly invokes the child command
+    signature.
+  - Passed the full child command line through fallback parent resolution.
+  - Added a focused regression for the service/network-logon `net view \\FILE-SRV-01` case.
+- Focused verification passed:
+  - `uv run pytest --no-cov tests/unit/test_spawn_rules.py -k "one_shot_shell_parent or network_command_keeps_matching_one_shot_shell_parent or system_admin_utility_gets_service_shell_parent"`
+  - `uv run pytest --no-cov tests/unit/test_activity.py -k "rejects_one_shot_shell_parent"`
+  - `uv run pytest --no-cov tests/unit/test_spawn_rules.py -k "network_command_keeps_matching_one_shot_shell_parent or system_admin_utility_owner_depends_on_remote_execution_family"`
+  - `uv run ruff check src/evidenceforge/generation/activity/generator.py tests/unit/test_spawn_rules.py`
+  - `uv run ruff format --check src/evidenceforge/generation/activity/generator.py tests/unit/test_spawn_rules.py`
+- Generated loop 51 output successfully.
+- Automated eval passed at `95.17623466907877` over 93,443 records.
+- Pillars:
+  - Parseability: `100.0`
+  - Plausibility: `96.11876002308942`
+  - Causality: `87.99445865302643`
+  - Timing: `95.73965000024901`
+- Hard probe `hard_probe_windows_shell_parent_command_match.json`:
+  - Loop 50 comparison: failed with `3` shell-parent command mismatches.
+  - Loop 51: `passed` with `0` shell-parent command mismatches.
+- Blind review:
+  - Initial mean synthetic-confidence: `37.75`; deliberated mean: `48.5`
+    (`Borderline Mixed/Inconclusive`).
+  - Reviewer scores:
+    - Threat Hunter: Real, confidence `72`, synthetic-confidence `28`; deliberated to Real
+      weakened, confidence `58`, synthetic-confidence `42`.
+    - Detection Engineer: Real, confidence `64`, synthetic-confidence `31`; deliberated to
+      Borderline Synthetic, confidence `55`, synthetic-confidence `52`.
+    - Network Forensics: Real, confidence `78`, synthetic-confidence `24`; deliberated to Real,
+      confidence `74`, synthetic-confidence `28`.
+    - Host/EDR: Synthetic, confidence `68`, synthetic-confidence `68`; deliberated to Synthetic,
+      confidence `72`, synthetic-confidence `72`.
+  - Panel consensus and prioritized findings:
+    - The loop 50 Windows shell-wrapper parent mismatch is fixed by hard probe.
+    - Highest-impact future target: Linux desktop/session/process realism. Reviewers converged on
+      repeated `/usr/lib/systemd/systemd --user` creation under the same logon/session IDs, active
+      bash/eCAR activity without coherent session-open lifecycle, and many similarly shaped
+      `python3 -c 'import requests; requests.get(...)'` process creates under terminal parents.
+    - Secondary targets: Linux cron/system identity and sysstat cadence, network collection-window
+      clipping, collection-profile artifact alignment, and repeated Windows unlock-style eCAR
+      `USER_SESSION LOGIN` rows.
+
+## Loop 52 Fix Target
+
+- Selected family: Linux desktop session and process lifecycle realism.
+- Owning abstraction: Linux user-session/action lifecycle plus canonical process/activity
+  generation.
+- Invariant: one Linux local desktop session should have one durable per-session user manager.
+  Rebuilding terminal/shell ancestry later in the same session must not recreate
+  `/usr/lib/systemd/systemd --user`. Generic workstation proxy web traffic should not invent
+  visible terminal-launched `python3 -c 'import requests...'` process evidence unless a modeled
+  process actually owns that activity.
+- Entry paths: Linux local logon bootstrap, visible shell-parent creation, process parent
+  resolution, explicit proxy client process hints, eCAR process/flow rendering, and desktop hard
+  probes.
+- Consumers: Host/EDR review, Linux session reconstruction, eCAR process trees, proxy-flow process
+  attribution, and downstream analytics that join session IDs, PIDs, and process ancestry.
+- Layer rationale: the defects were caused before rendering, by session/process ownership and
+  activity attribution. Fixing eCAR strings or hiding rows in an emitter would have left sibling
+  state and future process-tree decisions inconsistent.
+
+### Loop 52 implementation notes
+
+- Root cause: `_ensure_linux_local_session_shell_parent()` always created a new
+  `/usr/lib/systemd/systemd --user` process before terminal/shell ancestry. If a later command
+  needed a new shell under the same active session, `ensure_linux_session_shell()` only knew about
+  the previous shell PID, so it rebuilt the whole user-manager -> terminal -> bash chain. In
+  parallel, generic Linux workstation `python-requests/` user agents were mapped to visible
+  terminal-launched Python snippets for ordinary SaaS/CDN proxy traffic.
+- Implemented changes:
+  - Added durable `session_user_manager_pid` state to `ActiveSession` and cleared it with other
+    session process references.
+  - Reused an active Linux per-session user manager and active terminal/login parent when rebuilding
+    local session shell ancestry.
+  - Routed visible Linux shell-parent materialization through the active session shell path when a
+    valid active logon ID exists.
+  - Stopped attributing generic Linux workstation `python-requests/` proxy traffic to synthetic
+    terminal-launched `python3 -c 'import requests...'` processes while preserving modeled
+    server/background process ownership.
+  - Added focused regressions for rebuilt Linux session shells and workstation proxy attribution.
+- Focused verification passed:
+  - `uv run pytest --no-cov tests/unit/test_activity.py -k "linux_session_shell_reuses_user_manager_when_rebuilt or linux_workstation_python_requests_proxy_stays_unattributed"`
+  - `uv run pytest --no-cov tests/unit/test_explicit_proxy.py -k "python or proxy_client_hint or package_proxy_client_uses_system_owner or background_helper_process"`
+  - `uv run pytest --no-cov tests/unit/test_world_model.py -k "linux_local_session_shell_has_visible_terminal_parent"`
+  - `uv run pytest --no-cov tests/unit/test_spawn_rules.py -k "linux_generate_process_replaces_hidden_boot_shell_without_session or linux_resolve_parent_materializes_visible_shell_without_session or linux_process_creation_guard_materializes_hidden_shell_parent"`
+  - `uv run ruff check src/evidenceforge/models/state.py src/evidenceforge/generation/state_manager.py src/evidenceforge/generation/activity/generator.py tests/unit/test_activity.py`
+  - `uv run ruff format --check src/evidenceforge/models/state.py src/evidenceforge/generation/state_manager.py src/evidenceforge/generation/activity/generator.py tests/unit/test_activity.py`
+- Full verification passed:
+  - `uv run pytest --no-cov` (`4861 passed, 19 skipped`)
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+- Generated loop 52 output successfully.
+- Automated eval passed at `95.31401154149356` over 92,159 records.
+- Pillars:
+  - Parseability: `100.0`
+  - Plausibility: `94.9464460391597`
+  - Causality: `89.84597659329332`
+  - Timing: `95.57952941690148`
+- Hard probe `hard_probe_linux_desktop_session_process_realism.json`:
+  - Loop 51 comparison: failed with `2` duplicate Linux user-manager sessions and `30` desktop
+    `python-requests` process creates.
+  - Loop 52: `passed` with `0` duplicate Linux user-manager sessions and `0` desktop
+    `python-requests` process creates.
+- Blind review:
+  - Initial mean synthetic-confidence: `69.0`; deliberated mean: `77.0` (`Synthetic`).
+  - Reviewer scores:
+    - Threat Hunter: Synthetic but highly huntable, confidence `78`, synthetic-confidence `84`;
+      deliberated to Synthetic but highly huntable, confidence `82`, synthetic-confidence `86`.
+    - Detection Engineer: Inconclusive leaning Realistic/Real, confidence `74`,
+      synthetic-confidence `38`; deliberated to Inconclusive leaning Synthetic, confidence `68`,
+      synthetic-confidence `58`.
+    - Network Forensics: Synthetic, confidence `68`, synthetic-confidence `72`; deliberated to
+      Synthetic, confidence `72`, synthetic-confidence `76`.
+    - Host/EDR: Synthetic, confidence `76`, synthetic-confidence `82`; deliberated to Synthetic,
+      confidence `84`, synthetic-confidence `88`.
+  - Panel consensus and prioritized findings:
+    - The loop 51 Linux desktop/session family is fixed by hard probe.
+    - Highest-impact future target: host/EDR source-local lifecycle coherence for eCAR flow actor
+      attribution. Reviewers found many flow rows with precise process actor IDs but no matching
+      same-host process-create lifecycle support.
+    - Secondary targets: Windows remote-execution provenance for WMI/DC activity, proxy identity
+      alignment, IDS/web/proxy texture, and collection-profile artifact/package alignment.
+
+## Loop 53 Fix Target
+
+- Selected family: eCAR source-local flow actor lifecycle visibility.
+- Owning abstraction: eCAR source-observation normalization over canonical process/session state.
+- Invariant: eCAR `FLOW/CONNECT` rows must not render precise process actor identity unless the
+  same host stream contains a visible `PROCESS/CREATE` for that actor. If the process lifecycle is
+  not source-visible, keep the network fact but render it as unattributed.
+- Entry paths: network connection rendering, source timing, process visibility, eCAR close-time
+  normalization, output-window filtering, and per-host EDR review.
+- Consumers: Host/EDR review, detection rules that pivot from flow actor to process tree, endpoint
+  source-local graph reconstruction, and cross-source process/network joins.
+- Layer rationale: the canonical process can be globally true while the eCAR source-local stream
+  lacks the process lifecycle. The fix belongs after source observation and timing settle, where
+  eCAR decides what identity this host stream can honestly show.
+
+### Loop 53 implementation notes
+
+- Root cause: eCAR could render `FLOW/CONNECT` `actorID` values from canonical process state even
+  when the same host's eCAR stream had no visible `PROCESS/CREATE` for that process. This created
+  dangling source-local graph edges: reviewers saw precise flow actors that could not be
+  reconstructed from the host file.
+- Implemented changes:
+  - Added `_normalize_flow_process_actor_visibility()` as a final per-host eCAR close-time pass.
+  - The pass builds the visible process-create object set for the host and drops process identity
+    from `FLOW/CONNECT` rows whose actor is absent from that set.
+  - Reused the existing `_drop_flow_process_identity()` behavior so transport evidence remains
+    intact while unsafe process attribution is removed.
+  - Added regressions that scrub a dangling flow actor and preserve a flow actor with matching
+    source-visible process create.
+- Focused verification passed:
+  - `uv run pytest --no-cov tests/unit/test_ecar_spec_compliance.py -k "scrubs_flow_actor_without_visible_process_create or preserves_flow_actor_with_visible_process_create or scrubs_stale_flow_process_identity_after_process_terminate or actor_linked_flow_renders_after_process_create or outbound_flow_with_pid_only_renders_after_process_create"`
+  - `uv run pytest --no-cov tests/unit/test_ecar_spec_compliance.py`
+  - `uv run pytest --no-cov tests/unit/test_source_timing.py -k "FLOW or ecar or process_reference or endpoint"`
+  - `uv run ruff check src/evidenceforge/generation/emitters/ecar.py tests/unit/test_ecar_spec_compliance.py`
+  - `uv run ruff format --check src/evidenceforge/generation/emitters/ecar.py tests/unit/test_ecar_spec_compliance.py`
+- Full verification passed:
+  - `uv run pytest --no-cov` (`4863 passed, 19 skipped`)
+- Generated loop 53 output successfully.
+- Automated eval passed at `95.3745873581932` over 92,159 records.
+- Pillars:
+  - Parseability: `100.0`
+  - Plausibility: `95.14644603915968`
+  - Causality: `89.89042991620664`
+  - Timing: `95.57684184675803`
+- Hard probe `hard_probe_ecar_flow_actor_visibility.json`:
+  - Loop 52 comparison: failed with `13,930` eCAR `FLOW/CONNECT` actor IDs that lacked a
+    same-host `PROCESS/CREATE`.
+  - Loop 53: `passed` with `0` dangling flow actor IDs and `760` preserved visible flow actors.
+- Blind review:
+  - Initial mean synthetic-confidence: `72.0`; deliberated mean: `73.0` (`Synthetic`).
+  - Reviewer scores:
+    - Threat Hunter: Synthetic, confidence `72`, synthetic-confidence `68`; deliberated to
+      Synthetic, confidence `74`, synthetic-confidence `70`.
+    - Detection Engineer: Synthetic, confidence `82`, synthetic-confidence `86`; deliberated to
+      Synthetic, confidence `80`, synthetic-confidence `82`.
+    - Network Forensics: Inconclusive leaning synthetic, confidence `64`, synthetic-confidence
+      `56`; deliberated to Inconclusive leaning synthetic, confidence `66`, synthetic-confidence
+      `58`.
+    - Host/EDR: Synthetic, confidence `86`, synthetic-confidence `78`; deliberated to Synthetic,
+      confidence `88`, synthetic-confidence `82`.
+  - Panel consensus and prioritized findings:
+    - The loop 52 eCAR flow actor visibility defect is fixed by hard probe.
+    - Highest-impact future target: eCAR source-local endpoint lifecycle timing and identity
+      ownership. A type-7 unlock/login on `WS-AJOHNSON-01` was followed within about 120 ms by
+      multiple unrelated process creates that native Windows Security/Sysmon placed much earlier.
+    - Secondary targets: Windows remote-admin provenance, source-observation completeness/dedup,
+      network timing/cache ownership, and benign variation pools.
 - Generated loop 48 output successfully.
 - Automated eval passed at `95.17991488181465` over 94,702 records.
 - Pillars:

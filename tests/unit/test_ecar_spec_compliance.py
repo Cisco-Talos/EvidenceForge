@@ -1113,6 +1113,107 @@ class TestChronologicalOutput:
         assert "principal" not in flow
         assert "image_path" not in flow["properties"]
 
+    def test_close_scrubs_flow_actor_without_visible_process_create(self, tmp_path, ts):
+        """FLOW rows should not claim actors absent from the same host stream."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "FLOW",
+                "action": "CONNECT",
+                "objectID": "flow-123",
+                "actorID": "missing-process",
+                "pid": 1234,
+                "principal": "alice",
+                "image_path": r"C:\Program Files\App\app.exe",
+                "command_line": r'"C:\Program Files\App\app.exe" --sync',
+                "src_ip": "10.0.0.10",
+                "src_port": 49152,
+                "dst_ip": "10.0.0.20",
+                "dst_port": 443,
+                "protocol": "tcp",
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        flow = next(row for row in rows if row["object"] == "FLOW")
+        assert flow["objectID"] == "flow-123"
+        assert "actorID" not in flow
+        assert "pid" not in flow
+        assert "principal" not in flow
+        assert "image_path" not in flow["properties"]
+        assert "command_line" not in flow["properties"]
+        assert flow["properties"]["dst_port"] == "443"
+
+    def test_close_preserves_flow_actor_with_visible_process_create(self, tmp_path, ts):
+        """FLOW actor attribution is valid when the same host has the process create."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "process-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 1234,
+                "ppid": 4,
+                "image_path": r"C:\Program Files\App\app.exe",
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "FLOW",
+                "action": "CONNECT",
+                "objectID": "flow-123",
+                "actorID": process_id,
+                "pid": 1234,
+                "principal": "alice",
+                "image_path": r"C:\Program Files\App\app.exe",
+                "command_line": r'"C:\Program Files\App\app.exe" --sync',
+                "src_ip": "10.0.0.10",
+                "src_port": 49152,
+                "dst_ip": "10.0.0.20",
+                "dst_port": 443,
+                "protocol": "tcp",
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        flow = next(row for row in rows if row["object"] == "FLOW")
+        assert flow["actorID"] == process_id
+        assert flow["pid"] == 1234
+        assert flow["principal"] == "alice"
+        assert flow["properties"]["image_path"] == r"C:\Program Files\App\app.exe"
+
     def test_close_rewrites_linux_pids_by_source_timestamp_not_canonical_order(self, tmp_path, ts):
         """Linux PID morphology should follow rendered source time, not canonical time."""
         fmt = Mock()

@@ -86,6 +86,31 @@ logger = logging.getLogger(__name__)
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
 _STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+_POWERSHELL_WEB_CMDLET_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WindowsPowerShell/5.1"
+)
+_HTTP_USER_AGENT_OVERRIDE_PATTERNS = (
+    re.compile(
+        r"""(?ix)
+        \B-useragent
+        \s+
+        (?P<quote>['"])
+        (?P<value>[^'"]+)
+        (?P=quote)
+        """
+    ),
+    re.compile(
+        r"""(?ix)
+        user-agent
+        ["'\]\s]*
+        (?:,|=|=>)
+        \s*
+        (?P<quote>['"])
+        (?P<value>[^'"]+)
+        (?P=quote)
+        """
+    ),
+)
 _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
     r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
     re.IGNORECASE,
@@ -1563,6 +1588,28 @@ class StorylineMixin:
             self._storyline_host_available_at.get(key, available_at),
         )
 
+    def _record_storyline_session_ready(
+        self,
+        *,
+        system: System,
+        actor: User,
+        session: Any,
+        rng: random.Random,
+    ) -> None:
+        """Delay follow-on same-host commands until a remote session is usable."""
+        ready_time = getattr(session, "source_ready_time", None) or getattr(
+            session,
+            "start_time",
+            None,
+        )
+        if isinstance(ready_time, datetime):
+            self._record_storyline_host_available_after(
+                system=system,
+                actor=actor,
+                time=ready_time,
+                rng=rng,
+            )
+
     def _emit_storyline_account_password_followups(
         self,
         actor: User,
@@ -2113,6 +2160,93 @@ class StorylineMixin:
         )
 
         return browser_user_agent_for_process(rng, system, image)
+
+    @staticmethod
+    def _storyline_http_user_agent_for_command(
+        *,
+        system: System | None,
+        process_image: str | None,
+        command_line: str,
+        rng: random.Random,
+    ) -> str:
+        """Return source-native HTTP User-Agent metadata for command-derived HTTP."""
+        user_agent, _ = StorylineMixin._storyline_http_user_agent_metadata_for_command(
+            system=system,
+            process_image=process_image,
+            command_line=command_line,
+            rng=rng,
+        )
+        return user_agent
+
+    @staticmethod
+    def _storyline_http_user_agent_metadata_for_command(
+        *,
+        system: System | None,
+        process_image: str | None,
+        command_line: str,
+        rng: random.Random,
+    ) -> tuple[str, bool]:
+        """Return User-Agent and whether its absence is source-native-known."""
+        explicit_user_agent = StorylineMixin._explicit_http_user_agent_from_command(command_line)
+        if explicit_user_agent is not None:
+            return explicit_user_agent, False
+        if StorylineMixin._command_uses_dotnet_webclient(command_line):
+            return "", True
+        if StorylineMixin._command_uses_powershell_web_cmdlet(command_line):
+            return _POWERSHELL_WEB_CMDLET_USER_AGENT, False
+        return (
+            StorylineMixin._storyline_http_user_agent_for_process(
+                system=system,
+                process_image=process_image,
+                command_line=command_line,
+                rng=rng,
+            ),
+            False,
+        )
+
+    @staticmethod
+    def _explicit_http_user_agent_from_command(command_line: str) -> str | None:
+        """Extract an explicit User-Agent override from raw or decoded command text."""
+        for text in StorylineMixin._http_url_search_texts(command_line):
+            for pattern in _HTTP_USER_AGENT_OVERRIDE_PATTERNS:
+                match = pattern.search(text)
+                if match is None:
+                    continue
+                value = match.group("value").strip()
+                if value:
+                    return value
+        return None
+
+    @staticmethod
+    def _command_uses_dotnet_webclient(command_line: str) -> bool:
+        """Return true for raw System.Net.WebClient download commands."""
+        for text in StorylineMixin._http_url_search_texts(command_line):
+            lowered = text.lower()
+            if "webclient" not in lowered:
+                continue
+            if any(
+                token in lowered
+                for token in (
+                    ".downloadstring",
+                    ".downloadfile",
+                    ".openread",
+                    ".uploaddata",
+                    ".uploadfile",
+                )
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _command_uses_powershell_web_cmdlet(command_line: str) -> bool:
+        """Return true for PowerShell web cmdlets that set a native default UA."""
+        for text in StorylineMixin._http_url_search_texts(command_line):
+            lowered = text.lower()
+            if "invoke-webrequest" in lowered or "invoke-restmethod" in lowered:
+                return True
+            if re.search(r"(?i)\b(?:iwr|irm)\b", text):
+                return True
+        return False
 
     def _emit_storyline_archive_transfer_before_exfil(
         self,
@@ -3182,6 +3316,14 @@ class StorylineMixin:
                         network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
                         rng=rng,
                     )
+                    http_user_agent, http_user_agent_known_absent = (
+                        self._storyline_http_user_agent_metadata_for_command(
+                            system=system,
+                            process_image=process_name,
+                            command_line=command_line,
+                            rng=rng,
+                        )
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=dst_ip,
@@ -3204,7 +3346,8 @@ class StorylineMixin:
                             host=hostname,
                             uri=uri,
                             version="1.1",
-                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell/5.1",
+                            user_agent=http_user_agent,
+                            user_agent_known_absent=http_user_agent_known_absent,
                             request_body_len=0,
                             response_body_len=response_body_len,
                             status_code=200,
@@ -3750,6 +3893,12 @@ class StorylineMixin:
                     result.session.logon_id,
                     source_ip=result.session.source_ip,
                 )
+                self._record_storyline_session_ready(
+                    system=target,
+                    actor=actor,
+                    session=result.session,
+                    rng=rng,
+                )
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
             result_source_ip = (
@@ -3795,6 +3944,18 @@ class StorylineMixin:
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:
                 malicious_event["actor"] = result.session.username
+                self._record_storyline_logon(
+                    actor,
+                    target,
+                    result.session.logon_id,
+                    source_ip=result.session.source_ip,
+                )
+                self._record_storyline_session_ready(
+                    system=target,
+                    actor=actor,
+                    session=result.session,
+                    rng=rng,
+                )
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 3389
             result_source_ip = (

@@ -2526,6 +2526,25 @@ def validate_config() -> ValidationResult:
                             f'Boot-only Windows process "{exe}" must be seeded at boot, not emitted as recurring system_services.{role_name}',
                         )
                     )
+                if entry.get("singleton"):
+                    parent = str(entry.get("parent") or "").lower()
+                    if parent != "services":
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "system_processes.yaml",
+                                f'Singleton Windows service "{exe}" in system_services.{role_name} must use parent "services"',
+                            )
+                        )
+                    normalized_image = image.replace("/", "\\").lower()
+                    if not normalized_image.startswith("c:\\") or "\\" not in normalized_image:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "system_processes.yaml",
+                                f'Singleton Windows service "{exe}" in system_services.{role_name} must use a concrete Windows image path',
+                            )
+                        )
 
     # process_network_map.yaml
     if isinstance(process_net_data, list):

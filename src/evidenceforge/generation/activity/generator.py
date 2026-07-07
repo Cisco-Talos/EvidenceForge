@@ -318,6 +318,9 @@ _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
         "msdtc.exe",
     }
 )
+_WINDOWS_SINGLETON_SERVICE_PATHS = {
+    exe: {f"c:\\windows\\system32\\{exe}"} for exe in _WINDOWS_SINGLETON_SERVICE_EXES
+}
 _FILE_ACTION_EVENT_TYPES = {
     "read": "file_read",
     "create": "file_create",
@@ -6738,18 +6741,22 @@ class ActivityGenerator:
             proxy_content_type = "text/html"
 
         apply_domain_user_agent = http is None or (
-            not _is_tool_http_user_agent(http.user_agent)
+            not getattr(http, "user_agent_known_absent", False)
+            and not _is_tool_http_user_agent(http.user_agent)
             and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
         )
-        user_agent = self._proxy_user_agent_for_context(
-            rng,
-            source_system,
-            hostname=proxy_hostname,
-            domain_tags=domain_tags,
-            existing_user_agent=user_agent,
-            override_user_agent=proxy_ua_override,
-            apply_domain_override=apply_domain_user_agent,
-        )
+        if http is not None and getattr(http, "user_agent_known_absent", False):
+            user_agent = ""
+        else:
+            user_agent = self._proxy_user_agent_for_context(
+                rng,
+                source_system,
+                hostname=proxy_hostname,
+                domain_tags=domain_tags,
+                existing_user_agent=user_agent,
+                override_user_agent=proxy_ua_override,
+                apply_domain_override=apply_domain_user_agent,
+            )
         proxy_referrer = _source_native_http_referrer(
             user_agent,
             proxy_referrer,
@@ -6964,10 +6971,7 @@ class ActivityGenerator:
                     f"wget -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
                 )
             if ua.startswith("python-requests/"):
-                return (
-                    "/usr/bin/python3",
-                    f"python3 -c 'import requests; requests.get(\"{target_url}\")'",
-                )
+                return None
             if ua.startswith("go-http-client/"):
                 return "/usr/local/bin/service-healthcheck", (
                     f"service-healthcheck --url {target_url}"
@@ -7120,6 +7124,39 @@ class ActivityGenerator:
                 image,
                 command_line,
                 "www-data",
+            )
+        return None
+
+    def _windows_proxy_helper_system_owner_spec(
+        self,
+        *,
+        source_system: System,
+        image: str,
+        command_line: str,
+    ) -> tuple[str, str, str, str] | None:
+        """Return system-owned process metadata for Windows server proxy helpers."""
+        if _get_os_category(source_system.os) != "windows":
+            return None
+        if not self._is_proxy_server_like_source(source_system):
+            return None
+
+        image_lower = image.lower()
+        command_lower = command_line.lower()
+        exe_name = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+
+        if exe_name == "service-healthcheck.exe":
+            return (
+                f"service_healthcheck_proxy:{command_line}",
+                image,
+                command_line,
+                "SYSTEM",
+            )
+        if exe_name == "java.exe" and "integration-worker" in command_lower:
+            return (
+                f"integration_worker_proxy:{command_line}",
+                image,
+                command_line,
+                "SYSTEM",
             )
         return None
 
@@ -7386,6 +7423,22 @@ class ActivityGenerator:
 
         image, command_line = hint
         os_category = _get_os_category(source_system.os)
+        system_owner_spec = self._windows_proxy_helper_system_owner_spec(
+            source_system=source_system,
+            image=image,
+            command_line=command_line,
+        )
+        if system_owner_spec is not None:
+            key, owner_image, owner_command_line, owner_username = system_owner_spec
+            return self._ensure_system_connection_owner_process(
+                source_system=source_system,
+                time=time,
+                key=key,
+                image=owner_image,
+                command_line=owner_command_line,
+                username=owner_username,
+            )
+
         system_owner_spec = self._linux_proxy_helper_system_owner_spec(
             source_system=source_system,
             image=image,
@@ -8393,26 +8446,27 @@ class ActivityGenerator:
             self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
 
     @staticmethod
-    def _ensure_tls_conn_covers_certificate_bytes(event: SecurityEvent) -> None:
+    def _ensure_tls_conn_covers_certificate_bytes(event: SecurityEvent) -> bool:
         """Keep Zeek SSL certificate file evidence within the same conn budget."""
         net = event.network
         if net is None or not event.x509_chain:
-            return
+            return False
 
         from evidenceforge.generation.activity.tls_realism import (
             certificate_analyzer_delay_ms,
             certificate_file_size,
         )
 
+        changed = False
         cert_bytes = sum(certificate_file_size(cert) for cert in event.x509_chain)
         min_resp_bytes = cert_bytes + 280
         if (net.resp_bytes or 0) < min_resp_bytes:
             net.resp_bytes = min_resp_bytes
             if net.resp_pkts is not None:
                 net.resp_pkts = max(net.resp_pkts, max(1, (net.resp_bytes // 1460) + 1))
-            if net.resp_ip_bytes is not None:
-                packet_count = net.resp_pkts or max(1, (net.resp_bytes // 1460) + 1)
-                net.resp_ip_bytes = max(net.resp_ip_bytes, net.resp_bytes + (packet_count * 40))
+            packet_count = net.resp_pkts or max(1, (net.resp_bytes // 1460) + 1)
+            net.resp_ip_bytes = max(net.resp_ip_bytes or 0, net.resp_bytes + (packet_count * 40))
+            changed = True
 
         max_cert_delay = max(
             certificate_analyzer_delay_ms(
@@ -8429,6 +8483,8 @@ class ActivityGenerator:
         min_duration = max(min_duration, 1.05 + (0.075 * len(event.x509_chain)))
         if net.duration is None or net.duration < min_duration:
             net.duration = min_duration
+            changed = True
+        return changed
 
     def _emit_ocsp_http_response(
         self,
@@ -10992,6 +11048,29 @@ class ActivityGenerator:
                 ):
                     running_proc.last_activity_time = time
             return singleton_pid
+
+        if (
+            _get_os_category(system.os) == "windows"
+            and explicit_parent is not None
+            and ntpath.basename(explicit_parent.image).lower() == "services.exe"
+        ):
+            singleton_service_pid = self._existing_windows_singleton_service_pid(
+                system=system,
+                process_name=process_name,
+                time=time,
+                username=process_username,
+            )
+            if singleton_service_pid is not None:
+                running_proc = self.state_manager.get_process(
+                    system.hostname, singleton_service_pid
+                )
+                if running_proc is not None:
+                    self.state_manager.update_process_activity_time(
+                        system.hostname,
+                        singleton_service_pid,
+                        time,
+                    )
+                return singleton_service_pid
 
         if not from_storyline:
             persistent_app_pid = self._existing_persistent_user_app_pid(
@@ -18755,6 +18834,28 @@ class ActivityGenerator:
                 event.network.orig_bytes or 0,
                 event.network.resp_bytes or 0,
             )
+        if self._ensure_tls_conn_covers_certificate_bytes(event):
+            close_time = (
+                event.timestamp + timedelta(seconds=max(0.0, event.network.duration or 0.0))
+                if event.network.duration is not None
+                else None
+            )
+            self.state_manager.update_connection_interval(
+                event.network.conn_id,
+                event.timestamp,
+                close_time,
+            )
+            self.state_manager.update_connection_bytes(
+                event.network.conn_id,
+                event.network.orig_bytes or 0,
+                event.network.resp_bytes or 0,
+            )
+            if pid > 0 and resolved_source_system is not None:
+                self._remember_process_connection_hold(
+                    system=resolved_source_system,
+                    pid=pid,
+                    close_time=close_time,
+                )
 
         self._repair_explicit_proxy_listener_process_attribution(
             event,
@@ -19125,6 +19226,109 @@ class ActivityGenerator:
             return None
         return transport_pid
 
+    def _active_linux_session_user_manager_pid(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        at_time: datetime,
+    ) -> int | None:
+        """Return the durable `systemd --user` process for a local Linux session."""
+
+        at_time = ensure_utc(at_time)
+        session = self.state_manager.get_session(logon_id)
+        candidate_pids: list[int] = []
+        if session is not None and session.session_user_manager_pid:
+            candidate_pids.append(session.session_user_manager_pid)
+
+        for proc in self.state_manager.get_processes_on_system(target_system.hostname):
+            if proc.username != user.username:
+                continue
+            if proc.logon_id != logon_id:
+                continue
+            if proc.image != "/usr/lib/systemd/systemd":
+                continue
+            if proc.command_line != "/usr/lib/systemd/systemd --user":
+                continue
+            candidate_pids.append(proc.pid)
+
+        valid_candidates = []
+        for pid in dict.fromkeys(candidate_pids):
+            proc = self.state_manager.get_process(target_system.hostname, pid)
+            if proc is None or proc.start_time is None:
+                continue
+            if ensure_utc(proc.start_time) > at_time:
+                continue
+            if not self._is_pid_active_at(target_system, pid, at_time):
+                continue
+            valid_candidates.append(proc)
+
+        if not valid_candidates:
+            return None
+
+        valid_candidates.sort(key=lambda proc: ensure_utc(proc.start_time))
+        user_manager = valid_candidates[0]
+        if session is not None:
+            session.session_user_manager_pid = user_manager.pid
+        return user_manager.pid
+
+    def _active_linux_local_session_parent_pid(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        at_time: datetime,
+    ) -> int | None:
+        """Return an active terminal/login parent for a local Linux session shell."""
+
+        at_time = ensure_utc(at_time)
+        session = self.state_manager.get_session(logon_id)
+        candidate_pids: list[int] = []
+        if session is not None and session.process_tree_root:
+            candidate_pids.append(session.process_tree_root)
+
+        parent_images = {
+            "/usr/libexec/gnome-terminal-server",
+            "/bin/login",
+        }
+        for proc in self.state_manager.get_processes_on_system(target_system.hostname):
+            if proc.username != user.username:
+                continue
+            if proc.logon_id != logon_id:
+                continue
+            if proc.image not in parent_images:
+                continue
+            candidate_pids.append(proc.pid)
+
+        valid_candidates = []
+        for pid in dict.fromkeys(candidate_pids):
+            proc = self.state_manager.get_process(target_system.hostname, pid)
+            if proc is None or proc.start_time is None:
+                continue
+            if proc.image not in parent_images:
+                continue
+            if ensure_utc(proc.start_time) > at_time:
+                continue
+            if not self._linux_parent_usable_for_child_at(
+                system=target_system,
+                parent_pid=pid,
+                time=at_time,
+                logon_id=logon_id,
+            ):
+                continue
+            valid_candidates.append(proc)
+
+        if not valid_candidates:
+            return None
+
+        valid_candidates.sort(key=lambda proc: ensure_utc(proc.start_time), reverse=True)
+        parent = valid_candidates[0]
+        if session is not None:
+            session.process_tree_root = parent.pid
+        return parent.pid
+
     def _ensure_linux_local_session_shell_parent(
         self,
         *,
@@ -19150,18 +19354,32 @@ class ActivityGenerator:
         if user_systemd_time >= bash_time:
             user_systemd_time = logon_time + timedelta(milliseconds=90)
 
-        user_systemd_pid = self.generate_process(
+        session = self.state_manager.get_session(logon_id)
+        user_systemd_pid = self._active_linux_session_user_manager_pid(
             user=user,
-            system=target_system,
-            time=user_systemd_time,
+            target_system=target_system,
             logon_id=logon_id,
-            process_name="/usr/lib/systemd/systemd",
-            command_line="/usr/lib/systemd/systemd --user",
-            parent_pid=root_parent_pid,
-            suppress_command_file_effect=True,
+            at_time=bash_time,
         )
-        user_systemd_proc = self.state_manager.get_process(target_system.hostname, user_systemd_pid)
-        if user_systemd_proc is not None:
+        if user_systemd_pid is None:
+            user_systemd_pid = self.generate_process(
+                user=user,
+                system=target_system,
+                time=user_systemd_time,
+                logon_id=logon_id,
+                process_name="/usr/lib/systemd/systemd",
+                command_line="/usr/lib/systemd/systemd --user",
+                parent_pid=root_parent_pid,
+                suppress_command_file_effect=True,
+            )
+            if session is not None:
+                session.session_user_manager_pid = user_systemd_pid
+
+        user_systemd_proc = self.state_manager.get_process(
+            target_system.hostname,
+            user_systemd_pid,
+        )
+        if user_systemd_proc is not None and user_systemd_proc.start_time is not None:
             user_systemd_time = ensure_utc(user_systemd_proc.start_time)
 
         if workstation_like:
@@ -19170,6 +19388,21 @@ class ActivityGenerator:
         else:
             parent_image = "/bin/login"
             parent_command = f"login -- {user.username}"
+
+        existing_parent_pid = self._active_linux_local_session_parent_pid(
+            user=user,
+            target_system=target_system,
+            logon_id=logon_id,
+            at_time=bash_time,
+        )
+        if existing_parent_pid is not None:
+            existing_parent = self.state_manager.get_process(
+                target_system.hostname,
+                existing_parent_pid,
+            )
+            if existing_parent is not None and existing_parent.start_time is not None:
+                return existing_parent_pid, ensure_utc(existing_parent.start_time)
+            return existing_parent_pid, user_systemd_time
 
         terminal_time = max(
             user_systemd_time + timedelta(milliseconds=120),
@@ -19353,6 +19586,16 @@ class ActivityGenerator:
                 margin_seconds=1.5,
             ):
                 return None
+            if session is not None and session.system == target_system.hostname:
+                session_shell = self.ensure_linux_session_shell(
+                    user=user,
+                    target_system=target_system,
+                    logon_id=logon_id,
+                    logon_time=logon_time or session.start_time,
+                    activity_time=activity_time,
+                )
+                if session_shell is not None:
+                    return session_shell
         existing = self._active_visible_linux_shell_pid(
             target_system,
             user.username,
@@ -25994,22 +26237,29 @@ class ActivityGenerator:
 
         normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
         exe_name = normalized_path.rsplit("\\", 1)[-1]
-        if exe_name not in _WINDOWS_SINGLETON_SERVICE_EXES:
+        from evidenceforge.generation.activity.system_processes import (
+            get_windows_singleton_service_paths,
+        )
+
+        singleton_paths = {
+            key: set(paths) for key, paths in _WINDOWS_SINGLETON_SERVICE_PATHS.items()
+        }
+        for key, paths in get_windows_singleton_service_paths().items():
+            singleton_paths.setdefault(key, set()).update(paths)
+        valid_paths = singleton_paths.get(exe_name)
+        if not valid_paths:
             return None
 
-        canonical_path = f"c:\\windows\\system32\\{exe_name}"
-        if "\\" in normalized_path and normalized_path != canonical_path:
+        if "\\" in normalized_path and normalized_path not in valid_paths:
             return None
 
         normalized_username = username.upper()
         candidates: list[RunningProcess] = []
         for proc in self.state_manager.get_processes_on_system(system.hostname):
             proc_path = ntpath.normpath(proc.image.replace("/", "\\")).lower()
-            if proc_path != canonical_path:
+            if proc_path not in valid_paths:
                 continue
             if proc.username.upper() != normalized_username:
-                continue
-            if proc.start_time > time:
                 continue
             parent = self.state_manager.get_process(system.hostname, proc.parent_pid)
             parent_image = parent.image if parent else ""
@@ -26138,6 +26388,82 @@ class ActivityGenerator:
         if proc is None:
             return False
         return self._is_one_shot_shell_command(proc.image, proc.command_line)
+
+    @staticmethod
+    def _windows_one_shot_shell_payload(process_name: str, command_line: str) -> str:
+        """Return the inline command executed by a one-shot Windows shell."""
+        shell_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        command = command_line.strip()
+        if shell_exe == "cmd.exe":
+            match = re.search(r"(?i)(?:^|\s)/(?:c|k)\s+(.+)$", command)
+            return match.group(1).strip().strip('"') if match else ""
+        if shell_exe in {"powershell.exe", "pwsh.exe"}:
+            match = re.search(r"(?i)(?:^|\s)-(?:command|c)\s+(.+)$", command)
+            return match.group(1).strip().strip('"') if match else ""
+        return ""
+
+    @staticmethod
+    def _windows_shell_command_signature(command_line: str) -> tuple[str, ...]:
+        """Normalize a Windows command line for shell parent/child matching."""
+        tokens = _command_tokens(command_line)
+        if not tokens:
+            return ()
+        normalized: list[str] = []
+        for index, token in enumerate(tokens):
+            value = token.strip().strip('"').lower()
+            if index == 0:
+                value = value.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                if value.endswith(".exe"):
+                    value = value[:-4]
+            normalized.append(value)
+        return tuple(normalized)
+
+    @classmethod
+    def _windows_child_command_signatures(
+        cls,
+        process_name: str,
+        command_line: str,
+    ) -> set[tuple[str, ...]]:
+        """Return command signatures that can represent a child process launch."""
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        process_stem = process_exe.removesuffix(".exe")
+        signatures: set[tuple[str, ...]] = set()
+        command_signature = cls._windows_shell_command_signature(command_line)
+        if command_signature:
+            signatures.add(command_signature)
+            if command_signature[0] != process_stem:
+                signatures.add((process_stem, *command_signature))
+        else:
+            signatures.add((process_stem,))
+        return signatures
+
+    def _windows_shell_parent_invokes_child(
+        self,
+        *,
+        system: System,
+        parent_pid: int,
+        process_name: str,
+        command_line: str,
+    ) -> bool:
+        """Return whether a one-shot shell parent directly invokes this child command."""
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_proc is None:
+            return False
+        if not self._is_one_shot_shell_command(parent_proc.image, parent_proc.command_line):
+            return False
+        payload = self._windows_one_shot_shell_payload(
+            parent_proc.image,
+            parent_proc.command_line,
+        )
+        if not payload:
+            return False
+        parent_signature = self._windows_shell_command_signature(payload)
+        if not parent_signature:
+            return False
+        return parent_signature in self._windows_child_command_signatures(
+            process_name,
+            command_line,
+        )
 
     def _is_bare_interactive_windows_shell(self, process_name: str, command_line: str) -> bool:
         """Return whether a shell is an interactive prompt rather than an inline command."""
@@ -27307,6 +27633,15 @@ class ActivityGenerator:
             return self._windows_explorer_parent_pid(system, user, time, logon_id)
 
         if os_category == "windows":
+            parent_is_one_shot_shell = self._is_one_shot_shell_parent(system, parent_pid)
+            one_shot_parent_invokes_child = parent_is_one_shot_shell and (
+                self._windows_shell_parent_invokes_child(
+                    system=system,
+                    parent_pid=parent_pid,
+                    process_name=process_name,
+                    command_line=command_line,
+                )
+            )
             if is_same_exe_gui_child:
                 same_exe_parent = self._windows_same_exe_gui_parent_pid(
                     system=system,
@@ -27335,7 +27670,7 @@ class ActivityGenerator:
                     logon_id=logon_id,
                     os_category=os_category,
                 )
-                and not self._is_one_shot_shell_parent(system, parent_pid)
+                and (not parent_is_one_shot_shell or one_shot_parent_invokes_child)
             ):
                 return parent_pid
         elif parent_proc is not None and self._linux_parent_usable_for_child_at(
@@ -27368,7 +27703,14 @@ class ActivityGenerator:
                     return visible_shell_pid
             return parent_pid
 
-        resolved = self._resolve_parent(system, user, time, logon_id, process_name)
+        resolved = self._resolve_parent(
+            system,
+            user,
+            time,
+            logon_id,
+            process_name,
+            command_line,
+        )
         resolved_proc = self.state_manager.get_process(system.hostname, resolved)
         resolved_image = (resolved_proc.image if resolved_proc is not None else "").lower()
         if os_category == "windows":
