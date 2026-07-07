@@ -6,6 +6,27 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.11.0 (2026-07-07)
+
+This minor release extends the current development realism pass with expanded
+scenario validation, source-native generation refinements, and loop-driven
+quality fixes for the expanded iteration-test benchmark.
+
+**Scenario validation and generation refinements**
+
+- Added config validation and system-process data support for new process
+  ownership and service-helper modeling paths (`c8575e96`).
+- Improved canonical generation, source timing, state tracking, eCAR rendering,
+  proxy transaction handling, baseline behavior, and storyline session
+  readiness so endpoint, network, and protocol evidence remains source-native
+  and lifecycle-compatible (`c8575e96`).
+- Added focused regression coverage for activity generation, eCAR source-local
+  process/flow visibility, explicit proxy ownership, source timing, spawn
+  rules, storyline command/session behavior, email STARTTLS byte budgets, and
+  config validation (`c8575e96`).
+- Recorded expanded iteration-test assessment loop outcomes and next realism
+  targets in the branch worklog (`c8575e96`).
+
 ## v1.10.0 (2026-07-06)
 
 This minor release adds full email evidence generation, reusable scenario YAML
