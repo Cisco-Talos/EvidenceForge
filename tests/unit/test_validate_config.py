@@ -2045,6 +2045,41 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_singleton_service_without_services_parent(self, monkeypatch):
+        from evidenceforge.generation.activity import system_processes
+
+        real_loader = system_processes.load_system_processes
+
+        def load_invalid_system_processes():
+            data = real_loader()
+            services = {
+                role: [dict(entry) for entry in entries]
+                for role, entries in data.get("system_services", {}).items()
+            }
+            services.setdefault("workstation", []).append(
+                {
+                    "image": r"C:\Program Files\Agent\AgentSvc.exe",
+                    "command_templates": ["AgentSvc.exe"],
+                    "parent": "svchost_dcom",
+                    "singleton": True,
+                }
+            )
+            return {**data, "system_services": services}
+
+        monkeypatch.setattr(
+            system_processes, "load_system_processes", load_invalid_system_processes
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "system_processes.yaml"
+            and 'Singleton Windows service "agentsvc.exe"' in issue.message
+            and 'parent "services"' in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_command_template_escaped_brace_leaks(self, monkeypatch):
         from evidenceforge.generation.activity import application_catalog
 

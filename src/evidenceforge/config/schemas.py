@@ -2211,6 +2211,7 @@ class SystemServiceEntry(BaseModel, extra="forbid"):
     parent: str
     params: dict[str, list[str]] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
+    singleton: bool = False
 
 
 class SystemBinaryEntry(BaseModel, extra="forbid"):

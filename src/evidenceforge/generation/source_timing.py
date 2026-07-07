@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 
 _SOURCE_EPSILON = timedelta(milliseconds=1)
 _OBSERVATION_NOISE_US = 997
+_PROCESS_CREATE_SOURCE_KEYS = {
+    "source.windows_security_process_create",
+    "source.sysmon_process_create",
+    "source.ecar_process_create",
+}
 
 
 @dataclass(slots=True)
@@ -72,6 +77,12 @@ class SourceTimingPlanner:
         preferred_time = plan.source_times.get(cache_key)
         if preferred_time is None:
             preferred_time = self._sample_source_time(event, source_key, effective_seed)
+        if not_before is not None and preferred_time < not_before:
+            preferred_time = self._source_floor_repair_time(
+                source_key,
+                effective_seed,
+                not_before,
+            )
         constrained_time = self._apply_constraints(
             preferred_time,
             not_before=not_before,
@@ -334,6 +345,21 @@ class SourceTimingPlanner:
             "source-micro-noise:" + source_key + ":" + ":".join(str(part) for part in seed_parts)
         )
         return timedelta(microseconds=37 + (seed % 961))
+
+    @staticmethod
+    def _source_floor_repair_time(
+        source_key: str,
+        seed_parts: tuple[Any, ...],
+        lower_bound: datetime,
+    ) -> datetime:
+        """Keep clamped process-create sources source-native after a shared floor."""
+        if source_key not in _PROCESS_CREATE_SOURCE_KEYS:
+            return lower_bound
+        delay = sample_timing_delta(
+            source_key,
+            seed_parts=("floor-repair", source_key, *seed_parts),
+        )
+        return lower_bound + max(delay, _SOURCE_EPSILON)
 
     @staticmethod
     def _apply_constraints(

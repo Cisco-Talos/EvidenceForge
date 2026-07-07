@@ -43,6 +43,7 @@ from evidenceforge.generation.engine.baseline import (
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
     _is_kerberos_member_server,
+    _is_windows_singleton_service_image,
     _kernel_uptime_stamp,
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
@@ -98,6 +99,16 @@ def test_networkmanager_message_timestamp_uses_epoch_time():
     ts = datetime(2024, 3, 18, 12, 8, 39, 757990, tzinfo=UTC)
 
     assert _networkmanager_message_timestamp(ts) == "1710763719.7580"
+
+
+def test_windows_singleton_service_image_uses_system_process_catalog():
+    """Endpoint service agents marked singleton in config should be recognized."""
+    assert _is_windows_singleton_service_image(
+        r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPS.exe"
+    )
+    assert not _is_windows_singleton_service_image(
+        r"C:\Program Files\Google\Update\GoogleUpdate.exe"
+    )
 
 
 def test_linux_primary_interface_is_stable_per_host(linux_system):
@@ -1062,6 +1073,56 @@ class TestGenerateSystemProcess:
         ]
         assert len(security_creates) == 1
 
+    def test_stale_cleanup_preserves_catalog_singleton_service_agents(
+        self, win_system, timestamp, state_manager
+    ):
+        """Generic stale cleanup should not stop long-running singleton service agents."""
+        engine = type(
+            "FakeEngine",
+            (BaselineMixin,),
+            {
+                "_find_actor": lambda self, actor_name: User(
+                    username=actor_name,
+                    full_name=actor_name,
+                    email=f"{actor_name.lower()}@example.test",
+                    enabled=True,
+                )
+            },
+        )()
+        engine.scenario = type(
+            "Scenario",
+            (),
+            {"environment": type("Environment", (), {"systems": [win_system]})()},
+        )()
+        engine.state_manager = state_manager
+        engine.activity_generator = Mock()
+        engine._system_pids = {win_system.hostname: {}}
+
+        state_manager.set_current_time(timestamp - timedelta(hours=4))
+        services_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+            logon_id="0x3e7",
+        )
+        agent_pid = state_manager.create_process(
+            win_system.hostname,
+            services_pid,
+            r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPS.exe",
+            "PanGPS.exe",
+            "SYSTEM",
+            "System",
+            logon_id="0x3e7",
+        )
+
+        engine._terminate_stale_processes(timestamp)
+
+        assert state_manager.get_process(win_system.hostname, agent_pid) is not None
+        engine.activity_generator.generate_process_termination.assert_not_called()
+
     def test_singleton_windows_service_reuse_ignores_noncanonical_future_process(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters
     ):
@@ -1110,10 +1171,10 @@ class TestGenerateSystemProcess:
         assert len(security_creates) == 1
         assert security_creates[0].process.pid == returned_pid
 
-    def test_singleton_windows_service_reuse_ignores_canonical_future_process(
+    def test_singleton_windows_service_reuse_accepts_canonical_future_process(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters
     ):
-        """Singleton service reuse should not select processes that start after event time."""
+        """Singleton service reuse should be stable when generation visits time out of order."""
         state_manager.set_current_time(timestamp)
         parent_pid = state_manager.create_process(
             win_system.hostname,
@@ -1143,10 +1204,17 @@ class TestGenerateSystemProcess:
             username="SYSTEM",
         )
 
-        assert returned_pid != future_pid
+        assert returned_pid == future_pid
         returned_proc = state_manager.get_process(win_system.hostname, returned_pid)
         assert returned_proc is not None
-        assert returned_proc.start_time == timestamp + timedelta(minutes=10)
+        assert returned_proc.start_time == timestamp + timedelta(hours=1)
+        security_creates = [
+            c[0][0]
+            for c in mock_emitters["windows_event_security"].emit.call_args_list
+            if c[0][0].event_type == "system_process_create"
+            and c[0][0].process.image == r"C:\Windows\System32\spoolsv.exe"
+        ]
+        assert security_creates == []
 
     def test_allows_multiple_non_singleton_windows_service_processes(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters

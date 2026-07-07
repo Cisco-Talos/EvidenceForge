@@ -10011,10 +10011,84 @@ class TestActivityGenerator:
         assert release_time == source_visible_done
         assert reserved > source_visible_done
 
-    def test_linux_proxy_client_process_uses_non_shell_session_parent(
+    def test_linux_session_shell_reuses_user_manager_when_rebuilt(
         self, activity_gen, test_user, state_manager
     ):
-        """Synthetic Linux proxy socket owners should not occupy the foreground shell."""
+        """Rebuilding a local Linux shell should not duplicate `systemd --user`."""
+        session_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(session_time)
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+            start_time=session_time,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid}}
+
+        first_shell = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon_id,
+            logon_time=session_time,
+            activity_time=session_time + timedelta(minutes=5),
+        )
+
+        assert first_shell is not None
+        first_shell_proc = state_manager.get_process(linux.hostname, first_shell)
+        assert first_shell_proc is not None
+        first_terminal = state_manager.get_process(linux.hostname, first_shell_proc.parent_pid)
+        assert first_terminal is not None
+        first_user_manager_pid = first_terminal.parent_pid
+        first_user_manager = state_manager.get_process(linux.hostname, first_user_manager_pid)
+        assert first_user_manager is not None
+        assert first_user_manager.command_line == "/usr/lib/systemd/systemd --user"
+
+        state_manager.end_process(linux.hostname, first_shell)
+        state_manager.end_process(linux.hostname, first_terminal.pid)
+
+        second_shell = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon_id,
+            logon_time=session_time,
+            activity_time=session_time + timedelta(minutes=35),
+        )
+
+        assert second_shell is not None
+        second_shell_proc = state_manager.get_process(linux.hostname, second_shell)
+        assert second_shell_proc is not None
+        second_terminal = state_manager.get_process(linux.hostname, second_shell_proc.parent_pid)
+        assert second_terminal is not None
+        assert second_terminal.parent_pid == first_user_manager_pid
+        user_managers = [
+            proc
+            for proc in state_manager.get_processes_on_system(linux.hostname)
+            if proc.command_line == "/usr/lib/systemd/systemd --user" and proc.logon_id == logon_id
+        ]
+        assert len(user_managers) == 1
+
+    def test_linux_workstation_python_requests_proxy_stays_unattributed(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Generic Python proxy User-Agents should not synthesize desktop snippets."""
         request_time = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
         linux = System(
             hostname="WS-LNGUYEN-01",
@@ -10099,11 +10173,16 @@ class TestActivityGenerator:
             dst_port=443,
         )
 
-        proc = state_manager.get_process(linux.hostname, pid)
-        assert image == "/usr/bin/python3"
-        assert proc is not None
-        assert proc.parent_pid == terminal_pid
-        assert proc.parent_pid != bash_pid
+        assert pid == -1
+        assert image is None
+        assert state_manager.get_process(linux.hostname, terminal_pid) is not None
+        assert state_manager.get_process(linux.hostname, bash_pid) is not None
+        python_snippets = [
+            proc
+            for proc in state_manager.get_processes_on_system(linux.hostname)
+            if proc.image == "/usr/bin/python3" and "requests.get" in proc.command_line
+        ]
+        assert python_snippets == []
 
     def test_process_user_apps_bash_pool_respects_database_role(
         self, activity_gen, test_user, monkeypatch, mock_emitters

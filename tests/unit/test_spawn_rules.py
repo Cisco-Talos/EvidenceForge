@@ -187,6 +187,130 @@ class TestWindowsProcessTreeRealism:
         assert child_proc is not None
         assert child_proc.parent_pid == dns_pid
 
+    def test_program_files_singleton_service_reuses_active_agent(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Catalog-marked service agents should not overlap as duplicate SCM children."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        services_pid = pids["services"]
+        first_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        second_time = first_time + timedelta(minutes=7)
+
+        first_pid = ag.generate_system_process(
+            system=win_system,
+            time=first_time,
+            process_name=r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPS.exe",
+            command_line="PanGPS.exe",
+            parent_pid=services_pid,
+            username="SYSTEM",
+        )
+        second_pid = ag.generate_system_process(
+            system=win_system,
+            time=second_time,
+            process_name=r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPS.exe",
+            command_line="PanGPS.exe",
+            parent_pid=services_pid,
+            username="SYSTEM",
+        )
+
+        assert second_pid == first_pid
+        process_creates = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "system_process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("PanGPS.exe")
+        ]
+        assert len(process_creates) == 1
+
+    def test_regular_process_path_reuses_active_program_files_singleton_service(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """SYSTEM process generation should adapt service-agent children into singleton reuse."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        services_pid = pids["services"]
+        first_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        second_time = first_time + timedelta(minutes=8)
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.test",
+            enabled=True,
+        )
+
+        first_pid = ag.generate_system_process(
+            system=win_system,
+            time=first_time,
+            process_name=r"C:\Program Files\Zscaler\ZSATunnel\ZSATunnel.exe",
+            command_line="ZSATunnel.exe",
+            parent_pid=services_pid,
+            username="SYSTEM",
+        )
+        mock_emitters["ecar"].emit.reset_mock()
+
+        second_pid = ag.generate_process(
+            user=system_user,
+            system=win_system,
+            time=second_time,
+            logon_id="0x3e7",
+            process_name=r"C:\Program Files\Zscaler\ZSATunnel\ZSATunnel.exe",
+            command_line="ZSATunnel.exe",
+            parent_pid=services_pid,
+        )
+
+        assert second_pid == first_pid
+        process_creates = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("ZSATunnel.exe")
+        ]
+        assert process_creates == []
+
+    def test_out_of_order_program_files_singleton_service_reuses_future_candidate(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Out-of-order generation should not create overlapping service-agent siblings."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        services_pid = pids["services"]
+        earlier_time = datetime(2024, 3, 18, 12, 13, 6, tzinfo=UTC)
+        later_time = datetime(2024, 3, 18, 12, 21, 52, tzinfo=UTC)
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.test",
+            enabled=True,
+        )
+
+        later_pid = ag.generate_system_process(
+            system=win_system,
+            time=later_time,
+            process_name=r"C:\Program Files\Zscaler\ZSATunnel\ZSATunnel.exe",
+            command_line="ZSATunnel.exe",
+            parent_pid=services_pid,
+            username="SYSTEM",
+        )
+        earlier_pid = ag.generate_process(
+            user=system_user,
+            system=win_system,
+            time=earlier_time,
+            logon_id="0x3e7",
+            process_name=r"C:\Program Files\Zscaler\ZSATunnel\ZSATunnel.exe",
+            command_line="ZSATunnel.exe",
+            parent_pid=services_pid,
+        )
+
+        assert earlier_pid == later_pid
+        matching_creates = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type in {"process_create", "system_process_create"}
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("ZSATunnel.exe")
+        ]
+        assert len(matching_creates) == 1
+
     def test_cli_process_gets_shell_parent(self, state_manager, mock_emitters, win_system, user):
         """CLI process (dotnet.exe) should get cmd.exe or powershell.exe as parent."""
         ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
@@ -1119,6 +1243,66 @@ class TestDualSessionParentSelection:
         assert parent_proc.image == r"C:\Windows\System32\cmd.exe"
         assert parent_proc.command_line == rf"C:\Windows\System32\cmd.exe /c {command_line}"
         assert parent_proc.parent_pid == pids["wmiprvse"]
+
+    def test_network_command_keeps_matching_one_shot_shell_parent(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """A service shell wrapper should remain the parent of the child it invoked."""
+        service_user = User(
+            username="svc_mhsync",
+            full_name="MHS Sync",
+            email="svc_mhsync@example.com",
+            enabled=True,
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_time = datetime(2024, 3, 18, 17, 0, 59, tzinfo=UTC)
+        command_time = datetime(2024, 3, 18, 17, 1, 2, tzinfo=UTC)
+        command_line = r"net view \\FILE-SRV-01"
+        logon_id = ag.generate_logon(
+            service_user,
+            win_system,
+            logon_time,
+            logon_type=3,
+            source_ip="10.0.10.50",
+            emit_network_evidence=False,
+        )
+
+        shell_pid = ag._resolve_parent(
+            win_system,
+            service_user,
+            command_time,
+            logon_id,
+            r"C:\Windows\System32\net.exe",
+            command_line,
+        )
+        shell_proc = state_manager.get_process(win_system.hostname, shell_pid)
+
+        assert shell_proc is not None
+        assert shell_proc.image == r"C:\Windows\System32\cmd.exe"
+        assert shell_proc.command_line == rf"C:\Windows\System32\cmd.exe /c {command_line}"
+        assert shell_proc.parent_pid == pids["wmiprvse"]
+
+        child_pid = ag.generate_process(
+            service_user,
+            win_system,
+            command_time,
+            logon_id,
+            r"C:\Windows\System32\net.exe",
+            command_line,
+            parent_pid=shell_pid,
+            from_storyline=True,
+        )
+        child_proc = state_manager.get_process(win_system.hostname, child_pid)
+        shell_commands = [
+            proc.command_line
+            for proc in state_manager.get_processes_on_system(win_system.hostname)
+            if proc.image == r"C:\Windows\System32\cmd.exe" and " /c " in proc.command_line
+        ]
+
+        assert child_proc is not None
+        assert child_proc.parent_pid == shell_pid
+        assert rf"C:\Windows\System32\cmd.exe /c {command_line}" in shell_commands
+        assert r"C:\Windows\System32\cmd.exe /c net.exe" not in shell_commands
 
     @pytest.mark.parametrize(
         ("process_name", "command_line", "expected_parent_key"),

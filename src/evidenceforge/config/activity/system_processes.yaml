@@ -195,6 +195,7 @@ system_services:
       command_templates:
         - "vpnagent.exe"
       parent: services
+      singleton: true
       loaded_modules:
         - path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnapi.dll"
           signature: "Cisco Systems, Inc."
@@ -208,6 +209,7 @@ system_services:
       command_templates:
         - "PanGPS.exe"
       parent: services
+      singleton: true
       loaded_modules:
         - path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGpHip.dll"
           signature: "Palo Alto Networks, Inc."
@@ -215,6 +217,7 @@ system_services:
       command_templates:
         - "ZSAService.exe"
       parent: services
+      singleton: true
       loaded_modules:
         - path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSACommon.dll"
           signature: "Zscaler, Inc."
@@ -222,6 +225,7 @@ system_services:
       command_templates:
         - "ZSATunnel.exe"
       parent: services
+      singleton: true
       loaded_modules:
         - path: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.dll"
           signature: "Zscaler, Inc."

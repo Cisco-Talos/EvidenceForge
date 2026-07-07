@@ -1182,6 +1182,8 @@ class StateManager:
                 continue
             if session.explorer_pid == pid:
                 session.explorer_pid = None
+            if session.session_user_manager_pid == pid:
+                session.session_user_manager_pid = None
             if session.session_winlogon_pid == pid:
                 session.session_winlogon_pid = None
             if session.session_shell_pid == pid:
