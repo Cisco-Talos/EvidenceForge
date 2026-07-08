@@ -1,0 +1,41 @@
+{
+  "artifact_manifest_inside_review_tree": false,
+  "attempt": "60-d",
+  "candidate_commit": "8ccc066b",
+  "email_artifacts_format_count": 0,
+  "eml_files_inside_review_tree": [],
+  "eml_format_count": 0,
+  "format_names": [
+    "zeek_conn",
+    "zeek_dns",
+    "zeek_http",
+    "zeek_ssl",
+    "zeek_smtp",
+    "zeek_files",
+    "zeek_x509",
+    "zeek_ocsp",
+    "zeek_dhcp",
+    "zeek_ntp",
+    "cisco_asa",
+    "snort_alert",
+    "windows_event_security",
+    "windows_event_sysmon",
+    "ecar",
+    "syslog",
+    "bash_history",
+    "proxy_access",
+    "web_access"
+  ],
+  "mail_artifacts_family_count": 0,
+  "package_root_artifact_manifest_exists": true,
+  "package_root_eml_count": 30,
+  "profile_exists": true,
+  "profile_path": "scenarios/iteration-test-expanded/data/data/COLLECTION_PROFILE.json",
+  "scenario": "iteration-test-expanded",
+  "source_family_names": [
+    "network_sensors",
+    "perimeter_controls",
+    "endpoint_telemetry",
+    "application_access"
+  ]
+}

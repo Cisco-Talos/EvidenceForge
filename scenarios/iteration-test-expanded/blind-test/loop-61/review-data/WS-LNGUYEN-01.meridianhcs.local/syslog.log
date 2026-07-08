@@ -1,0 +1,321 @@
+<30>1 2024-03-18T12:01:17.110097Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Resetting tracker extract task after idle timeout 925796
+<78>1 2024-03-18T12:03:00.258000Z WS-LNGUYEN-01 CRON 779929 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:03:01.560837Z WS-LNGUYEN-01 fwupd 2929 - - metadata is 2 days old, scheduling refresh
+<30>1 2024-03-18T12:03:37.224618Z WS-LNGUYEN-01 systemd-resolved 33731 - - Transaction 660368 switched to UDP+EDNS0 with advertised UDP packet size 1472.
+<30>1 2024-03-18T12:03:42.759278Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Resetting tracker extract task after idle timeout 577511
+<30>1 2024-03-18T12:03:51.515526Z WS-LNGUYEN-01 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:03:55.785200Z WS-LNGUYEN-01 systemd 1 - - Finished motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:04:54.618718Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.98'
+<30>1 2024-03-18T12:05:21.741233Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.99'
+<30>1 2024-03-18T12:06:45.937400Z WS-LNGUYEN-01 polkitd 36519 - - Operator of unix-process:780035:233320155 successfully authenticated as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.NetworkManager.settings.modify.system for system-bus-name::1.100 [/usr/bin/nmcli] (owned by unix-user:deploy)
+<30>1 2024-03-18T12:06:51.656114Z WS-LNGUYEN-01 avahi-daemon 58600 - - Service "_ipp._tcp" successfully established.
+<30>1 2024-03-18T12:06:53.466791Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'admin' has logged in
+<30>1 2024-03-18T12:07:58.861756Z WS-LNGUYEN-01 snapd 33655 - - taskrunner.go:271: change 8193 task 2 done for lxd
+<30>1 2024-03-18T12:08:02.165501Z WS-LNGUYEN-01 gnome-shell 41735 - - Extension appindicatorsupport@rgcjonas.gmail.com already enabled
+<30>1 2024-03-18T12:08:52.213837Z WS-LNGUYEN-01 packagekitd 16338 - - resolve transaction /521486
+<86>1 2024-03-18T12:12:57.698200Z WS-LNGUYEN-01 sudo 780126 - - pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+<30>1 2024-03-18T12:13:00.467724Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.101'
+<86>1 2024-03-18T12:13:00.708200Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311191 of user root.
+<30>1 2024-03-18T12:15:03.997698Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764103.7617] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T12:15:04.346857Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'admin' has logged in
+<30>1 2024-03-18T12:15:06.205587Z WS-LNGUYEN-01 gnome-shell 41735 - - Window manager warning: Overwriting existing binding of keysym Super_L with keysym XF86AudioRaiseVolume
+<30>1 2024-03-18T12:15:11.511170Z WS-LNGUYEN-01 snapd 33655 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T12:15:40.414429Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764140.1944] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T12:15:51.007505Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764150.8595] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T12:16:08.733499Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764168.5135] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T12:16:16.397210Z WS-LNGUYEN-01 polkitd 36519 - - Registered Authentication Agent for unix-session:111 (system bus name :1.103 [/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2024-03-18T12:17:02.010872Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764221.9329] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T12:17:49.731228Z WS-LNGUYEN-01 polkitd 36519 - - Unregistered Authentication Agent for unix-session:110 (system bus name :1.88, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<30>1 2024-03-18T12:18:58.506448Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'deploy' has logged in
+<30>1 2024-03-18T12:19:22.824351Z WS-LNGUYEN-01 avahi-daemon 58600 - - Service "_ipp._tcp" successfully established.
+<30>1 2024-03-18T12:20:12.238228Z WS-LNGUYEN-01 polkitd 36519 - - Operator of unix-process:780288:233401213 successfully authenticated as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.systemd1.manage-units for system-bus-name::1.104 [/usr/bin/systemctl] (owned by unix-user:admin)
+<30>1 2024-03-18T12:21:17.250532Z WS-LNGUYEN-01 snapd 33655 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T12:24:17.481244Z WS-LNGUYEN-01 thermald 12610 - - thermal zone acpitz: trip point updated
+<30>1 2024-03-18T12:25:32.357940Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T12:25:33.960940Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T12:25:35.455940Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1965 seconds.
+<30>1 2024-03-18T12:26:03.205000Z WS-LNGUYEN-01 anacron 45410 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:26:04.504450Z WS-LNGUYEN-01 anacron 45410 - - Will run job `cron.daily' in 5 min.
+<30>1 2024-03-18T12:26:32.846897Z WS-LNGUYEN-01 systemd-resolved 33731 - - Transaction 962743 switched to UDP with advertised UDP packet size 1472.
+<30>1 2024-03-18T12:26:33.710194Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764793.6152] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T12:28:25.706366Z WS-LNGUYEN-01 fwupd 2929 - - USB-C Dock: no updates available
+<30>1 2024-03-18T12:29:20.609354Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710764960.6034] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T12:29:47.430976Z WS-LNGUYEN-01 polkitd 36519 - - Registered Authentication Agent for unix-session:121 (system bus name :1.105 [/usr/libexec/polkit-gnome-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2024-03-18T12:31:11.182535Z WS-LNGUYEN-01 anacron 45410 - - Job `cron.daily' started
+<30>1 2024-03-18T12:31:20.411503Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710765080.2005] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T12:31:36.682239Z WS-LNGUYEN-01 anacron 45410 - - Job `cron.daily' terminated
+<30>1 2024-03-18T12:31:38.936940Z WS-LNGUYEN-01 anacron 45410 - - Normal exit (1 job run)
+<30>1 2024-03-18T12:32:05.418517Z WS-LNGUYEN-01 rsyslogd 33439 - - action 'dyn_file_cache' resumed after retry 34180, next retry disabled
+<30>1 2024-03-18T12:32:05.513127Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710765125.3931] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T12:32:15.956892Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.108'
+<78>1 2024-03-18T12:33:00.175000Z WS-LNGUYEN-01 CRON 780506 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:35:03.952116Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710765303.8561] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T12:36:08.541644Z WS-LNGUYEN-01 fwupd 2929 - - metadata is 14 days old, scheduling refresh
+<30>1 2024-03-18T12:36:09.489426Z WS-LNGUYEN-01 thermald 12610 - - thermal zone acpitz: trip point updated
+<30>1 2024-03-18T12:36:15.852502Z WS-LNGUYEN-01 avahi-daemon 58600 - - Withdrawing address record for ens160.
+<30>1 2024-03-18T12:37:12.341305Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer CORP-PRINT-01 at 433878
+<30>1 2024-03-18T12:37:13.357841Z WS-LNGUYEN-01 fwupd 2929 - - System Firmware: no updates available
+<30>1 2024-03-18T12:37:37.354901Z WS-LNGUYEN-01 rsyslogd 33439 - - configuration file /etc/rsyslog.d/50-default.conf reloaded, checksum 14829
+<30>1 2024-03-18T12:40:38.731913Z WS-LNGUYEN-01 thermald 12610 - - thermal zone x86_pkg_temp: trip point updated
+<30>1 2024-03-18T12:41:09.884086Z WS-LNGUYEN-01 systemd-journald 33378 - - Vacuuming done, freed 95.3M of archived journals.
+<30>1 2024-03-18T12:43:51.429838Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Indexed 12 file(s) under /home/admin/Downloads
+<30>1 2024-03-18T12:58:20.374438Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T12:58:21.851438Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T12:58:23.396438Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1962 seconds.
+<86>1 2024-03-18T12:59:59.925086Z WS-LNGUYEN-01 login 781003 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T13:00:04.993086Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311568 of user root.
+<86>1 2024-03-18T13:02:36.034230Z WS-LNGUYEN-01 login 781080 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T13:02:40.817230Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311588 of user root.
+<30>1 2024-03-18T13:02:41.546977Z WS-LNGUYEN-01 snapd 33655 - - taskrunner.go:271: change 8193 task 2 done for core20
+<78>1 2024-03-18T13:03:00.268000Z WS-LNGUYEN-01 CRON 781086 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:03:23.653678Z WS-LNGUYEN-01 rsyslogd 33439 - - action 'dyn_file_cache' resumed after retry 57600, next retry disabled
+<86>1 2024-03-18T13:05:08.425306Z WS-LNGUYEN-01 login 781136 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T13:05:12.401534Z WS-LNGUYEN-01 sudo 781137 - - pam_unix(sudo:session): session opened for user admin(uid=1001) by (uid=0)
+<30>1 2024-03-18T13:05:13.619726Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710767113.4437] dhcp4 (ens160): state changed renew -> bound
+<86>1 2024-03-18T13:05:15.894306Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311608 of user ubuntu.
+<86>1 2024-03-18T13:05:18.323534Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311610 of user admin.
+<30>1 2024-03-18T13:07:56.206518Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710767276.1525] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T13:09:13.609370Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.109'
+<30>1 2024-03-18T13:09:16.045882Z WS-LNGUYEN-01 snapd 33655 - - taskrunner.go:271: change 8193 task 3 done for core20
+<30>1 2024-03-18T13:09:17.139442Z WS-LNGUYEN-01 irqbalance 4599 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T13:09:19.452113Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Indexed 68 file(s) under /home/admin/Downloads
+<30>1 2024-03-18T13:09:31.300115Z WS-LNGUYEN-01 cups-browsed 45915 - - Printer FINANCE-MFP was not found by DNS-SD, keeping stale queue for now
+<86>1 2024-03-18T13:11:07.664243Z WS-LNGUYEN-01 login 781239 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T13:11:12.198243Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311656 of user root.
+<30>1 2024-03-18T13:12:40.363292Z WS-LNGUYEN-01 polkitd 36519 - - Registered Authentication Agent for unix-session:121 (system bus name :1.111 [/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2024-03-18T13:17:02.486718Z WS-LNGUYEN-01 snapd 33655 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<86>1 2024-03-18T13:17:36.597794Z WS-LNGUYEN-01 sudo 781355 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<85>1 2024-03-18T13:17:36.792794Z WS-LNGUYEN-01 sudo 781355 - - backup : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status systemd-resolved --no-pager
+<86>1 2024-03-18T13:17:39.853105Z WS-LNGUYEN-01 sudo 781355 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:18:32.658353Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Miner finished crawling /home/admin/Downloads
+<30>1 2024-03-18T13:19:33.456214Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'deploy' has logged in
+<30>1 2024-03-18T13:24:26.923320Z WS-LNGUYEN-01 irqbalance 4599 - - IRQ 122 affinity hint keeps vector on CPU 2 (ens160)
+<30>1 2024-03-18T13:29:05.448172Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710768545.3932] device (ens160): state change: disconnected -> prepare
+<86>1 2024-03-18T13:30:20.208652Z WS-LNGUYEN-01 login 781612 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T13:30:24.408652Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311809 of user admin.
+<30>1 2024-03-18T13:30:24.944145Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T13:31:06.000841Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T13:31:07.434841Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T13:31:09.021841Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1647 seconds.
+<78>1 2024-03-18T13:33:00.064000Z WS-LNGUYEN-01 CRON 781644 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T13:33:18.671715Z WS-LNGUYEN-01 sudo 781778 - - pam_unix(sudo:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T13:33:23.355715Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311833 of user admin.
+<30>1 2024-03-18T13:35:17.560117Z WS-LNGUYEN-01 rsyslogd 33439 - - action 'local_file' resumed after retry 3604, next retry disabled
+<30>1 2024-03-18T13:35:17.845163Z WS-LNGUYEN-01 irqbalance 4599 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T13:38:26.461200Z WS-LNGUYEN-01 sudo 780126 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T13:38:28.724200Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311191.
+<86>1 2024-03-18T13:39:09.765243Z WS-LNGUYEN-01 login 781239 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T13:39:12.280243Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311656.
+<86>1 2024-03-18T13:39:21.700230Z WS-LNGUYEN-01 login 9118 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T13:39:25.618230Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311882 of user root.
+<30>1 2024-03-18T13:39:40.653970Z WS-LNGUYEN-01 irqbalance 4599 - - IRQ 24 classified for CPU 3 balancing on nvme0q1
+<30>1 2024-03-18T13:39:43.724485Z WS-LNGUYEN-01 avahi-daemon 58600 - - Service "_ipp._tcp" successfully established.
+<86>1 2024-03-18T13:43:41.231306Z WS-LNGUYEN-01 login 781136 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T13:43:44.693306Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311608.
+<30>1 2024-03-18T13:48:37.246149Z WS-LNGUYEN-01 irqbalance 4599 - - IRQ 86 affinity hint keeps vector on CPU 3 (ens160)
+<86>1 2024-03-18T13:49:34.947362Z WS-LNGUYEN-01 login 781944 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T13:49:41.794362Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 311964 of user root.
+<30>1 2024-03-18T13:50:27.947995Z WS-LNGUYEN-01 systemd-resolved 33731 - - Flushed stale cache scope ens160 after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T13:52:15.002230Z WS-LNGUYEN-01 login 781080 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T13:52:17.688230Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311588.
+<84>1 2024-03-18T13:56:46.373461Z WS-LNGUYEN-01 login 782123 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=lina.nguyen
+<30>1 2024-03-18T13:58:35.821569Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T13:58:37.288569Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T13:58:38.766569Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1737 seconds.
+<30>1 2024-03-18T14:01:11.354110Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Miner finished crawling /home/admin/Documents
+<30>1 2024-03-18T14:01:12.081244Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Indexed 43 file(s) under /home/admin/Documents
+<86>1 2024-03-18T14:01:18.503652Z WS-LNGUYEN-01 login 781612 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T14:01:20.520652Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311809.
+<78>1 2024-03-18T14:03:00.167000Z WS-LNGUYEN-01 CRON 782237 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T14:06:58.443996Z WS-LNGUYEN-01 sudo 782327 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<85>1 2024-03-18T14:06:58.599996Z WS-LNGUYEN-01 sudo 782327 - - deploy : TTY=pts/2 ; PWD=/home/ops ; USER=root ; COMMAND=/bin/systemctl status sshd --no-pager
+<86>1 2024-03-18T14:06:59.952097Z WS-LNGUYEN-01 sudo 782327 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T14:07:01.644597Z WS-LNGUYEN-01 sudo 782328 - - pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+<30>1 2024-03-18T14:07:03.625187Z WS-LNGUYEN-01 avahi-daemon 58600 - - Service "_ipps._tcp" successfully established.
+<86>1 2024-03-18T14:07:08.489597Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 312103 of user root.
+<30>1 2024-03-18T14:08:17.184984Z WS-LNGUYEN-01 thermald 12610 - - thermal zone x86_pkg_temp: trip point updated
+<86>1 2024-03-18T14:08:38.571209Z WS-LNGUYEN-01 login 782347 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<30>1 2024-03-18T14:08:40.430554Z WS-LNGUYEN-01 fwupd 2929 - - metadata is 6 days old, scheduling refresh
+<86>1 2024-03-18T14:08:42.961209Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 312115 of user ubuntu.
+<30>1 2024-03-18T14:09:12.917014Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.112'
+<30>1 2024-03-18T14:11:35.642037Z WS-LNGUYEN-01 rsyslogd 33439 - - omfwd: target logrelay01 using disk-assisted queue action-remote, checkpoint 44704
+<30>1 2024-03-18T14:12:21.252660Z WS-LNGUYEN-01 systemd-resolved 33731 - - Flushed positive cache scope ens160 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T14:12:22.537124Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer FRONTDESK-MFP at 473117
+<30>1 2024-03-18T14:14:40.925429Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'admin' has logged in
+<30>1 2024-03-18T14:14:49.354699Z WS-LNGUYEN-01 thermald 12610 - - cooling device 0 intel_powerclamp type: 0x02
+<30>1 2024-03-18T14:14:51.567020Z WS-LNGUYEN-01 cups-browsed 45915 - - Created local queue CORP-PRINT-01 (ipp_everywhere)
+<86>1 2024-03-18T14:14:54.648244Z WS-LNGUYEN-01 sudo 782439 - - pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+<30>1 2024-03-18T14:15:01.455881Z WS-LNGUYEN-01 packagekitd 16338 - - search-names transaction /717060
+<30>1 2024-03-18T14:15:01.813050Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<86>1 2024-03-18T14:15:01.984244Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 312168 of user root.
+<30>1 2024-03-18T14:15:02.219271Z WS-LNGUYEN-01 avahi-daemon 58600 - - Registering new address record for ens160.
+<30>1 2024-03-18T14:16:02.131963Z WS-LNGUYEN-01 packagekitd 16338 - - resolve transaction /897868
+<30>1 2024-03-18T14:16:40.325838Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'ubuntu' has logged in
+<30>1 2024-03-18T14:18:27.144755Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer FINANCE-MFP at 389349
+<30>1 2024-03-18T14:19:08.191111Z WS-LNGUYEN-01 fwupd 2929 - - metadata is 2 days old, scheduling refresh
+<30>1 2024-03-18T14:20:47.609280Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.115'
+<30>1 2024-03-18T14:21:01.983055Z WS-LNGUYEN-01 systemd-journald 33378 - - System Journal (/var/log/journal/d11d6e9fbfd48c0afb6458d95b210d76) is 770.8M, max 2048M, 1277.2M free.
+<30>1 2024-03-18T14:22:02.407519Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T14:23:22.543071Z WS-LNGUYEN-01 systemd-resolved 33731 - - Transaction 670098 switched to TCP with advertised UDP packet size 1472.
+<30>1 2024-03-18T14:23:26.605885Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710771806.3649] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T14:25:33.703566Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T14:27:35.248232Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T14:27:36.770232Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T14:27:38.140232Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1728 seconds.
+<86>1 2024-03-18T14:28:09.714086Z WS-LNGUYEN-01 login 781003 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T14:28:10.911086Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311568.
+<30>1 2024-03-18T14:31:01.408092Z WS-LNGUYEN-01 snapd 33655 - - taskrunner.go:271: change 8193 task 2 done for lxd
+<86>1 2024-03-18T14:31:55.828812Z WS-LNGUYEN-01 login 782782 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T14:32:00.560812Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 312303 of user admin.
+<86>1 2024-03-18T14:33:28.055534Z WS-LNGUYEN-01 sudo 781137 - - pam_unix(sudo:session): session closed for user admin
+<86>1 2024-03-18T14:33:29.426534Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311610.
+<86>1 2024-03-18T14:35:27.100439Z WS-LNGUYEN-01 sudo 782864 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<85>1 2024-03-18T14:35:27.667439Z WS-LNGUYEN-01 sudo 782864 - - svc_app : TTY=pts/3 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/bin/iostat -xz 1 3
+<86>1 2024-03-18T14:35:31.836592Z WS-LNGUYEN-01 sudo 782864 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T14:38:08.943362Z WS-LNGUYEN-01 login 781944 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T14:38:11.809362Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 311964.
+<30>1 2024-03-18T14:40:08.205468Z WS-LNGUYEN-01 irqbalance 4599 - - IRQ 16 affinity hint keeps vector on CPU 3 (ens160)
+<30>1 2024-03-18T14:40:09.824448Z WS-LNGUYEN-01 avahi-daemon 58600 - - Service "_ipps._tcp" successfully established.
+<30>1 2024-03-18T14:43:20.700257Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710773000.6843] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T14:43:21.408684Z WS-LNGUYEN-01 irqbalance 4599 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T14:44:23.580564Z WS-LNGUYEN-01 packagekitd 16338 - - get-updates transaction /431854
+<30>1 2024-03-18T14:44:24.294936Z WS-LNGUYEN-01 packagekitd 16338 - - resolve transaction /985318
+<30>1 2024-03-18T14:44:25.223145Z WS-LNGUYEN-01 snapd 33655 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T14:44:25.272423Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710773065.1094] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T14:56:26.398075Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T14:56:27.910075Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T14:56:29.351075Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1625 seconds.
+<30>1 2024-03-18T15:00:37.538899Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T15:00:40.694820Z WS-LNGUYEN-01 gnome-shell 41735 - - Monitor 0 configuration unchanged after hotplug event
+<78>1 2024-03-18T15:03:00.290000Z WS-LNGUYEN-01 CRON 783369 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:04:06.215946Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T15:04:40.122879Z WS-LNGUYEN-01 snapd 33655 - - stateengine.go:150: state ensure starting change 8200
+<30>1 2024-03-18T15:06:02.900033Z WS-LNGUYEN-01 snapd 33655 - - taskrunner.go:271: change 8193 task 7 done for microk8s
+<30>1 2024-03-18T15:06:03.437906Z WS-LNGUYEN-01 dbus-daemon 33491 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.116'
+<30>1 2024-03-18T15:07:30.523576Z WS-LNGUYEN-01 rsyslogd 33439 - - module omfile: worker thread pool adjusted to 2
+<86>1 2024-03-18T15:08:16.646209Z WS-LNGUYEN-01 login 782347 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T15:08:18.838209Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 312115.
+<30>1 2024-03-18T15:08:43.786052Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710774523.6721] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T15:11:50.762173Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer FINANCE-MFP at 529198
+<30>1 2024-03-18T15:11:52.136334Z WS-LNGUYEN-01 cups-browsed 45915 - - Printer FINANCE-MFP was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T15:18:27.503671Z WS-LNGUYEN-01 snapd 33655 - - stateengine.go:150: state ensure starting change 8195
+<30>1 2024-03-18T15:19:45.301862Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Indexed 68 file(s) under /home/admin/Documents
+<30>1 2024-03-18T15:22:07.522094Z WS-LNGUYEN-01 avahi-daemon 58600 - - Registering new address record for ens160.
+<86>1 2024-03-18T15:22:07.714598Z WS-LNGUYEN-01 sudo 783767 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<85>1 2024-03-18T15:22:08.059598Z WS-LNGUYEN-01 sudo 783767 - - ubuntu : TTY=pts/1 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/tail -n 40 /var/log/kern.log
+<86>1 2024-03-18T15:22:09.139197Z WS-LNGUYEN-01 sudo 783767 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T15:23:35.862325Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T15:23:37.299325Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T15:23:38.102761Z WS-LNGUYEN-01 cups-browsed 45915 - - Printer CORP-PRINT-01 was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T15:23:38.861325Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1785 seconds.
+<30>1 2024-03-18T15:23:51.314082Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710775431.1921] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T15:25:40.816821Z WS-LNGUYEN-01 snapd 33655 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T15:26:23.219633Z WS-LNGUYEN-01 systemd-resolved 33731 - - Flushed stale cache scope ens160 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:26:23.797553Z WS-LNGUYEN-01 packagekitd 16338 - - resolve transaction /192998
+<30>1 2024-03-18T15:26:42.148763Z WS-LNGUYEN-01 fwupd 2929 - - UEFI dbx: no updates available
+<86>1 2024-03-18T15:29:12.122555Z WS-LNGUYEN-01 login 783877 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T15:29:15.390555Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 312761 of user ubuntu.
+<30>1 2024-03-18T15:29:16.909787Z WS-LNGUYEN-01 thermald 12610 - - thermal zone acpitz: trip point updated
+<30>1 2024-03-18T15:29:44.497544Z WS-LNGUYEN-01 rsyslogd 33439 - - configuration file /etc/rsyslog.conf reloaded, checksum 89865
+<30>1 2024-03-18T15:29:50.934564Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Miner finished crawling /home/admin/Documents
+<30>1 2024-03-18T15:31:07.663240Z WS-LNGUYEN-01 snapd 33655 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<78>1 2024-03-18T15:33:00.133000Z WS-LNGUYEN-01 CRON 783968 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:33:19.315606Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710775999.1696] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T15:36:23.240807Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710776183.0748] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T15:37:18.513223Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Indexed 12 file(s) under /home/ubuntu/Documents
+<30>1 2024-03-18T15:38:51.239848Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'deploy' has logged in
+<30>1 2024-03-18T15:41:06.914164Z WS-LNGUYEN-01 thermald 12610 - - thermal zone acpitz: trip point updated
+<30>1 2024-03-18T15:41:20.318354Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710776480.2394] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T15:42:27.414865Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer FINANCE-MFP at 668765
+<86>1 2024-03-18T15:42:42.364786Z WS-LNGUYEN-01 sudo 784131 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<85>1 2024-03-18T15:42:42.678786Z WS-LNGUYEN-01 sudo 784131 - - svc_app : TTY=pts/5 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/journalctl -u sshd -n 80
+<86>1 2024-03-18T15:42:50.614774Z WS-LNGUYEN-01 sudo 784131 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T15:42:51.613442Z WS-LNGUYEN-01 cups-browsed 45915 - - Printer CORP-PRINT-01 was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T15:53:22.160156Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T15:53:23.783156Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T15:53:25.270156Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1728 seconds.
+<30>1 2024-03-18T16:02:31.022893Z WS-LNGUYEN-01 fwupd 2929 - - metadata is 2 days old, scheduling refresh
+<78>1 2024-03-18T16:03:00.093000Z WS-LNGUYEN-01 CRON 784529 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:03:09.098411Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710777788.9124] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T16:05:46.758379Z WS-LNGUYEN-01 irqbalance 4599 - - Skipping IRQ 86: banned by affinity mask 00000008 (virtio0-input)
+<30>1 2024-03-18T16:06:56.389631Z WS-LNGUYEN-01 rsyslogd 33439 - - main Q: queue main has 51859 messages pending, worker threads 2
+<30>1 2024-03-18T16:07:01.049723Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Resetting tracker extract task after idle timeout 208699
+<30>1 2024-03-18T16:07:01.312534Z WS-LNGUYEN-01 rsyslogd 33439 - - module imjournal: worker thread pool adjusted to 1
+<30>1 2024-03-18T16:09:21.321057Z WS-LNGUYEN-01 gnome-shell 41735 - - Window manager warning: Overwriting existing binding of keysym Print with keysym Print
+<30>1 2024-03-18T16:10:22.685068Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710778222.6761] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T16:10:25.076376Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710778225.0634] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T16:11:01.318385Z WS-LNGUYEN-01 fwupd 2929 - - System Firmware: firmware version unchanged after LVFS metadata check
+<30>1 2024-03-18T16:11:04.819774Z WS-LNGUYEN-01 packagekitd 16338 - - search-names transaction /890986
+<30>1 2024-03-18T16:11:20.803867Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer CORP-PRINT-01 at 101595
+<30>1 2024-03-18T16:16:17.700354Z WS-LNGUYEN-01 avahi-daemon 58600 - - Withdrawing address record for ens160.
+<30>1 2024-03-18T16:19:27.721869Z WS-LNGUYEN-01 irqbalance 4599 - - Skipping IRQ 137: banned by affinity mask 00000001 (ens160)
+<30>1 2024-03-18T16:19:28.662624Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'ubuntu' has logged in
+<30>1 2024-03-18T16:19:28.848879Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Resetting tracker extract task after idle timeout 548239
+<30>1 2024-03-18T16:19:30.101488Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710778770.0625] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T16:19:30.209915Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710778770.0489] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T16:20:40.508069Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710778840.4441] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T16:20:45.134276Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710778844.9913] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T16:22:14.162188Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T16:22:15.731188Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T16:22:17.078188Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1914 seconds.
+<30>1 2024-03-18T16:24:38.613978Z WS-LNGUYEN-01 accounts-daemon 50211 - - user 'admin' has logged in
+<30>1 2024-03-18T16:26:17.661014Z WS-LNGUYEN-01 systemd-resolved 33731 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 684684.
+<30>1 2024-03-18T16:28:05.430879Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710779285.2059] dhcp4 (ens160): state changed renew -> bound
+<86>1 2024-03-18T16:28:24.660151Z WS-LNGUYEN-01 sudo 785036 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<85>1 2024-03-18T16:28:24.693151Z WS-LNGUYEN-01 sudo 785036 - - deploy : TTY=pts/0 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/systemctl list-timers --all --no-pager
+<86>1 2024-03-18T16:28:28.090248Z WS-LNGUYEN-01 sudo 785036 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T16:28:45.496060Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710779325.3161] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T16:29:17.800257Z WS-LNGUYEN-01 thermald 12610 - - cooling device 1 intel_powerclamp type: 0x02
+<30>1 2024-03-18T16:29:47.105383Z WS-LNGUYEN-01 cups-browsed 45915 - - Printer FRONTDESK-MFP was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T16:30:12.504117Z WS-LNGUYEN-01 gnome-shell 41735 - - Monitor 1 configuration unchanged after hotplug event
+<78>1 2024-03-18T16:33:00.239000Z WS-LNGUYEN-01 CRON 785096 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:35:17.771152Z WS-LNGUYEN-01 thermald 12610 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T16:36:08.872475Z WS-LNGUYEN-01 irqbalance 4599 - - Skipping IRQ 154: banned by affinity mask 00000008 (virtio0-input)
+<30>1 2024-03-18T16:36:08.991678Z WS-LNGUYEN-01 rsyslogd 33439 - - configuration file /etc/rsyslog.conf reloaded, checksum 15825
+<30>1 2024-03-18T16:38:06.664581Z WS-LNGUYEN-01 systemd-resolved 33731 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 920631.
+<86>1 2024-03-18T16:38:25.158820Z WS-LNGUYEN-01 sudo 785227 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<30>1 2024-03-18T16:38:25.340779Z WS-LNGUYEN-01 packagekitd 16338 - - resolve transaction /540279
+<85>1 2024-03-18T16:38:25.485820Z WS-LNGUYEN-01 sudo 785227 - - deploy : TTY=pts/0 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/find /var/tmp -maxdepth 1 -mtime +7 -type f
+<86>1 2024-03-18T16:38:28.056806Z WS-LNGUYEN-01 sudo 785227 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T16:41:11.814977Z WS-LNGUYEN-01 systemd-journald 33378 - - Rotating system journal.
+<30>1 2024-03-18T16:54:10.361465Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T16:54:11.929465Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T16:54:13.321465Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1850 seconds.
+<84>1 2024-03-18T16:58:13.916272Z WS-LNGUYEN-01 login 785580 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=lina.nguyen
+<78>1 2024-03-18T17:03:00.132000Z WS-LNGUYEN-01 CRON 785701 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T17:03:18.549970Z WS-LNGUYEN-01 login 785706 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T17:03:25.825970Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 313514 of user root.
+<30>1 2024-03-18T17:03:47.345331Z WS-LNGUYEN-01 tracker-miner-fs-3 18173 - - Indexed 43 file(s) under /home/ubuntu/Documents
+<30>1 2024-03-18T17:03:48.545546Z WS-LNGUYEN-01 irqbalance 4599 - - IRQ 86 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2024-03-18T17:06:26.038451Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710781585.8725] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T17:08:08.207735Z WS-LNGUYEN-01 fwupd 2929 - - metadata is 6 days old, scheduling refresh
+<86>1 2024-03-18T17:09:09.214323Z WS-LNGUYEN-01 login 785785 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T17:09:15.683323Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 313561 of user root.
+<30>1 2024-03-18T17:12:41.097236Z WS-LNGUYEN-01 systemd-resolved 33731 - - Transaction 313048 switched to UDP+EDNS0 with advertised UDP packet size 512.
+<30>1 2024-03-18T17:15:36.550193Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710782136.3092] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T17:19:42.979632Z WS-LNGUYEN-01 gnome-shell 41735 - - Window manager warning: Overwriting existing binding of keysym Super_L with keysym Super_L
+<30>1 2024-03-18T17:19:43.030466Z WS-LNGUYEN-01 cups-browsed 45915 - - Created local queue FRONTDESK-MFP (ipp_everywhere)
+<30>1 2024-03-18T17:19:43.554765Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710782383.3058] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T17:20:40.556085Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710782440.3111] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T17:21:56.820357Z WS-LNGUYEN-01 cups-browsed 45915 - - Browse remote printer FRONTDESK-MFP at 367643
+<30>1 2024-03-18T17:25:03.948062Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T17:25:05.496062Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T17:25:06.826062Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1961 seconds.
+<30>1 2024-03-18T17:28:21.065605Z WS-LNGUYEN-01 rsyslogd 33439 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 43787
+<30>1 2024-03-18T17:29:47.104699Z WS-LNGUYEN-01 NetworkManager 33463 - - <info>  [1710782987.0327] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T17:30:51.297665Z WS-LNGUYEN-01 cups-browsed 45915 - - Printer FRONTDESK-MFP was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T17:31:37.725678Z WS-LNGUYEN-01 thermald 12610 - - thermal zone x86_pkg_temp: trip point updated
+<30>1 2024-03-18T17:32:15.788814Z WS-LNGUYEN-01 rsyslogd 33439 - - module omfile: worker thread pool adjusted to 1
+<78>1 2024-03-18T17:33:00.277000Z WS-LNGUYEN-01 CRON 786272 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T17:33:38.464419Z WS-LNGUYEN-01 login 786307 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T17:33:44.569419Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 313756 of user admin.
+<86>1 2024-03-18T17:34:59.320534Z WS-LNGUYEN-01 sudo 786324 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<85>1 2024-03-18T17:34:59.915534Z WS-LNGUYEN-01 sudo 786324 - - backup : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/sbin/service systemd-resolved status
+<86>1 2024-03-18T17:35:05.412347Z WS-LNGUYEN-01 sudo 786324 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T17:57:48.538862Z WS-LNGUYEN-01 dhclient 12787 - - DHCPREQUEST for 10.10.1.21 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T17:57:50.010862Z WS-LNGUYEN-01 dhclient 12787 - - DHCPACK of 10.10.1.21 from 10.10.2.10
+<30>1 2024-03-18T17:57:51.449862Z WS-LNGUYEN-01 dhclient 12787 - - bound to 10.10.1.21 -- renewal in 1888 seconds.
+<86>1 2024-03-18T18:03:10.601970Z WS-LNGUYEN-01 login 785706 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T18:03:11.611970Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 313514.
+<86>1 2024-03-18T18:18:00.498419Z WS-LNGUYEN-01 login 786307 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T18:18:02.511419Z WS-LNGUYEN-01 systemd-logind 33515 - - Removed session 313756.

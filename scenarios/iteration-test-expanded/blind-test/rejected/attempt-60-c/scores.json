@@ -1,0 +1,39 @@
+{
+  "attempt": "60-c",
+  "baseline_average": 38.25,
+  "baseline_loop": "loop-59",
+  "candidate_commit": "b89e744a",
+  "decision": "rejected",
+  "decision_basis": "standalone blind-review arithmetic average only; no deliberation; automated eval ignored except as guardrail",
+  "average_synthetic_confidence": 40.75,
+  "scores": [
+    {
+      "assessment": "Inconclusive",
+      "report": "threat-hunter-report.md",
+      "reviewer": "Threat Hunter",
+      "synthetic_confidence": 43,
+      "verdict_confidence": 66
+    },
+    {
+      "assessment": "Synthetic",
+      "report": "detection-engineer-report.md",
+      "reviewer": "Detection Engineer",
+      "synthetic_confidence": 47,
+      "verdict_confidence": 58
+    },
+    {
+      "assessment": "Real",
+      "report": "network-forensics-report.md",
+      "reviewer": "Network Forensics",
+      "synthetic_confidence": 26,
+      "verdict_confidence": 62
+    },
+    {
+      "assessment": "Inconclusive",
+      "report": "host-forensics-report.md",
+      "reviewer": "Host/EDR",
+      "synthetic_confidence": 47,
+      "verdict_confidence": 62
+    }
+  ]
+}

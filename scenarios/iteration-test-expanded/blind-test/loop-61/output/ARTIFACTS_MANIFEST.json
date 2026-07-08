@@ -1,0 +1,457 @@
+{
+  "email": {
+    "messages": [
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 12:04:57 +0000",
+        "eml_path": "email-000086a60f7a.eml",
+        "message_id": "<alerts-9bc7d7e3-6519424@industrybriefs.net>",
+        "sender": "alerts@industrybriefs.net",
+        "subject": "EHR connector release notes - Meridianhcs 12D4",
+        "to": [
+          "<marcus.chen@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [
+          "priya.patel@meridianhcs.com"
+        ],
+        "cc": [
+          "<evelyn.brooks@meridianhcs.com>"
+        ],
+        "date": "Mon, 18 Mar 2024 12:09:37 +0000",
+        "eml_path": "benefits-confirmation-msg.eml",
+        "message_id": "<notices-b9dac45a-8235363@benefits-serviceportal.com>",
+        "sender": "notices@benefits-serviceportal.com",
+        "subject": "Benefits confirmation required today",
+        "to": [
+          "<finance@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [
+          "priya.patel@meridianhcs.com"
+        ],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 12:24:09 +0000",
+        "eml_path": "finance-forward-to-it-msg.eml",
+        "message_id": "<100000I9EMNA.1000OREDIL@meridianhcs.com>",
+        "sender": "diego.ramirez@meridianhcs.com",
+        "subject": "Fwd: Benefits confirmation required today",
+        "to": [
+          "<it-help@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 12:34:47 +0000",
+        "eml_path": "email-00002df0d625.eml",
+        "message_id": "<notifications-4e565fd6-7526514@partnerrelay.io>",
+        "sender": "notifications@partnerrelay.io",
+        "subject": "Revised change window - today",
+        "to": [
+          "<diego.ramirez@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [
+          "<clinical-ops@meridianhcs.com>"
+        ],
+        "date": "Mon, 18 Mar 2024 12:48:11 +0000",
+        "eml_path": "ehr-release-note-msg.eml",
+        "message_id": "<1746897100.499514.89c6aefa@meridianhcs.com>",
+        "sender": "lina.nguyen@meridianhcs.com",
+        "subject": "EHR connector release notes",
+        "to": [
+          "<ehr-release@research.meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 12:52:44 +0000",
+        "eml_path": "email-000042f79c38.eml",
+        "message_id": "<1857367289.726253.170cf96d@meridianhcs.com>",
+        "sender": "lina.nguyen@meridianhcs.com",
+        "subject": "Confirming field note - before review",
+        "to": [
+          "<evelyn.brooks@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 12:52:51 +0000",
+        "eml_path": "email-0000866f0985.eml",
+        "message_id": "<10016JOWMJ.102AT4B.1137@aisha-johnson.meridianhcs.com>",
+        "sender": "aisha.johnson@meridianhcs.com",
+        "subject": "Review invoice - for closeout",
+        "to": [
+          "<diego.ramirez@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 13:25:30 +0000",
+        "eml_path": "email-0000ce70e862.eml",
+        "message_id": "<908609878.463284.10a84574@meridianhcs.com>",
+        "sender": "omar.haddad@meridianhcs.com",
+        "subject": "Question: service ticket for vendorpost",
+        "to": [
+          "<contact@vendorpost.net>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 13:31:04 +0000",
+        "eml_path": "email-00008d070c85.eml",
+        "message_id": "<100001LZ6P8C.1000O9DBGU@meridianhcs.com>",
+        "sender": "diego.ramirez@meridianhcs.com",
+        "subject": "Schedule service ticket - for closeout",
+        "to": [
+          "<marcus.chen@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 13:40:56 +0000",
+        "eml_path": "email-000006fa86d6.eml",
+        "message_id": "<notifications-0aa9f86b-0158813@vendorpost.net>",
+        "sender": "notifications@vendorpost.net",
+        "subject": "Meridianhcs: Business associate agreement notes #D8DA",
+        "to": [
+          "<priya.patel@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 13:46:25 +0000",
+        "eml_path": "docflow-ai-summary-msg.eml",
+        "message_id": "<workspace-e2b1dcaf-9440641@docflow-health.net>",
+        "sender": "workspace@docflow-health.net",
+        "subject": "DocFlow summary package: vendor terms",
+        "to": [
+          "<priya.patel@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 13:48:10 +0000",
+        "eml_path": "email-0000eb10f099.eml",
+        "message_id": "<notifications-0587219f-2016567@customermailhub.com>",
+        "sender": "notifications@customermailhub.com",
+        "subject": "Meridianhcs invoice notes",
+        "to": [
+          "<priya.patel@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 13:50:16 +0000",
+        "eml_path": "email-0000aa7af446.eml",
+        "message_id": "<billing-1d60fd69-8131232@industrybriefs.net>",
+        "sender": "billing@industrybriefs.net",
+        "subject": "Draft: invoice for meridianhcs",
+        "to": [
+          "<aisha.johnson@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [
+          "<omar.haddad@meridianhcs.com>"
+        ],
+        "date": "Mon, 18 Mar 2024 13:55:34 +0000",
+        "eml_path": "vendor-interface-package-msg.eml",
+        "message_id": "<1486572785.976919.3e76dbd7@meridianhcs.com>",
+        "sender": "lina.nguyen@meridianhcs.com",
+        "subject": "Stonebridge interface package comments",
+        "to": [
+          "<miles.avery@stonebridge-consultingllc.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 14:15:06 +0000",
+        "eml_path": "email-000030ee577b.eml",
+        "message_id": "<1000F31UGB.107ZZ93.4647@evelyn-brooks.meridianhcs.com>",
+        "sender": "evelyn.brooks@meridianhcs.com",
+        "subject": "Update field note - for the shared folder",
+        "to": [
+          "<omar.haddad@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 14:24:37 +0000",
+        "eml_path": "email-0000d850911c.eml",
+        "message_id": "<4AD925BA-47D5-3A81-80D3-0056ED2A87C4@meridianhcs.com>",
+        "sender": "priya.patel@meridianhcs.com",
+        "subject": "Confirming renewal - for the shared folder",
+        "to": [
+          "<contact@industrybriefs.net>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 14:35:13 +0000",
+        "eml_path": "email-0000032fe808.eml",
+        "message_id": "<notifications-866b39cd-6540576@customermailhub.com>",
+        "sender": "notifications@customermailhub.com",
+        "subject": "Revised vendor packet - before noon",
+        "to": [
+          "<aisha.johnson@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [
+          "<marcus.chen@meridianhcs.com>"
+        ],
+        "date": "Mon, 18 Mar 2024 15:08:04 +0000",
+        "eml_path": "internal-reset-lure-msg.eml",
+        "message_id": "<121609FF-AFF2-1350-BCEC-8A52032BE7D0@meridianhcs.com>",
+        "sender": "aisha.johnson@meridianhcs.com",
+        "subject": "Help desk follow-up: credential reset validation",
+        "to": [
+          "<finance@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 15:30:43 +0000",
+        "eml_path": "email-0000bc40bca7.eml",
+        "message_id": "<billing-4d973b54-6854388@partnerrelay.io>",
+        "sender": "billing@partnerrelay.io",
+        "subject": "Meridianhcs service ticket notes",
+        "to": [
+          "<sophia.martinez@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 15:30:58 +0000",
+        "eml_path": "email-0000ec333080.eml",
+        "message_id": "<notifications-197a17a5-6083917@industrybriefs.net>",
+        "sender": "notifications@industrybriefs.net",
+        "subject": "Invoice 18477 scheduled for ACH / ref 2A23",
+        "to": [
+          "<evelyn.brooks@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 15:44:11 +0000",
+        "eml_path": "email-000048b09f3c.eml",
+        "message_id": "<1000019UHE2D.1001Y5NHKA@meridianhcs.com>",
+        "sender": "priya.patel@meridianhcs.com",
+        "subject": "Closeout change window - from yesterday",
+        "to": [
+          "<marcus.chen@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "transport_not_completed",
+        "artifact_export_status": "metadata_only",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 16:03:58 +0000",
+        "eml_path": "",
+        "message_id": "<billing-a1f65b41-3807664@medclaims-processing.net>",
+        "sender": "billing@medclaims-processing.net",
+        "subject": "Updated claims processing invoice",
+        "to": [
+          "<evelyn.brooks@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 16:24:58 +0000",
+        "eml_path": "email-000007ac687c.eml",
+        "message_id": "<EC82C158-A049-FAE5-F620-37205687C0BC@meridianhcs.com>",
+        "sender": "diego.ramirez@meridianhcs.com",
+        "subject": "Closeout meeting - after the call",
+        "to": [
+          "<omar.haddad@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 16:32:36 +0000",
+        "eml_path": "email-0000b5ba00c5.eml",
+        "message_id": "<755111923.769878.c954ad96@meridianhcs.com>",
+        "sender": "omar.haddad@meridianhcs.com",
+        "subject": "Confirming: meeting for customermailhub",
+        "to": [
+          "<support@customermailhub.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 16:38:33 +0000",
+        "eml_path": "email-00006e8c00d8.eml",
+        "message_id": "<billing-adee20aa-3704499@customermailhub.com>",
+        "sender": "billing@customermailhub.com",
+        "subject": "Forecast 6426 today",
+        "to": [
+          "<sophia.martinez@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [
+          "priya.patel@meridianhcs.com"
+        ],
+        "cc": [
+          "<diego.ramirez@meridianhcs.com>"
+        ],
+        "date": "Mon, 18 Mar 2024 16:50:00 +0000",
+        "eml_path": "executive-operating-note-msg.eml",
+        "message_id": "<1000016ONZTK.10015EDCND@meridianhcs.com>",
+        "sender": "evelyn.brooks@meridianhcs.com",
+        "subject": "March operating note",
+        "to": [
+          "<marina.holt@northbridge-advisory.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 17:10:42 +0000",
+        "eml_path": "email-0000fa636d4e.eml",
+        "message_id": "<89E93A3F-87CB-3759-96D3-20FAED2F7D9C@meridianhcs.com>",
+        "sender": "priya.patel@meridianhcs.com",
+        "subject": "Vendorpost: Question on ADT test file #C20C",
+        "to": [
+          "<orders@vendorpost.net>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 17:30:03 +0000",
+        "eml_path": "email-000062f84baf.eml",
+        "message_id": "<billing-e3ef33dd-5934720@partnerrelay.io>",
+        "sender": "billing@partnerrelay.io",
+        "subject": "Access 6232 from yesterday",
+        "to": [
+          "<lina.nguyen@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 17:41:08 +0000",
+        "eml_path": "email-000078738f07.eml",
+        "message_id": "<1229781171.188033.303b3ac1@meridianhcs.com>",
+        "sender": "lina.nguyen@meridianhcs.com",
+        "subject": "Review meeting - after the call",
+        "to": [
+          "<contact@industrybriefs.net>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 17:49:21 +0000",
+        "eml_path": "email-0000c118e4f2.eml",
+        "message_id": "<2917361138.267488.a4f126a0@meridianhcs.com>",
+        "sender": "omar.haddad@meridianhcs.com",
+        "subject": "Closeout: access for meridianhcs",
+        "to": [
+          "<marcus.chen@meridianhcs.com>"
+        ]
+      },
+      {
+        "artifact_export_reason": "selected_by_artifact_policy",
+        "artifact_export_status": "materialized",
+        "bcc": [],
+        "cc": [],
+        "date": "Mon, 18 Mar 2024 17:51:45 +0000",
+        "eml_path": "email-00006a10c16e.eml",
+        "message_id": "<billing-d0171c0c-6685585@vendorpost.net>",
+        "sender": "billing@vendorpost.net",
+        "subject": "Question: forecast for meridianhcs",
+        "to": [
+          "<aisha.johnson@meridianhcs.com>"
+        ]
+      }
+    ]
+  },
+  "schema_version": "1.0"
+}

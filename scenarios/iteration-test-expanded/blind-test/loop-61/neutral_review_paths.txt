@@ -1,0 +1,4 @@
+Threat Hunter: /private/tmp/eforge-loop61-threat-hunter-KpkqiN/dataset
+Detection Engineer: /private/tmp/eforge-loop61-detection-engineer-FJxdgC/dataset
+Network Forensics: /private/tmp/eforge-loop61-network-forensics-GLuMSk/dataset
+Host Forensics: /private/tmp/eforge-loop61-host-forensics-Gp2IjC/dataset

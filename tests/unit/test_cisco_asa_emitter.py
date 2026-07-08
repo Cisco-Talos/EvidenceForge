@@ -24,6 +24,7 @@
 
 import re
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -176,6 +177,59 @@ class TestConnectionIdCounter:
         ]
         terminal_digits = {conn_id % 10 for conn_id in ids}
         assert len(terminal_digits) >= 8
+
+    def test_visible_connection_id_mapping_includes_hidden_volume_gaps(self):
+        """Final visible ASA IDs should not expose a tiny bounded increment pattern."""
+        lines = []
+        for index in range(80):
+            ts = T0 + timedelta(seconds=index * 17)
+            temp_id = 1_000_000 + index
+            line = (
+                f"<166>{ts:%b} {ts.day:2d} {ts:%H:%M:%S} fw01 "
+                f"%ASA-6-302013: Built outbound TCP connection {temp_id} for "
+                f"inside:10.0.10.50/{50000 + index} "
+                f"(10.0.10.50/{50000 + index}) to outside:203.0.113.50/443 "
+                "(203.0.113.50/443)"
+            )
+            lines.append((2024, line))
+
+        mapping = CiscoAsaEmitter._build_connection_id_mapping(lines, "fw01")
+        visible_ids = [mapping[str(1_000_000 + index)] for index in range(80)]
+        gaps = [
+            current - previous
+            for previous, current in zip(visible_ids, visible_ids[1:], strict=False)
+        ]
+
+        assert visible_ids == sorted(visible_ids)
+        assert any(gap > 5 for gap in gaps)
+        assert len(set(gaps)) >= 20
+
+    def test_connection_id_mapping_preserves_same_second_file_order(self, tmp_path):
+        """Same-second rows should keep the order already present in the final log file."""
+        path = tmp_path / "cisco_asa.log"
+        lines = [
+            (
+                "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP "
+                "connection 1000010 for inside:10.0.10.50/50010 "
+                "(10.0.10.50/50010) to outside:203.0.113.50/443 "
+                "(203.0.113.50/443)"
+            ),
+            (
+                "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP "
+                "connection 1000001 for inside:10.0.10.51/50001 "
+                "(10.0.10.51/50001) to outside:203.0.113.51/443 "
+                "(203.0.113.51/443)"
+            ),
+        ]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        mapping = CiscoAsaEmitter._connection_id_mapping(
+            [("fw01|2024", SimpleNamespace(output_path=path))],
+            "fw01",
+        )
+        visible_ids = [mapping["1000010"], mapping["1000001"]]
+
+        assert visible_ids == sorted(visible_ids)
 
     def test_sorted_output_preserves_stateful_connection_ids(self, asa_emitter, tmp_path):
         late_event = _make_connection_event(

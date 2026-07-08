@@ -1,0 +1,4 @@
+Threat Hunter: /private/tmp/research-data-th-OfGTeg/dataset
+Detection Engineer: /private/tmp/research-data-de-sqEe4V/dataset
+Network Forensics: /private/tmp/research-data-nf-apt5Xm/dataset
+Host/EDR: /private/tmp/research-data-he-t1iawF/dataset

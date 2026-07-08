@@ -1,0 +1,59 @@
+{
+  "automated_eval": {
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "causality": 90.15797101449276,
+      "parseability": 100.0,
+      "plausibility": 97.07609419066993,
+      "timing": 95.49762282214864
+    },
+    "records": 96398,
+    "score": 95.90804086572041,
+    "status": "PASS"
+  },
+  "blind_initial": {
+    "average_interpretation": "mixed / inconclusive",
+    "average_synthetic_confidence": 42.0,
+    "detection_engineer": {
+      "assessment": "Inconclusive",
+      "interpretation": "mostly realistic",
+      "report_path": "detection-engineer-report.md",
+      "synthetic_confidence": 32,
+      "verdict_confidence": 68
+    },
+      "host_forensics": {
+        "assessment": "Inconclusive",
+        "interpretation": "mostly realistic",
+        "report_path": "host-forensics-report.md",
+        "synthetic_confidence": 36,
+        "verdict_confidence": 66
+      },
+    "network_forensics": {
+      "assessment": "Synthetic",
+      "interpretation": "likely synthetic",
+      "report_path": "network-forensics-report.md",
+      "synthetic_confidence": 64,
+      "verdict_confidence": 66
+    },
+    "threat_hunter": {
+      "assessment": "Inconclusive",
+      "interpretation": "mostly realistic",
+      "report_path": "threat-hunter-report.md",
+      "synthetic_confidence": 36,
+      "verdict_confidence": 68
+    }
+  },
+  "deliberation": {
+    "average_interpretation": null,
+    "average_synthetic_confidence": null,
+    "reason": "Skipped to keep loop 61 as a raw standalone blind-panel re-review; prior experiment policy used direct averaging.",
+    "report_path": null,
+    "triggered": false
+  },
+  "experiment_notes": [
+    "Loop 61 reapplies previously reverted loop 60a, 60b, and 60c fixes together on top of accepted loop 60.",
+    "No deliberation report was run for this artifact; scores are the raw blind panel average."
+  ],
+  "loop": 61,
+  "schema_version": "eforge-assess-scores/v1"
+}

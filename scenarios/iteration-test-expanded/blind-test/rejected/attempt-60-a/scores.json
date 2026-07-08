@@ -1,0 +1,63 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 60,
+  "automated_eval": {
+    "score": 95.90845223387653,
+    "status": "PASS",
+    "records": 96389,
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 97.07773966329445,
+      "causality": 90.15797101449276,
+      "timing": 95.49762282214864
+    }
+  },
+  "blind_initial": {
+    "threat_hunter": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 66,
+      "synthetic_confidence": 45,
+      "interpretation": "mixed / inconclusive",
+      "report_path": "threat-hunter-report.md"
+    },
+    "detection_engineer": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 64,
+      "synthetic_confidence": 43,
+      "interpretation": "mixed / inconclusive",
+      "report_path": "detection-engineer-report.md"
+    },
+    "network_forensics": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 66,
+      "synthetic_confidence": 56,
+      "interpretation": "mixed / inconclusive",
+      "report_path": "network-forensics-report.md"
+    },
+    "host_forensics": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 68,
+      "synthetic_confidence": 32,
+      "interpretation": "mostly realistic",
+      "report_path": "host-forensics-report.md"
+    },
+    "average_synthetic_confidence": 44.0,
+    "average_interpretation": "mixed / inconclusive"
+  },
+  "deliberation": {
+    "triggered": false,
+    "reason": "Skipped by monotonic experiment protocol; decision uses standalone blind-review average only.",
+    "average_synthetic_confidence": null,
+    "average_interpretation": null,
+    "report_path": null
+  },
+  "monotonic_gate": {
+    "baseline_loop": 59,
+    "baseline_average_synthetic_confidence": 38.25,
+    "candidate_average_synthetic_confidence": 44.0,
+    "accepted": false,
+    "decision_rule": "accept only if candidate average is strictly lower than baseline average",
+    "rejection_reason": "Candidate blind-review average worsened by 5.75 points, so the ASA connection-ID candidate must be reverted."
+  }
+}

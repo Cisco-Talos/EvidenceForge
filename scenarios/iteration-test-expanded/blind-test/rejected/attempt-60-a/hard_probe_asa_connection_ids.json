@@ -1,0 +1,102 @@
+{
+  "log_path": "scenarios/iteration-test-expanded/data/data/fw-perimeter/cisco_asa.log",
+  "built_count": 6048,
+  "teardown_count": 6042,
+  "unique_built_ids": 6048,
+  "unique_teardown_ids": 6042,
+  "teardown_without_built": 0,
+  "built_without_teardown": 6,
+  "gap_count": 6047,
+  "nonpositive_gaps": 0,
+  "min_gap": 1,
+  "max_gap": 231,
+  "mean_gap": 17.5511824044981,
+  "median_gap": 8,
+  "p95_gap": 60,
+  "p99_gap": 184,
+  "distinct_gap_count": 194,
+  "small_1_to_5_gap_count": 2443,
+  "small_1_to_5_gap_ratio": 0.4040019844551017,
+  "top_20_gaps": [
+    [
+      4,
+      579
+    ],
+    [
+      3,
+      570
+    ],
+    [
+      2,
+      545
+    ],
+    [
+      1,
+      468
+    ],
+    [
+      5,
+      281
+    ],
+    [
+      7,
+      255
+    ],
+    [
+      14,
+      233
+    ],
+    [
+      6,
+      229
+    ],
+    [
+      13,
+      216
+    ],
+    [
+      8,
+      216
+    ],
+    [
+      15,
+      213
+    ],
+    [
+      11,
+      202
+    ],
+    [
+      12,
+      201
+    ],
+    [
+      10,
+      201
+    ],
+    [
+      9,
+      179
+    ],
+    [
+      16,
+      59
+    ],
+    [
+      17,
+      51
+    ],
+    [
+      39,
+      41
+    ],
+    [
+      20,
+      39
+    ],
+    [
+      25,
+      39
+    ]
+  ]
+}
