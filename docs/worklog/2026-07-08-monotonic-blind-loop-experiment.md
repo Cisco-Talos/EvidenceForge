@@ -2,9 +2,10 @@
 
 ## Purpose
 
-This branch tests a stricter assessment-loop policy before changing the
-`eforge-assess` skill. The goal is to keep accepted EvidenceForge realism-loop
-checkpoints monotonically improving with respect to standalone blind-review
+This branch tests a stricter assessment-loop policy on
+`scenarios/iteration-test-expanded/` before changing the `eforge-assess` skill.
+The goal is to keep accepted EvidenceForge realism-loop checkpoints
+monotonically improving with respect to standalone blind-review
 synthetic-confidence scores. Lower synthetic-confidence scores are better.
 
 ## Branch Policy
@@ -53,14 +54,14 @@ contradiction, even if the average score technically decreases.
 Accepted loops stay in the normal canonical loop series:
 
 ```text
-scenarios/iteration-test/blind-test/loop-N/
+scenarios/iteration-test-expanded/blind-test/loop-N/
 ```
 
 Rejected attempts stay outside the dashboard trend:
 
 ```text
-scenarios/iteration-test/blind-test/rejected/attempt-N-a/
-scenarios/iteration-test/blind-test/rejected/attempt-N-b/
+scenarios/iteration-test-expanded/blind-test/rejected/attempt-N-a/
+scenarios/iteration-test-expanded/blind-test/rejected/attempt-N-b/
 ```
 
 Dashboards and rolling score tables should use accepted `loop-N/scores.json`
