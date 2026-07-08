@@ -189,3 +189,52 @@ Carry-forward findings from the rejected blind reviews:
 - Threat Hunter and Network Forensics: NTP visibility is sparse, DHCP is
   slightly too clean, and collection/profile mail-artifact declarations may not
   match the neutral copied dataset.
+
+### Attempt 60-c — Rejected
+
+- Candidate target: rejected attempt 60-b Detection Engineer findings in Postfix
+  syslog receive/delivery/reject evidence.
+- Candidate commit: `b89e744a fix: vary Postfix mail syslog lifecycles`
+- Owning layer: `ActivityGenerator` Postfix receive/delivery/reject syslog
+  helpers.
+- Family contract: Postfix queue lifecycle rows must preserve source-native
+  ordering, `delays=` components should vary per queue/recipient, and rejected
+  RCPT rows must render a 4xx/5xx SMTP reply rather than reusing unrelated
+  STARTTLS success text.
+- Verification before review:
+  - `uv run pytest --no-cov tests/unit/test_email_evidence.py -k "postfix_delay_components or linux_mail_server_emits_postfix_syslog_lifecycle or rejected_email_stops"`:
+    3 passed
+  - `uv run pytest --no-cov tests/unit/test_email_evidence.py`: 37 passed
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `uv run pytest --no-cov`: 4,875 passed, 19 skipped
+  - Regenerated and evaluated `scenarios/iteration-test-expanded/`: PASS,
+    95.90845223387653, 96,388 records
+  - Hard probe: 33 complete Postfix lifecycles, 33 ordered, zero ordering
+    violations, zero bad RCPT reject replies, 45 distinct `delays=` ratio
+    shapes, and zero legacy fixed-ratio tuples.
+- Standalone blind scores:
+  - Threat Hunter: 43
+  - Detection Engineer: 47
+  - Network Forensics: 26
+  - Host/EDR: 47
+  - Average: 40.75
+- Decision: rejected because 40.75 is not lower than the accepted baseline
+  38.25.
+- Revert commit: `a966eb1e Revert "fix: vary Postfix mail syslog lifecycles"`
+- Artifacts: `scenarios/iteration-test-expanded/blind-test/rejected/attempt-60-c/`
+
+Carry-forward findings from the rejected blind reviews:
+
+- Detection Engineer and Threat Hunter: `COLLECTION_PROFILE.json` advertises
+  `mail_artifacts` / `eml` even though the neutral review dataset contains only
+  rendered logs.
+- Detection Engineer: Zeek and ASA contain post-window connection/build starts
+  after the collection profile's primary window end.
+- Threat Hunter: DC Security log-clear semantics are ambiguous because
+  EventRecordIDs continue high after Event ID 1102.
+- Host/EDR: Sysmon `ProcessGuid` and process hash texture look mechanically
+  bucketed across Windows hosts, and one RDP session lacks expected source-side
+  companion evidence.
+- Network Forensics: remaining signals are low-impact long-tail texture concerns
+  around collection-window neatness and repeated HTTP/TLS palettes.
