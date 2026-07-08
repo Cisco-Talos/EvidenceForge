@@ -6,6 +6,32 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.11.1 (2026-07-08)
+
+This patch release preserves the expanded blind-review experiment results and
+promotes the accepted source-native realism fixes from that loop series.
+
+**Blind-review loop experiment**
+
+- Documented the monotonic blind-loop experiment, expanded-scenario target
+  selection, rejected attempts, accepted loop 60, combined loop 61 re-review,
+  dashboard, and worklog evidence for the `iteration-test-expanded` assessment
+  series (`9dd55582`, `3fd67393`, `6442a991`, `1b25ed33`, `df2c2612`,
+  `847dbb09`, `dfebaf38`).
+- Preserved rejected-attempt audit history, including candidate/revert cycles for
+  ASA connection IDs, proxy-origin identity, and Postfix lifecycle fixes
+  (`3b43c998`, `512a8304`, `5fc56088`, `315744fb`, `b89e744a`, `a966eb1e`).
+
+**Realism fixes**
+
+- Limited reviewer-visible collection profiles to rendered logs while leaving
+  packaged email artifacts documented by the package artifact manifest
+  (`8ccc066b`).
+- Added hidden-volume texture to Cisco ASA connection IDs, aligned explicit
+  proxy-origin traffic with scenario-owned DNS identity, and varied Postfix
+  lifecycle ordering/delay/reject behavior before the combined loop 61 review
+  (`00d8dd8a`, `564c4848`, `c883a30d`).
+
 ## v1.11.0 (2026-07-07)
 
 This minor release extends the current development realism pass with expanded
