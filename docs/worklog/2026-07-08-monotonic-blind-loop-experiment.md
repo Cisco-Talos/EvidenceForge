@@ -292,3 +292,58 @@ Carry-forward findings if the experiment resumes:
   EventRecordIDs.
 - Network Forensics and Detection Engineer: NTP and OCSP long-tail collection
   texture remain weak but low impact.
+
+### Loop 61 — Combined Fix-Forward Review
+
+After concluding that the monotonic rejection rule was probably not useful, loop
+61 re-applied the previously reverted 60-a, 60-b, and 60-c fixes together on top
+of accepted loop 60 and ran a fresh standalone blind panel.
+
+- Re-applied commits:
+  - `00d8dd8a fix: add ASA hidden connection-id volume`
+  - `564c4848 fix: align proxy origin with scenario DNS identity`
+  - `c883a30d fix: vary Postfix mail syslog lifecycles`
+- Verification before review:
+  - `uv run pytest --no-cov -q tests/unit/test_cisco_asa_emitter.py tests/unit/test_explicit_proxy.py tests/unit/test_email_evidence.py`:
+    177 passed
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `uv run pytest --no-cov -q`: 4,880 passed, 19 skipped
+  - `uv run eforge validate scenarios/iteration-test-expanded/scenario.yaml`:
+    valid with the known 26 warnings
+  - Regenerated and evaluated `scenarios/iteration-test-expanded/`: PASS,
+    95.90804086572041, 96,398 records
+  - Combined hard probe: ASA ID gaps remain varied, `mail-fin.meridianhcs.com`
+    proxy-origin TLS/ASA traffic stays on `10.10.2.27`, Postfix lifecycles are
+    ordered with varied `delays=` ratios, and the rendered review tree still
+    excludes email artifact declarations.
+- Standalone blind scores:
+  - Threat Hunter: 36
+  - Detection Engineer: 32
+  - Network Forensics: 64
+  - Host/EDR: 36
+  - Average: 42.0
+- Monotonic comparison: not accepted by the old monotonic rule because 42.0 is
+  not lower than accepted loop 60's 37.25.
+- Practical interpretation: the original 60-a/b/c findings did not recur as
+  primary blind-review findings, which supports keeping these as real local
+  improvements. The worse average was driven mainly by a new Network Forensics
+  finding about Zeek TLSv1.2 `resumed:true` rows carrying full-handshake-style
+  `ssl_history` without cert/file/x509 artifacts.
+- Artifacts: `scenarios/iteration-test-expanded/blind-test/loop-61/`
+
+Carry-forward findings after loop 61:
+
+- Network Forensics: fix the Zeek TLS resumption contract first. TLSv1.2 resumed
+  sessions should use abbreviated-session semantics; full-handshake histories
+  should be `resumed:false` and emit consistent `cert_chain_fuids`, `files`, and
+  `x509` rows.
+- Threat Hunter: normalize APP-INT SSH publickey syslog rendering so pivotal
+  root scp sessions include key type/fingerprint consistently with same-host
+  peer sessions.
+- Threat Hunter: close the DB-PROD root SSH session visibly when Zeek marks the
+  transport `SF` inside the window, or model a coherent endpoint collection gap.
+- Threat Hunter and Host/EDR: reduce repeated Linux admin/healthcheck command
+  texture and make short command/process lifetimes more command-aware.
+- Network Forensics: add plausible response-interval constraints for same-UID
+  HTTP keep-alive transaction depth after large responses.

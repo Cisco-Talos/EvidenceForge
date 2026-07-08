@@ -1,0 +1,1404 @@
+{
+  "schema_version": 1,
+  "scenario_name": "iteration-test-expanded",
+  "observation_profile": "enterprise_standard",
+  "collection_window": {
+    "start": "2024-03-18T12:00:00Z",
+    "end": "2024-03-18T18:00:00Z"
+  },
+  "source_summary": {
+    "asa": {
+      "delayed": 648,
+      "visible": 6,
+      "dropped": 3,
+      "filtered": 275
+    },
+    "ecar": {
+      "delayed": 1142,
+      "dropped": 10
+    },
+    "zeek": {
+      "delayed": 1346,
+      "filtered": 12,
+      "visible": 466,
+      "dropped": 2
+    },
+    "ids": {
+      "delayed": 13
+    },
+    "web": {
+      "delayed": 310
+    },
+    "syslog": {
+      "delayed": 119,
+      "visible": 2,
+      "dropped": 2
+    },
+    "bash_history": {
+      "visible": 26
+    },
+    "windows_security": {
+      "delayed": 637
+    },
+    "sysmon": {
+      "delayed": 181,
+      "dropped": 1
+    },
+    "proxy": {
+      "delayed": 26
+    }
+  },
+  "storyline_events": [
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-001",
+      "index": 0,
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "External benefits-themed phishing message is delivered to Finance with hidden security Bcc",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 12,
+          "filtered": 3
+        },
+        "ecar": {
+          "delayed": 23
+        },
+        "proxy": {
+          "delayed": 2
+        },
+        "syslog": {
+          "delayed": 10
+        },
+        "sysmon": {
+          "delayed": 11
+        },
+        "windows_security": {
+          "delayed": 15
+        },
+        "zeek": {
+          "visible": 10,
+          "delayed": 22
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-002",
+      "index": 1,
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "Finance user reads the suspicious benefits message through OWA",
+      "event_types": [
+        "email_read"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 4
+        },
+        "proxy": {
+          "delayed": 1
+        },
+        "sysmon": {
+          "delayed": 3
+        },
+        "windows_security": {
+          "delayed": 2
+        },
+        "zeek": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-003",
+      "index": 2,
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "Diego forwards the suspicious message to the help desk and discreetly copies security",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 6,
+          "filtered": 3
+        },
+        "ecar": {
+          "delayed": 12
+        },
+        "syslog": {
+          "delayed": 11,
+          "dropped": 1
+        },
+        "sysmon": {
+          "delayed": 12
+        },
+        "windows_security": {
+          "delayed": 16
+        },
+        "zeek": {
+          "visible": 4,
+          "delayed": 18
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-001",
+      "index": 3,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "External attacker scans the DMZ for exposed services",
+      "event_types": [
+        "port_scan"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 6
+        },
+        "ecar": {
+          "delayed": 2
+        },
+        "zeek": {
+          "delayed": 5,
+          "filtered": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-002",
+      "index": 4,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "External attacker runs Nikto web vulnerability scanning against the EHR portal",
+      "event_types": [
+        "web_scan"
+      ],
+      "source_status": {
+        "asa": {
+          "visible": 3,
+          "delayed": 350,
+          "dropped": 2,
+          "filtered": 1
+        },
+        "ecar": {
+          "delayed": 352,
+          "dropped": 4
+        },
+        "ids": {
+          "delayed": 13
+        },
+        "web": {
+          "delayed": 307
+        },
+        "zeek": {
+          "visible": 167,
+          "delayed": 493,
+          "dropped": 2,
+          "filtered": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-003",
+      "index": 5,
+      "actor": "root",
+      "system": "LT-MRIVERA-02",
+      "activity": "Rogue laptop obtains an address from DHCP on the corporate LAN",
+      "event_types": [
+        "dhcp_lease"
+      ],
+      "source_status": {
+        "syslog": {
+          "delayed": 3
+        },
+        "zeek": {
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-004",
+      "index": 6,
+      "actor": "lina.nguyen",
+      "system": "WS-LNGUYEN-01",
+      "activity": "Engineering sends an internal EHR release note to a clinical operations distribution group",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 11,
+          "filtered": 3
+        },
+        "ecar": {
+          "delayed": 24
+        },
+        "proxy": {
+          "delayed": 1
+        },
+        "syslog": {
+          "visible": 1,
+          "delayed": 18,
+          "dropped": 1
+        },
+        "sysmon": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 8
+        },
+        "zeek": {
+          "visible": 10,
+          "delayed": 28
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-005",
+      "index": 7,
+      "actor": "omar.haddad",
+      "system": "WS-OHADDAD-01",
+      "activity": "Analytics user reads the EHR release note through IMAPS",
+      "event_types": [
+        "email_read"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 5
+        },
+        "syslog": {
+          "delayed": 2
+        },
+        "windows_security": {
+          "delayed": 1
+        },
+        "zeek": {
+          "delayed": 6
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-004",
+      "index": 8,
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "SQL injection probes against the EHR portal produce server errors",
+      "event_types": [
+        "connection"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 2
+        },
+        "web": {
+          "delayed": 2
+        },
+        "zeek": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-005",
+      "index": 9,
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "Web shell upload and reverse shell callback to direct-IP C2",
+      "event_types": [
+        "connection",
+        "process",
+        "raw"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 3,
+          "dropped": 1
+        },
+        "syslog": {
+          "visible": 1
+        },
+        "web": {
+          "delayed": 1
+        },
+        "zeek": {
+          "visible": 3
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-006",
+      "index": 10,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "event_types": [
+        "process"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 31
+        },
+        "bash_history": {
+          "visible": 7
+        },
+        "ecar": {
+          "delayed": 52
+        },
+        "syslog": {
+          "delayed": 9
+        },
+        "windows_security": {
+          "delayed": 2
+        },
+        "zeek": {
+          "visible": 5,
+          "delayed": 26
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-006",
+      "index": 11,
+      "actor": "priya.patel",
+      "system": "WS-PPATEL-01",
+      "activity": "A vendor document workflow sends security an AI-generated summary with prompt-injection text in an attachment",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 3
+        },
+        "ecar": {
+          "delayed": 3
+        },
+        "syslog": {
+          "delayed": 8
+        },
+        "sysmon": {
+          "delayed": 2
+        },
+        "windows_security": {
+          "delayed": 2
+        },
+        "zeek": {
+          "delayed": 9
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-007",
+      "index": 12,
+      "actor": "lina.nguyen",
+      "system": "WS-LNGUYEN-01",
+      "activity": "Engineering sends an outbound interface package to a lab vendor through the clinical route and ISP relay",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 6,
+          "filtered": 1
+        },
+        "ecar": {
+          "delayed": 12
+        },
+        "syslog": {
+          "delayed": 9
+        },
+        "windows_security": {
+          "delayed": 4
+        },
+        "zeek": {
+          "visible": 2,
+          "delayed": 18
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-007",
+      "index": 13,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Harvest database credentials and SSH key material from the web server",
+      "event_types": [
+        "process"
+      ],
+      "source_status": {
+        "bash_history": {
+          "visible": 3
+        },
+        "ecar": {
+          "delayed": 6
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-008",
+      "index": 14,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Failed SSH attempt to PROXY-01 followed by successful SSH lateral movement to APP-INT-01",
+      "event_types": [
+        "connection",
+        "ssh_session"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 5,
+          "filtered": 1
+        },
+        "bash_history": {
+          "visible": 1
+        },
+        "ecar": {
+          "delayed": 10
+        },
+        "syslog": {
+          "delayed": 4
+        },
+        "windows_security": {
+          "delayed": 4
+        },
+        "zeek": {
+          "visible": 8,
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-009",
+      "index": 15,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Dump Linux password databases from APP-INT-01",
+      "event_types": [
+        "process"
+      ],
+      "source_status": {
+        "bash_history": {
+          "visible": 2
+        },
+        "ecar": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-010",
+      "index": 16,
+      "actor": "marcus.chen",
+      "system": "WS-MCHEN-01",
+      "activity": "Attacker uses explicit sysadmin credentials through RunAs",
+      "event_types": [
+        "explicit_credentials"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 1
+        },
+        "sysmon": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-011",
+      "index": 17,
+      "actor": "root",
+      "system": "LT-MRIVERA-02",
+      "activity": "Wrong-password fumble before broader credential spray",
+      "event_types": [
+        "failed_logon"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 1
+        },
+        "syslog": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 1
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-012",
+      "index": 18,
+      "actor": "root",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential spray succeeds against help desk user followed by RDP session",
+      "event_types": [
+        "credential_spray",
+        "rdp_session"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2,
+          "filtered": 5
+        },
+        "ecar": {
+          "delayed": 12
+        },
+        "sysmon": {
+          "delayed": 2
+        },
+        "windows_security": {
+          "delayed": 20
+        },
+        "zeek": {
+          "delayed": 8
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-008",
+      "index": 19,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Compromised help desk mailbox sends an internal credential-reset lure to finance",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 10,
+          "filtered": 2
+        },
+        "ecar": {
+          "delayed": 19
+        },
+        "proxy": {
+          "delayed": 2
+        },
+        "syslog": {
+          "delayed": 11
+        },
+        "sysmon": {
+          "delayed": 11
+        },
+        "windows_security": {
+          "delayed": 11
+        },
+        "zeek": {
+          "visible": 8,
+          "delayed": 20
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-009",
+      "index": 20,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker reads the compromised help desk mailbox through IMAPS",
+      "event_types": [
+        "email_read"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 1
+        },
+        "ecar": {
+          "delayed": 1
+        },
+        "syslog": {
+          "delayed": 2
+        },
+        "sysmon": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 1
+        },
+        "zeek": {
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-013",
+      "index": 21,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "event_types": [
+        "connection",
+        "dns_query",
+        "logon",
+        "process"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2,
+          "filtered": 1
+        },
+        "ecar": {
+          "delayed": 16
+        },
+        "sysmon": {
+          "delayed": 14
+        },
+        "windows_security": {
+          "delayed": 17
+        },
+        "zeek": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-014",
+      "index": 22,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential dumping with Mimikatz disguised as a Windows indexing service",
+      "event_types": [
+        "create_remote_thread",
+        "process",
+        "process_access"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 5
+        },
+        "sysmon": {
+          "delayed": 5
+        },
+        "windows_security": {
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-015",
+      "index": 23,
+      "actor": "aisha.johnson",
+      "system": "DC-01",
+      "activity": "PsExec-style lateral movement to DC-01 through SMB service creation",
+      "event_types": [
+        "logon",
+        "process",
+        "service_installed"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 3
+        },
+        "ecar": {
+          "delayed": 11
+        },
+        "sysmon": {
+          "delayed": 9
+        },
+        "windows_security": {
+          "delayed": 11
+        },
+        "zeek": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-010",
+      "index": 24,
+      "actor": "evelyn.brooks",
+      "system": "WS-EBROOKS-01",
+      "activity": "External invoice-themed attachment is rejected by the mail gateway",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 1
+        },
+        "ecar": {
+          "delayed": 1
+        },
+        "syslog": {
+          "delayed": 2
+        },
+        "zeek": {
+          "delayed": 5
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-016",
+      "index": 25,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Create backdoor account and add it to Domain Admins",
+      "event_types": [
+        "account_created",
+        "group_member_added",
+        "process"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 7
+        },
+        "sysmon": {
+          "delayed": 7
+        },
+        "windows_security": {
+          "delayed": 10
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-017",
+      "index": 26,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Install service and scheduled task persistence on DC-01",
+      "event_types": [
+        "process",
+        "scheduled_task_created",
+        "service_installed"
+      ],
+      "source_status": {
+        "asa": {
+          "filtered": 2
+        },
+        "ecar": {
+          "delayed": 13
+        },
+        "sysmon": {
+          "delayed": 12
+        },
+        "windows_security": {
+          "delayed": 11
+        },
+        "zeek": {
+          "delayed": 3
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-018",
+      "index": 27,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Allowed HTTPS beacon from DC-01 to attacker infrastructure",
+      "event_types": [
+        "beacon"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 45
+        },
+        "ecar": {
+          "delayed": 47
+        },
+        "proxy": {
+          "delayed": 10
+        },
+        "sysmon": {
+          "delayed": 12
+        },
+        "windows_security": {
+          "delayed": 35
+        },
+        "zeek": {
+          "visible": 34,
+          "delayed": 72
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-019",
+      "index": 28,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Direct C2 beacon attempts from DC-01 are blocked by firewall",
+      "event_types": [
+        "beacon"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 4
+        },
+        "ecar": {
+          "delayed": 5
+        },
+        "proxy": {
+          "delayed": 4
+        },
+        "sysmon": {
+          "delayed": 5
+        },
+        "windows_security": {
+          "delayed": 5
+        },
+        "zeek": {
+          "delayed": 8
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-020",
+      "index": 29,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "DNS tunneling exfiltration from APP-INT-01",
+      "event_types": [
+        "dns_tunnel"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 23,
+          "filtered": 238
+        },
+        "ecar": {
+          "delayed": 259,
+          "dropped": 2
+        },
+        "sysmon": {
+          "delayed": 22
+        },
+        "windows_security": {
+          "delayed": 280
+        },
+        "zeek": {
+          "visible": 140,
+          "delayed": 376,
+          "filtered": 6
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-email-011",
+      "index": 30,
+      "actor": "evelyn.brooks",
+      "system": "WS-EBROOKS-01",
+      "activity": "Executive sends an inline-authored operating note to an outside advisor with internal Bcc",
+      "event_types": [
+        "email_message"
+      ],
+      "source_status": {
+        "asa": {
+          "visible": 1,
+          "delayed": 11,
+          "filtered": 3
+        },
+        "ecar": {
+          "delayed": 20
+        },
+        "proxy": {
+          "delayed": 1
+        },
+        "syslog": {
+          "delayed": 9
+        },
+        "sysmon": {
+          "delayed": 12
+        },
+        "windows_security": {
+          "delayed": 18
+        },
+        "zeek": {
+          "visible": 4,
+          "delayed": 33
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-021",
+      "index": 31,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "DGA queries from compromised web server",
+      "event_types": [
+        "dga_queries"
+      ],
+      "source_status": {
+        "asa": {
+          "visible": 1,
+          "delayed": 89,
+          "dropped": 1
+        },
+        "ecar": {
+          "delayed": 91
+        },
+        "windows_security": {
+          "delayed": 91
+        },
+        "zeek": {
+          "visible": 46,
+          "delayed": 136
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-022",
+      "index": 32,
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data",
+      "event_types": [
+        "logon",
+        "process"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 9
+        },
+        "sysmon": {
+          "delayed": 8
+        },
+        "windows_security": {
+          "delayed": 12
+        },
+        "zeek": {
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-023",
+      "index": 33,
+      "actor": "root",
+      "system": "DB-PROD-01",
+      "activity": "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01",
+      "event_types": [
+        "process",
+        "ssh_session"
+      ],
+      "source_status": {
+        "asa": {
+          "filtered": 6
+        },
+        "bash_history": {
+          "visible": 11
+        },
+        "ecar": {
+          "delayed": 41
+        },
+        "syslog": {
+          "delayed": 10
+        },
+        "windows_security": {
+          "delayed": 4
+        },
+        "zeek": {
+          "visible": 4,
+          "delayed": 6
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-024",
+      "index": 34,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker locks compromised workstation before stepping away",
+      "event_types": [
+        "workstation_lock"
+      ],
+      "source_status": {
+        "windows_security": {
+          "delayed": 1
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-025",
+      "index": 35,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Upload compressed archive to external staging domain over HTTPS",
+      "event_types": [
+        "connection"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 5
+        },
+        "ecar": {
+          "delayed": 11,
+          "dropped": 2
+        },
+        "proxy": {
+          "delayed": 1
+        },
+        "sysmon": {
+          "delayed": 6,
+          "dropped": 1
+        },
+        "windows_security": {
+          "delayed": 10
+        },
+        "zeek": {
+          "visible": 4,
+          "delayed": 6
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-026",
+      "index": 36,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Ongoing periodic beacon from WEB-EXT-01",
+      "event_types": [
+        "beacon"
+      ],
+      "source_status": {
+        "asa": {
+          "visible": 1,
+          "delayed": 5,
+          "filtered": 3
+        },
+        "ecar": {
+          "delayed": 10
+        },
+        "proxy": {
+          "delayed": 3
+        },
+        "windows_security": {
+          "delayed": 3
+        },
+        "zeek": {
+          "visible": 6,
+          "delayed": 18
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-027",
+      "index": 37,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker returns and unlocks compromised workstation",
+      "event_types": [
+        "workstation_unlock"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-028",
+      "index": 38,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Clear Linux shell history on WEB-EXT-01",
+      "event_types": [
+        "process"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "bash_history": {
+          "visible": 1
+        },
+        "ecar": {
+          "delayed": 9
+        },
+        "syslog": {
+          "delayed": 4
+        },
+        "sysmon": {
+          "delayed": 4
+        },
+        "windows_security": {
+          "delayed": 4
+        },
+        "zeek": {
+          "visible": 3
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-029",
+      "index": 39,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Clear Linux shell history on APP-INT-01",
+      "event_types": [
+        "process"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 1
+        },
+        "bash_history": {
+          "visible": 1
+        },
+        "ecar": {
+          "delayed": 8
+        },
+        "syslog": {
+          "delayed": 4
+        },
+        "sysmon": {
+          "delayed": 2
+        },
+        "windows_security": {
+          "delayed": 2
+        },
+        "zeek": {
+          "visible": 1
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-030",
+      "index": 40,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Encoded PowerShell download and Security log clearing on DC-01",
+      "event_types": [
+        "log_cleared",
+        "process"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 6,
+          "dropped": 1
+        },
+        "proxy": {
+          "delayed": 1
+        },
+        "sysmon": {
+          "delayed": 6
+        },
+        "windows_security": {
+          "delayed": 7
+        },
+        "zeek": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-031",
+      "index": 41,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Standalone DNS queries for attacker infrastructure",
+      "event_types": [
+        "dns_query"
+      ],
+      "source_status": {
+        "asa": {
+          "filtered": 3
+        },
+        "ecar": {
+          "delayed": 3
+        },
+        "windows_security": {
+          "delayed": 3
+        },
+        "zeek": {
+          "visible": 4,
+          "delayed": 2
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-032",
+      "index": 42,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Delete backdoor account after exfiltration",
+      "event_types": [
+        "account_deleted",
+        "process"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 3
+        },
+        "sysmon": {
+          "delayed": 3
+        },
+        "windows_security": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-033",
+      "index": 43,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker logs off compromised help desk workstation",
+      "event_types": [
+        "logoff"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 1
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-034",
+      "index": 44,
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account session logs off FILE-SRV-01",
+      "event_types": [
+        "logoff"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 1
+        },
+        "windows_security": {
+          "delayed": 1
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-035",
+      "index": 45,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Root SSH session logs off APP-INT-01",
+      "event_types": [
+        "logoff"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 1
+        },
+        "syslog": {
+          "delayed": 2
+        }
+      }
+    }
+  ],
+  "red_herring_events": [
+    {
+      "kind": "red_herring",
+      "storyline_id": "rh-001",
+      "index": 0,
+      "actor": "sophia.martinez",
+      "system": "WS-SMARTINEZ-01",
+      "activity": "Sales user mistypes password several times before a normal logon",
+      "event_types": [
+        "failed_logon",
+        "logon"
+      ],
+      "source_status": {
+        "ecar": {
+          "delayed": 4
+        },
+        "windows_security": {
+          "delayed": 4
+        }
+      }
+    },
+    {
+      "kind": "red_herring",
+      "storyline_id": "rh-002",
+      "index": 1,
+      "actor": "marcus.chen",
+      "system": "DC-01",
+      "activity": "Sysadmin performs after-hours RDP maintenance and diagnostics on DC-01",
+      "event_types": [
+        "process",
+        "rdp_session"
+      ],
+      "source_status": {
+        "asa": {
+          "delayed": 2
+        },
+        "ecar": {
+          "delayed": 11
+        },
+        "sysmon": {
+          "delayed": 10
+        },
+        "windows_security": {
+          "delayed": 10
+        },
+        "zeek": {
+          "visible": 3
+        }
+      }
+    }
+  ]
+}
