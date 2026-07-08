@@ -92,6 +92,53 @@ For each candidate attempt:
 
 ## Attempt Log
 
-Starting accepted baseline: current `dev` state at branch creation. Establish
-the precise loop number, commit, and standalone blind average before the first
-candidate fix.
+Starting accepted baseline: `scenarios/iteration-test-expanded/blind-test/loop-59`.
+
+- Baseline standalone blind average: 38.25
+- Baseline reviewer scores: Threat Hunter 36, Detection Engineer 62, Network
+  Forensics 28, Host/EDR 27
+- Automated eval is ignored for acceptance, but loop 59 passed at 95.90845223387653
+  over 96,389 records.
+
+### Attempt 60-a — Rejected
+
+- Candidate target: loop-59 Detection Engineer P1 ASA connection-ID hidden-volume
+  model. The prior report found 6,048 built TCP/UDP connection IDs with adjacent
+  visible gaps always in the 1-5 range.
+- Candidate commit: `3b43c998 fix: add ASA hidden connection-id volume`
+- Owning layer: Cisco ASA source-native emitter
+- Family contract: visible ASA Built/Teardown IDs remain monotonic and paired,
+  but adjacent visible IDs include deterministic hidden-volume gaps instead of
+  exposing a tiny bounded synthetic increment range.
+- Verification before review:
+  - `uv run pytest --no-cov tests/unit/test_cisco_asa_emitter.py`
+  - `uv run ruff check src/evidenceforge/generation/emitters/cisco_asa.py tests/unit/test_cisco_asa_emitter.py`
+  - `uv run ruff format --check src/evidenceforge/generation/emitters/cisco_asa.py tests/unit/test_cisco_asa_emitter.py`
+  - `uv run pytest --no-cov` before the same-second ordering correction: 4,875
+    passed, 19 skipped
+  - Regenerated and evaluated `scenarios/iteration-test-expanded/`: PASS,
+    95.90845223387653, 96,389 records
+  - Hard probe: 6,048 Built IDs, 0 nonpositive adjacent Built gaps, 194 distinct
+    adjacent gaps, max gap 231, 6 expected dangling Built IDs at collection edge
+- Standalone blind scores:
+  - Threat Hunter: 45
+  - Detection Engineer: 43
+  - Network Forensics: 56
+  - Host/EDR: 32
+  - Average: 44.0
+- Decision: rejected because 44.0 is not lower than the accepted baseline 38.25.
+- Revert commit: `512a8304 Revert "fix: add ASA hidden connection-id volume"`
+- Artifacts: `scenarios/iteration-test-expanded/blind-test/rejected/attempt-60-a/`
+
+Carry-forward findings from the rejected blind reviews:
+
+- Detection Engineer: eCAR FLOW timing repeatedly lags Zeek/syslog transport
+  evidence, including SSH sessions and short DNS flows.
+- Network Forensics: repeated `mail-fin.meridianhcs.com` proxy-origin path
+  mismatch; DNS answers internal `10.10.2.27`, but proxy-origin TLS/ASA goes to
+  `54.230.228.12`.
+- Threat Hunter: one SSH tuple has endpoint session close roughly 15 minutes
+  before Zeek TCP close, plus repeated rsyslog reload and Sysmon static registry
+  texture.
+- Host/EDR: endpoint telemetry remains mostly realistic; minor bash-history
+  timestamp backstep and filtered Windows Security EventRecordID gaps.
