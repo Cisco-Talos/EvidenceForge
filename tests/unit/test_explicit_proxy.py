@@ -19,12 +19,10 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import (
     NetworkConfig,
-    NetworkIdentity,
     NetworkSegment,
     NetworkSensor,
     System,
@@ -4182,132 +4180,6 @@ class TestExplicitProxyVisibility:
         assert all("10.0.0.1" not in event.dns.answers for event in dns_events)
         assert all(event.dns.query != "PROXY-01.example.org" for event in dns_events)
         assert any(event.dns.query == "example.com" for event in dns_events)
-
-    def test_scenario_identity_overrides_preserved_proxy_origin_ip(self):
-        generator, emitters = _generator(
-            [
-                NetworkSensor(
-                    type="network",
-                    name="client-tap",
-                    monitoring_segments=["workstations"],
-                    direction="outbound",
-                    log_formats=["zeek"],
-                ),
-                NetworkSensor(
-                    type="network",
-                    name="egress-tap",
-                    monitoring_segments=["dmz"],
-                    direction="outbound",
-                    log_formats=["zeek"],
-                ),
-            ]
-        )
-        generator._dns_server_ips = ["10.0.0.1"]
-        generator._network_resolver = ScenarioNetworkResolver(
-            [
-                NetworkIdentity(
-                    id="mail_fin",
-                    hosts=["mail-fin.example.com"],
-                    ips=["10.0.2.27"],
-                    tags=["email"],
-                )
-            ]
-        )
-
-        generator.generate_connection(
-            src_ip="10.0.1.10",
-            dst_ip="54.230.228.12",
-            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
-            dst_port=443,
-            proto="tcp",
-            service="ssl",
-            duration=1.0,
-            orig_bytes=500,
-            resp_bytes=5000,
-            source_system=generator._ip_to_system["10.0.1.10"],
-            hostname="mail-fin.example.com",
-            emit_dns=True,
-            conn_state="SF",
-            preserve_dst_ip=True,
-        )
-
-        pairs = _conn_pairs(emitters)
-        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
-        assert ("10.0.3.10", "10.0.2.27", 443) in pairs
-        assert ("10.0.3.10", "54.230.228.12", 443) not in pairs
-
-        dns_events = [
-            call.args[0]
-            for call in emitters["zeek_dns"].emit.call_args_list
-            if call.args[0].dns and call.args[0].dns.query == "mail-fin.example.com"
-        ]
-        assert dns_events
-        assert any("10.0.2.27" in event.dns.answers for event in dns_events)
-        assert all("54.230.228.12" not in event.dns.answers for event in dns_events)
-
-    def test_email_dns_system_overrides_preserved_proxy_origin_ip(self, monkeypatch):
-        generator, emitters = _generator(
-            [
-                NetworkSensor(
-                    type="network",
-                    name="client-tap",
-                    monitoring_segments=["workstations"],
-                    direction="outbound",
-                    log_formats=["zeek"],
-                ),
-                NetworkSensor(
-                    type="network",
-                    name="egress-tap",
-                    monitoring_segments=["dmz"],
-                    direction="outbound",
-                    log_formats=["zeek"],
-                ),
-            ]
-        )
-        mail_server = _system("MAIL-FIN", "10.0.2.27", ["mail_server"])
-        generator._ip_to_system[mail_server.ip] = mail_server
-        generator._dns_server_ips = ["10.0.0.1"]
-
-        monkeypatch.setattr(
-            generator,
-            "_email_dns_system_for_hostname",
-            lambda hostname: (
-                mail_server
-                if str(hostname or "").lower().rstrip(".") == "mail-fin.example.com"
-                else None
-            ),
-        )
-
-        generator.generate_connection(
-            src_ip="10.0.1.10",
-            dst_ip="54.230.228.12",
-            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
-            dst_port=443,
-            proto="tcp",
-            service="ssl",
-            duration=1.0,
-            orig_bytes=500,
-            resp_bytes=5000,
-            source_system=generator._ip_to_system["10.0.1.10"],
-            hostname="mail-fin.example.com",
-            emit_dns=True,
-            conn_state="SF",
-            preserve_dst_ip=True,
-        )
-
-        pairs = _conn_pairs(emitters)
-        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
-        assert ("10.0.3.10", "10.0.2.27", 443) in pairs
-        assert ("10.0.3.10", "54.230.228.12", 443) not in pairs
-
-        dns_events = [
-            call.args[0]
-            for call in emitters["zeek_dns"].emit.call_args_list
-            if call.args[0].dns and call.args[0].dns.query == "mail-fin.example.com"
-        ]
-        assert dns_events
-        assert any("10.0.2.27" in event.dns.answers for event in dns_events)
-        assert all("54.230.228.12" not in event.dns.answers for event in dns_events)
 
     def test_private_destination_without_hostname_does_not_invent_public_dns(self):
         from evidenceforge.generation.activity.network import REVERSE_DNS

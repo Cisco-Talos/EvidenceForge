@@ -214,10 +214,6 @@ class ProxyTransactionExecutor(Protocol):
         """Emit correlated DNS evidence."""
         ...
 
-    def _email_dns_system_for_hostname(self, hostname: str | None) -> System | None:
-        """Return the configured mail server system that owns an email DNS hostname."""
-        ...
-
     def generate_connection(
         self,
         *,
@@ -348,25 +344,14 @@ class ProxyTransactionActionBundle:
             and not generator_utils._is_ip_literal(proxy_context.host)
             and not proxy_context.host.endswith(f".{request.ad_domain}")
             and not proxy_context.host.endswith(".local")
+            and not request.preserve_explicit_proxy_dst_ip
         ):
-            email_dns_system = executor._email_dns_system_for_hostname(proxy_context.host)
-            email_dns_ip = (
-                str(getattr(email_dns_system, "ip", "") or "") if email_dns_system else ""
-            )
-            if email_dns_ip:
-                dst_ip = email_dns_ip
+            resolver = getattr(executor, "_network_resolver", None)
+            if resolver is not None:
+                resolved = resolver.resolve_host(proxy_context.host, src_host=proxy_sys.hostname)
+                dst_ip = resolved.ip or dst_ip
             else:
-                resolver = getattr(executor, "_network_resolver", None)
-                if resolver is not None:
-                    resolved = resolver.resolve_host(
-                        proxy_context.host, src_host=proxy_sys.hostname
-                    )
-                    if resolved.source == "scenario_identity" and resolved.ip:
-                        dst_ip = resolved.ip
-                    elif not request.preserve_explicit_proxy_dst_ip:
-                        dst_ip = resolved.ip or dst_ip
-                elif not request.preserve_explicit_proxy_dst_ip:
-                    dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
+                dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
 
         client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
         client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
