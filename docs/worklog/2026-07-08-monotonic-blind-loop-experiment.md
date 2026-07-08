@@ -238,3 +238,57 @@ Carry-forward findings from the rejected blind reviews:
   companion evidence.
 - Network Forensics: remaining signals are low-impact long-tail texture concerns
   around collection-window neatness and repeated HTTP/TLS palettes.
+
+### Attempt 60-d — Accepted
+
+- Candidate target: rejected attempt 60-c Detection Engineer and Threat Hunter
+  finding that the neutral review dataset's `COLLECTION_PROFILE.json` advertised
+  `mail_artifacts` / `email_artifacts` / `eml` even though reviewers were given
+  only the rendered log tree.
+- Candidate commit: `8ccc066b fix: limit collection profile to rendered logs`
+- Owning layer: collection profile generation for the rendered review log tree.
+- Family contract: `COLLECTION_PROFILE.json` inside the rendered review tree
+  describes only files present in that tree. Packaged artifacts remain documented
+  by the package-root artifact manifest instead of the log-tree collection
+  profile.
+- Verification before review:
+  - `uv run pytest --no-cov tests/unit/test_collection_profile.py tests/unit/test_engine.py -k "collection_profile or generate_baseline_only_writes_ground_truth_and_manifest"`:
+    2 passed
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`
+  - `uv run pytest --no-cov`: 4,875 passed, 19 skipped
+  - `uv run eforge validate scenarios/iteration-test-expanded/scenario.yaml`:
+    valid with the known 26 warnings
+  - Regenerated and evaluated `scenarios/iteration-test-expanded/`: PASS,
+    95.90845223387653, 96,389 records
+  - Hard probe: zero `mail_artifacts` families, zero `email_artifacts` formats,
+    zero `eml` formats, zero `.eml` files inside the review tree, package-root
+    `ARTIFACTS_MANIFEST.json` present, and 30 package-root `.eml` artifacts.
+- Panel note: the first attempt-60-d panel was invalidated because the shared
+  temporary review copy was contaminated during review. The accepted score uses
+  a clean rerun with four separate read-only temporary copies.
+- Standalone blind scores:
+  - Threat Hunter: 18
+  - Detection Engineer: 35
+  - Network Forensics: 24
+  - Host/EDR: 72
+  - Average: 37.25
+- Decision: accepted because 37.25 is lower than the accepted baseline 38.25.
+- Artifacts: `scenarios/iteration-test-expanded/blind-test/loop-60/`
+- Stop condition: user instructed to stop after this loop; do not start 60-e.
+
+Carry-forward findings if the experiment resumes:
+
+- Host/EDR: Linux shell pipeline process lifecycles are impossible in multiple
+  bash/eCAR examples because upstream `cat` processes outlive downstream
+  `head`, `grep`, or `cut` consumers by many seconds.
+- Host/EDR: short utility command durations such as `whoami` and simple
+  `/proc` reads remain too long, likely sharing the command-duration owner with
+  the pipeline lifecycle issue.
+- Detection Engineer: proxy access timestamp semantics remain ambiguous when
+  proxy access rows precede proxy-origin DNS/TLS by a few seconds.
+- Detection Engineer: DC Security Event ID 1102 collection/export semantics
+  remain ambiguous because later Security events continue with high
+  EventRecordIDs.
+- Network Forensics and Detection Engineer: NTP and OCSP long-tail collection
+  texture remain weak but low impact.

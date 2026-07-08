@@ -1,0 +1,51 @@
+Received: from eu-smtp-inbound-1.mimecast.com (207.211.31.217) by mail.meridianhcs.com with ESMTPS id 000FDF2082A for <marcus.chen@meridianhcs.com>; Mon, 18 Mar 2024 12:08:31 +0000
+Received: from mailout-01.industrybriefs.net (204.141.51.81) by eu-smtp-inbound-1.mimecast.com (207.211.31.217) with ESMTPS id a9a6f8ca; Mon, 18 Mar 2024 12:07:38 +0000
+Received: from alerts-app-02.industrybriefs.net (103.168.174.157) by mailout-01.industrybriefs.net (204.141.51.81) with ESMTPS id eea3d74c; Mon, 18 Mar 2024 12:07:24 +0000
+Return-Path: <alerts@industrybriefs.net>
+Date: Mon, 18 Mar 2024 12:04:57 +0000
+From: <alerts@industrybriefs.net>
+To: <marcus.chen@meridianhcs.com>
+Subject: EHR connector release notes - Meridianhcs 12D4
+Auto-Submitted: auto-generated
+X-Auto-Response-Suppress: All
+X-Mailer: Alerts Mailer 5.7
+X-Release-Track: ehr-interface
+Message-ID: <alerts-9bc7d7e3-6519424@industrybriefs.net>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_690113_2720292413"
+
+------=_Part_690113_2720292413
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Team,
+
+The 11:00 connector package finished validation against the test EHR feed. =
+I put the
+short release note below so clinical operations can confirm their interface=
+ mapping before
+the afternoon window.
+
+- HL7 ADT test messages passed
+- insurance eligibility lookup still needs a retry window
+- patient export job remains read-only
+
+Lina
+Reference: MERIDIANHCS-E038-78A
+
+--=20
+INDUSTRYBRIEFS Mail Gateway ref D77A-00D5A6
+Classification: Business Confidential
+This email and any attachments are intended for the addressed recipients an=
+d may contain privileged information.
+Attachments are scanned by the company mail gateway before delivery.
+
+------=_Part_690113_2720292413
+Content-Type: text/plain; name="ehr-release-checklist.txt"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="ehr-release-checklist.txt"
+
+UmVsZWFzZSBjaGVja2xpc3QKQURUIGludGVyZmFjZTogcGFzc2VkCkVsaWdpYmlsaXR5IGxvb2t1
+cDogcmV0cnkgaW50ZXJ2YWwgcGVuZGluZwpQYXRpZW50IGV4cG9ydDogcmVhZC1vbmx5Cg==
+
+------=_Part_690113_2720292413--

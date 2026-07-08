@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "collection_window": {
+    "start": "2024-03-18T12:00:00Z",
+    "end": "2024-03-18T18:00:00Z"
+  },
+  "observation_profile": "enterprise_standard",
+  "output_target": "default",
+  "source_families": [
+    {
+      "family": "network_sensors",
+      "formats": [
+        "zeek_conn",
+        "zeek_dns",
+        "zeek_http",
+        "zeek_ssl",
+        "zeek_smtp",
+        "zeek_files",
+        "zeek_x509",
+        "zeek_ocsp",
+        "zeek_dhcp",
+        "zeek_ntp"
+      ],
+      "primary_window": {
+        "start": "2024-03-18T12:00:00Z",
+        "end": "2024-03-18T18:00:00Z"
+      },
+      "tail_policy": "Sensor records are clipped to the primary collection window; boundary-spanning connections may close just outside the query horizon.",
+      "ordering": "JSON exports are timestamp-normalized for consistent downstream analysis; connection rows use the observed connection start timestamp.",
+      "notes": [
+        "Protocol analyzer rows reference the connection UID visible to the sensor.",
+        "Companion file, TLS, certificate, DNS, SMTP, DHCP, and NTP rows stay tied to the parent sensor interval when observed."
+      ]
+    },
+    {
+      "family": "perimeter_controls",
+      "formats": [
+        "cisco_asa",
+        "snort_alert"
+      ],
+      "primary_window": {
+        "start": "2024-03-18T12:00:00Z",
+        "end": "2024-03-18T18:00:00Z"
+      },
+      "tail_policy": "Firewall and IDS exports use the primary window; long-lived sessions can lack the opposite lifecycle record at the boundary.",
+      "ordering": "Text exports preserve source timestamp order within each device file.",
+      "notes": [
+        "NAT and alert records reflect the boundary device's view, not endpoint state."
+      ]
+    },
+    {
+      "family": "endpoint_telemetry",
+      "formats": [
+        "windows_event_security",
+        "windows_event_sysmon",
+        "ecar",
+        "syslog",
+        "bash_history"
+      ],
+      "primary_window": {
+        "start": "2024-03-18T12:00:00Z",
+        "end": "2024-03-18T18:00:00Z"
+      },
+      "tail_policy": "Endpoint exports can include lifecycle closure rows after the primary window when the initiating process, logon, service, or shell session was visible or already active near the boundary.",
+      "ordering": "Host files are sorted by source event timestamp after collector normalization; durable source IDs remain monotonic within a host file.",
+      "notes": [
+        "Missing pre-window initiators are expected for long-lived processes, sessions, and services.",
+        "Endpoint flow attribution can be omitted when the collector cannot bind a tuple to a stable process without breaking source-local causality."
+      ]
+    },
+    {
+      "family": "application_access",
+      "formats": [
+        "proxy_access",
+        "web_access"
+      ],
+      "primary_window": {
+        "start": "2024-03-18T12:00:00Z",
+        "end": "2024-03-18T18:00:00Z"
+      },
+      "tail_policy": "Application access logs use the primary window and may include request completion timestamps near the boundary.",
+      "ordering": "Access logs are written in source timestamp order within each host file.",
+      "notes": [
+        "Proxy rows may reflect authenticated users, machine context, service traffic, or unauthenticated infrastructure requests."
+      ]
+    }
+  ]
+}
