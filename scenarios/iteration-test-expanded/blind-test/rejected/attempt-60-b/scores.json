@@ -1,0 +1,63 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 60,
+  "automated_eval": {
+    "score": 95.90804086572041,
+    "status": "PASS",
+    "records": 96399,
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 97.07609419066993,
+      "causality": 90.15797101449276,
+      "timing": 95.49762282214864
+    }
+  },
+  "blind_initial": {
+    "threat_hunter": {
+      "assessment": "Real",
+      "verdict_confidence": 58,
+      "synthetic_confidence": 34,
+      "interpretation": "mostly realistic",
+      "report_path": "threat-hunter-report.md"
+    },
+    "detection_engineer": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 67,
+      "synthetic_confidence": 63,
+      "interpretation": "likely synthetic",
+      "report_path": "detection-engineer-report.md"
+    },
+    "network_forensics": {
+      "assessment": "Real",
+      "verdict_confidence": 72,
+      "synthetic_confidence": 24,
+      "interpretation": "mostly realistic",
+      "report_path": "network-forensics-report.md"
+    },
+    "host_forensics": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 64,
+      "synthetic_confidence": 46,
+      "interpretation": "mixed / inconclusive",
+      "report_path": "host-forensics-report.md"
+    },
+    "average_synthetic_confidence": 41.75,
+    "average_interpretation": "mixed / inconclusive"
+  },
+  "deliberation": {
+    "triggered": false,
+    "reason": "Skipped by monotonic experiment protocol; decision uses standalone blind-review average only.",
+    "average_synthetic_confidence": null,
+    "average_interpretation": null,
+    "report_path": null
+  },
+  "monotonic_gate": {
+    "baseline_loop": 59,
+    "baseline_average_synthetic_confidence": 38.25,
+    "candidate_average_synthetic_confidence": 41.75,
+    "accepted": false,
+    "decision_rule": "accept only if candidate average is strictly lower than baseline average",
+    "rejection_reason": "Candidate blind-review average worsened by 3.5 points, so the proxy-origin DNS identity candidate was reverted."
+  }
+}

@@ -1,0 +1,25 @@
+Received: from mail.meridianhcs.com (203.14.220.1) by relay1.northlake-messaging.net with ESMTPS id 0001OL2S6S for <orders@vendorpost.net>; Mon, 18 Mar 2024 17:10:52 +0000
+Received: from WS-PPATEL-01.meridianhcs.local (10.10.1.32) by mail.meridianhcs.com with ESMTPSA id 00061CCF484 for <orders@vendorpost.net>; Mon, 18 Mar 2024 17:10:45 +0000
+Return-Path: <priya.patel@meridianhcs.com>
+Date: Mon, 18 Mar 2024 17:10:42 +0000
+From: <priya.patel@meridianhcs.com>
+To: <orders@vendorpost.net>
+Subject: Vendorpost: Question on ADT test file #C20C
+Thread-Topic: Vendorpost: Question on ADT test file #C20C
+X-Mailer: Microsoft Outlook 16.0
+Message-ID: <89E93A3F-87CB-3759-96D3-20FAED2F7D9C@meridianhcs.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Could you confirm whether the ADT test file reflects the latest patient-loc=
+ation mapping?
+The interface team asked before their afternoon coordination meeting.
+Reference: VENDORPOST-EC33-756
+
+--=20
+MERIDIANHCS Mail Gateway ref CF16-0060FC
+Classification: Internal Use
+This message may contain confidential business information intended only fo=
+r the listed recipients.
+Please do not forward externally without the document owner's approval.

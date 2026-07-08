@@ -1,0 +1,277 @@
+{
+  "active_before_cleanup_count": 0,
+  "active_before_cleanup_examples": [],
+  "attempt": "60-c",
+  "bad_reject_count": 0,
+  "bad_reject_examples": [],
+  "candidate_commit": "b89e744a",
+  "cleanup_before_client_count": 0,
+  "cleanup_before_client_examples": [],
+  "complete_lifecycle_count": 33,
+  "delivery_before_active_count": 0,
+  "delivery_before_active_examples": [],
+  "delivery_delay_tuple_count": 45,
+  "distinct_delay_ratio_shapes": 45,
+  "legacy_fixed_ratio_count": 0,
+  "max_delay_sum_abs_delta": 0.01,
+  "ordered_lifecycle_count": 33,
+  "ordering_violation_count": 0,
+  "ordering_violation_examples": [],
+  "postfix_rows": 220,
+  "reject_count": 1,
+  "sample_delay_tuples": [
+    {
+      "delay": 0.97,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        0.13,
+        0.16,
+        0.13,
+        0.55
+      ],
+      "process": "postfix/local",
+      "queue_id": "0093AAF368",
+      "ratios": [
+        0.13,
+        0.16,
+        0.13,
+        0.57
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 1.05,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        0.22,
+        0.18,
+        0.18,
+        0.47
+      ],
+      "process": "postfix/local",
+      "queue_id": "0093AAF368",
+      "ratios": [
+        0.21,
+        0.17,
+        0.17,
+        0.45
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 7.37,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        1.04,
+        0.97,
+        1.47,
+        3.9
+      ],
+      "process": "postfix/smtp",
+      "queue_id": "0093AAF368",
+      "ratios": [
+        0.14,
+        0.13,
+        0.2,
+        0.53
+      ],
+      "sum_delta": 0.01
+    },
+    {
+      "delay": 6.47,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        1.8,
+        0.54,
+        0.78,
+        3.35
+      ],
+      "process": "postfix/smtp",
+      "queue_id": "07F9F903B",
+      "ratios": [
+        0.28,
+        0.08,
+        0.12,
+        0.52
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 9.28,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        4.58,
+        0.26,
+        1.0,
+        3.44
+      ],
+      "process": "postfix/smtp",
+      "queue_id": "00079202468",
+      "ratios": [
+        0.49,
+        0.03,
+        0.11,
+        0.37
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 0.63,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        0.07,
+        0.07,
+        0.17,
+        0.32
+      ],
+      "process": "postfix/local",
+      "queue_id": "00026616B3C",
+      "ratios": [
+        0.11,
+        0.11,
+        0.27,
+        0.51
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 10.22,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        2.19,
+        1.22,
+        2.77,
+        4.04
+      ],
+      "process": "postfix/smtp",
+      "queue_id": "00026616B3C",
+      "ratios": [
+        0.21,
+        0.12,
+        0.27,
+        0.4
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 1.88,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        0.14,
+        0.17,
+        0.7,
+        0.87
+      ],
+      "process": "postfix/local",
+      "queue_id": "00E79ED5C5",
+      "ratios": [
+        0.07,
+        0.09,
+        0.37,
+        0.46
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 2.54,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        0.62,
+        0.31,
+        0.46,
+        1.15
+      ],
+      "process": "postfix/local",
+      "queue_id": "0646AD114",
+      "ratios": [
+        0.24,
+        0.12,
+        0.18,
+        0.45
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 9.32,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        1.18,
+        0.69,
+        0.82,
+        6.63
+      ],
+      "process": "postfix/smtp",
+      "queue_id": "000FB1F81F8",
+      "ratios": [
+        0.13,
+        0.07,
+        0.09,
+        0.71
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 3.0,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        0.48,
+        0.51,
+        1.21,
+        0.8
+      ],
+      "process": "postfix/local",
+      "queue_id": "025909620",
+      "ratios": [
+        0.16,
+        0.17,
+        0.4,
+        0.27
+      ],
+      "sum_delta": 0.0
+    },
+    {
+      "delay": 13.01,
+      "fixed_legacy_shape": false,
+      "host": "MAIL-CLIN-01",
+      "parts": [
+        5.13,
+        0.71,
+        2.61,
+        4.55
+      ],
+      "process": "postfix/smtp",
+      "queue_id": "00B7150DD5",
+      "ratios": [
+        0.39,
+        0.05,
+        0.2,
+        0.35
+      ],
+      "sum_delta": -0.01
+    }
+  ],
+  "scenario": "iteration-test-expanded",
+  "syslog_files": [
+    "scenarios/iteration-test-expanded/data/data/APP-INT-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/DB-PROD-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/LT-MRIVERA-02.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/MAIL-CLIN-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/MAIL-EDGE-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/PROXY-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/WEB-EXT-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/WS-LNGUYEN-01.meridianhcs.local/syslog.log",
+    "scenarios/iteration-test-expanded/data/data/WS-OHADDAD-01.meridianhcs.local/syslog.log"
+  ],
+  "tracked_queue_count": 35
+}

@@ -1,0 +1,244 @@
+{
+  "host": "mail-fin.meridianhcs.com",
+  "dns_count": 44,
+  "dns_answer_counts": {
+    "10.10.2.27": 29,
+    "fd00:0a02:001b::1": 15
+  },
+  "ssl_count": 25,
+  "ssl_dst_counts": {
+    "10.10.2.27": 25
+  },
+  "proxy_access_count": 10,
+  "asa_match_count": 20,
+  "asa_dst_counts": {
+    "10.10.2.27": 20
+  },
+  "public_ssl_mismatch_count": 0,
+  "internal_ssl_count": 25,
+  "sample_dns": [
+    {
+      "path": "zeek-core/dns.json",
+      "line": 84,
+      "ts": 1710763899.875027,
+      "answers": [
+        "10.10.2.27"
+      ],
+      "id.orig_h": "10.10.2.25",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 86,
+      "ts": 1710763906.153571,
+      "answers": [
+        "fd00:0a02:001b::1"
+      ],
+      "id.orig_h": "10.10.2.25",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 198,
+      "ts": 1710764377.958596,
+      "answers": [
+        "10.10.2.27"
+      ],
+      "id.orig_h": "10.10.3.20",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 199,
+      "ts": 1710764378.170045,
+      "answers": [
+        "fd00:0a02:001b::1"
+      ],
+      "id.orig_h": "10.10.3.20",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 236,
+      "ts": 1710764647.81824,
+      "answers": [
+        "10.10.2.27"
+      ],
+      "id.orig_h": "10.10.1.34",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 238,
+      "ts": 1710764650.171593,
+      "answers": [
+        "fd00:0a02:001b::1"
+      ],
+      "id.orig_h": "10.10.1.34",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 315,
+      "ts": 1710765369.217673,
+      "answers": [
+        "10.10.2.27"
+      ],
+      "id.orig_h": "10.10.3.20",
+      "id.resp_h": "10.10.2.10"
+    },
+    {
+      "path": "zeek-core/dns.json",
+      "line": 317,
+      "ts": 1710765369.447671,
+      "answers": [
+        "fd00:0a02:001b::1"
+      ],
+      "id.orig_h": "10.10.3.20",
+      "id.resp_h": "10.10.2.10"
+    }
+  ],
+  "sample_ssl": [
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 4,
+      "ts": 1710764306.119164,
+      "dst": "10.10.2.27",
+      "src": "10.10.3.20",
+      "uid": "C8OPyvXB1qoYhRr1JR0"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 5,
+      "ts": 1710764381.204002,
+      "dst": "10.10.2.27",
+      "src": "10.10.3.20",
+      "uid": "CLAgLBQHQCVZJsACWy"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 7,
+      "ts": 1710764652.39064,
+      "dst": "10.10.2.27",
+      "src": "10.10.1.34",
+      "uid": "CKOdtW76YRwPyEfnnGX"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 11,
+      "ts": 1710765373.36229,
+      "dst": "10.10.2.27",
+      "src": "10.10.3.20",
+      "uid": "CwMgVTz2aYjgMNJkui"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 13,
+      "ts": 1710765684.544251,
+      "dst": "10.10.2.27",
+      "src": "10.10.3.20",
+      "uid": "CgWgNshRX7Z30ExtNd"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 22,
+      "ts": 1710767277.288378,
+      "dst": "10.10.2.27",
+      "src": "10.10.3.20",
+      "uid": "CrB3vopTuje6FrcvI1h"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 29,
+      "ts": 1710768362.867128,
+      "dst": "10.10.2.27",
+      "src": "10.10.3.20",
+      "uid": "CmEGuSxeF1IpimYTw18"
+    },
+    {
+      "path": "zeek-core/ssl.json",
+      "line": 30,
+      "ts": 1710768666.727671,
+      "dst": "10.10.2.27",
+      "src": "10.10.1.34",
+      "uid": "CGisko5jLXvUoAILxk"
+    }
+  ],
+  "sample_proxy": [
+    {
+      "path": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 88,
+      "line_text": "10.10.1.34 - MERIDIANHCS\\diego.ramirez [18/Mar/2024:12:18:20 +0000] \"CONNECT mail-fin.meridianhcs.com:443 HTTP/1.1\" 200 149 \"-\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36\" \"cs_bytes=262 sc_b"
+    },
+    {
+      "path": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 99,
+      "line_text": "10.10.1.34 - MERIDIANHCS\\diego.ramirez [18/Mar/2024:12:19:38 +0000] \"CONNECT mail-fin.meridianhcs.com:443 HTTP/1.1\" 200 150 \"-\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36\" \"cs_bytes=432 sc_b"
+    },
+    {
+      "path": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 167,
+      "line_text": "10.10.1.33 - MERIDIANHCS\\evelyn.brooks [18/Mar/2024:12:36:08 +0000] \"CONNECT mail-fin.meridianhcs.com:443 HTTP/1.1\" 200 165 \"-\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0\" \"cs_bytes=375 sc_bytes=165 proxy_action=tunnel\""
+    },
+    {
+      "path": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 201,
+      "line_text": "10.10.1.34 - MERIDIANHCS\\diego.ramirez [18/Mar/2024:12:41:19 +0000] \"CONNECT mail-fin.meridianhcs.com:443 HTTP/1.1\" 200 152 \"-\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36\" \"cs_bytes=346 sc_b"
+    },
+    {
+      "path": "PROXY-01.meridianhcs.local/proxy_access.log",
+      "line": 252,
+      "line_text": "10.10.1.34 - MERIDIANHCS\\diego.ramirez [18/Mar/2024:13:07:48 +0000] \"CONNECT mail-fin.meridianhcs.com:443 HTTP/1.1\" 200 203 \"-\" \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36\" \"cs_bytes=346 sc_b"
+    }
+  ],
+  "sample_asa": [
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 681,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:18:25 fw-perimeter %ASA-6-302013: Built outbound TCP connection 1218809 for dmz:10.10.3.20/46904 (10.10.3.20/46904) to inside:10.10.2.27/443 (10.10.2.27/443)"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 747,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:19:39 fw-perimeter %ASA-6-302014: Teardown TCP connection 1218809 for dmz:10.10.3.20/46904 to inside:10.10.2.27/443 duration 0:01:14 bytes 434582 TCP FINs"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 750,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:19:40 fw-perimeter %ASA-6-302013: Built outbound TCP connection 1218904 for dmz:10.10.3.20/46060 (10.10.3.20/46060) to inside:10.10.2.27/443 (10.10.2.27/443)"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 807,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:20:55 fw-perimeter %ASA-6-302014: Teardown TCP connection 1218904 for dmz:10.10.3.20/46060 to inside:10.10.2.27/443 duration 0:01:14 bytes 367123 TCP FINs"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 1469,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:36:13 fw-perimeter %ASA-6-302013: Built outbound TCP connection 1219784 for dmz:10.10.3.20/44364 (10.10.3.20/44364) to inside:10.10.2.27/443 (10.10.2.27/443)"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 1608,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:37:51 fw-perimeter %ASA-6-302014: Teardown TCP connection 1219784 for dmz:10.10.3.20/44364 to inside:10.10.2.27/443 duration 0:01:38 bytes 380582 TCP FINs"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 1830,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:41:24 fw-perimeter %ASA-6-302013: Built outbound TCP connection 1220286 for dmz:10.10.3.20/41468 (10.10.3.20/41468) to inside:10.10.2.27/443 (10.10.2.27/443)"
+    },
+    {
+      "path": "fw-perimeter/cisco_asa.log",
+      "line": 1915,
+      "dst": "10.10.2.27",
+      "line_text": "<166>Mar 18 12:43:04 fw-perimeter %ASA-6-302014: Teardown TCP connection 1220286 for dmz:10.10.3.20/41468 to inside:10.10.2.27/443 duration 0:01:39 bytes 324769 TCP FINs"
+    }
+  ]
+}

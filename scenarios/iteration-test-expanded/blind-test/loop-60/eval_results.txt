@@ -1,0 +1,320 @@
+EvidenceForge Data Quality Evaluation
+Output directory: scenarios/iteration-test-expanded/data
+Scenario: scenarios/iteration-test-expanded/scenario.yaml
+✓ Loaded scenario: iteration-test-expanded
+
+[07/08/26 14:51:16] INFO     Parsing bash_history:                 engine.py:391
+                             aisha.johnson.bash_history                         
+                    INFO     Parsing bash_history:                 engine.py:391
+                             marcus.chen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             root.bash_history                                  
+                    INFO     Parsing bash_history:                 engine.py:391
+                             lina.nguyen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             marcus.chen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             root.bash_history                                  
+                    INFO     Parsing bash_history:                 engine.py:391
+                             aisha.johnson.bash_history                         
+                    INFO     Parsing bash_history:                 engine.py:391
+                             marcus.chen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             aisha.johnson.bash_history                         
+                    INFO     Parsing bash_history:                 engine.py:391
+                             marcus.chen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             aisha.johnson.bash_history                         
+                    INFO     Parsing bash_history:                 engine.py:391
+                             marcus.chen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             aisha.johnson.bash_history                         
+                    INFO     Parsing bash_history:                 engine.py:391
+                             marcus.chen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             root.bash_history                                  
+                    INFO     Parsing bash_history:                 engine.py:391
+                             lina.nguyen.bash_history                           
+                    INFO     Parsing bash_history:                 engine.py:391
+                             root.bash_history                                  
+                    INFO     Parsing bash_history:                 engine.py:391
+                             omar.haddad.bash_history                           
+                    INFO     Parsing cisco_asa: cisco_asa.log      engine.py:391
+[07/08/26 14:51:17] INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing ecar: ecar.json               engine.py:391
+                    INFO     Parsing email_artifacts:              engine.py:391
+                             ARTIFACTS_MANIFEST.json                            
+                    INFO     Parsing proxy_access:                 engine.py:391
+                             proxy_access.log                                   
+                    INFO     Parsing snort_alert: snort_alert.log  engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing syslog: syslog.log            engine.py:391
+                    INFO     Parsing web_access: web_access.log    engine.py:391
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_security:       engine.py:391
+                             windows_event_security.xml                         
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+[07/08/26 14:51:18] INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing windows_event_sysmon:         engine.py:391
+                             windows_event_sysmon.xml                           
+                    INFO     Parsing zeek_conn: conn.json          engine.py:391
+                    INFO     Parsing zeek_conn: conn.json          engine.py:391
+                    INFO     Parsing zeek_dhcp: dhcp.json          engine.py:391
+                    INFO     Parsing zeek_dns: dns.json            engine.py:391
+                    INFO     Parsing zeek_dns: dns.json            engine.py:391
+                    INFO     Parsing zeek_files: files.json        engine.py:391
+                    INFO     Parsing zeek_files: files.json        engine.py:391
+                    INFO     Parsing zeek_http: http.json          engine.py:391
+                    INFO     Parsing zeek_http: http.json          engine.py:391
+                    INFO     Parsing zeek_ntp: ntp.json            engine.py:391
+                    INFO     Parsing zeek_ocsp: ocsp.json          engine.py:391
+                    INFO     Parsing zeek_ocsp: ocsp.json          engine.py:391
+                    INFO     Parsing zeek_smtp: smtp.json          engine.py:391
+                    INFO     Parsing zeek_ssl: ssl.json            engine.py:391
+                    INFO     Parsing zeek_ssl: ssl.json            engine.py:391
+                    INFO     Parsing zeek_x509: x509.json          engine.py:391
+                    INFO     Parsing zeek_x509: x509.json          engine.py:391
+                    INFO     Parsed 96389 records across 20        engine.py:269
+                             sources                                            
+                    INFO     Scoring Pillar 1: Parseability        engine.py:292
+                    INFO     Loaded format definition:             loader.py:111
+                             bash_history (version 1.0)                         
+                    INFO     Loaded format definition: cisco_asa   loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: ecar        loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition:             loader.py:111
+                             proxy_access (version 1.0)                         
+                    INFO     Loaded format definition: snort_alert loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: syslog      loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: web_access  loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition:             loader.py:111
+                             windows_event_security (version 1.0)               
+[07/08/26 14:51:19] INFO     Loaded format definition:             loader.py:111
+                             windows_event_sysmon (version 1.0)                 
+                    INFO     Loaded format definition: zeek_conn   loader.py:111
+                             (version 1.0)                                      
+[07/08/26 14:51:20] INFO     Loaded format definition: zeek_dhcp   loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_dns    loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_files  loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_http   loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_ntp    loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_ocsp   loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_smtp   loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_ssl    loader.py:111
+                             (version 1.0)                                      
+                    INFO     Loaded format definition: zeek_x509   loader.py:111
+                             (version 1.0)                                      
+[07/08/26 14:51:22] INFO     Scoring Pillar 2: Plausibility        engine.py:292
+                    INFO     Network visibility engine network_visibility.py:164
+                             initialized: 4 segments,                           
+                             4 sensors, 20 mapped IPs,                          
+                             3 NAT rules, 2 VIPs, 1                             
+                             public CIDRs                                       
+                    INFO     Scoring Pillar 3: Causality           engine.py:292
+[07/08/26 14:51:23] INFO     Network visibility engine network_visibility.py:164
+                             initialized: 4 segments,                           
+                             4 sensors, 20 mapped IPs,                          
+                             3 NAT rules, 2 VIPs, 1                             
+                             public CIDRs                                       
+                    INFO     Scoring Pillar 4: Timing              engine.py:292
+  Dim 4: Timing                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:06
+  Parsed 96,389 records from 20 sources ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:01
+
+=== EvidenceForge Data Quality Report ===
+Scenario: iteration-test-expanded
+Evaluated: 2026-07-08T18:51:23Z
+Total records: 96,389 across 20 sources
+  (bash_history: 290, cisco_asa: 14,869, ecar: 28,223, email_artifacts: 31, 
+proxy_access: 2,375, snort_alert: 34, syslog: 4,532, web_access: 758, 
+windows_event_security: 14,735, windows_event_sysmon: 4,859, zeek_conn: 14,051, 
+zeek_dhcp: 73, zeek_dns: 5,347, zeek_files: 1,044, zeek_http: 2,444, zeek_ntp: 
+2, zeek_ocsp: 53, zeek_smtp: 53, zeek_ssl: 1,878, zeek_x509: 738)
+Observation profile: enterprise_standard (manifest loaded)
+
+Overall Quality Score: 96/100
+Aspirational targets: 14/19 (74%)
+
+Pillar Scores:
+  1. Parseability:                        100/100
+     Spec Conformance:                    100/100  [min:95 PASS] [asp:99 met]
+       96389/96389 records pass strict spec validation
+     Format Constraints:                  100/100
+       96389/96389 records pass format constraint checks
+  2. Plausibility:                        97/100
+     Value & OS Plausibility:             100/100  [min:95 PASS] [asp:99 met]
+       19557/19557 records pass OS/value plausibility checks
+     Co-occurrence Rules:                 100/100
+       26658/26658 co-occurrence checks pass
+     Distribution Fit:                    81/100
+       ecar.object: 77; ecar.action: 70; web_access.method: 91; 
+windows_event_security.EventID: 56; zeek_conn.proto: 92; zeek_conn.conn_state: 
+83; zeek_dns.qtype_name: 95; zeek_dns.rcode_name: 98; zeek_http.method: 46; 
+zeek_http.status_code: 87; zeek_ssl.version: 82; zeek_ssl.established: 91
+     Cross-Source Field Agreement:        100/100
+       20288/20288 matched pivot pairs agree
+     User Behavioral Diversity:           100/100
+       Avg pairwise similarity: 0.09 across 65 users
+     Anomaly Rate:                        100/100
+       53/5000 events anomalous (1.1%), target 1-5%
+  3. Causality:                           90/100
+     Causal Ordering:                     100/100  [min:90 PASS] [asp:99 met]
+       11911/11911 causal pairs correctly ordered
+     Event Presence:                      93/100  [min:85 PASS] [asp:95 below]
+       43/46 expected-visible storyline events have traces in logs
+     Indicator Accuracy:                  96/100
+       866/900 indicator checks correct
+     Pivot Linkability:                   56/100
+       25/45 expected-visible consecutive pairs share a pivotable indicator
+     Temporal Integrity:                  91/100
+       42/46 expected-visible events correctly timed and ordered
+     Storyline Trace Coverage:            100/100
+       60/60 expected-visible format-traces found
+  4. Timing:                              95/100
+     Attack Chain Timing:                 100/100
+       45/45 storyline transitions within bounds
+     Human Burstiness:                    98/100
+       CV scores for 23 users (target CV 1.0-3.0)
+     System Process Regularity:           79/100
+       Interval CV: 1.208 (9 service groups, 986 events)
+     Diurnal Pattern:                     N/A
+     Volume Adequacy:                     100/100
+       Noise:signal 2094:1 (target 200:1 for low)
+     Rate Plausibility:                   100/100
+       15414/15414 timing checks plausible
+
+Acceptance: PASS (all hard requirements met)
+
+All acceptance criteria:
+  PASS parseability.spec_conformance: 100.0 vs min 95  aspirational: 99
+  PASS plausibility.value_plausibility: 100.0 vs min 95  aspirational: 99
+  PASS causality.causal_ordering: 100.0 vs min 90  aspirational: 99
+  PASS causality.event_presence: 93.5 vs min 85  aspirational: 95
+
+Host Log Profile (informational):
+  app-int-01: all expected formats present
+  db-prod-01: all expected formats present
+  dc-01: all expected formats present
+  file-srv-01: all expected formats present
+  lt-mrivera-02: missing formats: bash_history
+  mail-clin-01: all expected formats present
+  mail-edge-01: all expected formats present
+  mail-fin-01: all expected formats present
+  proxy-01: all expected formats present
+  web-ext-01: all expected formats present
+  ws-ajohnson-01: all expected formats present
+  ws-dramirez-01: all expected formats present
+  ws-ebrooks-01: all expected formats present
+  ws-lnguyen-01: all expected formats present
+  ws-mchen-01: all expected formats present
+  ws-ohaddad-01: all expected formats present
+  ws-ppatel-01: all expected formats present
+  ws-smartinez-01: all expected formats present
+
+Sample failures (Event Presence):
+  Event 1: diego.ramirez@WS-DRAMIREZ-01 'Finance user reads the suspicious 
+benefits message through O' — no traces
+  Event 11: priya.patel@WS-PPATEL-01 'A vendor document workflow sends security 
+an AI-generated su' — no traces
+  Event 24: evelyn.brooks@WS-EBROOKS-01 'External invoice-themed attachment is 
+rejected by the mail g' — no traces
+
+Sample failures (Indicator Accuracy):
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+  Event 3: hostname mismatch in cisco_asa
+
+Sample failures (Pivot Linkability):
+  Events 2→3: no shared indicator (diego.ramirez@WS-DRAMIREZ-01 → 
+root@WEB-EXT-01)
+  Events 5→6: no shared indicator (root@LT-MRIVERA-02 → 
+lina.nguyen@WS-LNGUYEN-01)
+  Events 6→7: no shared indicator (lina.nguyen@WS-LNGUYEN-01 → 
+omar.haddad@WS-OHADDAD-01)
+  Events 7→8: no shared indicator (omar.haddad@WS-OHADDAD-01 → 
+apache@WEB-EXT-01)
+  Events 10→11: no shared indicator (root@WEB-EXT-01 → priya.patel@WS-PPATEL-01)
+  Events 11→12: no shared indicator (priya.patel@WS-PPATEL-01 → 
+lina.nguyen@WS-LNGUYEN-01)
+  Events 12→13: no shared indicator (lina.nguyen@WS-LNGUYEN-01 → 
+root@WEB-EXT-01)
+  Events 15→16: no shared indicator (root@APP-INT-01 → marcus.chen@WS-MCHEN-01)
+  Events 23→24: no shared indicator (aisha.johnson@DC-01 → 
+evelyn.brooks@WS-EBROOKS-01)
+  Events 24→25: no shared indicator (evelyn.brooks@WS-EBROOKS-01 → SYSTEM@DC-01)
+
+Sample failures (Temporal Integrity):
+  Event 1: no traces to verify timing
+  Event 11: no traces to verify timing
+  Event 24: no traces to verify timing
+  Event 28: trace at +134s from expected (tolerance ±120s)
+

@@ -1,0 +1,48 @@
+EvidenceForge Data Quality Evaluation
+Output directory: scenarios/iteration-test-expanded/data
+Scenario: scenarios/iteration-test-expanded/scenario.yaml
+✓ Loaded scenario: iteration-test-expanded
+
+  Dim 4: Timing                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:07
+  Parsed 96,399 records from 20 sources ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:01
+
+=== EvidenceForge Data Quality Report ===
+Scenario: iteration-test-expanded
+Evaluated: 2026-07-08T17:44:18Z
+Total records: 96,399 across 20 sources
+Observation profile: enterprise_standard (manifest loaded)
+
+Overall Quality Score: 96/100
+Aspirational targets: 14/19 (74%)
+
+Pillar Scores:
+  1. Parseability:                        100/100
+     Spec Conformance:                    100/100  [min:95 PASS] [asp:99 met]
+     Format Constraints:                  100/100
+  2. Plausibility:                        97/100
+     Value & OS Plausibility:             100/100  [min:95 PASS] [asp:99 met]
+     Co-occurrence Rules:                 100/100
+     Distribution Fit:                    81/100
+     Cross-Source Field Agreement:        100/100
+     User Behavioral Diversity:           100/100
+     Anomaly Rate:                        100/100
+  3. Causality:                           90/100
+     Causal Ordering:                     100/100  [min:90 PASS] [asp:99 met]
+     Event Presence:                      93/100  [min:85 PASS] [asp:95 below]
+     Indicator Accuracy:                  96/100
+     Pivot Linkability:                   56/100
+     Temporal Integrity:                  91/100
+     Storyline Trace Coverage:            100/100
+  4. Timing:                              95/100
+     Attack Chain Timing:                 100/100
+     Human Burstiness:                    98/100
+     System Process Regularity:           79/100
+     Diurnal Pattern:                     N/A
+     Volume Adequacy:                     100/100
+     Rate Plausibility:                   100/100
+
+Acceptance: PASS (all hard requirements met)
+
+Host Log Profile (informational):
+  lt-mrivera-02: missing formats: bash_history
+

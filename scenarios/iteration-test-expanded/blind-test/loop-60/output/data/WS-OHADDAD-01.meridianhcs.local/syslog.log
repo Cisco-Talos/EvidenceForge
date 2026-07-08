@@ -1,0 +1,202 @@
+<30>1 2024-03-18T12:00:14.476035Z WS-OHADDAD-01 dbus-daemon 22474 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.98'
+<30>1 2024-03-18T12:04:31.126346Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T12:04:32.683346Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T12:04:34.178346Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1865 seconds.
+<30>1 2024-03-18T12:06:28.207000Z WS-OHADDAD-01 anacron 18551 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:06:28.355908Z WS-OHADDAD-01 anacron 18551 - - Will run job `cron.daily' in 5 min.
+<78>1 2024-03-18T12:07:00.131000Z WS-OHADDAD-01 CRON 464891 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:09:58.018349Z WS-OHADDAD-01 gnome-shell 55792 - - Extension appindicatorsupport@rgcjonas.gmail.com already enabled
+<30>1 2024-03-18T12:11:39.627312Z WS-OHADDAD-01 anacron 18551 - - Job `cron.daily' started
+<30>1 2024-03-18T12:12:46.601791Z WS-OHADDAD-01 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:12:51.400155Z WS-OHADDAD-01 systemd 1 - - Finished motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:13:38.130232Z WS-OHADDAD-01 anacron 18551 - - Job `cron.daily' terminated
+<30>1 2024-03-18T12:13:40.831660Z WS-OHADDAD-01 anacron 18551 - - Normal exit (1 job run)
+<30>1 2024-03-18T12:14:03.900588Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710764043.8466] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T12:14:41.046255Z WS-OHADDAD-01 polkitd 15007 - - Subject unix-process:465023:138327799 is not authorized for action org.freedesktop.login1.reboot
+<30>1 2024-03-18T12:16:45.773131Z WS-OHADDAD-01 systemd-journald 22373 - - Runtime Journal (/run/log/journal/548bd1c0f9e798ec35923dace4caf285) is 884.2M, max 4096M, 3211.8M free.
+<30>1 2024-03-18T12:17:35.057092Z WS-OHADDAD-01 avahi-daemon 23192 - - Withdrawing address record for ens160.
+<30>1 2024-03-18T12:17:39.138674Z WS-OHADDAD-01 polkitd 15007 - - Unregistered Authentication Agent for unix-session:144 (system bus name :1.100, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<30>1 2024-03-18T12:29:56.867654Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710764996.7647] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T12:30:38.672696Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Indexed 68 file(s) under /home/admin/Documents
+<30>1 2024-03-18T12:34:15.582060Z WS-OHADDAD-01 rsyslogd 22422 - - main Q: queue local-spool has 62352 messages pending, worker threads 3
+<30>1 2024-03-18T12:34:18.477411Z WS-OHADDAD-01 polkitd 15007 - - Subject unix-process:465423:138445714 is authorized for action org.freedesktop.systemd1.manage-units
+<30>1 2024-03-18T12:34:18.520078Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710765258.4121] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T12:35:39.599103Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T12:35:41.083103Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T12:35:42.622103Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1645 seconds.
+<78>1 2024-03-18T12:37:00.226000Z WS-OHADDAD-01 CRON 465459 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:38:53.043490Z WS-OHADDAD-01 rsyslogd 22422 - - action 'fwd_core' resumed after retry 23122, next retry disabled
+<86>1 2024-03-18T12:40:09.441500Z WS-OHADDAD-01 sudo 465524 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<85>1 2024-03-18T12:40:09.721500Z WS-OHADDAD-01 sudo 465524 - - svc_app : TTY=pts/1 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/sbin/service systemd-resolved status
+<86>1 2024-03-18T12:40:19.697786Z WS-OHADDAD-01 sudo 465524 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:40:22.026002Z WS-OHADDAD-01 snapd 22583 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2024-03-18T12:42:02.919821Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710765722.7698] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T12:48:00.916410Z WS-OHADDAD-01 cups-browsed 23190 - - Browse remote printer FINANCE-MFP at 971105
+<30>1 2024-03-18T12:52:46.339536Z WS-OHADDAD-01 rsyslogd 22422 - - module imjournal: worker thread pool adjusted to 3
+<30>1 2024-03-18T12:55:45.324853Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710766545.1759] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T12:59:08.550481Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710766748.3135] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T13:03:07.176704Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T13:03:08.758704Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T13:03:10.267704Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1856 seconds.
+<86>1 2024-03-18T13:04:53.008614Z WS-OHADDAD-01 login 465954 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T13:05:00.245614Z WS-OHADDAD-01 systemd-logind 22498 - - New session 208053 of user root.
+<78>1 2024-03-18T13:07:00.157000Z WS-OHADDAD-01 CRON 466022 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:08:19.007910Z WS-OHADDAD-01 polkitd 15007 - - Operator of unix-process:466069:138649789 failed to authenticate as unix-user:admin to gain TEMPORARY authorization for action org.freedesktop.login1.reboot for system-bus-name::1.104 [/usr/bin/loginctl] (owned by unix-user:admin)
+<30>1 2024-03-18T13:13:52.397394Z WS-OHADDAD-01 cups-browsed 23190 - - Created local queue FRONTDESK-MFP (driverless)
+<30>1 2024-03-18T13:17:46.165873Z WS-OHADDAD-01 rsyslogd 22422 - - action 'send_remote' resumed after retry 26748, next retry disabled
+<30>1 2024-03-18T13:19:53.331814Z WS-OHADDAD-01 systemd-resolved 22632 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 374043.
+<30>1 2024-03-18T13:24:00.629906Z WS-OHADDAD-01 fwupd 42475 - - Thunderbolt Controller: no updates available
+<86>1 2024-03-18T13:25:13.231899Z WS-OHADDAD-01 login 5824 - - pam_unix(login:session): session opened for user omar.haddad(uid=4506) by LOGIN(uid=0)
+<86>1 2024-03-18T13:25:17.155899Z WS-OHADDAD-01 systemd-logind 22498 - - New session 208235 of user omar.haddad.
+<30>1 2024-03-18T13:25:19.477260Z WS-OHADDAD-01 rsyslogd 22422 - - omfwd: target logrelay01 using disk-assisted queue fwdRule1, checkpoint 77251
+<86>1 2024-03-18T13:27:48.255423Z WS-OHADDAD-01 sudo 466433 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<85>1 2024-03-18T13:27:48.334423Z WS-OHADDAD-01 sudo 466433 - - svc_app : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/systemctl list-timers --all --no-pager
+<86>1 2024-03-18T13:27:50.372093Z WS-OHADDAD-01 sudo 466433 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:34:07.162194Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T13:34:08.511194Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T13:34:10.124194Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1859 seconds.
+<30>1 2024-03-18T13:34:46.818902Z WS-OHADDAD-01 packagekitd 54913 - - search-names transaction /991251
+<78>1 2024-03-18T13:37:00.134000Z WS-OHADDAD-01 CRON 466608 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T13:47:07.708128Z WS-OHADDAD-01 sudo 466793 - - pam_unix(sudo:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T13:47:10.578128Z WS-OHADDAD-01 systemd-logind 22498 - - New session 208432 of user root.
+<30>1 2024-03-18T13:51:16.548853Z WS-OHADDAD-01 fwupd 42475 - - metadata is 14 days old, scheduling refresh
+<30>1 2024-03-18T13:52:19.268962Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Miner finished crawling /home/admin/Downloads
+<30>1 2024-03-18T13:54:38.758422Z WS-OHADDAD-01 cups-browsed 23190 - - Browse remote printer FRONTDESK-MFP at 451556
+<30>1 2024-03-18T14:02:56.743305Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710770576.6103] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T14:02:57.547821Z WS-OHADDAD-01 polkitd 15007 - - Registered Authentication Agent for unix-session:148 (system bus name :1.107 [/usr/libexec/polkit-gnome-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2024-03-18T14:05:09.319165Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T14:05:10.612165Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T14:05:12.209165Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1903 seconds.
+<86>1 2024-03-18T14:05:55.199128Z WS-OHADDAD-01 sudo 466793 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T14:05:58.667128Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 208432.
+<78>1 2024-03-18T14:07:00.284000Z WS-OHADDAD-01 CRON 467188 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:08:34.934769Z WS-OHADDAD-01 systemd 1 - - Starting apt-daily.service - Daily apt download activities.
+<30>1 2024-03-18T14:08:38.297431Z WS-OHADDAD-01 systemd 1 - - apt-daily.service: Deactivated successfully.
+<30>1 2024-03-18T14:08:57.747809Z WS-OHADDAD-01 systemd-resolved 22632 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 946006.
+<30>1 2024-03-18T14:10:40.581102Z WS-OHADDAD-01 snapd 22583 - - daemon.go:460: gracefully waiting for hook snapd-desktop-integration.configure
+<30>1 2024-03-18T14:10:40.987977Z WS-OHADDAD-01 irqbalance 17835 - - IRQ 16 classified for CPU 1 balancing on ahci
+<86>1 2024-03-18T14:12:29.037614Z WS-OHADDAD-01 login 465954 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T14:12:30.241614Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 208053.
+<30>1 2024-03-18T14:21:32.304534Z WS-OHADDAD-01 thermald 51365 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T14:21:33.829070Z WS-OHADDAD-01 thermald 51365 - - cooling device 1 intel_powerclamp type: 0x02
+<30>1 2024-03-18T14:24:38.305018Z WS-OHADDAD-01 snapd 22583 - - daemon.go:460: gracefully waiting for hook snapd-desktop-integration.configure
+<30>1 2024-03-18T14:24:39.858270Z WS-OHADDAD-01 irqbalance 17835 - - Skipping IRQ 154: banned by affinity mask 00000004 (ahci)
+<30>1 2024-03-18T14:25:09.196994Z WS-OHADDAD-01 avahi-daemon 23192 - - Withdrawing address record for ens160.
+<30>1 2024-03-18T14:26:18.053132Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710771977.8741] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T14:36:55.996037Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T14:36:57.419037Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T14:36:58.812037Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1632 seconds.
+<78>1 2024-03-18T14:37:00.280000Z WS-OHADDAD-01 CRON 467772 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:41:01.124518Z WS-OHADDAD-01 dbus-daemon 22474 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.108'
+<30>1 2024-03-18T14:41:30.020642Z WS-OHADDAD-01 accounts-daemon 34859 - - user 'admin' has logged in
+<30>1 2024-03-18T14:51:05.200416Z WS-OHADDAD-01 fwupd 42475 - - Thunderbolt Controller: firmware version unchanged after LVFS metadata check
+<30>1 2024-03-18T15:02:08.234421Z WS-OHADDAD-01 snapd 22583 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2024-03-18T15:04:10.258928Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T15:04:11.949928Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T15:04:13.443928Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1748 seconds.
+<78>1 2024-03-18T15:07:00.142000Z WS-OHADDAD-01 CRON 468322 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T15:08:29.684361Z WS-OHADDAD-01 login 468338 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T15:08:35.257361Z WS-OHADDAD-01 systemd-logind 22498 - - New session 209164 of user root.
+<30>1 2024-03-18T15:08:36.745618Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Miner finished crawling /home/ubuntu/Documents
+<30>1 2024-03-18T15:21:10.031365Z WS-OHADDAD-01 fwupd 42475 - - System Firmware: firmware version unchanged after LVFS metadata check
+<30>1 2024-03-18T15:21:12.058984Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710775271.8630] device (ens160): state change: disconnected -> prepare
+<30>1 2024-03-18T15:33:21.309768Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T15:33:22.782768Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T15:33:24.393768Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1709 seconds.
+<78>1 2024-03-18T15:37:00.138000Z WS-OHADDAD-01 CRON 468908 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T15:37:50.663361Z WS-OHADDAD-01 login 468338 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T15:37:54.442361Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 209164.
+<30>1 2024-03-18T15:39:23.870686Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Resetting tracker extract task after idle timeout 383571
+<30>1 2024-03-18T15:39:24.937907Z WS-OHADDAD-01 avahi-daemon 23192 - - Service "_ipps._tcp" successfully established.
+<30>1 2024-03-18T15:39:26.051202Z WS-OHADDAD-01 fwupd 42475 - - metadata is 14 days old, scheduling refresh
+<30>1 2024-03-18T15:49:08.783379Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Indexed 68 file(s) under /home/deploy/Documents
+<30>1 2024-03-18T15:49:09.676321Z WS-OHADDAD-01 thermald 51365 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T15:52:35.919657Z WS-OHADDAD-01 polkitd 15007 - - Operator of unix-process:469194:139635526 successfully authenticated as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.NetworkManager.settings.modify.system for system-bus-name::1.110 [/usr/sbin/NetworkManager] (owned by unix-user:deploy)
+<30>1 2024-03-18T16:01:10.774601Z WS-OHADDAD-01 cups-browsed 23190 - - Created local queue FRONTDESK-MFP (driverless)
+<30>1 2024-03-18T16:01:53.428282Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T16:01:54.753282Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T16:01:56.232282Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1934 seconds.
+<78>1 2024-03-18T16:07:00.206000Z WS-OHADDAD-01 CRON 469491 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:14:34.058937Z WS-OHADDAD-01 packagekitd 54913 - - search-names transaction /825346
+<84>1 2024-03-18T16:15:46.635320Z WS-OHADDAD-01 login 469675 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=omar.haddad
+<30>1 2024-03-18T16:20:01.036125Z WS-OHADDAD-01 fwupd 42475 - - metadata is 6 days old, scheduling refresh
+<30>1 2024-03-18T16:22:50.541662Z WS-OHADDAD-01 irqbalance 17835 - - IRQ 16 classified for CPU 3 balancing on nvme0q1
+<30>1 2024-03-18T16:25:23.395359Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710779123.1864] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T16:25:45.487713Z WS-OHADDAD-01 fwupd 42475 - - metadata is 6 days old, scheduling refresh
+<30>1 2024-03-18T16:25:47.431008Z WS-OHADDAD-01 fwupd 42475 - - System Firmware: firmware version unchanged after LVFS metadata check
+<30>1 2024-03-18T16:25:59.317562Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710779159.2086] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T16:25:59.431527Z WS-OHADDAD-01 accounts-daemon 34859 - - user 'deploy' has logged in
+<30>1 2024-03-18T16:34:10.840774Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T16:34:12.406774Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T16:34:13.788774Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1727 seconds.
+<78>1 2024-03-18T16:37:00.293000Z WS-OHADDAD-01 CRON 470063 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T16:37:44.092700Z WS-OHADDAD-01 login 470140 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T16:37:48.568700Z WS-OHADDAD-01 systemd-logind 22498 - - New session 209965 of user admin.
+<30>1 2024-03-18T16:44:11.365530Z WS-OHADDAD-01 snapd 22583 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T16:46:35.035921Z WS-OHADDAD-01 thermald 51365 - - cooling device 0 intel_powerclamp type: 0x02
+<30>1 2024-03-18T16:51:03.402808Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710780663.2778] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T16:53:06.935719Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Resetting tracker extract task after idle timeout 823304
+<30>1 2024-03-18T16:54:24.180679Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Miner finished crawling /home/admin/Downloads
+<30>1 2024-03-18T16:54:25.002760Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710780864.7598] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T16:57:11.815035Z WS-OHADDAD-01 fwupd 42475 - - metadata is 14 days old, scheduling refresh
+<30>1 2024-03-18T16:58:10.593037Z WS-OHADDAD-01 packagekitd 54913 - - get-updates transaction /706967
+<30>1 2024-03-18T17:02:59.272480Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T17:03:00.716480Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T17:03:02.338480Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1644 seconds.
+<30>1 2024-03-18T17:03:35.538286Z WS-OHADDAD-01 irqbalance 17835 - - IRQ 32 classified for CPU 0 balancing on mlx5_comp0
+<30>1 2024-03-18T17:03:48.526038Z WS-OHADDAD-01 gnome-shell 55792 - - Monitor 1 configuration unchanged after hotplug event
+<30>1 2024-03-18T17:04:12.893605Z WS-OHADDAD-01 fwupd 42475 - - USB-C Dock: no updates available
+<30>1 2024-03-18T17:04:13.614484Z WS-OHADDAD-01 tracker-miner-fs-3 20964 - - Miner finished crawling /home/admin/Documents
+<30>1 2024-03-18T17:04:13.703443Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710781453.6594] dhcp4 (ens160): state changed renew -> bound
+<30>1 2024-03-18T17:04:14.122320Z WS-OHADDAD-01 thermald 51365 - - cooling device 1 intel_powerclamp type: 0x02
+<30>1 2024-03-18T17:05:13.681884Z WS-OHADDAD-01 systemd-resolved 22632 - - Transaction 849940 switched to UDP with advertised UDP packet size 1472.
+<30>1 2024-03-18T17:05:24.000087Z WS-OHADDAD-01 avahi-daemon 23192 - - Registering new address record for ens160.
+<30>1 2024-03-18T17:06:18.196343Z WS-OHADDAD-01 dbus-daemon 22474 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.112'
+<30>1 2024-03-18T17:06:18.801063Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710781578.7941] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T17:06:43.229732Z WS-OHADDAD-01 snapd 22583 - - snapmgr.go:523: refresh candidates checked for lxd
+<78>1 2024-03-18T17:07:00.231000Z WS-OHADDAD-01 CRON 470627 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T17:07:54.035215Z WS-OHADDAD-01 su 470637 - - pam_unix(su:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T17:07:59.293215Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210237 of user root.
+<30>1 2024-03-18T17:08:31.837212Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710781711.5922] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T17:10:52.810463Z WS-OHADDAD-01 dbus-daemon 22474 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.115'
+<86>1 2024-03-18T17:10:55.015102Z WS-OHADDAD-01 login 470734 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T17:11:00.379102Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210268 of user ubuntu.
+<30>1 2024-03-18T17:11:01.841705Z WS-OHADDAD-01 rsyslogd 22422 - - configuration file /etc/rsyslog.d/50-default.conf reloaded, checksum 67289
+<86>1 2024-03-18T17:13:25.504163Z WS-OHADDAD-01 login 470764 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<30>1 2024-03-18T17:13:31.357714Z WS-OHADDAD-01 snapd 22583 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2024-03-18T17:13:32.369802Z WS-OHADDAD-01 cups-browsed 23190 - - Browse remote printer CORP-PRINT-01 at 106505
+<86>1 2024-03-18T17:13:32.646163Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210289 of user ubuntu.
+<30>1 2024-03-18T17:13:35.417039Z WS-OHADDAD-01 snapd 22583 - - taskrunner.go:271: change 8596 task 4 done for snapd-desktop-integration
+<86>1 2024-03-18T17:14:24.740774Z WS-OHADDAD-01 login 470776 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T17:14:29.949774Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210297 of user ubuntu.
+<30>1 2024-03-18T17:14:31.975906Z WS-OHADDAD-01 rsyslogd 22422 - - action 'fwd_core' resumed after retry 93050, next retry disabled
+<30>1 2024-03-18T17:14:33.565731Z WS-OHADDAD-01 rsyslogd 22422 - - configuration reload completed after SIGHUP, reload id 70891
+<30>1 2024-03-18T17:14:40.603979Z WS-OHADDAD-01 systemd-resolved 22632 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 825961.
+<86>1 2024-03-18T17:16:30.414934Z WS-OHADDAD-01 login 470831 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<30>1 2024-03-18T17:16:32.345751Z WS-OHADDAD-01 avahi-daemon 23192 - - Service "_ipp._tcp" successfully established.
+<86>1 2024-03-18T17:16:34.395934Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210315 of user admin.
+<86>1 2024-03-18T17:16:44.656884Z WS-OHADDAD-01 login 470833 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<30>1 2024-03-18T17:16:52.113674Z WS-OHADDAD-01 packagekitd 54913 - - search-names transaction /907976
+<86>1 2024-03-18T17:16:52.134884Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210317 of user ubuntu.
+<30>1 2024-03-18T17:16:53.786608Z WS-OHADDAD-01 dbus-daemon 22474 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.118'
+<86>1 2024-03-18T17:16:55.074162Z WS-OHADDAD-01 sudo 470835 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<85>1 2024-03-18T17:16:55.086162Z WS-OHADDAD-01 sudo 470835 - - svc_app : TTY=pts/5 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/journalctl -u sshd -n 40
+<86>1 2024-03-18T17:17:04.037192Z WS-OHADDAD-01 sudo 470835 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T17:21:37.809868Z WS-OHADDAD-01 thermald 51365 - - thermal zone x86_pkg_temp: trip point updated
+<30>1 2024-03-18T17:21:38.958866Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710782498.8219] device (ens160): state change: ip-config -> activated
+<30>1 2024-03-18T17:25:31.113832Z WS-OHADDAD-01 dbus-daemon 22474 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.119'
+<30>1 2024-03-18T17:26:15.455904Z WS-OHADDAD-01 NetworkManager 22450 - - <info>  [1710782775.4029] device (ens160): state change: ip-config -> activated
+<86>1 2024-03-18T17:28:44.395515Z WS-OHADDAD-01 login 471038 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T17:28:49.016515Z WS-OHADDAD-01 systemd-logind 22498 - - New session 210424 of user admin.
+<86>1 2024-03-18T17:29:29.752774Z WS-OHADDAD-01 login 470776 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T17:29:31.840774Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 210297.
+<30>1 2024-03-18T17:30:27.420148Z WS-OHADDAD-01 dhclient 4623 - - DHCPREQUEST for 10.10.1.22 on ens160 to 10.10.2.10 port 67
+<30>1 2024-03-18T17:30:28.838148Z WS-OHADDAD-01 dhclient 4623 - - DHCPACK of 10.10.1.22 from 10.10.2.10
+<30>1 2024-03-18T17:30:30.215148Z WS-OHADDAD-01 dhclient 4623 - - bound to 10.10.1.22 -- renewal in 1802 seconds.
+<78>1 2024-03-18T17:37:00.298000Z WS-OHADDAD-01 CRON 471216 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T17:45:56.873700Z WS-OHADDAD-01 login 470140 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T17:45:58.580700Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 209965.
+<86>1 2024-03-18T17:54:45.755163Z WS-OHADDAD-01 login 470764 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T17:54:47.627163Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 210289.
+<86>1 2024-03-18T18:17:19.290215Z WS-OHADDAD-01 su 470637 - - pam_unix(su:session): session closed for user root
+<86>1 2024-03-18T18:17:22.215215Z WS-OHADDAD-01 systemd-logind 22498 - - Removed session 210237.

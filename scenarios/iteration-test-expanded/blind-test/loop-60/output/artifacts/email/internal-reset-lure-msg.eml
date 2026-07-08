@@ -1,0 +1,48 @@
+Received: from mail.meridianhcs.com (10.10.2.25) by mail-fin.meridianhcs.com with Microsoft SMTP Server id 15.2.1258.14; Mon, 18 Mar 2024 15:08:12 +0000
+Received: from WS-AJOHNSON-01.meridianhcs.local (10.10.1.35) by mail.meridianhcs.com with ESMTPSA id 00093C2E139; Mon, 18 Mar 2024 15:08:07 +0000
+Return-Path: <aisha.johnson@meridianhcs.com>
+Date: Mon, 18 Mar 2024 15:08:04 +0000
+From: <aisha.johnson@meridianhcs.com>
+To: <finance@meridianhcs.com>
+Cc: <marcus.chen@meridianhcs.com>
+Subject: Help desk follow-up: credential reset validation
+Thread-Topic: Help desk follow-up: credential reset validation
+X-MS-Has-Attach: yes
+X-Mailer: Microsoft Outlook 16.0
+X-Ticket-Queue: HD-Reset-Review
+Message-ID: <121609FF-AFF2-1350-BCEC-8A52032BE7D0@meridianhcs.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="_004_00000000A25DB647000000002FDBF66B_"
+
+--_004_00000000A25DB647000000002FDBF66B_
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Team,
+
+We are reconciling several password reset tickets after the morning service=
+ interruption.
+Please use the normal self-service workflow and confirm that your finance a=
+nd reporting
+applications still open after the reset.
+
+Help Desk
+
+--=20
+MERIDIANHCS Mail Gateway ref 811E-00B6B8
+Classification: Internal Use
+If you received this message in error, please notify the sender and delete =
+it from your mailbox.
+Please do not forward externally without the document owner's approval.
+
+--_004_00000000A25DB647000000002FDBF66B_
+Content-Type: text/plain; name="reset-validation-steps.txt"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="reset-validation-steps.txt"
+
+UmVzZXQgdmFsaWRhdGlvbiBzdGVwcwoxLiBPcGVuIHRoZSBlbXBsb3llZSBzZXJ2aWNlIHBvcnRh
+bC4KMi4gQ29uZmlybSBmaW5hbmNlIGFuZCByZXBvcnRpbmcgYXBwbGljYXRpb24gYWNjZXNzLgoz
+LiBSZXBseSB0byB0aGUgaGVscCBkZXNrIHRpY2tldCBpZiBlaXRoZXIgYXBwbGljYXRpb24gZmFp
+bHMuCg==
+
+--_004_00000000A25DB647000000002FDBF66B_--

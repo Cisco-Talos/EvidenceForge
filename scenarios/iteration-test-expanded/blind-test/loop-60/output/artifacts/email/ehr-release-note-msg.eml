@@ -1,0 +1,48 @@
+Received: from mail-clinical.meridianhcs.com (10.10.2.26) by mail.meridianhcs.com with ESMTPS id 06E369850; Mon, 18 Mar 2024 12:48:21 +0000
+Received: from WS-LNGUYEN-01.meridianhcs.local (10.10.1.21) by mail-clinical.meridianhcs.com with ESMTPSA id 0093AAF368; Mon, 18 Mar 2024 12:48:14 +0000
+Return-Path: <lina.nguyen@meridianhcs.com>
+Date: Mon, 18 Mar 2024 12:48:11 +0000
+From: <lina.nguyen@meridianhcs.com>
+To: <ehr-release@research.meridianhcs.com>
+Cc: <clinical-ops@meridianhcs.com>
+Subject: EHR connector release notes
+X-Release-Track: ehr-interface
+Message-ID: <1746897100.499514.89c6aefa@meridianhcs.com>
+User-Agent: Thunderbird 115.7.0
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="------------0000aa8871497e1b19"
+
+--------------0000aa8871497e1b19
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Team,
+
+The 11:00 connector package finished validation against the test EHR feed. =
+I put the
+short release note below so clinical operations can confirm their interface=
+ mapping before
+the afternoon window.
+
+- HL7 ADT test messages passed
+- insurance eligibility lookup still needs a retry window
+- patient export job remains read-only
+
+Lina
+
+--=20
+MERIDIANHCS Mail Gateway ref AE00-000F3C
+Classification: Internal Use
+This message may contain confidential business information intended only fo=
+r the listed recipients.
+Attachments are scanned by the company mail gateway before delivery.
+
+--------------0000aa8871497e1b19
+Content-Type: text/plain; name="ehr-release-checklist.txt"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="ehr-release-checklist.txt"
+
+UmVsZWFzZSBjaGVja2xpc3QKQURUIGludGVyZmFjZTogcGFzc2VkCkVsaWdpYmlsaXR5IGxvb2t1
+cDogcmV0cnkgaW50ZXJ2YWwgcGVuZGluZwpQYXRpZW50IGV4cG9ydDogcmVhZC1vbmx5Cg==
+
+--------------0000aa8871497e1b19--
