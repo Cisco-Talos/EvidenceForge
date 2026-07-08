@@ -136,20 +136,6 @@ def build_collection_profile(
                     "traffic, or unauthenticated infrastructure requests.",
                 ],
             ),
-            CollectionSourceFamily(
-                family="mail_artifacts",
-                formats=["email_artifacts", "eml"],
-                primary_window=collection_window,
-                tail_policy=(
-                    "Message artifact rows describe selected mailbox/export content; "
-                    "metadata-only rows state why full RFC 5322 content is not present."
-                ),
-                ordering="The manifest is sorted by message date, message id, and sender.",
-                notes=[
-                    "The manifest excludes internal case identifiers, local filesystem paths, "
-                    "classification labels, and transport route internals.",
-                ],
-            ),
         ],
     )
 
