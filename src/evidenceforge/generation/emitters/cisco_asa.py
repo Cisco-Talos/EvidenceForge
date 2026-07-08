@@ -180,18 +180,16 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         route_writers: list[tuple[str, Any]],
         sensor_hostname: str,
     ) -> dict[str, int]:
-        rows: list[tuple[int, tuple[int, int, int, int, int], int, str]] = []
+        rows: list[tuple[int, tuple[int, int, int, int, int], str]] = []
         for route_key, writer in route_writers:
             if not writer.output_path.exists():
                 continue
             year = int(syslog_route_year(route_key) or 0)
-            for line_index, line in enumerate(
-                writer.output_path.read_text(encoding="utf-8").splitlines()
-            ):
-                rows.append((year, rfc3164_timestamp_sort_key(line), line_index, line))
+            for line in writer.output_path.read_text(encoding="utf-8").splitlines():
+                rows.append((year, rfc3164_timestamp_sort_key(line), line))
         rows.sort(key=lambda row: (row[0], row[1], row[2]))
         return CiscoAsaEmitter._build_connection_id_mapping(
-            ((year, line) for year, _sort_key, _line_index, line in rows),
+            ((year, line) for year, _sort_key, line in rows),
             sensor_hostname,
         )
 
@@ -204,9 +202,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         current = 1_000_000 + seed % 500_000
         mapping: dict[str, int] = {}
         pattern = re.compile(r"(connection )(\d+)( for)")
-        visible_index = 0
-        previous_second: int | None = None
-        for year, line in lines:
+        for _year, line in lines:
             match = pattern.search(line)
             if match is None:
                 continue
@@ -214,71 +210,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             if int(old_id) < 1_000_000:
                 continue
             if old_id not in mapping:
-                current_second = CiscoAsaEmitter._line_epoch_second(year, line)
-                gap = CiscoAsaEmitter._hidden_connection_id_gap(
-                    sensor_hostname=sensor_hostname,
-                    current=current,
-                    visible_index=visible_index,
-                    line=line,
-                    previous_second=previous_second,
-                    current_second=current_second,
-                )
+                gap_seed = f"{sensor_hostname}:{current}:{len(mapping)}"
+                gap = 1 + int(hashlib.md5(gap_seed.encode()).hexdigest()[:2], 16) % 5
                 current += gap
                 mapping[old_id] = current
-                visible_index += 1
-                if current_second is not None:
-                    previous_second = current_second
         return mapping
-
-    @staticmethod
-    def _line_epoch_second(year: int, line: str) -> int | None:
-        """Return an approximate epoch-second key for an RFC3164 ASA line."""
-        month, day, hour, minute, second = rfc3164_timestamp_sort_key(line)
-        if month == 99 or day == 99:
-            return None
-        try:
-            line_dt = datetime(max(year, 1970), month, day, hour, minute, second)
-        except ValueError:
-            return None
-        return int(line_dt.timestamp())
-
-    @staticmethod
-    def _hidden_connection_id_gap(
-        *,
-        sensor_hostname: str,
-        current: int,
-        visible_index: int,
-        line: str,
-        previous_second: int | None,
-        current_second: int | None,
-    ) -> int:
-        """Return a deterministic visible ASA connection-ID gap.
-
-        ASA connection IDs are device-wide counters. A collected log stream sees
-        only a subset of firewall activity, so adjacent visible connection IDs
-        should include hidden connection volume rather than revealing a tight
-        synthetic 1-5 increment range.
-        """
-        gap_seed = f"asa-hidden-conn-gap:{sensor_hostname}:{current}:{visible_index}:{line[:96]}"
-        digest = hashlib.md5(gap_seed.encode()).digest()
-        bucket = digest[0] % 100
-        if bucket < 34:
-            base_gap = 1 + digest[1] % 4
-        elif bucket < 70:
-            base_gap = 5 + digest[1] % 11
-        elif bucket < 93:
-            base_gap = 16 + digest[1] % 35
-        else:
-            base_gap = 52 + digest[1] % 180
-
-        elapsed_gap = 0
-        if previous_second is not None and current_second is not None:
-            elapsed_seconds = max(0, current_second - previous_second)
-            if elapsed_seconds > 0:
-                hidden_rate = 0.08 + (digest[2] / 255.0) * 0.42
-                elapsed_gap = min(500, int(elapsed_seconds * hidden_rate))
-
-        return max(1, base_gap + elapsed_gap)
 
     @staticmethod
     def _apply_connection_id_mapping(path: Path, mapping: dict[str, int]) -> None:
