@@ -14720,12 +14720,7 @@ class ActivityGenerator:
         reject_time = self._smtp_lifecycle_time(time, duration, 0.42)
         recipient = self._postfix_recipient_list(smtp.rcptto)[:1]
         to_address = recipient[0] if recipient else "undisclosed-recipients"
-        reply = self._postfix_reject_reply(
-            smtp=smtp,
-            src_system=src_system,
-            dst_system=dst_system,
-            time=reject_time,
-        )
+        reply = smtp.last_reply or "550 5.7.1 Message rejected"
         self.generate_syslog_event(
             dst_system,
             connect_time,
@@ -14770,16 +14765,10 @@ class ActivityGenerator:
         qmgr_pid = self._postfix_component_pid(system, "qmgr", time)
         peer_name = self._postfix_peer_name(peer_system)
         recipients = self._postfix_recipient_list(queue_recipients or smtp.rcptto)
-        connect_time = self._smtp_lifecycle_time(time, duration, 0.06)
-        client_time = self._smtp_lifecycle_time(time, duration, 0.20)
-        cleanup_time = max(
-            self._smtp_lifecycle_time(time, duration, 0.38),
-            client_time + timedelta(milliseconds=160),
-        )
-        active_time = max(
-            self._smtp_lifecycle_time(time, duration, 0.64),
-            cleanup_time + timedelta(milliseconds=220),
-        )
+        connect_time = self._smtp_lifecycle_time(time, duration, 0.08)
+        client_time = self._smtp_lifecycle_time(time, duration, 0.16)
+        cleanup_time = self._smtp_lifecycle_time(time, duration, 0.28)
+        active_time = self._smtp_lifecycle_time(time, duration, 0.38)
         queue_state = self._postfix_queue_state(system, queue_id)
         queue_state["client_time"] = client_time
         queue_state["active_time"] = active_time
@@ -14823,10 +14812,7 @@ class ActivityGenerator:
             local_pid = self._postfix_component_pid(system, "local", time)
             latest_delivery_time = active_time
             for offset, recipient in enumerate(local_recipients):
-                delivery_time = max(
-                    self._smtp_lifecycle_time(time, duration, 0.78 + 0.05 * offset),
-                    active_time + timedelta(milliseconds=180 + (offset * 110)),
-                )
+                delivery_time = self._smtp_lifecycle_time(time, duration, 0.58 + 0.05 * offset)
                 delay = self._postfix_delay_between(client_time, delivery_time)
                 self.generate_syslog_event(
                     system,
@@ -14834,8 +14820,7 @@ class ActivityGenerator:
                     "postfix/local",
                     (
                         f"{queue_id}: to=<{recipient}>, relay=local, delay={delay}, "
-                        f"delays={self._postfix_delays(delay, queue_id=queue_id, recipient=recipient, component='local')}, "
-                        "dsn=2.0.0, "
+                        f"delays={self._postfix_delays(delay)}, dsn=2.0.0, "
                         "status=sent (delivered to maildir)"
                     ),
                     pid=local_pid,
@@ -14889,15 +14874,9 @@ class ActivityGenerator:
         start_time = queue_state.get("client_time")
         if not isinstance(start_time, datetime):
             start_time = time
-        active_time = queue_state.get("active_time")
-        if not isinstance(active_time, datetime):
-            active_time = time
         latest_delivery_time = time
         for offset, recipient in enumerate(recipients):
-            delivery_time = max(
-                self._smtp_lifecycle_time(time, duration, 0.82 + 0.05 * offset),
-                active_time + timedelta(milliseconds=240 + (offset * 140)),
-            )
+            delivery_time = self._smtp_lifecycle_time(time, duration, 0.70 + 0.04 * offset)
             delay = self._postfix_delay_between(start_time, delivery_time)
             self.generate_syslog_event(
                 system,
@@ -14905,9 +14884,7 @@ class ActivityGenerator:
                 "postfix/smtp",
                 (
                     f"{queue_id}: to=<{recipient}>, relay={peer_name}[{peer_system.ip}]:{port}, "
-                    f"delay={delay}, "
-                    f"delays={self._postfix_delays(delay, queue_id=queue_id, recipient=recipient, component='smtp')}, "
-                    "dsn=2.0.0, "
+                    f"delay={delay}, delays={self._postfix_delays(delay)}, dsn=2.0.0, "
                     f"status=sent ({remote_reply})"
                 ),
                 pid=smtp_pid,
@@ -15039,34 +15016,6 @@ class ActivityGenerator:
         """Return the peer label Postfix would show for an SMTP client/server."""
         return self._email_server_fqdn(system.hostname)
 
-    def _postfix_reject_reply(
-        self,
-        *,
-        smtp: SmtpContext,
-        src_system: "System",
-        dst_system: "System",
-        time: datetime,
-    ) -> str:
-        """Return a source-native SMTP reject reply for Postfix RCPT rejections."""
-        reply = str(smtp.last_reply or "").strip()
-        if len(reply) >= 3 and reply[:3].isdigit() and reply[0] in {"4", "5"}:
-            return reply
-
-        recipients = ",".join(self._postfix_recipient_list(smtp.rcptto))
-        seed = _stable_seed(
-            "postfix_reject_reply:"
-            f"{src_system.hostname}:{dst_system.hostname}:{smtp.mailfrom}:"
-            f"{recipients}:{time.isoformat()}"
-        )
-        replies = [
-            "550 5.7.1 Message rejected",
-            "550 5.7.1 Delivery not authorized",
-            "554 5.7.1 Service unavailable; message refused",
-            "550 5.1.1 Recipient address rejected",
-            "450 4.7.1 Client host rejected: try again later",
-        ]
-        return replies[seed % len(replies)]
-
     @staticmethod
     def _smtp_lifecycle_time(time: datetime, duration: float, fraction: float) -> datetime:
         """Return a syslog timestamp bounded inside the SMTP hop interval."""
@@ -15087,30 +15036,13 @@ class ActivityGenerator:
         return f"{value:.2f}".rstrip("0").rstrip(".")
 
     @staticmethod
-    def _postfix_delays(
-        delay: str,
-        *,
-        queue_id: str = "",
-        recipient: str = "",
-        component: str = "",
-    ) -> str:
+    def _postfix_delays(delay: str) -> str:
         """Return a plausible Postfix delays tuple that sums near delay."""
         total = float(delay)
-        floor = min(0.01, total / 8)
-        seed = _stable_seed(f"postfix_delays:{queue_id}:{recipient}:{component}:{delay}")
-        rng = random.Random(seed)
-        weights = [
-            rng.uniform(0.08, 0.35),
-            rng.uniform(0.01, 0.18),
-            rng.uniform(0.06, 0.45),
-            rng.uniform(0.18, 0.70),
-        ]
-        remaining = max(0.0, total - floor * 4)
-        weight_total = sum(weights)
-        before_qmgr = floor + remaining * weights[0] / weight_total
-        qmgr = floor + remaining * weights[1] / weight_total
-        connection = floor + remaining * weights[2] / weight_total
-        delivery = max(floor, total - before_qmgr - qmgr - connection)
+        before_qmgr = max(0.01, total * 0.18)
+        qmgr = max(0.01, total * 0.08)
+        connection = max(0.01, total * 0.22)
+        delivery = max(0.01, total - before_qmgr - qmgr - connection)
         return f"{before_qmgr:.2f}/{qmgr:.2f}/{connection:.2f}/{delivery:.2f}"
 
     def _email_smtp_hop_times(

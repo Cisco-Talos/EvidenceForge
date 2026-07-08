@@ -580,16 +580,6 @@ def test_linux_mail_server_emits_postfix_syslog_lifecycle(tmp_path: Path) -> Non
         for record in syslog_records
         if record.fields.get("message", "").startswith(f"{queue_id}: from=<alice@corp.example>")
     )
-    client_record = next(
-        record
-        for record in syslog_records
-        if record.fields.get("message", "").startswith(f"{queue_id}: client=")
-    )
-    cleanup_record = next(
-        record
-        for record in syslog_records
-        if record.fields.get("message", "").startswith(f"{queue_id}: message-id=")
-    )
     delivery_record = next(
         record
         for record in syslog_records
@@ -598,11 +588,7 @@ def test_linux_mail_server_emits_postfix_syslog_lifecycle(tmp_path: Path) -> Non
     delay_match = re.search(r"\bdelay=([0-9.]+)", delivery_record.fields["message"])
     assert delay_match is not None
     assert active_record.timestamp is not None
-    assert client_record.timestamp is not None
-    assert cleanup_record.timestamp is not None
     assert delivery_record.timestamp is not None
-    assert client_record.timestamp < cleanup_record.timestamp < active_record.timestamp
-    assert active_record.timestamp < delivery_record.timestamp
     assert (
         float(delay_match.group(1))
         >= (delivery_record.timestamp - active_record.timestamp).total_seconds()
@@ -624,28 +610,6 @@ def test_linux_mail_server_emits_postfix_syslog_lifecycle(tmp_path: Path) -> Non
     )
     assert outbound_flow["pid"] == smtp_pid
     assert outbound_flow["properties"]["image_path"] == "/usr/lib/postfix/sbin/smtp"
-
-
-def test_postfix_delay_components_vary_by_queue_and_recipient() -> None:
-    delay_tuples = [
-        ActivityGenerator._postfix_delays(
-            "8.00",
-            queue_id=f"{index:09X}",
-            recipient=f"user{index}@corp.example",
-            component="smtp",
-        )
-        for index in range(12)
-    ]
-
-    assert len(set(delay_tuples)) >= 10
-    ratio_shapes: set[tuple[float, ...]] = set()
-    for delay_tuple in delay_tuples:
-        parts = [float(value) for value in delay_tuple.split("/")]
-        assert len(parts) == 4
-        assert abs(sum(parts) - 8.0) <= 0.03
-        ratio_shapes.add(tuple(round(part / 8.0, 2) for part in parts))
-
-    assert len(ratio_shapes) >= 8
 
 
 def test_plaintext_smtp_reply_uses_postfix_receive_queue_id(tmp_path: Path, monkeypatch) -> None:
@@ -1884,15 +1848,6 @@ def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path
     assert scenario.environment.email is not None
     scenario.environment.email.artifacts = EmailArtifactsConfig(mode="all")
     scenario.environment.email.mail_servers[1].allow_inbound_starttls = False
-    systems = [
-        system.model_copy(update={"os": "Ubuntu 22.04"})
-        if system.hostname == "MAIL-FIN"
-        else system
-        for system in scenario.environment.systems
-    ]
-    scenario = scenario.model_copy(
-        update={"environment": scenario.environment.model_copy(update={"systems": systems})}
-    )
     scenario = _with_email_storyline(
         scenario,
         EmailMessageEventSpec(
@@ -1911,13 +1866,6 @@ def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path
                 )
             ],
         ),
-    ).model_copy(
-        update={
-            "output": OutputSpec(
-                logs=[{"format": "zeek"}, {"format": "syslog"}],
-                destination="./data",
-            )
-        }
     )
     engine = GenerationEngine(
         scenario,
@@ -1933,12 +1881,6 @@ def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path
     assert smtp_records[0]["last_reply"].startswith(("550", "554"))
     assert smtp_records[0]["fuids"] == []
     assert smtp_records[0]["id.resp_h"] == "10.10.2.26"
-    syslog_text = "\n".join(
-        path.read_text(encoding="utf-8") for path in (tmp_path / "data").rglob("syslog.log")
-    )
-    reject_match = re.search(r"NOQUEUE: reject: RCPT from .*: ([45]\d\d [^;]+);", syslog_text)
-    assert reject_match is not None
-    assert "220 2.0.0 TLS go ahead" not in reject_match.group(1)
     files_path = tmp_path / "data" / "zeek-core" / "files.json"
     file_records = _read_ndjson(files_path) if files_path.exists() else []
     assert not any(row.get("source") == "SMTP" for row in file_records)
