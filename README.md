@@ -35,11 +35,12 @@ git clone https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 uv sync
 
-# Install agent skills (Claude Code by default)
+# Install project-local skills for all supported agents
 uv run eforge install-skills
 
-# Or install Codex skills
-uv run eforge install-skills --agent codex
+# Or select one agent or install user-wide
+uv run eforge install-skills --agent chatgpt
+uv run eforge install-skills --global
 
 # Create a scenario interactively
 # /eforge scenario
@@ -66,7 +67,12 @@ EvidenceForge includes agent skills for interactive, guided workflows. These are
 | `/eforge evaluate` | Runs the data quality evaluation, interprets scores, reviews records for realism, and suggests improvements. |
 | `/eforge config` | Add, modify, or remove personas, domains, applications, and other configuration data. Handles cross-file dependencies automatically. See [Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md). |
 
-Install Claude Code skills with `uv run eforge install-skills` (project scope) or `uv run eforge install-skills --global`. Install Codex skills with `uv run eforge install-skills --agent codex`.
+`uv run eforge install-skills` installs project-local skills for both Claude Code
+and ChatGPT. Claude commands go under `.claude/commands/`; ChatGPT skills go
+under `.agents/skills/`. Add `--global` to install both user-wide under
+`~/.claude/commands/` and `~/.agents/skills/`, or select one with `--agent
+claude` or `--agent chatgpt`. The legacy name `--agent codex` remains an alias
+for `--agent chatgpt` and uses the same destinations.
 
 ## CLI Reference
 
@@ -79,7 +85,7 @@ For scripted or non-interactive use:
 | `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (4 pillars, 20 sub-scores) |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
-| `eforge install-skills [--agent claude\|codex] [--global]` | Install agent skills (`--global` is Claude-only) |
+| `eforge install-skills [--agent all\|claude\|chatgpt\|codex] [--global]` | Install project-local or user-wide agent skills; defaults to all agents (`codex` aliases `chatgpt`) |
 | `eforge version` | Show version |
 
 Useful command flags: `generate` accepts `--verbose` / `--debug` for logging,

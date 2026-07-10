@@ -1013,96 +1013,136 @@ def eval_cmd(
 @app.command("install-skills")
 def install_skills_cmd(
     agent: str = typer.Option(
-        "claude",
+        "all",
         "--agent",
-        help="Agent to install skills for: claude or codex",
+        help="Agent to install skills for: all, claude, chatgpt, or codex (alias)",
     ),
     global_install: bool = typer.Option(
-        False, "--global", help="Install to ~/.claude/commands/ (global)"
+        False,
+        "--global",
+        help="Install to each selected agent user directory",
     ),
 ) -> None:
     """Install EvidenceForge skills for supported agent workflows.
 
-    By default, installs Claude Code slash commands to .claude/commands/ in the
-    current directory. Use --global with Claude installs to install to
-    ~/.claude/commands/. Use --agent codex to install Codex skills to
-    ~/.codex/skills/.
+    By default, installs skills for Claude Code and ChatGPT in the current
+    project. Use --global to install to each selected agent user directory.
+    The codex agent name remains available as an alias for chatgpt.
 
     Existing installations are updated: new files are copied, changed files
     are overwritten, and stale files from previous versions are removed.
     """
-    from evidenceforge.cli.install_skills import install_codex_skills, install_skills
-
-    normalized_agent = agent.lower()
-    if normalized_agent not in {"claude", "codex"}:
-        console.print(
-            f"[bold red]Error:[/bold red] Unknown agent '{agent}'. Use 'claude' or 'codex'.",
-            style="red",
-        )
-        raise typer.Exit(EXIT_INPUT_ERROR)
-
-    if normalized_agent == "codex" and global_install:
-        console.print(
-            "[bold red]Error:[/bold red] --global is only valid for Claude installs. "
-            "Codex skills install to ~/.codex/skills/.",
-            style="red",
-        )
-        raise typer.Exit(EXIT_INPUT_ERROR)
-
-    if normalized_agent == "codex":
-        target_dir = Path.home() / ".codex" / "skills"
-        scope = "user"
-        install_func = install_codex_skills
-    elif global_install:
-        target_dir = Path.home() / ".claude" / "commands"
-        scope = "global"
-        install_func = install_skills
-    else:
-        target_dir = Path.cwd() / ".claude" / "commands"
-        scope = "project"
-        install_func = install_skills
-
-    console.print(
-        f"[bold blue]Installing EvidenceForge skills for {normalized_agent} ({scope})[/bold blue]"
+    from evidenceforge.cli.install_skills import (
+        find_evidenceforge_chatgpt_skills,
+        install_chatgpt_skills,
+        install_skills,
     )
-    console.print(f"Target: {target_dir}\n")
 
-    try:
-        installed, removed = install_func(target_dir)
-    except FileNotFoundError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}", style="red")
-        raise typer.Exit(EXIT_INPUT_ERROR)
-    except PermissionError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}", style="red")
-        raise typer.Exit(EXIT_INPUT_ERROR)
-
-    if installed:
-        console.print(f"[green]✓[/green] Installed {len(installed)} files:")
-        for f in installed:
-            if normalized_agent == "claude":
-                console.print(f"  eforge/{f}")
-            else:
-                console.print(f"  {f}")
-
-    if removed:
-        console.print(f"\n[yellow]Removed {len(removed)} stale files:[/yellow]")
-        for f in removed:
-            if normalized_agent == "claude":
-                console.print(f"  eforge/{f}", style="dim")
-            else:
-                console.print(f"  {f}", style="dim")
-
-    if normalized_agent == "claude":
-        console.print(f"\n[bold green]✓ Skills installed to {target_dir / 'eforge'}[/bold green]")
+    requested_agent = agent.lower()
+    valid_agents = {"all", "claude", "chatgpt", "codex"}
+    if requested_agent not in valid_agents:
         console.print(
-            "Use /eforge scenario, /eforge generate, /eforge validate, /eforge evaluate, or /eforge config."
+            f"[bold red]Error:[/bold red] Unknown agent {agent!r}. "
+            "Use all, claude, chatgpt, or codex.",
+            style="red",
         )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if requested_agent == "all":
+        selected_agents = ("claude", "chatgpt")
+    elif requested_agent == "codex":
+        selected_agents = ("chatgpt",)
     else:
-        console.print(f"\n[bold green]✓ Skills installed to {target_dir}[/bold green]")
+        selected_agents = (requested_agent,)
+
+    scope = "global" if global_install else "project"
+    failures: list[tuple[str, str]] = []
+    successful_agents: set[str] = set()
+
+    for index, normalized_agent in enumerate(selected_agents):
+        if index:
+            console.print()
+
+        if normalized_agent == "claude":
+            target_dir = (
+                Path.home() / ".claude" / "commands"
+                if global_install
+                else Path.cwd() / ".claude" / "commands"
+            )
+        else:
+            target_dir = (
+                Path.home() / ".agents" / "skills"
+                if global_install
+                else Path.cwd() / ".agents" / "skills"
+            )
+
         console.print(
-            "Use the eforge-scenario, eforge-generate, eforge-validate, "
-            "eforge-evaluate, or eforge-config skills."
+            f"[bold blue]Installing EvidenceForge skills for "
+            f"{normalized_agent} ({scope})[/bold blue]"
         )
+        console.print(f"Target: {target_dir}\n")
+
+        try:
+            if normalized_agent == "claude":
+                installed, removed = install_skills(target_dir)
+            else:
+                installed, removed = install_chatgpt_skills(target_dir)
+        except (FileNotFoundError, PermissionError) as error:
+            console.print(f"[bold red]Error:[/bold red] {error}", style="red")
+            failures.append((normalized_agent, str(error)))
+            continue
+
+        successful_agents.add(normalized_agent)
+        if installed:
+            console.print(f"[green]✓[/green] Installed {len(installed)} files:")
+            for installed_file in installed:
+                if normalized_agent == "claude":
+                    console.print(f"  eforge/{installed_file}")
+                else:
+                    console.print(f"  {installed_file}")
+
+        if removed:
+            console.print(f"\n[yellow]Removed {len(removed)} stale files:[/yellow]")
+            for removed_file in removed:
+                if normalized_agent == "claude":
+                    console.print(f"  eforge/{removed_file}", style="dim")
+                else:
+                    console.print(f"  {removed_file}", style="dim")
+
+        if normalized_agent == "claude":
+            installed_dir = target_dir / "eforge"
+            console.print(f"\n[bold green]✓ Skills installed to {installed_dir}[/bold green]")
+            console.print(
+                "Use /eforge scenario, /eforge generate, /eforge validate, "
+                "/eforge evaluate, or /eforge config."
+            )
+        else:
+            console.print(f"\n[bold green]✓ Skills installed to {target_dir}[/bold green]")
+            console.print(
+                "Use the eforge-scenario, eforge-generate, eforge-validate, "
+                "eforge-evaluate, or eforge-config skills."
+            )
+
+    if global_install and "chatgpt" in successful_agents:
+        legacy_dir = Path.home() / ".codex" / "skills"
+        legacy_skills = find_evidenceforge_chatgpt_skills(legacy_dir)
+        if legacy_skills:
+            console.print(
+                "\n[bold yellow]Warning:[/bold yellow] Legacy EvidenceForge skills "
+                f"also exist under {legacy_dir} and may appear as duplicates:"
+            )
+            for legacy_skill in legacy_skills:
+                console.print(f"  {legacy_skill}", style="dim")
+            console.print(
+                "These legacy files were not modified. Remove them manually after "
+                "confirming the new installation works."
+            )
+
+    if failures:
+        console.print("\n[bold red]Skill installation completed with errors:[/bold red]")
+        for failed_agent, message in failures:
+            console.print(f"  {failed_agent}: {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
 
 
 @app.command()
