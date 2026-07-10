@@ -29,9 +29,9 @@ from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
 
-CODEX_SKILL_NAMES = ("scenario", "generate", "validate", "evaluate", "config")
+CHATGPT_SKILL_NAMES = ("scenario", "generate", "validate", "evaluate", "config")
 
-_CODEX_REFERENCES_BY_SKILL = {
+_CHATGPT_REFERENCES_BY_SKILL = {
     "config": (
         "references/config-apps-processes.md",
         "references/config-dependency-graph.md",
@@ -57,12 +57,12 @@ _CODEX_REFERENCES_BY_SKILL = {
     "validate": ("references/scenario-reference.md",),
 }
 
-_CODEX_REFERENCE_REWRITES = {
+_CHATGPT_REFERENCE_REWRITES = {
     "/eforge:references:scenario-reference": "`references/scenario-reference.md`",
     "/eforge:references:evidence-formats": "`references/evidence-formats.md`",
 }
 
-_CODEX_COMMAND_REWRITES = {
+_CHATGPT_COMMAND_REWRITES = {
     "/eforge scenario": "the `eforge-scenario` skill",
     "/eforge generate": "the `eforge-generate` skill",
     "/eforge validate": "the `eforge-validate` skill",
@@ -144,7 +144,7 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
 def _collect_command_files(manifest: dict[str, Path]) -> dict[str, Path]:
     """Return top-level command skill files keyed by command name."""
     command_files: dict[str, Path] = {}
-    for name in CODEX_SKILL_NAMES:
+    for name in CHATGPT_SKILL_NAMES:
         rel_path = f"{name}.md"
         if rel_path not in manifest:
             raise FileNotFoundError(f"Required skill file not found: {rel_path}")
@@ -153,16 +153,16 @@ def _collect_command_files(manifest: dict[str, Path]) -> dict[str, Path]:
 
 
 def _collect_reference_files(manifest: dict[str, Path]) -> dict[str, Path]:
-    """Return reference files to bundle inside each Codex skill."""
+    """Return reference files to bundle inside each ChatGPT skill."""
     return {rel: source for rel, source in manifest.items() if rel.startswith("references/")}
 
 
-def _references_for_codex_skill(
+def _references_for_chatgpt_skill(
     skill_name: str, reference_files: dict[str, Path]
 ) -> dict[str, Path]:
-    """Return the reference files needed by a single Codex skill."""
+    """Return the reference files needed by a single ChatGPT skill."""
     refs: dict[str, Path] = {}
-    for rel_path in _CODEX_REFERENCES_BY_SKILL[skill_name]:
+    for rel_path in _CHATGPT_REFERENCES_BY_SKILL[skill_name]:
         if rel_path not in reference_files:
             raise FileNotFoundError(f"Required reference file not found: {rel_path}")
         refs[rel_path] = reference_files[rel_path]
@@ -267,8 +267,8 @@ def _remove_stale_files(eforge_dir: Path, manifest: dict[str, Path]) -> list[str
     return removed
 
 
-def _is_evidenceforge_codex_skill(path: Path) -> bool:
-    """Return True if path appears to be an EvidenceForge-owned Codex skill."""
+def _is_evidenceforge_chatgpt_skill(path: Path) -> bool:
+    """Return True if path appears to be an EvidenceForge-owned ChatGPT skill."""
     skill_file = path / "SKILL.md"
     if not skill_file.is_file():
         return False
@@ -333,8 +333,8 @@ def _extract_frontmatter_block(lines: list[str], key: str, source: Path) -> list
     raise ValueError(f"Skill file is missing required frontmatter field '{key}': {source}")
 
 
-def _codex_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str:
-    """Build Codex-compatible SKILL.md frontmatter from Claude command metadata."""
+def _chatgpt_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str:
+    """Build ChatGPT-compatible SKILL.md frontmatter from Claude command metadata."""
     name = _extract_frontmatter_value(frontmatter_lines, "name", source)
     description_lines = _extract_frontmatter_block(frontmatter_lines, "description", source)
 
@@ -351,12 +351,12 @@ def _codex_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str:
     )
 
 
-def _rewrite_codex_skill_body(body: str) -> str:
-    """Adapt Claude-specific references in a skill body for Codex."""
+def _rewrite_chatgpt_skill_body(body: str) -> str:
+    """Adapt Claude-specific references in a skill body for ChatGPT."""
     content = body
-    for old, new in _CODEX_REFERENCE_REWRITES.items():
+    for old, new in _CHATGPT_REFERENCE_REWRITES.items():
         content = content.replace(old, new)
-    for old, new in _CODEX_COMMAND_REWRITES.items():
+    for old, new in _CHATGPT_COMMAND_REWRITES.items():
         content = content.replace(old, new)
     return content
 
@@ -388,8 +388,8 @@ def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
     return eforge_dir
 
 
-def _ensure_safe_codex_skill_directory(target_dir: Path, skill_name: str) -> Path:
-    """Create or validate a safe Codex skill directory."""
+def _ensure_safe_chatgpt_skill_directory(target_dir: Path, skill_name: str) -> Path:
+    """Create or validate a safe ChatGPT skill directory."""
     from evidenceforge.utils.paths import reject_symlink
 
     skill_dir = target_dir / skill_name
@@ -408,11 +408,11 @@ def _ensure_safe_codex_skill_directory(target_dir: Path, skill_name: str) -> Pat
     return skill_dir
 
 
-def _codex_skill_text(source: Path) -> str:
-    """Read a command file and convert it to a valid Codex SKILL.md file."""
+def _chatgpt_skill_text(source: Path) -> str:
+    """Read a command file and convert it to a valid ChatGPT SKILL.md file."""
     content = source.read_text(encoding="utf-8")
     frontmatter_lines, body = _split_frontmatter(content, source)
-    return _codex_frontmatter_text(source, frontmatter_lines) + _rewrite_codex_skill_body(body)
+    return _chatgpt_frontmatter_text(source, frontmatter_lines) + _rewrite_chatgpt_skill_body(body)
 
 
 def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
@@ -448,16 +448,16 @@ def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     return installed, removed
 
 
-def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
-    """Install EvidenceForge skills to a Codex skills directory.
+def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
+    """Install EvidenceForge skills to a ChatGPT skills directory.
 
-    Creates one Codex skill directory per EvidenceForge command, each with a
+    Creates one ChatGPT skill directory per EvidenceForge command, each with a
     SKILL.md file and bundled references. Existing EvidenceForge-owned skill
     directories are updated and stale EvidenceForge-owned skill directories are
     removed.
 
     Args:
-        target_dir: Codex skills directory, e.g. ~/.codex/skills/.
+        target_dir: ChatGPT skills directory, e.g. .agents/skills/.
 
     Returns:
         Tuple of (installed_files, removed_files) as relative path lists.
@@ -474,14 +474,14 @@ def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     removed: list[str] = []
     for name, source in sorted(command_files.items()):
         skill_name = f"eforge-{name}"
-        skill_dir = _ensure_safe_codex_skill_directory(target_dir, skill_name)
-        skill_reference_files = _references_for_codex_skill(name, reference_files)
+        skill_dir = _ensure_safe_chatgpt_skill_directory(target_dir, skill_name)
+        skill_reference_files = _references_for_chatgpt_skill(name, reference_files)
 
         skill_manifest: dict[str, Path] = {"SKILL.md": source}
         skill_manifest.update(skill_reference_files)
 
         skill_file = _safe_install_destination(skill_dir, "SKILL.md")
-        _write_text_no_follow(skill_file, _codex_skill_text(source))
+        _write_text_no_follow(skill_file, _chatgpt_skill_text(source))
         installed.append(f"{skill_name}/SKILL.md")
 
         for rel_path, ref_source in sorted(skill_reference_files.items()):
@@ -493,3 +493,34 @@ def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
             removed.append(f"{skill_name}/{stale}")
 
     return installed, removed
+
+
+def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
+    """Install ChatGPT-compatible skills using the legacy function name.
+
+    Args:
+        target_dir: ChatGPT skills directory.
+
+    Returns:
+        Tuple of (installed_files, removed_files) as relative path lists.
+    """
+    return install_chatgpt_skills(target_dir)
+
+
+def find_evidenceforge_chatgpt_skills(target_dir: Path) -> list[Path]:
+    """Find EvidenceForge-owned ChatGPT skill directories under a target.
+
+    Args:
+        target_dir: Directory containing ChatGPT skill directories.
+
+    Returns:
+        Sorted list of recognized EvidenceForge skill directories.
+    """
+    if not target_dir.is_dir():
+        return []
+
+    return sorted(
+        path
+        for path in target_dir.iterdir()
+        if path.is_dir() and _is_evidenceforge_chatgpt_skill(path)
+    )

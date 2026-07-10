@@ -6,6 +6,23 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.12.0 (2026-07-10)
+
+This minor release aligns EvidenceForge skill installation with current Claude
+Code and ChatGPT project-local and user-wide discovery paths.
+
+**Agent skill installation**
+
+- Changed `eforge install-skills` to install both Claude Code and ChatGPT skills
+  by default, with explicit `all`, `claude`, and `chatgpt` agent selections and
+  `codex` retained as a compatibility alias (`1c585619`).
+- Added project-local and user-wide ChatGPT destinations under `.agents/skills`,
+  best-effort multi-agent installation, and warnings for preserved legacy
+  `.codex/skills` installations (`1c585619`).
+- Updated installer documentation and regression coverage for agent selection,
+  scope handling, compatibility, partial failures, and legacy detection
+  (`1c585619`).
+
 ## v1.11.1 (2026-07-08)
 
 This patch release preserves the expanded blind-review experiment results and
