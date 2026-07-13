@@ -9004,6 +9004,26 @@ class ActivityGenerator:
             )
             if source_ip is None:
                 logon_type = 2
+        if (
+            logon_type == 10
+            and os_cat == "windows"
+            and source_ip not in (None, "", "-", system.ip)
+            and emit_network_evidence
+        ):
+            explicit_source_system = source_system
+            if explicit_source_system is None and source_ip is not None:
+                explicit_source_system = self._ip_to_system.get(source_ip)
+            _, rendered_logon_id = self._execute_rdp_session_bundle(
+                user=user,
+                target_system=system,
+                time=time,
+                source_ip=source_ip,
+                source_system=explicit_source_system,
+                source_port=source_port,
+                logon_id=logon_id,
+                preserve_explicit_source=True,
+            )
+            return rendered_logon_id
         if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
             existing_interactive = self._active_user_workstation_windows_session(
                 user,
@@ -23344,15 +23364,48 @@ class ActivityGenerator:
         source_ip: str,
         source_system: Optional["System"] = None,
         source_pid: int = -1,
+        source_port: int | None = None,
         logon_id: str | None = None,
         source_process_time: datetime | None = None,
         source_process_factory: RdpSourceProcessFactory | None = None,
+        preserve_explicit_source: bool = False,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
         Compound event ensuring network and host evidence are always paired.
         Returns Zeek UID.
         """
+        uid, _ = self._execute_rdp_session_bundle(
+            user=user,
+            target_system=target_system,
+            time=time,
+            source_ip=source_ip,
+            source_system=source_system,
+            source_pid=source_pid,
+            source_port=source_port,
+            logon_id=logon_id,
+            source_process_time=source_process_time,
+            source_process_factory=source_process_factory,
+            preserve_explicit_source=preserve_explicit_source,
+        )
+        return uid
+
+    def _execute_rdp_session_bundle(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_system: Optional["System"] = None,
+        source_pid: int = -1,
+        source_port: int | None = None,
+        logon_id: str | None = None,
+        source_process_time: datetime | None = None,
+        source_process_factory: RdpSourceProcessFactory | None = None,
+        preserve_explicit_source: bool = False,
+    ) -> tuple[str, str]:
+        """Execute the canonical RDP bundle and return transport and session IDs."""
+
         bundle = RdpSessionActionBundle(
             executor=self,
             request=RdpSessionRequest(
@@ -23362,12 +23415,15 @@ class ActivityGenerator:
                 source_ip=source_ip,
                 source_system=source_system,
                 source_pid=source_pid,
+                source_port=source_port,
                 source_process_time=source_process_time,
                 logon_id=logon_id or "",
+                preserve_explicit_source=preserve_explicit_source,
             ),
             source_process_factory=source_process_factory,
         )
-        return bundle.execute()
+        uid = bundle.execute()
+        return uid, bundle.rendered_logon_id
 
     def _resolve_direct_rdp_source_system(
         self,

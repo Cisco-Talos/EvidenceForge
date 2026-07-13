@@ -2148,8 +2148,54 @@ class TestActivityGenerator:
     def test_generate_logon_rdp_uses_native_4624_auth_shape(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """RDP 4624 should not render CredSSP as the authentication package."""
+        """Direct Type 10 calls should delegate transport and auth to the RDP bundle."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=10,
+            source_ip="10.0.99.50",
+            source_port=49306,
+        )
+
+        event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        rdp_connections = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3389
+        ]
+        assert len(rdp_connections) == 1
+        network_event = rdp_connections[0]
+        assert event.timestamp > network_event.timestamp
+        assert event.auth.source_port == network_event.network.src_port == 49306
+        assert event.auth.logon_id == logon_id
+        assert event.auth.logon_type == 10
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
+        assert event.auth.auth_package != "CredSSP"
+
+    def test_generate_logon_rdp_preserves_explicit_modeled_source(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Compatibility delegation should not replace an explicit storyline source."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_source = System(
+            hostname="LT-REDTEAM-01",
+            ip="10.0.0.99",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            linux_source.ip: linux_source,
+        }
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_logon(
@@ -2157,14 +2203,22 @@ class TestActivityGenerator:
             test_system,
             timestamp,
             logon_type=10,
-            source_ip="10.0.99.50",
+            source_ip=linux_source.ip,
         )
 
-        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        assert event.auth.logon_type == 10
-        assert event.auth.logon_process == "User32"
-        assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
-        assert event.auth.auth_package != "CredSSP"
+        network_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        assert network_event.network.src_ip == linux_source.ip
+        assert logon_event.auth.source_ip == linux_source.ip
+        assert logon_event.src_host.hostname == linux_source.hostname
 
     def test_generate_logon_rdp_without_remote_source_downgrades_to_interactive(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
