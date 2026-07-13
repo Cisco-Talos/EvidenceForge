@@ -152,6 +152,8 @@ class NetworkContext:
     zeek_uid: str = ""  # From StateManager.open_connection()
     conn_id: str = ""  # From StateManager.open_connection()
     duration: float | None = None
+    source_visible_start_time: datetime | None = None
+    source_visible_close_time: datetime | None = None
     orig_bytes: int | None = None
     resp_bytes: int | None = None
     orig_pkts: int = 0

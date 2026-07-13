@@ -1307,13 +1307,13 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
-    def test_short_flow_uses_endpoint_completion_latency(
+    def test_short_flow_stays_inside_canonical_connection_interval(
         self,
         emitter,
         monkeypatch,
         ts,
     ):
-        """Very short FLOW rows should not share Zeek's packet-level timestamp."""
+        """Very short FLOW rows retain texture without moving past transport close."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         process = ProcessContext(
@@ -1351,9 +1351,46 @@ class TestChronologicalOutput:
         emitter._render_connection(event)
 
         assert ts + timedelta(milliseconds=18) <= emitted[0]["timestamp"]
-        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=424)
-        assert emitted[0]["pid"] == 1234
-        assert emitted[0]["actorID"] == "process-1"
+        assert emitted[0]["timestamp"] < ts + timedelta(milliseconds=50)
+        assert emitted[0]["pid"] == -1
+        assert "actorID" not in emitted[0]
+
+    def test_delayed_flow_uses_finalized_canonical_interval(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Collection delay must not shift an endpoint FLOW beyond canonical close."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts + timedelta(milliseconds=700),
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.53",
+                dst_port=53,
+                protocol="udp",
+                conn_state="SF",
+                duration=0.04,
+                initiating_pid=-1,
+                source_visible_start_time=ts,
+                source_visible_close_time=ts + timedelta(milliseconds=40),
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert ts <= emitted[0]["timestamp"] <= ts + timedelta(milliseconds=40)
 
     def test_incomplete_flow_without_duration_uses_attempt_result_latency(
         self,

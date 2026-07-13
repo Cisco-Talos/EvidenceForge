@@ -18972,6 +18972,22 @@ class ActivityGenerator:
                 event.timestamp = adjusted_time
                 time = adjusted_time
 
+        # Finalize the canonical source-visible interval only after every protocol,
+        # payload, and process-visibility adjustment has settled. Dispatch creates
+        # source-local event copies with collection delay, so the immutable interval
+        # must live on NetworkContext rather than be re-derived from those copies.
+        event.network.source_visible_start_time = event.timestamp
+        event.network.source_visible_close_time = (
+            event.timestamp + timedelta(seconds=max(0.0, event.network.duration))
+            if event.network.duration is not None
+            else None
+        )
+        self.state_manager.update_connection_interval(
+            event.network.conn_id,
+            event.network.source_visible_start_time,
+            event.network.source_visible_close_time,
+        )
+
         # Automatic weird.log synthesis is intentionally disabled for now. The
         # Zeek weird type space is broad and state-sensitive; poorly matched
         # weird rows are more damaging than sparse weird.log output. Explicit

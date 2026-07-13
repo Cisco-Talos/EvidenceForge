@@ -136,3 +136,61 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
   complete/no-delay profiles, target and source endpoint views, and short connection intervals.
   Do not force eCAR FLOW before the Linux `Connection from` line when native collection latency can
   explain that order; the hard boundary is successful auth/session establishment.
+
+## Loop 64 Outcome
+
+- **Commits:** `4d441adc fix: preserve remote transport before authentication` and `f6c00225
+  fix: route type 10 logons through RDP bundles`.
+- **Root-cause closure:** SSH/RDP bundles now budget the active observation profile's relative
+  eCAR/auth delay and the relevant endpoint clock relationship. Inbound eCAR FLOW clock scope is
+  the receiving endpoint rather than always the source host. Generic Windows Type 10 logons now
+  delegate to the RDP bundle instead of emitting auth first and transport later, while explicit
+  storyline source identity and source-port truth are preserved.
+- **Verification:** focused dispatcher/source-timing/SSH/RDP/storyline tests passed; final full
+  suite passed with 4,897 tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.91799130579982, PASS across all hard gates.
+- **Hard probe:** 104 successful SSH authentications, 103 observed matching target eCAR FLOW rows,
+  one modeled cross-source collection gap, and zero FLOW-after-Accepted/PAM inversions. All 26 RDP
+  Type 10 sessions had both endpoint FLOW views present and before Security authentication, with
+  minimum source/target leads of 707 ms and 1,400 ms.
+- **Blind panel:** initial Threat Hunter 69, Detection Engineer 88, Network Forensics 87, Host/EDR
+  27; average 67.75 (`likely synthetic`), 2.0 points lower than loop 63. Verdict disagreement
+  triggered deliberation. Two initial missing-format findings were invalid because the nested
+  source files were present; deliberation removed them and revised all verdicts to Synthetic with
+  a final average of 84.5. Deliberation scores remain outside trend calculations.
+- **Target result:** no reviewer repeated the SSH/RDP authentication-before-endpoint-transport
+  contradiction. The network reviewer found the broader sibling contract: 8,944 of 15,744 matched
+  successful eCAR FLOW observations landed after every matching Zeek connection interval.
+- **Highest new root contracts:** network-wide endpoint FLOW interval alignment; Event 4769
+  service-account/SPN namespace ownership; collection-window admission before fan-out; DMZ DNS
+  RTT/parent-duration identity; TCP state/history derivation; stable sensor clocks; TGS
+  `LogonGuid`; and NTP stratum/reference-ID semantics.
+
+## Loop 65 Family Contract
+
+- **Selected family:** network-wide endpoint FLOW occurrence time inside the canonical connection
+  interval.
+- **Finding classification:** `existing_family_sibling` in the canonical network-connection and
+  source-timing contract.
+- **Owning abstraction:** the network-connection action bundle owns the canonical/source-visible
+  interval, while `SourceTimingPlanner` owns source latency and endpoint clock texture. eCAR remains
+  a source-native renderer of the already-bounded occurrence.
+- **Invariant:** every observed eCAR `FLOW/CONNECT` row for a successful exact-tuple connection must
+  have an occurrence timestamp within that connection's canonical source-visible open/close
+  interval. Observation delay and host-clock texture must not move the occurrence past close. If a
+  very short connection cannot also satisfy visible process-create ordering, omit PID/principal/
+  actor identity instead of delaying the FLOW.
+- **Entry paths:** ordinary TCP/UDP connections, automatic DNS and Kerberos prerequisites, proxy
+  transactions, DHCP/NTP, scanner probes, browsing/mail/file transfer, baseline/service traffic,
+  and higher-level SSH/RDP/admin bundles that request the canonical connection contract.
+- **Consumers:** source and target eCAR FLOW rows, canonical connection state, process/session
+  lifecycle guards, remote-auth bundles, cross-source probes, and network/host blind review.
+- **Layer rationale:** the defect is created when per-source observation delay, intrinsic eCAR
+  latency, and endpoint clock adjustment shift a connection occurrence without respecting its
+  already-owned close time. Patching eCAR JSON after rendering would hide the contradiction from
+  one consumer while leaving canonical/source-timing truth and future endpoint sources exposed.
+- **Sibling risks:** cover both endpoint directions, Windows/Linux hosts, very short UDP/DNS/
+  Kerberos intervals, TCP connections with longer lifetimes, multiple sensor views, all observation
+  profiles, and process-attributed versus unattributed FLOW rows. Do not change Zeek duration or
+  inflate short connections merely to accommodate endpoint reporting latency.
