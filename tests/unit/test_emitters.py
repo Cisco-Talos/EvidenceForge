@@ -2728,6 +2728,7 @@ class TestWindowsEventEmitter:
                 target_username="alice@CORP.LOCAL",
                 target_domain="CORP.LOCAL",
                 service_name="cifs/FILE-01",
+                service_account_name="FILE-01$",
                 service_sid="S-1-5-21-123-456-789-1104",
                 ticket_options="0x40810010",
                 ticket_status="0x0",
@@ -2745,6 +2746,8 @@ class TestWindowsEventEmitter:
         assert "<EventID>4769</EventID>" in content
         assert '<Data Name="TargetUserName">alice</Data>' in content
         assert '<Data Name="TargetDomainName">CORP.LOCAL</Data>' in content
+        assert '<Data Name="ServiceName">FILE-01$</Data>' in content
+        assert "cifs/FILE-01" not in content
         assert "alice@CORP.LOCAL" not in content
 
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):

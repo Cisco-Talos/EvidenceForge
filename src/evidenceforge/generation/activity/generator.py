@@ -22781,6 +22781,7 @@ class ActivityGenerator:
         time: datetime,
         domain: str = "",
         source_port: int | None = None,
+        service_account_name: str = "",
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         request = KerberosServiceTicketRequest(
@@ -22791,8 +22792,29 @@ class ActivityGenerator:
             time=time,
             domain=domain,
             source_port=source_port,
+            service_account_name=service_account_name,
         )
         KerberosServiceTicketActionBundle(self, request).execute()
+
+    @staticmethod
+    def _service_account_for_spn(service_name: str) -> str:
+        """Resolve the default AD account identity ticketed for an SPN.
+
+        Machine-hosted SPNs map to the target computer account. Callers with an
+        explicit user or managed-service account pass that identity on the action
+        request instead of relying on this default.
+        """
+
+        account_or_spn = service_name.strip().split("@", 1)[0]
+        if "/" not in account_or_spn:
+            return account_or_spn
+
+        service_class, target = account_or_spn.split("/", 1)
+        if service_class.lower() == "krbtgt":
+            return "krbtgt"
+
+        hostname = target.split(":", 1)[0].rstrip(".").split(".", 1)[0]
+        return f"{hostname}$" if hostname else account_or_spn
 
     def _execute_kerberos_service_ticket_bundle(
         self,
@@ -22803,6 +22825,9 @@ class ActivityGenerator:
 
         username = request.username
         service_name = request.service_name
+        service_account_name = request.service_account_name or self._service_account_for_spn(
+            service_name
+        )
         source_ip = request.source_ip
         dc_hostname = request.dc_hostname
         time = request.time
@@ -22848,13 +22873,8 @@ class ActivityGenerator:
                 ),
                 target_domain=domain,
                 service_name=service_name,
-                service_sid=(
-                    self._get_sid("krbtgt")
-                    if service_name.lower().startswith("krbtgt/")
-                    else self._get_sid(
-                        f"{service_name.split('/')[1]}$" if "/" in service_name else service_name
-                    )
-                ),
+                service_account_name=service_account_name,
+                service_sid=self._get_sid(service_account_name),
                 ticket_options=rng.choices(
                     ["0x40810000", "0x40810010", "0x40000000", "0x10"],
                     weights=[50, 25, 15, 10],

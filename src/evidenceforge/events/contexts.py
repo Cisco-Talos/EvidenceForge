@@ -323,7 +323,8 @@ class KerberosContext:
     target_username: str
     target_domain: str
     target_sid: str = ""
-    service_name: str = ""  # "krbtgt" for TGT, SPN for service ticket
+    service_name: str = ""  # "krbtgt" for TGT, requested SPN for service ticket
+    service_account_name: str = ""  # AD account ticketed for the requested service
     service_sid: str = ""
     ticket_options: str = ""
     ticket_status: str = "0x0"

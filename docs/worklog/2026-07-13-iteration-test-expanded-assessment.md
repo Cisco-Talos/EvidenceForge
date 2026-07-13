@@ -246,3 +246,48 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
   host isolation, Security versus Sysmon channel isolation, and the clear event's own position in
   the new epoch. Preserve organic filtered-channel gaps within each epoch and do not reset eCAR,
   process, session, or collector-owned identifiers.
+
+## Loop 66 Outcome
+
+- **Commit:** `a6bc3172 fix: reset Security record IDs after log clear`.
+- **Verification:** focused record-sequence/emitter tests passed; final full suite passed with
+  4,903 tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.91799130579982, PASS across all hard gates.
+- **Hard probe:** one visible Security clear, record ID 29,051,410 immediately before the clear,
+  ID 1 on Event 1102, and ID 28 on the next visible Security event. Other channels remained
+  independent.
+- **Blind panel:** standalone Threat Hunter 69, Detection Engineer 76, Network Forensics 42, and
+  Host/EDR 34; average 55.25 (`mixed / inconclusive`). Verdict disagreement and the 44-point spread
+  triggered deliberation; its separate final average was 68.25 (`likely synthetic`).
+- **Target result:** no report repeated the record-ID contradiction. Host/EDR and deliberation
+  explicitly cited the reset as convincing native state change.
+- **Highest next root contracts:** Event 4769 service-account/SPN ownership; Event 4688 target-
+  subject semantics; process-owned Windows file/registry effects; DMZ DNS completion within parent
+  intervals; output-window admission; OS-native Event 4698 versions; and role-conditioned Linux
+  activity rates.
+
+## Loop 67 Family Contract
+
+- **Selected family:** Windows Event 4769 account identity versus requested Kerberos SPN.
+- **Finding classification:** `new_family` in canonical Kerberos identity ownership and native
+  Windows rendering.
+- **Owning abstraction:** `KerberosContext` owns both the full requested SPN and the resolved
+  ticketed service-account identity; the Kerberos DC action bundle derives them together and the
+  Windows emitter only renders the native account field.
+- **Invariant:** `KerberosContext.service_name` preserves the protocol SPN used for ticket intent
+  and correlation. `service_account_name` and `service_sid` identify the same AD account. Event
+  4769 `ServiceName` renders that account name, never a slash-delimited SPN, while service-ticket
+  generation and stable action identity continue to use the requested SPN.
+- **Entry paths:** DC ticket expansion for Windows logons, baseline machine Kerberos, direct KDC
+  connections, cached-TGT service tickets, storyline-driven service use, and TGT renewals/default
+  compatibility contexts.
+- **Consumers:** Security 4769 XML/Snare, Kerberos source timing and cache state, ServiceSid
+  correlation, detection analytics, canonical contexts, and rendered hard probes.
+- **Layer rationale:** the generator currently derives the service SID from the account encoded by
+  the SPN but stores only the SPN string, forcing the Windows emitter to put protocol identity in
+  an account field. Splitting truth once at the Kerberos owner preserves both consumers and avoids
+  an emitter-only hostname rewrite.
+- **Sibling risks:** cover `krbtgt/REALM`, host/CIFS/LDAP/DNS/HTTP machine-hosted SPNs, slashless
+  account requests, explicit managed/user service accounts, and contexts created outside the
+  primary bundle. Preserve deterministic ticket timing, cache identity, and ServiceSid values.
