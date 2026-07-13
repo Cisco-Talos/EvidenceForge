@@ -80,3 +80,7 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Sibling risks:** the shared action bundle covers every generated allowed baseline sudo command
   and both syslog output targets. It does not infer lifecycle around explicit raw syslog samples,
   model PAM authentication failures, or yet correlate sudo with shell/eCAR process execution.
+- **Sibling-path closure:** the rendered-data probe found that generic ambient logind sessions
+  could still select `sudo`, producing PAM rows without a command authorization. Generic logind
+  noise now selects only `login` or `su`; all modeled sudo session rows therefore enter through
+  the action bundle that owns command authorization and closure.

@@ -471,14 +471,11 @@ def _linux_baseline_session_initiator(
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
     if system_type == "server":
-        if user == "root":
-            service = rng.choices(("login", "sudo", "su"), weights=(3, 70, 27), k=1)[0]
-        else:
-            service = rng.choices(("login", "sudo"), weights=(5, 95), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(10, 90), k=1)[0]
     elif user == "root":
-        service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(70, 30), k=1)[0]
     else:
-        service = rng.choices(("login", "sudo"), weights=(76, 24), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(90, 10), k=1)[0]
     app_name = service
     opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
     message = (
