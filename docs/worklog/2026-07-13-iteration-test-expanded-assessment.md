@@ -194,3 +194,55 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
   Kerberos intervals, TCP connections with longer lifetimes, multiple sensor views, all observation
   profiles, and process-attributed versus unattributed FLOW rows. Do not change Zeek duration or
   inflate short connections merely to accommodate endpoint reporting latency.
+
+## Loop 65 Outcome
+
+- **Commits:** `6bfe4dfa fix: bound endpoint flows to canonical intervals` and `1650965c fix:
+  preserve canonical TLS connection duration`.
+- **Root-cause closure:** `NetworkContext` and connection state now share one finalized immutable
+  source-visible interval after protocol/payload/process timing settles. eCAR timing consumes that
+  interval and omits impossible actor identity rather than moving short FLOW rows after close.
+  Zeek TLS duration texture can no longer shorten the canonical interval.
+- **Verification:** focused canonical interval/eCAR/Zeek tests passed; final full suite passed with
+  4,900 tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.91799130579982, PASS across all hard gates.
+- **Hard probe:** 15,744 exact-tuple eCAR FLOW rows matched successful rendered Zeek intervals and
+  zero landed after the nearest transport close, down from 8,944 in loop 64.
+- **Blind panel:** Threat Hunter 74, Detection Engineer 76, Network Forensics 72, Host/EDR 84;
+  average 76.5 (`likely synthetic`). All verdicts were Synthetic; average verdict confidence 82.5
+  and score spread 12, so deliberation did not trigger.
+- **Target result:** no reviewer repeated the FLOW-after-close defect. Reviewers explicitly praised
+  endpoint transport interval alignment and found no impossible packet/state/UID/TLS/file
+  contradiction.
+- **Highest next root contracts:** Security channel `EventRecordID` epoch reset after Event 1102;
+  post-window new-activity admission; Windows 4648/Sysmon 7/8 native XML fields; machine-account
+  eCAR lifecycle grouping; persistent sensor clocks; proxy DNS-to-origin readiness; stable
+  `LogonGuid`; and behavior-specific Type 3 duration tails.
+- **False-positive exclusion:** two reports incorrectly said declared ASA/Snort/proxy/web/syslog
+  artifacts were absent; those nested files exist and automated eval parsed them. The claim was
+  excluded from synthesis without altering standalone scores.
+
+## Loop 66 Family Contract
+
+- **Selected family:** source-native Windows Security channel record identity after audit-log clear.
+- **Finding classification:** `existing_family_regression` in the Windows record-ID lifecycle.
+- **Owning abstraction:** `WindowsRecordIdSequence` owns per-host, per-channel native record
+  identity during final chronological rendering; the Security emitter identifies clear boundaries
+  but must not retain one global monotonic epoch through Event 1102.
+- **Invariant:** Event 1102 starts a new Security-channel epoch. Its native `EventRecordID` and all
+  subsequent Security records must use a reset low sequence for that host/channel. Other Windows
+  channels and hosts retain their independent sequences. A collector-global durable cursor, if
+  needed, must not replace the native XML field.
+- **Entry paths:** explicit typed `log_cleared` storyline events, causal `wevtutil cl Security`
+  expansion, direct canonical log-clear calls, default Windows XML rendering, Snare rendering from
+  the same event data, and multi-host buffered/sorted output.
+- **Consumers:** Windows Security XML/Snare records, evaluator record ordering, SIEM correlation,
+  native-event parsers, channel-clear hard probes, and blind detection/host/hunting review.
+- **Layer rationale:** chronological finalization assigns every `EventRecordID` only after buffered
+  events are sorted. The sequence model already owns source-native gaps and channel identity, so
+  the epoch transition belongs there rather than in the action bundle or XML template.
+- **Sibling risks:** cover clear-as-first-record, multiple clears, events at identical timestamps,
+  host isolation, Security versus Sysmon channel isolation, and the clear event's own position in
+  the new epoch. Preserve organic filtered-channel gaps within each epoch and do not reset eCAR,
+  process, session, or collector-owned identifiers.

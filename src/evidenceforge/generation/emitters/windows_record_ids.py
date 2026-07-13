@@ -83,6 +83,12 @@ class WindowsRecordIdSequence:
 
     def next(self, timestamp: datetime | None = None, event_id: int | None = None) -> int:
         """Return the next EventRecordID for a visible event."""
+        if self.channel == "security" and event_id == 1102:
+            self.current = 1
+            self._last_timestamp = (
+                ensure_utc(timestamp) if isinstance(timestamp, datetime) else None
+            )
+            return self.current
         hidden = self._hidden_events_since_last_visible(timestamp)
         hidden += self._sample_filtered_channel_gap(event_id)
         self.current += 1 + hidden
