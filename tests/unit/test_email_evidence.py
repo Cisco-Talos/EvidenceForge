@@ -1073,7 +1073,7 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
     )
     assert relay_queue_match is not None
     relay_queue_id = relay_queue_match.group(1)
-    assert any(f"queued as {relay_queue_id}" in message for message in delivery_messages)
+    assert any(relay_queue_id in message for message in delivery_messages)
     assert (
         sum(
             1

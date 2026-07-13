@@ -1,12 +1,15 @@
-# Iteration-Test-Expanded Assessment Loops 62-71
+# Iteration-Test-Expanded Assessment Continuation
 
 ## Scope
 
-Run ten iterative realism fix loops against
+The initial request covered ten iterative realism fix loops against
 `scenarios/iteration-test-expanded/scenario.yaml`, preserving prior artifacts and
 writing new results under `scenarios/iteration-test-expanded/blind-test/loop-N/`.
 Each loop selects concrete blind-review evidence, fixes the highest owning layer,
 verifies a sibling path, regenerates, evaluates, and runs a standalone blind panel.
+
+After stopping at loop 62, the user requested ten additional loops. The active continuation is
+loops 63-72 against the same expanded scenario.
 
 ## Loop 62 Family Contract
 
@@ -55,3 +58,25 @@ verifies a sibling path, regenerates, evaluates, and runs a standalone blind pan
 The user requested that the run stop at the end of loop 62. Loops 63-71 were not started. The
 highest-leverage next effort, if resumed, is a family-level lifecycle/state correction selected
 from the P0 contracts in the loop 62 report; do not patch those defects as isolated emitter text.
+
+## Loop 63 Family Contract
+
+- **Selected family:** Linux sudo authorization/PAM session lifecycle ordering.
+- **Finding classification:** `new_family` within Linux/syslog session semantics.
+- **Owning abstraction:** a Linux sudo session action bundle that owns the multi-event lifecycle,
+  with the syslog finalizer acting only as a source-local ordering guard after observation timing.
+- **Invariant:** every allowed sudo invocation must render one same-PID sequence ordered as the
+  sudoers command authorization record, PAM session open, and PAM session close. Denied commands
+  must not create PAM session rows. A close must never precede either the authorization or open.
+- **Entry paths:** baseline extra-syslog sudo command generation, role-conditioned sudo command
+  configuration, default and SOF-ELK® syslog finalization, and future callers of the public sudo
+  action request. Raw syslog escape hatches remain outside the modeled lifecycle.
+- **Consumers:** canonical syslog events, RFC5424/RFC3164 rendering, strict syslog parsers,
+  detection/host review, and rendered-output lifecycle probes.
+- **Layer rationale:** authorization, session open, runtime, and close are distinct phases of one
+  sudo action. Their causal relationship belongs above rendering; the emitter may clamp
+  source-local jitter but must not invent the lifecycle. Patching only timestamps in rendered
+  text would leave canonical event order wrong and future consumers exposed.
+- **Sibling risks:** the shared action bundle covers every generated allowed baseline sudo command
+  and both syslog output targets. It does not infer lifecycle around explicit raw syslog samples,
+  model PAM authentication failures, or yet correlate sudo with shell/eCAR process execution.

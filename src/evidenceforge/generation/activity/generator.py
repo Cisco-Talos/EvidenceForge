@@ -124,6 +124,8 @@ from evidenceforge.generation.actions import (
     KerberosTgtRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    LinuxSudoSessionActionBundle,
+    LinuxSudoSessionRequest,
     LogClearedActionBundle,
     LogClearedRequest,
     LogoffActionBundle,
@@ -25257,6 +25259,32 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def generate_linux_sudo_session(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        command_message: str,
+        sudo_user: str,
+        uid: int,
+        pid: int,
+        runtime: timedelta,
+    ) -> None:
+        """Generate one allowed sudo command and its ordered PAM lifecycle."""
+
+        LinuxSudoSessionActionBundle(
+            executor=self,
+            request=LinuxSudoSessionRequest(
+                system=system,
+                time=time,
+                command_message=command_message,
+                sudo_user=sudo_user,
+                uid=uid,
+                pid=pid,
+                runtime=runtime,
+            ),
+        ).execute()
 
     def generate_raw(
         self,
