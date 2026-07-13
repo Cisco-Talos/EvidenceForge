@@ -987,6 +987,10 @@ class TestObservationProfiles:
                         "missingness": 0.0,
                         "delay_ms": {"min_ms": 20, "max_ms": 2000},
                     },
+                    "syslog": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
                 },
             },
         )
@@ -1016,7 +1020,7 @@ class TestObservationProfiles:
             auth=auth,
         )
 
-        for format_name in ("windows_event_security", "ecar"):
+        for format_name in ("windows_event_security", "ecar", "syslog"):
             assert (
                 policy.decide(format_name, logon).delay == policy.decide(format_name, logoff).delay
             )

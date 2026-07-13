@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from evidenceforge.events.contexts import AuthContext
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
@@ -113,6 +114,12 @@ class LinuxSudoSessionActionBundle:
         """Emit command authorization, PAM open, then PAM close with one PID."""
 
         request = self._request
+        auth = AuthContext(
+            username=request.sudo_user,
+            logon_id=request.stable_id,
+            result="success",
+            elevated=True,
+        )
         timing_seed = _stable_seed(f"{request.stable_id}:source_timing")
         open_time = request.time + timedelta(milliseconds=12 + (timing_seed % 289))
         close_time = (
@@ -130,6 +137,7 @@ class LinuxSudoSessionActionBundle:
             pid=request.pid,
             facility=10,
             severity=5,
+            auth=auth,
         )
         self._executor.generate_syslog_event(
             system=request.system,
@@ -142,6 +150,7 @@ class LinuxSudoSessionActionBundle:
             pid=request.pid,
             facility=10,
             severity=6,
+            auth=auth,
         )
         self._executor.generate_syslog_event(
             system=request.system,
@@ -151,4 +160,5 @@ class LinuxSudoSessionActionBundle:
             pid=request.pid,
             facility=10,
             severity=6,
+            auth=auth,
         )

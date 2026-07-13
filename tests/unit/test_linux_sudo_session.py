@@ -44,6 +44,10 @@ def test_linux_sudo_action_orders_authorization_before_pam_lifecycle() -> None:
     assert "session closed" in calls[2].kwargs["message"]
     assert calls[0].kwargs["time"] < calls[1].kwargs["time"] < calls[2].kwargs["time"]
     assert {call.kwargs["pid"] for call in calls} == {701258}
+    auth_contexts = [call.kwargs["auth"] for call in calls]
+    assert auth_contexts[0] is auth_contexts[1] is auth_contexts[2]
+    assert auth_contexts[0].username == "deploy"
+    assert auth_contexts[0].logon_id.startswith("linux-sudo-session-")
 
 
 def test_linux_sudo_action_anchor_and_timing_are_deterministic() -> None:

@@ -84,3 +84,6 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
   could still select `sudo`, producing PAM rows without a command authorization. Generic logind
   noise now selects only `login` or `su`; all modeled sudo session rows therefore enter through
   the action bundle that owns command authorization and closure.
+- **Observation contract:** all three bundle phases share one canonical `AuthContext` lifecycle
+  identity, so source-observation missingness and delay are sampled once for the complete sudo
+  session instead of independently orphaning authorization, open, or close rows.
