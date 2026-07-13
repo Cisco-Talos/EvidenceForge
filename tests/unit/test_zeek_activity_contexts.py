@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
@@ -720,6 +721,55 @@ class TestSslContextPopulation:
 
         assert accepted_event.timestamp > transport_event.timestamp + timedelta(
             milliseconds=flow_window.max_ms
+        )
+
+    def test_ssh_auth_budgets_messy_collection_ecar_delay(self, activity_gen):
+        """SSH acceptance must remain after target eCAR FLOW under delayed collection."""
+
+        gen, events = activity_gen
+        gen.dispatcher.observation_policy = ObservationPolicy("messy_collection")
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51112,
+        )
+
+        transport_event = _ssh_transport_event(events)
+        accepted_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Accepted password")
+        )
+        flow_window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+        observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
+            "ecar",
+            "syslog",
+        )
+
+        assert (
+            accepted_event.timestamp
+            > transport_event.timestamp
+            + timedelta(milliseconds=flow_window.max_ms)
+            + observation_gap
         )
 
     def test_ssh_connection_syslog_precedes_responder_process_source_time(self, activity_gen):

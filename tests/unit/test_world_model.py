@@ -29,9 +29,11 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import (
@@ -792,6 +794,43 @@ def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
     )
 
     assert logon_time > base_time + timedelta(milliseconds=flow_window.max_ms)
+
+
+def test_rdp_target_logon_budgets_observation_and_cross_host_clocks() -> None:
+    """RDP authentication should follow both rendered endpoint FLOW observations."""
+
+    scenario = _make_scenario()
+    source = next(system for system in scenario.environment.systems if system.hostname == "WKS-01")
+    target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
+    user = scenario.environment.users[0]
+    base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    executor = Mock()
+    executor.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
+    executor._source_timing_planner = SourceTimingPlanner("enterprise_standard")
+    bundle = RdpSessionActionBundle(
+        executor=executor,
+        request=RdpSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip=source.ip,
+            source_system=source,
+        ),
+    )
+
+    logon_time = bundle._target_logon_time(
+        rng=random.Random(7),
+        source_ip=source.ip,
+        src_port=52875,
+        transport_start_time=base_time,
+        source_system=source,
+    )
+    required_gap_ms = bundle._endpoint_flow_visible_gap_ms(
+        source_system=source,
+        timestamp=base_time,
+    )
+
+    assert logon_time > base_time + timedelta(milliseconds=required_gap_ms)
 
 
 def test_world_planner_moves_rdp_source_after_future_workstation_session(

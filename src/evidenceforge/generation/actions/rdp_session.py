@@ -30,14 +30,21 @@ activity generator as the runtime adapter for shared state and dispatch.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions.base import (
+    ActionAnchor,
+    endpoint_clock_difference,
+    source_observation_delay_difference,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.scenario import System, User
@@ -92,6 +99,8 @@ class RdpSessionExecutor(Protocol):
     """Adapter protocol implemented by the current activity generator."""
 
     state_manager: StateManager
+    dispatcher: EventDispatcher
+    _source_timing_planner: SourceTimingPlanner
     _ip_to_system: dict[str, System]
 
     def _coerce_windows_rdp_user_from_existing_session(
@@ -221,6 +230,7 @@ class RdpSessionActionBundle:
             source_ip=source_ip,
             src_port=src_port,
             transport_start_time=network_start_time,
+            source_system=source_system,
         )
         logon_id = self._request.logon_id
         if logon_id:
@@ -396,6 +406,7 @@ class RdpSessionActionBundle:
         source_ip: str,
         src_port: int,
         transport_start_time: datetime | None = None,
+        source_system: System | None = None,
     ) -> datetime:
         """Resolve target 4624 timing after source-visible network evidence."""
 
@@ -427,12 +438,22 @@ class RdpSessionActionBundle:
         graph.constrain_after(
             "target_logon",
             "transport_observed",
-            min_gap=timedelta(milliseconds=self._endpoint_flow_visible_gap_ms() + 25),
+            min_gap=timedelta(
+                milliseconds=self._endpoint_flow_visible_gap_ms(
+                    source_system=source_system,
+                    timestamp=observed_connection_time,
+                )
+                + 25
+            ),
         )
         return graph.resolved_time("target_logon")
 
-    @staticmethod
-    def _endpoint_flow_visible_gap_ms() -> int:
+    def _endpoint_flow_visible_gap_ms(
+        self,
+        *,
+        source_system: System | None = None,
+        timestamp: datetime | None = None,
+    ) -> int:
         """Return the latest expected same-tuple endpoint FLOW observation delay."""
         flow_window = get_timing_window(
             "source.ecar_flow",
@@ -441,7 +462,24 @@ class RdpSessionActionBundle:
             default_position="after",
             default_class="source_latency",
         )
-        return flow_window.max_ms
+        observation_delay = source_observation_delay_difference(
+            self._executor,
+            earlier_source="ecar",
+            later_source="windows_security",
+        )
+        clock_delay = timedelta(0)
+        if source_system is not None and timestamp is not None:
+            clock_delay = endpoint_clock_difference(
+                self._executor,
+                earlier_host=source_system.hostname,
+                earlier_os="windows",
+                later_host=self._request.target_system.hostname,
+                later_os="windows",
+                timestamp=timestamp,
+            )
+        return flow_window.max_ms + math.ceil(
+            (observation_delay + clock_delay).total_seconds() * 1000
+        )
 
     def _target_logon_gap_after_transport(self, rng: random.Random) -> int:
         """Choose an RDP target logon gap after endpoint transport visibility."""

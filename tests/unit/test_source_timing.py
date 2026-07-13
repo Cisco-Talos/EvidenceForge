@@ -167,6 +167,51 @@ def test_linux_ecar_uses_linux_host_clock_profile() -> None:
     assert enterprise_time != complete_time
 
 
+def test_ecar_flow_uses_clock_of_rendering_endpoint() -> None:
+    """Inbound and outbound eCAR FLOW rows should use their local endpoint clocks."""
+
+    source = _host_context()
+    target = HostContext(
+        hostname="WIN-TARGET-01",
+        ip="10.0.0.53",
+        fqdn="WIN-TARGET-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    event_kwargs = {
+        "timestamp": _base_time(),
+        "event_type": "connection",
+        "src_host": source,
+        "dst_host": target,
+        "network": _network_context(),
+    }
+    complete = SourceTimingPlanner(clock_profile_name="complete")
+    enterprise = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+
+    for direction, expected_host in (("outbound", source), ("inbound", target)):
+        seed = (direction, expected_host.hostname, 49152, _base_time())
+        complete_time = complete.source_time(
+            SecurityEvent(**event_kwargs),
+            "source.ecar_flow",
+            seed_parts=seed,
+        )
+        enterprise_time = enterprise.source_time(
+            SecurityEvent(**event_kwargs),
+            "source.ecar_flow",
+            seed_parts=seed,
+        )
+        expected_adjustment = enterprise.endpoint_clock_adjustment_for_host(
+            hostname=expected_host.hostname,
+            os_category="windows",
+            timestamp=_base_time(),
+        )
+
+        assert enterprise_time - complete_time == expected_adjustment
+
+
 def test_network_sensor_timing_is_independent_from_endpoint_clock_profile() -> None:
     """Zeek/network sensor source times do not inherit endpoint host clock skew."""
     seed = ("uid", "query", _base_time())

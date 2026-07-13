@@ -87,3 +87,52 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Observation contract:** all three bundle phases share one canonical `AuthContext` lifecycle
   identity, so source-observation missingness and delay are sampled once for the complete sudo
   session instead of independently orphaning authorization, open, or close rows.
+
+## Loop 63 Outcome
+
+- **Commits:** `016c1984 fix: model ordered Linux sudo lifecycles`, `281d5fe5 fix: close
+  ambient sudo lifecycle bypass`, and `14b094e1 fix: group sudo lifecycle observations`.
+- **Verification:** focused action/baseline/emitter/observation tests passed; final full suite passed
+  with 4,892 tests and 19 skips; Ruff lint/format passed.
+- **Generation and eval:** 90,405 records from `iteration-test-expanded`; automated score
+  96.00265028575151, PASS across all hard gates.
+- **Hard probe:** 134 allowed invocations across nine hosts, two denied invocations, and zero
+  orphan, missing, misordered, or unexpected sudo lifecycle phases.
+- **Blind panel:** Threat Hunter 72, Detection Engineer 67, Network Forensics 68, Host/EDR 72;
+  average 69.75 (`likely synthetic`), 11.25 points lower than loop 62. All verdicts were Synthetic;
+  deliberation did not trigger because verdict confidence was 75-79 and score spread was 5.
+- **Target result:** no reviewer repeated the authorization-after-PAM contradiction. Two reviewers
+  independently found the remaining distribution sibling: six servers converged on 18-19 unique
+  commands, which is deferred to role/operator-conditioned activity-count and reuse state.
+- **Highest new root contracts:** SSH and RDP endpoint FLOW-after-auth inversions, one complete
+  post-window new transaction, a live-session `LogonGuid` mutation, PsExec file-writer ownership,
+  record-ID continuity after Security clear, stable sensor clocks, resolver-upstream transport,
+  and missing Sysmon Event 7 `User` fields.
+
+## Loop 64 Family Contract
+
+- **Selected family:** remote-interactive endpoint transport observation before successful SSH/RDP
+  authentication.
+- **Finding classification:** `existing_family_regression` in the shared remote-session timing and
+  observation contract.
+- **Owning abstraction:** SSH and RDP action bundles compute auth readiness from the canonical
+  transport interval plus the active observation policy's worst-case relative eCAR delay; the
+  source-timing planner remains the owner of per-source latency, and eCAR remains a renderer.
+- **Invariant:** for a successful remote session, same-tuple source/target eCAR `FLOW/CONNECT`
+  observations must remain inside the canonical connection interval and precede successful target
+  auth/session evidence. For SSH this means before Accepted/PAM open and eCAR `USER_SESSION/LOGIN`;
+  for RDP it means before Security 4624 Type 10 and eCAR `USER_SESSION/LOGIN`. When process-create
+  visibility conflicts with the bound, process identity is omitted instead of delaying transport.
+- **Entry paths:** typed storyline SSH/RDP, baseline remote administration, SCP receiver sessions,
+  Linux `logon_type=10` compatibility delegation, Windows RDP planner calls, and future callers of
+  both public action bundles.
+- **Consumers:** eCAR FLOW and USER_SESSION records, Linux SSH syslog, Windows Security 4624,
+  Sysmon network rows, Zeek transport, rendered cross-source hard probes, and blind host review.
+- **Layer rationale:** the inversion is created by combining bundle-level auth gaps with active
+  source-observation delay ranges; the current bundles budget only intrinsic eCAR source latency.
+  The observation policy owns those delay ranges, so exposing a typed relative-delay bound to the
+  bundles prevents every sibling path without rewriting timestamps in eCAR or auth emitters.
+- **Sibling risks:** cover both `enterprise_standard` and larger `messy_collection` delay profiles,
+  complete/no-delay profiles, target and source endpoint views, and short connection intervals.
+  Do not force eCAR FLOW before the Linux `Connection from` line when native collection latency can
+  explain that order; the hard boundary is successful auth/session establishment.

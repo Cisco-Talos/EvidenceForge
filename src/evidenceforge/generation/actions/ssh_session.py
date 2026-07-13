@@ -45,7 +45,10 @@ from evidenceforge.events.contexts import (
     SyslogContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.base import (
+    ActionAnchor,
+    source_observation_delay_difference,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
@@ -764,9 +767,17 @@ class SshSessionActionBundle:
                 (canonical_event_time - canonical_transport_open_time).total_seconds() * 1000
             ),
         )
+        observation_delay_ms = math.ceil(
+            source_observation_delay_difference(
+                self.executor,
+                earlier_source="ecar",
+                later_source="syslog",
+            ).total_seconds()
+            * 1000
+        )
         auth_ready_delay_ms = max(
             conn_delay_ms + accepted_gap_ms,
-            canonical_offset_ms + flow_window.max_ms + 25,
+            canonical_offset_ms + flow_window.max_ms + observation_delay_ms + 25,
         )
         graph = TemporalConstraintGraph()
         graph.add_node("transport_open", transport_open_time)

@@ -283,29 +283,45 @@ class SourceTimingPlanner:
         seed_parts: tuple[Any, ...],
     ) -> timedelta:
         """Return shared host-clock adjustment for host-resident endpoint sources."""
-        scope = self._endpoint_clock_scope(event, source_key)
+        scope = self._endpoint_clock_scope(event, source_key, seed_parts)
         if scope is None:
             return timedelta(0)
         host_key, os_category = scope
-        plan = self._ensure_plan(event)
-        timing = endpoint_clock_timing(plan.clock_profile_name, os_category)
+        return self.endpoint_clock_adjustment_for_host(
+            hostname=host_key,
+            os_category=os_category,
+            timestamp=event.timestamp,
+        )
+
+    def endpoint_clock_adjustment_for_host(
+        self,
+        *,
+        hostname: str,
+        os_category: str,
+        timestamp: datetime,
+    ) -> timedelta:
+        """Return the active profile's deterministic clock adjustment for one host."""
+
+        if not hostname or os_category not in {"windows", "linux"}:
+            return timedelta(0)
+        timing = endpoint_clock_timing(self.clock_profile_name, os_category)
         offset_ms = self._bounded_int(
             "endpoint-clock-offset",
             timing.host_offset_min_ms,
             timing.host_offset_max_ms,
-            (plan.clock_profile_name, os_category, host_key),
+            (self.clock_profile_name, os_category, hostname),
         )
         drift_ppm = self._bounded_int(
             "endpoint-clock-drift",
             timing.host_drift_min_ppm,
             timing.host_drift_max_ppm,
-            (plan.clock_profile_name, os_category, host_key),
+            (self.clock_profile_name, os_category, hostname),
         )
         seconds_since_midnight = (
-            event.timestamp.hour * 3600
-            + event.timestamp.minute * 60
-            + event.timestamp.second
-            + event.timestamp.microsecond / 1_000_000
+            timestamp.hour * 3600
+            + timestamp.minute * 60
+            + timestamp.second
+            + timestamp.microsecond / 1_000_000
         )
         drift_us = round(seconds_since_midnight * drift_ppm)
         return timedelta(milliseconds=offset_ms, microseconds=drift_us)
@@ -314,6 +330,7 @@ class SourceTimingPlanner:
     def _endpoint_clock_scope(
         event: SecurityEvent,
         source_key: str,
+        seed_parts: tuple[Any, ...],
     ) -> tuple[str, str] | None:
         """Return ``(host, os_category)`` for endpoint sources, else ``None``."""
         if source_key.startswith(("source.zeek_", "network.")):
@@ -323,7 +340,11 @@ class SourceTimingPlanner:
             hostname = getattr(host, "hostname", "") or ""
             return (hostname, "windows") if hostname else None
         if source_key.startswith("source.ecar_"):
-            host = event.src_host or event.dst_host
+            direction = str(seed_parts[0]).lower() if seed_parts else ""
+            if source_key == "source.ecar_flow" and direction == "inbound":
+                host = event.dst_host or event.src_host
+            else:
+                host = event.src_host or event.dst_host
             hostname = getattr(host, "hostname", "") or ""
             os_category = getattr(host, "os_category", "") or ""
             if os_category not in {"windows", "linux"}:
