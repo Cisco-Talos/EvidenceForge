@@ -3086,6 +3086,10 @@ class TestSslContextPopulation:
         for event in resumed_events:
             assert event.x509 is None
             assert event.ssl.cert_chain_fuids == []
+            if event.ssl.version == "TLSv12":
+                assert event.ssl.ssl_history == "CSIFIFD"
+            else:
+                assert event.ssl.ssl_history == "CSOFFD"
 
     def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
         """TLS resumption should require prior client/server pair state."""

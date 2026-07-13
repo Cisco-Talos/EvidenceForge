@@ -2740,20 +2740,22 @@ _TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
 # SSL history patterns (weighted).  Zeek's ssl_history values are handshake
 # message-type codes, not conn.log-style originator/responder direction flags;
 # established TLS rows should include "S" for the ServerHello.
-_SSL_HISTORY_TLS12_SUCCESS = (
+_SSL_HISTORY_TLS12_FULL_HANDSHAKE = (
     ("CSXKNGIFIFD", 34),  # ECDHE full handshake plus encrypted app data
     ("CSXNGIFIFD", 18),  # RSA/static-key full handshake
     ("CSXKNGIFIFT", 18),  # full handshake with NewSessionTicket
-    ("CSIFIFD", 20),  # abbreviated/resumed session
     ("CSXKNGIFIFL", 10),  # established then alert/close
 )
-_SSL_HISTORY_TLS13_SUCCESS = (
+_SSL_HISTORY_TLS12_RESUMED = (("CSIFIFD", 20),)  # abbreviated session, no cert/key exchange
+_SSL_HISTORY_TLS13_FULL_HANDSHAKE = (
     ("CSOXYFFD", 36),  # full TLS 1.3 handshake plus encrypted app data
-    ("CSOFFD", 26),  # resumed/PSK-style handshake
     ("CSOXYFFTD", 18),  # full handshake with ticket
     ("CSJOXYFFD", 8),  # HelloRetryRequest path
     ("CSOXYFFL", 12),  # established then alert/close
 )
+_SSL_HISTORY_TLS13_RESUMED = (("CSOFFD", 26),)  # PSK-style handshake, no cert messages
+_SSL_HISTORY_TLS12_SUCCESS = _SSL_HISTORY_TLS12_FULL_HANDSHAKE + _SSL_HISTORY_TLS12_RESUMED
+_SSL_HISTORY_TLS13_SUCCESS = _SSL_HISTORY_TLS13_FULL_HANDSHAKE + _SSL_HISTORY_TLS13_RESUMED
 _SSL_HISTORY_SUCCESS = _SSL_HISTORY_TLS12_SUCCESS + _SSL_HISTORY_TLS13_SUCCESS
 _SSL_HIST_SUCCESS_VALUES = tuple(h[0] for h in _SSL_HISTORY_SUCCESS)
 _SSL_HIST_SUCCESS_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_SUCCESS)
@@ -2802,17 +2804,17 @@ def _choose_ssl_history_from_roll(
 
     if tls_version == "TLSv13":
         if resumed:
-            values = ("CSOFFD", "CSOXYFFTD", "CSOXYFFD")
-            weights = (60, 25, 15)
+            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_RESUMED)
+            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_RESUMED)
         else:
-            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_SUCCESS)
-            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_SUCCESS)
+            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
+            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
     elif resumed:
-        values = ("CSIFIFD", "CSXKNGIFIFT", "CSXKNGIFIFD")
-        weights = (55, 30, 15)
+        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_RESUMED)
+        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_RESUMED)
     else:
-        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_SUCCESS)
-        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_SUCCESS)
+        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
+        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
 
     return _weighted_choice_from_roll(values, weights, roll)
 
