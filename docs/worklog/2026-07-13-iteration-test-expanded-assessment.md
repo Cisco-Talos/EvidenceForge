@@ -31,3 +31,27 @@ verifies a sibling path, regenerates, evaluates, and runs a standalone blind pan
   attempt to model every Zeek handshake-history permutation, TLS renegotiation, decrypted TLS
   1.3 certificate visibility, or packet-loss-driven partial histories.
 
+## Loop 62 Outcome
+
+- **Commit:** `72f9b86e fix: align TLS history with session resumption`
+- **Verification:** focused TLS/Zeek/SMTP tests passed; full default suite passed with 4,888 tests
+  and 19 skips; Ruff lint/format and configuration/scenario validation passed.
+- **Generation:** 96,398 records from `iteration-test-expanded`.
+- **Automated evaluation:** 95.90804086572041, PASS across all hard gates.
+- **Targeted hard probe:** 1,888 established SSL rows, 0 resumption/history/certificate contract
+  violations. The loop 61 defect did not recur in blind review.
+- **Blind panel:** Threat Hunter 63, Detection Engineer 84, Network Forensics 88, Host/EDR 89;
+  average 81.0. All verdicts were Synthetic, so deliberation was not triggered; score spread was
+  26 points.
+- **Highest new root contracts:** universal sudo authorization/PAM inversion; DMZ DNS RTT versus
+  connection-duration divergence; unstable per-host IRQ identity; impossible rsyslog socket
+  reacquisition; Security EventRecordID continuity after channel clear; broad symmetric
+  Security/Sysmon occurrence jitter; and cross-sensor accounting jitter without modeled loss.
+- **Artifacts:** `scenarios/iteration-test-expanded/blind-test/loop-62/REPORT.md` and
+  `scores.json` contain the complete synthesis and owning-layer recommendations.
+
+## Stop Point
+
+The user requested that the run stop at the end of loop 62. Loops 63-71 were not started. The
+highest-leverage next effort, if resumed, is a family-level lifecycle/state correction selected
+from the P0 contracts in the loop 62 report; do not patch those defects as isolated emitter text.
