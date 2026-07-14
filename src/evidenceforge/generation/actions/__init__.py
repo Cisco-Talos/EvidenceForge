@@ -109,6 +109,9 @@ from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
 )
+from evidenceforge.generation.actions.network_transaction_planner import (
+    NetworkTransactionPlanner,
+)
 from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
@@ -238,6 +241,7 @@ __all__ = [
     "LinuxSudoSessionRequest",
     "NetworkConnectionActionBundle",
     "NetworkConnectionRequest",
+    "NetworkTransactionPlanner",
     "NmapCommandProbeActionBundle",
     "NmapCommandProbeRequest",
     "NtlmValidationActionBundle",

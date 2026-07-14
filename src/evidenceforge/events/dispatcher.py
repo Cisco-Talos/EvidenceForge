@@ -179,6 +179,8 @@ class EventDispatcher:
         """
         if self.storyline_cluster_id and event.storyline_cluster_id is None:
             event.storyline_cluster_id = self.storyline_cluster_id
+        if event.network is not None:
+            event.network.validate_finalized_transaction()
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")

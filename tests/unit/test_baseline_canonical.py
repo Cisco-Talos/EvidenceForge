@@ -708,6 +708,9 @@ class TestIdsAlertCorrelation:
         event = snort.emit.call_args[0][0]
         assert event.ids is not None
         assert event.ids.sid == 10001
+        assert event.network is not None
+        assert event.network.transaction is not None
+        event.network.validate_finalized_transaction()
 
     def test_ufw_block_packet_profile_is_valid_and_stable(self):
         """UFW blocked SYN metadata should be valid and path-stable by source."""

@@ -145,11 +145,7 @@ class NetworkConnectionRequest:
 
 
 class NetworkConnectionExecutor(Protocol):
-    """Adapter protocol implemented by the current activity generator."""
-
-    def _execute_network_connection_bundle(self, request: NetworkConnectionRequest) -> str:
-        """Expand one network connection request into canonical evidence."""
-        ...
+    """Services supplied by the activity generator to network planning."""
 
 
 class NetworkConnectionActionBundle:
@@ -176,4 +172,8 @@ class NetworkConnectionActionBundle:
     def execute(self) -> str:
         """Emit network, source endpoint, proxy, DNS/TLS/HTTP, and firewall evidence."""
 
-        return self._executor._execute_network_connection_bundle(self._request)
+        from evidenceforge.generation.actions.network_transaction_planner import (
+            NetworkTransactionPlanner,
+        )
+
+        return NetworkTransactionPlanner(self._executor).execute(self._request)
