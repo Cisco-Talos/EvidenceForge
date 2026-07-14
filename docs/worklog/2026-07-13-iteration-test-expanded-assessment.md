@@ -498,3 +498,30 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Sibling risks:** cover main-thread inference for every dependent family, explicit non-leader
   TIDs, PID/TID omission when PID is unknown, Linux PID morphology rewrites, process termination,
   and unchanged Windows alignment. Do not synthesize a thread merely to add distribution texture.
+
+## Loop 72 Outcome
+
+- **Commit:** `aef80375 fix: use Linux process leader for inferred TIDs`.
+- **Verification:** focused Linux TID tests passed; final full suite passed with 4,911 tests and 19
+  skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 93,351 records from `iteration-test-expanded`; automated score
+  95.83901668531391, PASS across all hard gates.
+- **Hard probe:** all 2,118 Linux eCAR PID/TID rows used the process leader, including all 349 FLOW
+  rows and 108 FILE rows; zero invented `PID+offset` TIDs remained.
+- **Blind panel:** Threat Hunter 74, Detection Engineer 68, Network Forensics 88, and Host/EDR 83;
+  standalone average 78.25 (`likely synthetic`). All verdicts were Synthetic, average verdict
+  confidence was 91.0, and score spread was 20, so deliberation did not trigger.
+- **Target result:** the impossible non-leader offset distribution was eliminated. Three reviewers
+  still identified the categorical fallback as a lower-level generator fingerprint and recommend
+  explicit durable thread state or TID omission when ownership is unknown.
+- **Highest remaining root contracts:** durable thread state; shared multi-sensor packet accounting;
+  final-window admission; role/state-driven files, tasks, privilege activity, registry side effects,
+  and session bootstrap; plus stable sensor/proxy timing models.
+
+## Effort Completion
+
+Assessment loops 63–72 are complete for `scenarios/iteration-test-expanded/scenario.yaml`. Each loop
+validated and committed its code boundary before generation, retained immutable data-only blind
+review input, ran four independent specialist reviews, and recorded standalone scores. Continue from
+the highest remaining root contracts above; do not treat blind-score movement alone as a quality
+gate because reviewer sampling and newly discovered families produce material variance.
