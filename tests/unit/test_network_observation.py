@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
-from evidenceforge.events.contexts import DnsContext, IdsContext, NetworkContext
+from evidenceforge.events.contexts import DnsContext, HttpContext, IdsContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkSensorObservation
@@ -21,6 +21,7 @@ from evidenceforge.generation.activity.timing_profiles import NetworkSensorObser
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.network_observation import NetworkObservationPlanner
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
@@ -285,6 +286,7 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
     for sensor in ("source-tap", "destination-tap"):
         conn = json.loads((tmp_path / sensor / "conn.json").read_text())
         dns = json.loads((tmp_path / sensor / "dns.json").read_text())
+        observation = _observation_by_sensor(event.network_observations)[sensor]
         rows[sensor] = conn, dns
         assert conn["uid"] == dns["uid"]
         assert conn["id.orig_h"] == dns["id.orig_h"]
@@ -294,8 +296,115 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
         assert conn["orig_bytes"] == 1200
         assert conn["resp_bytes"] == 8400
         assert conn["missed_bytes"] == 0
+        assert conn["ts"] == pytest.approx(observation.observed_start_time.timestamp())
+        assert dns["ts"] >= conn["ts"]
+        assert dns["ts"] + dns["rtt"] <= conn["ts"] + conn["duration"]
     assert rows["source-tap"][0]["uid"] != rows["destination-tap"][0]["uid"]
     assert rows["destination-tap"][0]["id.orig_h"] == "198.51.100.25"
+
+
+def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> None:
+    """DNS query and response timing stays within a very short parent flow."""
+
+    event = _network_event(start=T0, stable_id="network:short-dns")
+    event.timestamp = T0 + timedelta(milliseconds=2)
+    event.network.duration = 0.000744
+    event.network.source_visible_close_time = T0 + timedelta(seconds=0.000744)
+    event.network.orig_bytes = 52
+    event.network.resp_bytes = 83
+    event.network.orig_pkts = 1
+    event.network.resp_pkts = 1
+    event.network.orig_ip_bytes = 80
+    event.network.resp_ip_bytes = 111
+    event.network.transaction = None
+    event.network.finalize_transaction(
+        "network:short-dns",
+        hostname="resolver.corp.local",
+        phase_times=(
+            ("transport_start", T0),
+            ("transport_close", T0 + timedelta(seconds=0.000744)),
+        ),
+    )
+    event.dns.rtt = 0.000744
+    event.lifecycle = ActionLifecycleContext(
+        group_id="network:short-dns",
+        canonical_start=T0,
+        phase="start",
+    )
+    event._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap"],
+        "zeek_dns": ["source-tap"],
+    }
+    event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
+        event,
+        {"zeek_conn", "zeek_dns"},
+    )
+    event.network_observations_planned = True
+    conn_emitter = ZeekEmitter(
+        load_format("zeek_conn"),
+        tmp_path,
+        sensor_hostnames=["source-tap"],
+    )
+    dns_emitter = ZeekDnsEmitter(
+        load_format("zeek_dns"),
+        tmp_path,
+        sensor_hostnames=["source-tap"],
+    )
+
+    conn_emitter.emit(event)
+    dns_emitter.emit(event)
+    conn_emitter.close()
+    dns_emitter.close()
+
+    conn = json.loads((tmp_path / "source-tap" / "conn.json").read_text())
+    dns = json.loads((tmp_path / "source-tap" / "dns.json").read_text())
+    assert dns["ts"] == pytest.approx(conn["ts"])
+    assert dns["ts"] + dns["rtt"] <= conn["ts"] + conn["duration"]
+
+
+def test_http_companion_never_precedes_planned_sensor_connection(tmp_path) -> None:
+    """A sensor-local HTTP row cannot precede its same-UID connection start."""
+
+    event = _network_event(stable_id="network:http-observation-order")
+    event.dns = None
+    event.network.service = "http"
+    event.http = HttpContext(
+        method="GET",
+        host="updates.example.com",
+        uri="/manifest.json",
+        canonical_request_time=event.timestamp,
+    )
+    event._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_http": ["source-tap", "destination-tap"],
+    }
+    event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
+        event,
+        {"zeek_conn", "zeek_http"},
+    )
+    event.network_observations_planned = True
+    conn_emitter = ZeekEmitter(
+        load_format("zeek_conn"),
+        tmp_path,
+        sensor_hostnames=["source-tap", "destination-tap"],
+    )
+    http_emitter = ZeekHttpEmitter(
+        load_format("zeek_http"),
+        tmp_path,
+        sensor_hostnames=["source-tap", "destination-tap"],
+    )
+
+    conn_emitter.emit(event)
+    http_emitter.emit(event)
+    conn_emitter.close()
+    http_emitter.close()
+
+    observations = _observation_by_sensor(event.network_observations)
+    for sensor in ("source-tap", "destination-tap"):
+        conn = json.loads((tmp_path / sensor / "conn.json").read_text())
+        http = json.loads((tmp_path / sensor / "http.json").read_text())
+        assert conn["ts"] == pytest.approx(observations[sensor].observed_start_time.timestamp())
+        assert http["ts"] >= conn["ts"]
 
 
 def test_snort_consumes_planned_sensor_timestamp_and_tuple(tmp_path) -> None:

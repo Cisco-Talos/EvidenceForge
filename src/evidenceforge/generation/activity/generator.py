@@ -82,6 +82,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -2678,11 +2679,13 @@ def _tcp_ip_byte_count(
     *,
     overhead_override: int | None = None,
 ) -> int:
-    """Return TCP IP-byte accounting with header and control-packet texture."""
+    """Return MTU-bounded TCP IP-byte accounting with header texture."""
     if packet_count <= 0:
         return 0
+    payload = payload_bytes or 0
+    mtu_ceiling = packet_count * 1500
     if overhead_override is not None:
-        return (payload_bytes or 0) + packet_count * overhead_override
+        return min(payload + packet_count * overhead_override, mtu_ceiling)
     overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
     option_extra = 0
     if packet_count > 1:
@@ -2693,7 +2696,7 @@ def _tcp_ip_byte_count(
         )
         max_option_extra = packet_count * (max(_TCP_OVERHEAD_VALUES) - overhead)
         option_extra = min(max_option_extra, textured_packets * rng.choice((4, 8, 12)))
-    return (payload_bytes or 0) + packet_count * overhead + option_extra
+    return min(payload + packet_count * overhead + option_extra, mtu_ceiling)
 
 
 def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:
@@ -6883,6 +6886,21 @@ class ActivityGenerator:
             status_code=status_code,
             cache_result=cache_result,
         )
+        request_body_bytes = 0
+        if proxy_method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:
+            request_body_bytes = (
+                max(0, http.request_body_len) if http is not None else max(0, orig_bytes or 0)
+            )
+        if proxy_method == "HEAD" or status_code in {204, 304}:
+            response_body_bytes = 0
+        elif proxy_method == "CONNECT" and status_code < 400:
+            response_body_bytes = 0
+        elif http is not None and http.status_code == status_code:
+            response_body_bytes = max(0, http.response_body_len)
+        elif status_code >= 400:
+            response_body_bytes = max(0, sc_bytes - rng.randint(120, min(320, sc_bytes)))
+        else:
+            response_body_bytes = max(0, response_bytes)
 
         return ProxyContext(
             client_ip=src_ip,
@@ -6903,6 +6921,8 @@ class ActivityGenerator:
             sc_bytes=sc_bytes,
             cs_bytes=cs_bytes,
             time_taken=time_taken,
+            request_body_bytes=request_body_bytes,
+            response_body_bytes=response_body_bytes,
             user_agent=user_agent,
             content_type=proxy_content_type,
             cache_result=cache_result,
@@ -12698,6 +12718,8 @@ class ActivityGenerator:
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
         ssh_attempted_username: str | None = None,
+        parent_action_group_id: str | None = None,
+        preserve_start_time: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -12773,6 +12795,8 @@ class ActivityGenerator:
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
             ssh_attempted_username=ssh_attempted_username,
+            parent_action_group_id=parent_action_group_id,
+            preserve_start_time=preserve_start_time,
         )
         return NetworkConnectionActionBundle(
             executor=self,
@@ -18691,6 +18715,9 @@ class ActivityGenerator:
         source_system: System | None = None,
         source_pid: int = -1,
         source_process_image: str = "",
+        planned_query_time: datetime | None = None,
+        planned_rtt_seconds: float | None = None,
+        parent_action_group_id: str | None = None,
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -18716,6 +18743,9 @@ class ActivityGenerator:
             source_system=source_system,
             source_pid=source_pid,
             source_process_image=source_process_image,
+            planned_query_time=planned_query_time,
+            planned_rtt_seconds=planned_rtt_seconds,
+            parent_action_group_id=parent_action_group_id,
         )
         DnsLookupActionBundle(executor=self, request=request).execute()
 
@@ -18842,7 +18872,9 @@ class ActivityGenerator:
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
-        dns_time = time - timedelta(milliseconds=rng.randint(900, 1400))
+        dns_time = request.planned_query_time or (
+            time - timedelta(milliseconds=rng.randint(900, 1400))
+        )
         query_process = self._dns_query_process_context(request, src_system, dns_time)
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
@@ -18875,6 +18907,8 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(80, 400),
                 src_port=src_port,
                 dns=dns_ctx,
+                parent_action_group_id=request.parent_action_group_id,
+                preserve_start_time=request.planned_query_time is not None,
             )
             return
 
@@ -19010,7 +19044,11 @@ class ActivityGenerator:
             rcode_num=0,
             answers=answers,
             TTLs=ttls,
-            rtt=_dns_rtt(rng, dns_server_ip),
+            rtt=(
+                request.planned_rtt_seconds
+                if request.planned_rtt_seconds is not None
+                else _dns_rtt(rng, dns_server_ip)
+            ),
             AA=is_internal,
             RD=True,
             RA=True,
@@ -19029,6 +19067,8 @@ class ActivityGenerator:
             resp_bytes=rng.randint(80, 400),
             src_port=src_port,
             dns=dns_ctx,
+            parent_action_group_id=request.parent_action_group_id,
+            preserve_start_time=request.planned_query_time is not None,
         )
 
         # Address lookups that are prerequisites for TCP still occur in a
@@ -19142,6 +19182,7 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(80, 500),
                 src_port=companion_src_port,
                 dns=companion_ctx,
+                parent_action_group_id=request.parent_action_group_id,
             )
             if companion_kind == "MX" and companion_answers:
                 mx_hosts = [
@@ -19215,6 +19256,7 @@ class ActivityGenerator:
                         resp_bytes=rng.randint(80, 500),
                         src_port=mx_a_src_port,
                         dns=mx_a_ctx,
+                        parent_action_group_id=request.parent_action_group_id,
                     )
 
         # Occasional resolver search-suffix mistakes/background discovery probes.
@@ -19261,6 +19303,7 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(80, 200),
                 src_port=nx_src_port,
                 dns=nx_ctx,
+                parent_action_group_id=request.parent_action_group_id,
             )
 
     def _emit_ad_srv_discovery(
@@ -20370,6 +20413,11 @@ class ActivityGenerator:
             tgt_before_tgs_ms=(35, 220),
         )
         source_port = self._reserve_kerberos_source_port(source_ip, dc_hostname, tgt_time)
+        session_obj_id = stable_uuid(
+            "ecar-machine-account-session",
+            request.stable_id,
+            logon_id,
+        )
         self.generate_kerberos_tgt(
             username=machine_username,
             source_ip=source_ip,
@@ -20415,6 +20463,12 @@ class ActivityGenerator:
                 subject_domain="NT AUTHORITY",
                 subject_logon_id="0x3e7",
             ),
+            edr=EdrContext(object_id=session_obj_id),
+            lifecycle=ActionLifecycleContext(
+                group_id=request.stable_id,
+                canonical_start=time,
+                phase="start",
+            ),
         )
         self.dispatcher.dispatch(event)
 
@@ -20429,6 +20483,12 @@ class ActivityGenerator:
                 user_sid=self._get_sid(machine_username),
                 logon_id=logon_id,
                 logon_type=3,
+            ),
+            edr=EdrContext(object_id=session_obj_id),
+            lifecycle=ActionLifecycleContext(
+                group_id=request.stable_id,
+                canonical_start=time,
+                phase="closure",
             ),
         )
         self.dispatcher.dispatch(logoff_event)

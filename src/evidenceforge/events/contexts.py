@@ -39,6 +39,7 @@ from evidenceforge.events.network import (
     NetworkTransactionOutcome,
     NetworkTransactionPlan,
 )
+from evidenceforge.events.proxy import ProxyTransactionPlan
 
 
 @dataclass(slots=True)
@@ -551,6 +552,7 @@ class HttpContext:
     user_agent_known_absent: bool = False
     request_body_len: int = 0
     response_body_len: int = 0
+    canonical_request_time: datetime | None = None
     flow_request_body_len: int | None = None
     flow_response_body_len: int | None = None
     flow_transaction_count: int = 1
@@ -701,12 +703,15 @@ class ProxyContext:
     sc_bytes: int = 0  # Server→client bytes
     cs_bytes: int = 0  # Client→server bytes
     time_taken: int = 0  # Request duration in ms
+    request_body_bytes: int = 0  # HTTP entity body only, excluding headers/framing
+    response_body_bytes: int = 0  # HTTP entity body only, excluding headers/framing
     user_agent: str = ""
     content_type: str = ""
     cache_result: str = "MISS"  # HIT, MISS, REVALIDATED, NONE, DENIED
     referrer: str = ""  # HTTP Referer header
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
     proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
+    transaction: ProxyTransactionPlan | None = None
 
 
 @dataclass(slots=True)

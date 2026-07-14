@@ -1564,7 +1564,7 @@ class TestSslContextPopulation:
         activity_gen,
         monkeypatch,
     ):
-        """Origin egress should wait for the client-side proxy request observation window."""
+        """Origin egress should follow the canonical proxy request and DNS phases."""
         gen, events = activity_gen
         source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
         proxy = System(
@@ -1682,34 +1682,25 @@ class TestSslContextPopulation:
             and event.network.src_ip == proxy.ip
             and event.network.dst_ip == egress_ip
         )
-        dns = next(
+        dns_events = [
             event
             for event in events
             if event.dns
             and event.network
             and event.network.src_ip == proxy.ip
             and event.dns.query == "www.google.com"
-        )
-        request_window = generator_module.get_timing_window(
-            "source.zeek_http_request",
-            default_min_ms=1,
-            default_max_ms=450,
-            default_position="after",
-            default_class="same_observation",
-        )
-        required_gap = timedelta(milliseconds=request_window.max_ms + 1)
-
-        assert client.timestamp < base_time
-        assert egress.timestamp >= base_time + required_gap
-        assert dns.timestamp < egress.timestamp
-        assert any(
-            request["src_ip"] == proxy.ip
-            and request["dst_ip"] == egress_ip
-            and request["hostname"] == "www.google.com"
-            and request["force_address"] is True
-            and request["bypass_cache"] is True
-            for request in dns_requests
-        )
+        ]
+        assert client.proxy is not None
+        transaction = client.proxy.transaction
+        assert transaction is not None
+        assert client.timestamp == transaction.client_connect_at == base_time
+        assert client.timestamp < transaction.request_at
+        assert egress.timestamp == transaction.origin_connect_at
+        assert transaction.resolver_mode == "resolver_cache_hit"
+        assert transaction.dns_query_at is None
+        assert transaction.dns_response_at is None
+        assert not dns_events
+        assert not dns_requests
 
     def test_explicit_proxy_download_keeps_file_identity_and_order(self, activity_gen):
         """Proxy client and origin legs should preserve object identity and file timing."""

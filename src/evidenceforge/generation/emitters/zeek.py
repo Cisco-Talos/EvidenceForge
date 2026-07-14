@@ -146,19 +146,26 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 )
                 canonical_duration = float(duration or 0.0)
                 duration = max(sampled_duration, canonical_duration + 0.001)
-        event_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
+        if event.network_observations_planned and net.transaction is not None:
+            # The observation planner owns the sensor-visible connection start.
+            # Protocol siblings are projected from this same canonical anchor by
+            # SensorMultiplexEmitter, so applying another conn-only source delay
+            # here can place HTTP/TLS rows before their parent connection.
+            event_ts = net.transaction.started_at
+        else:
+            event_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
         event_data = {
             "ts": event_ts,
             "uid": net.zeek_uid,

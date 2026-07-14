@@ -3587,6 +3587,11 @@ class TestActivityGenerator:
         machine_logon = next(
             event for event in security_events if event.event_type == "machine_logon"
         )
+        machine_logoff = next(event for event in security_events if event.event_type == "logoff")
+        assert machine_logon.edr.object_id == machine_logoff.edr.object_id
+        assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
+        assert machine_logon.lifecycle.phase == "start"
+        assert machine_logoff.lifecycle.phase == "closure"
         kerberos_connection = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list

@@ -211,11 +211,6 @@ relationships:
     position: after
     min_ms: 1
     max_ms: 95
-  network.proxy_upstream_after_client:
-    class: causal_prerequisite
-    position: after
-    min_ms: 950
-    max_ms: 1800
   source.zeek_ssl_analyzer:
     class: same_observation
     position: after

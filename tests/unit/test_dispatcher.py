@@ -37,6 +37,7 @@ from evidenceforge.events import (
 )
 from evidenceforge.events.contexts import SslContext, SyslogContext, X509Context
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.observation import (
     SOURCE_FAMILIES,
     ObservationPolicy,
@@ -1050,6 +1051,59 @@ class TestObservationProfiles:
             assert (
                 policy.decide(format_name, logon).delay == policy.decide(format_name, logoff).delay
             )
+
+    def test_action_lifecycle_observation_is_coherent_across_event_types(self, monkeypatch):
+        """One source shares drop and delay decisions for a canonical action lifecycle."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.5,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
+                },
+            },
+        )
+        policy = ObservationPolicy("action_lifecycle_test")
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+        )
+        auth = AuthContext(username="WS-01$", logon_id="0x537dab7", logon_type=3)
+        group_id = "machine-account-logon-test"
+        logon = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="machine_logon",
+            dst_host=host,
+            auth=auth,
+            lifecycle=ActionLifecycleContext(
+                group_id=group_id,
+                canonical_start=_make_ts(),
+                phase="start",
+            ),
+        )
+        logoff = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=8),
+            event_type="logoff",
+            dst_host=host,
+            auth=auth,
+            lifecycle=ActionLifecycleContext(
+                group_id=group_id,
+                canonical_start=_make_ts(),
+                phase="closure",
+            ),
+        )
+
+        assert policy.decide("ecar", logon) == policy.decide("ecar", logoff)
 
     def test_network_observation_delay_is_coherent_per_uid_source(self, monkeypatch):
         """Network tuple companions should share source-local delay for one UID."""

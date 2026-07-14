@@ -66,6 +66,7 @@ class _NetworkOccurrenceDraft:
     pe: Any = None
     proxy: Any = None
     firewall: Any = None
+    parent_action_group_id: str | None = None
 
     def build_event(self, generator_module: ModuleType) -> SecurityEvent:
         """Construct the canonical event only after the transaction is frozen."""
@@ -104,7 +105,8 @@ class _NetworkOccurrenceDraft:
                 canonical_start=transaction.started_at,
                 phase="start",
                 parent_group_id=(
-                    transaction.conn_id if self.network.application_layer_only else None
+                    self.parent_action_group_id
+                    or (transaction.conn_id if self.network.application_layer_only else None)
                 ),
             ),
         )
@@ -171,6 +173,8 @@ class NetworkTransactionPlanner:
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
         ssh_attempted_username = request.ssh_attempted_username
+        parent_action_group_id = request.parent_action_group_id
+        preserve_start_time = request.preserve_start_time
         caller_supplied_pid = pid > 0
 
         from evidenceforge.events.contexts import NetworkContext
@@ -467,6 +471,7 @@ class NetworkTransactionPlanner:
                 preserve_explicit_proxy_dst_ip=preserve_explicit_proxy_dst_ip,
                 caller_provided_conn_state=caller_provided_conn_state,
                 ad_domain=ad_domain,
+                parent_action_group_id=parent_action_group_id,
             )
             return ProxyTransactionActionBundle(
                 request=proxy_request,
@@ -486,6 +491,7 @@ class NetworkTransactionPlanner:
             and proto == "tcp"
             and dst_port in (80, 443)
             and src_ip_is_local
+            and not suppress_prereq_dns
         )
         # Same-host connections are valid for host-based logs (eCAR FLOW)
         # but invisible to network sensors (Zeek/Snort)
@@ -714,12 +720,23 @@ class NetworkTransactionPlanner:
             )
 
         if pid > 0 and resolved_source_system is not None and resolved_process is not None:
-            time = executor._clamp_after_visible_process_create(
+            adjusted_time = executor._clamp_after_visible_process_create(
                 resolved_source_system,
                 pid,
                 time,
                 "source.windows_wfp_connection",
             )
+            if preserve_start_time and adjusted_time > time:
+                # Higher-level action bundles already own this transport's phase
+                # anchor. A late endpoint process observation must not move the
+                # canonical connection behind a dependent sibling; retain the
+                # transport and omit unsafe process attribution instead.
+                pid = -1
+                resolved_process = None
+                process_image = None
+                suppress_source_pid_inference = True
+            else:
+                time = adjusted_time
 
         # Preserve the initiating application on the canonical DNS occurrence
         # after connection ownership has been resolved. The DNS bundle still
@@ -1232,15 +1249,16 @@ class NetworkTransactionPlanner:
         if proto == "tcp" and duration and duration > 10.0 and rng.random() < 0.03:
             missed_bytes = rng.randint(500, 50000)
 
-        time = generator_module._zeek_conn_observation_time(
-            time,
-            src_ip,
-            src_port,
-            dst_ip,
-            dst_port,
-            proto,
-            service or "",
-        )
+        if not preserve_start_time:
+            time = generator_module._zeek_conn_observation_time(
+                time,
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                proto,
+                service or "",
+            )
         if proto == "icmp":
             time = executor._disambiguate_icmp_observation_time(
                 src_ip,
@@ -1267,6 +1285,7 @@ class NetworkTransactionPlanner:
             and proto == "tcp"
             and dst_port in (80, 443)
             and src_ip_is_local
+            and not suppress_prereq_dns
         ):
             executor._emit_dns_lookup(
                 src_ip,
@@ -1428,6 +1447,7 @@ class NetworkTransactionPlanner:
 
         event = _NetworkOccurrenceDraft(
             timestamp=time,
+            parent_action_group_id=parent_action_group_id,
             src_host=src_host_ctx,
             dst_host=dst_host_ctx,
             local_only=local_only,
@@ -2291,8 +2311,17 @@ class NetworkTransactionPlanner:
                 "source.windows_wfp_connection",
             )
             if adjusted_time > event.timestamp:
-                event.timestamp = adjusted_time
-                time = adjusted_time
+                if preserve_start_time:
+                    executor._set_connection_process_context(
+                        event,
+                        source_system=resolved_source_system,
+                        pid=-1,
+                    )
+                    pid = -1
+                    process_ctx = None
+                else:
+                    event.timestamp = adjusted_time
+                    time = adjusted_time
 
         # Finalize the canonical source-visible interval only after every protocol,
         # payload, and process-visibility adjustment has settled. Dispatch creates

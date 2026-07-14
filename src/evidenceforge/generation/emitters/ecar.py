@@ -230,6 +230,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     _supported_types: set[str] = {
         "logon",
+        "machine_logon",
         "logoff",
         "failed_logon",
         "process_create",
@@ -269,6 +270,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Dispatch to per-type render method."""
         renderer = {
             "logon": self._render_logon,
+            "machine_logon": self._render_logon,
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
@@ -887,6 +889,23 @@ class EcarEmitter(HostMultiplexEmitter):
         """
 
         interval_start, not_after = self._flow_interval(event, seed_parts)
+        lifecycle = event.lifecycle
+        if (
+            lifecycle is not None
+            and lifecycle.parent_group_id is not None
+            and lifecycle.parent_group_id.startswith("proxy-transaction-")
+        ):
+            host_key = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+            flow_time = _SOURCE_TIMING.lifecycle_child_source_time(
+                event,
+                "source.ecar_flow",
+                host_key=host_key,
+                seed_parts=seed_parts,
+                within=(interval_start, not_after) if not_after is not None else None,
+            )
+            if flow_time is not None:
+                process_identity_safe = not_before is None or not_before <= flow_time
+                return flow_time, process_identity_safe
         if drop_late_process_identity and not_before is not None:
             flow_time = _SOURCE_TIMING.source_time(
                 event,

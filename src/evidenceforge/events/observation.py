@@ -285,6 +285,8 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if event.lifecycle is not None:
+            return f"action-lifecycle:{event.lifecycle.group_id}"
         if source == "ecar":
             remote_session_group = self._ecar_remote_session_group_key(event)
             if remote_session_group:
@@ -367,6 +369,8 @@ class ObservationPolicy:
     @staticmethod
     def _uses_coherent_source_identity(source: str, group: str) -> bool:
         """Return whether observation delay/drop should be shared within a source group."""
+        if group.startswith("action-lifecycle:") and source in SOURCE_FAMILIES:
+            return True
         if source == "ecar" and group.startswith("remote-session:"):
             return True
         if group.startswith("process:") and source in {"windows_security", "sysmon", "ecar"}:

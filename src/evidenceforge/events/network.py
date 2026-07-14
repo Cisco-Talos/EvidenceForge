@@ -222,6 +222,12 @@ class NetworkTransactionPlan:
             raise ValueError("Network transaction ports must be non-negative")
         if self.duration is not None and self.duration < 0:
             raise ValueError("Network transaction duration must be non-negative")
+        if self.protocol in {"tcp", "udp"}:
+            for direction in (self.traffic.orig, self.traffic.resp):
+                if direction.packets and direction.ip_bytes > direction.packets * 1500:
+                    raise ValueError(
+                        "Canonical IP-byte accounting exceeds the modeled 1500-byte MTU"
+                    )
         if self.closed_at is not None:
             if self.closed_at < self.started_at:
                 raise ValueError("Network transaction close cannot precede its start")

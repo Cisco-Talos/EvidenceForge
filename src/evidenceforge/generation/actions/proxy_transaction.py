@@ -46,11 +46,8 @@ from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
 )
-from evidenceforge.generation.activity.helpers import _get_rng
 from evidenceforge.generation.activity.network_params import proxy_connect_status_message
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
@@ -101,6 +98,7 @@ class ProxyTransactionRequest:
     preserve_explicit_proxy_dst_ip: bool
     caller_provided_conn_state: bool
     ad_domain: str
+    parent_action_group_id: str | None = None
     source: str = "activity_generator"
 
     @property
@@ -114,7 +112,8 @@ class ProxyTransactionRequest:
             f"{self.dst_ip}:{self.dst_port}:{self.proto}:{self.service or ''}:"
             f"{self.hostname or ''}:{self.pid}:{self.duration or ''}:"
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
-            f"{self.conn_state or ''}:{self.time.isoformat()}:{self.source}"
+            f"{self.conn_state or ''}:{self.time.isoformat()}:"
+            f"{self.parent_action_group_id or ''}:{self.source}"
         )
         return f"proxy-transaction-{seed:016x}"
 
@@ -210,6 +209,9 @@ class ProxyTransactionExecutor(Protocol):
         hostname: str | None = None,
         force_address: bool = False,
         bypass_cache: bool = False,
+        planned_query_time: datetime | None = None,
+        planned_rtt_seconds: float | None = None,
+        parent_action_group_id: str | None = None,
     ) -> None:
         """Emit correlated DNS evidence."""
         ...
@@ -247,6 +249,8 @@ class ProxyTransactionExecutor(Protocol):
         proxy_bypass: bool = False,
         preserve_http_outcome: bool = False,
         process_image: str | None = None,
+        parent_action_group_id: str | None = None,
+        preserve_start_time: bool = False,
     ) -> str:
         """Generate a canonical connection event."""
         ...
@@ -298,6 +302,9 @@ class ProxyTransactionActionBundle:
             explicit_mode=True,
             time=request.time,
         )
+        if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
+            self._shape_failed_connect(proxy_context)
+        self._finalize_proxy_byte_semantics(proxy_context)
         tunnel_key = (
             request.src_ip,
             proxy_sys.ip,
@@ -321,9 +328,16 @@ class ProxyTransactionActionBundle:
                 last_activity, cached_uid = active_tunnel
                 elapsed = (request.time - last_activity).total_seconds()
                 if 0 <= elapsed < generator_utils._EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
-                    # Reuse the client/proxy transport, but still render this
-                    # inspected request in proxy_access. CONNECT setup dedupe
-                    # remains owned by ProxyEmitter's active-tunnel state.
+                    from evidenceforge.generation.actions.proxy_phase_planner import (
+                        ProxyPhasePlanner,
+                    )
+
+                    proxy_context.transaction = ProxyPhasePlanner().plan_reused(
+                        request,
+                        proxy_context,
+                        request.time,
+                    )
+                    proxy_context.time_taken = proxy_context.transaction.time_taken_ms
                     executor._explicit_proxy_tunnels[tunnel_key] = (request.time, cached_uid)
                     self._dispatch_reused_tunnel_proxy_request(
                         proxy_context=proxy_context,
@@ -332,15 +346,6 @@ class ProxyTransactionActionBundle:
                         listener_port=listener_port,
                     )
                     return cached_uid
-
-        client_http = self._build_client_http(proxy_context)
-        if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
-            self._shape_failed_connect(proxy_context, client_http)
-        if proxy_context.status_code < 400 and client_http.response_body_len > 0:
-            proxy_context.sc_bytes = max(
-                proxy_context.sc_bytes,
-                client_http.response_body_len + generator_utils._PROXY_SC_OVERHEAD[0],
-            )
 
         if (
             proxy_context.host
@@ -368,14 +373,6 @@ class ProxyTransactionActionBundle:
                 elif not request.preserve_explicit_proxy_dst_ip:
                     dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
 
-        client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
-        client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
-        will_emit_egress = proxy_context.status_code < 400 and proxy_context.cache_result != "HIT"
-        egress_delay = (
-            self._egress_delay(dst_ip, proxy_context=proxy_context)
-            if will_emit_egress
-            else timedelta(0)
-        )
         client_pid, client_process_image = self._resolve_client_process(proxy_context, proxy_sys)
 
         if src_port is None:
@@ -396,48 +393,50 @@ class ProxyTransactionActionBundle:
                 client_time,
                 "source.windows_wfp_connection",
             )
+        from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
 
-        egress_time = self._resolve_egress_time(
-            client_time=client_time,
-            src_port=src_port,
-            proxy_sys=proxy_sys,
-            listener_port=listener_port,
-            egress_delay=egress_delay,
-            will_emit_egress=will_emit_egress,
-            generator_utils=generator_utils,
-        )
+        phase_plan = ProxyPhasePlanner().plan(request, proxy_context, client_time)
+        proxy_context.transaction = phase_plan
+        proxy_context.time_taken = phase_plan.time_taken_ms
+        client_http = self._build_client_http(proxy_context)
+        client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
+        client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
+        if phase_plan.terminal_outcome == "success" and request.dst_port == 443:
+            if proxy_context.method == "CONNECT":
+                framing_rng = random.Random(
+                    _stable_seed(
+                        "proxy_client_tunnel_framing:"
+                        f"{request.src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
+                        f"{request.time.timestamp()}:{proxy_context.method}"
+                    )
+                )
+                client_orig_bytes += max(request.orig_bytes or 0, framing_rng.randint(180, 900))
+                client_resp_bytes += max(request.resp_bytes or 0, framing_rng.randint(900, 4500))
+            else:
+                # Inspected HTTPS shares one client/proxy transport. Its ledger
+                # must include the exact CONNECT setup totals rendered by the
+                # proxy emitter, not an independently sampled framing estimate.
+                client_orig_bytes += phase_plan.tunnel_setup_cs_bytes
+                client_resp_bytes += phase_plan.tunnel_setup_sc_bytes
 
-        (
-            client_duration,
-            egress_duration,
-            client_orig_bytes,
-            client_resp_bytes,
-        ) = self._resolve_durations_and_sizes(
-            dst_ip=dst_ip,
-            proxy_context=proxy_context,
-            client_orig_bytes=client_orig_bytes,
-            client_resp_bytes=client_resp_bytes,
-            client_time=client_time,
-            egress_time=egress_time,
-            will_emit_egress=will_emit_egress,
-            generator_utils=generator_utils,
-        )
-
-        proxy_terminal_failures = {"DENIED", "AUTH_REQUIRED", "GATEWAY_ERROR"}
+        client_duration = phase_plan.client_duration_seconds
+        egress_time = phase_plan.origin_connect_at
+        egress_duration = phase_plan.origin_duration_seconds
         will_emit_origin_transaction = (
-            proxy_context.cache_result not in proxy_terminal_failures
-            and proxy_context.cache_result != "HIT"
+            phase_plan.terminal_outcome == "success" and egress_time is not None
         )
         egress_http = (
             self._build_egress_http(proxy_context, client_http)
             if will_emit_origin_transaction
             else None
         )
+        if egress_http is not None:
+            egress_http.canonical_request_time = phase_plan.origin_request_at
         client_file_transfer: FileTransferContext | None = None
         client_pe: PeContext | None = None
         egress_file_transfer = request.file_transfer
         egress_pe: PeContext | None = None
-        if egress_http is not None and request.file_transfer is None:
+        if egress_http is not None and request.file_transfer is None and egress_time is not None:
             (
                 client_file_transfer,
                 client_pe,
@@ -455,7 +454,6 @@ class ProxyTransactionActionBundle:
                 client_dst_ip=proxy_sys.ip,
                 egress_dst_ip=dst_ip,
                 proxy_context=proxy_context,
-                generator_utils=generator_utils,
             )
 
         client_uid = executor.generate_connection(
@@ -481,12 +479,11 @@ class ProxyTransactionActionBundle:
             proxy_bypass=True,
             preserve_http_outcome=True,
             process_image=client_process_image,
+            parent_action_group_id=self.anchor.stable_id,
+            preserve_start_time=True,
         )
 
-        if (
-            proxy_context.cache_result in proxy_terminal_failures
-            or proxy_context.cache_result == "HIT"
-        ):
+        if egress_time is None or egress_duration is None:
             return client_uid
 
         egress_resp_bytes = request.resp_bytes
@@ -498,19 +495,19 @@ class ProxyTransactionActionBundle:
             and proxy_context.cache_result == "MISS"
         ):
             egress_resp_bytes = max(request.resp_bytes or 0, request.http.response_body_len)
-        if proxy_context.host:
+        if phase_plan.dns_query_at is not None and proxy_context.host:
             executor._emit_dns_lookup(
                 proxy_sys.ip,
                 dst_ip,
-                egress_time - timedelta(seconds=2),
+                egress_time,
                 hostname=proxy_context.host,
                 force_address=True,
                 bypass_cache=True,
+                planned_query_time=phase_plan.dns_query_at,
+                planned_rtt_seconds=phase_plan.dns_rtt_seconds,
+                parent_action_group_id=self.anchor.stable_id,
             )
 
-        egress_conn_state = request.conn_state
-        if not request.caller_provided_conn_state and proxy_context.status_code < 400:
-            egress_conn_state = "SF"
         executor.generate_connection(
             src_ip=proxy_sys.ip,
             dst_ip=dst_ip,
@@ -524,7 +521,7 @@ class ProxyTransactionActionBundle:
             emit_dns=False,
             pid=-1,
             source_system=proxy_sys,
-            conn_state=egress_conn_state,
+            conn_state=phase_plan.origin_conn_state,
             dns=request.dns,
             ids=request.ids,
             http=egress_http,
@@ -535,8 +532,11 @@ class ProxyTransactionActionBundle:
             hostname=proxy_context.host,
             proxy_bypass=True,
             preserve_http_outcome=True,
+            suppress_prereq_dns=True,
+            parent_action_group_id=self.anchor.stable_id,
+            preserve_start_time=True,
         )
-        if request.dst_port == 443:
+        if request.dst_port == 443 and phase_plan.terminal_outcome == "success":
             executor._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)
         return client_uid
 
@@ -550,9 +550,13 @@ class ProxyTransactionActionBundle:
     ) -> None:
         """Dispatch one proxy-visible request on an already-open CONNECT tunnel."""
 
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+
         request = self.request
+        transaction = proxy_context.transaction
+        event_time = transaction.request_at if transaction is not None else request.time
         reused_event = SecurityEvent(
-            timestamp=request.time,
+            timestamp=event_time,
             event_type="connection",
             network=NetworkContext(
                 src_ip=request.src_ip,
@@ -568,15 +572,25 @@ class ProxyTransactionActionBundle:
                 application_layer_only=True,
             ),
             proxy=proxy_context,
+            lifecycle=ActionLifecycleContext(
+                group_id=self.anchor.stable_id,
+                canonical_start=event_time,
+                phase="dependent",
+                parent_group_id=cached_uid,
+            ),
         )
         self.executor.dispatcher.dispatch(reused_event)
 
     def _build_client_http(self, proxy_context: ProxyContext) -> HttpContext:
         """Build the client-to-proxy HTTP context."""
 
-        from evidenceforge.generation.activity import generator as generator_utils
-
         request = self.request
+        phase_plan = proxy_context.transaction
+        request_time = (
+            (phase_plan.tunnel_request_at or phase_plan.request_at)
+            if phase_plan is not None
+            else request.time
+        )
         if request.dst_port == 443:
             tunnel_status_code = proxy_context.tunnel_status_code
             if tunnel_status_code is None:
@@ -588,7 +602,10 @@ class ProxyTransactionActionBundle:
                 version="1.1",
                 user_agent=proxy_context.user_agent,
                 request_body_len=0,
-                response_body_len=0,
+                response_body_len=(
+                    proxy_context.response_body_bytes if tunnel_status_code >= 400 else 0
+                ),
+                canonical_request_time=request_time,
                 status_code=tunnel_status_code,
                 status_msg=proxy_connect_status_message(
                     tunnel_status_code,
@@ -616,11 +633,7 @@ class ProxyTransactionActionBundle:
                 503: "Service Unavailable",
                 504: "Gateway Timeout",
             }
-            response_body_len = generator_utils._proxy_http_response_body_len(
-                proxy_context,
-                resp_bytes=request.resp_bytes,
-                http=request.http,
-            )
+            response_body_len = proxy_context.response_body_bytes
             return HttpContext(
                 method=request.http.method,
                 host=proxy_context.host,
@@ -628,8 +641,9 @@ class ProxyTransactionActionBundle:
                 version=request.http.version,
                 user_agent=request.http.user_agent,
                 user_agent_known_absent=request.http.user_agent_known_absent,
-                request_body_len=request.http.request_body_len,
+                request_body_len=proxy_context.request_body_bytes,
                 response_body_len=response_body_len,
+                canonical_request_time=request_time,
                 flow_request_body_len=request.http.flow_request_body_len,
                 flow_response_body_len=request.http.flow_response_body_len,
                 flow_transaction_count=request.http.flow_transaction_count,
@@ -647,20 +661,15 @@ class ProxyTransactionActionBundle:
                 ),
             )
 
-        request_body_len = 0
-        if proxy_context.method not in ("GET", "HEAD", "CONNECT", "OPTIONS"):
-            request_body_len = proxy_context.cs_bytes
         return HttpContext(
             method=proxy_context.method,
             host=proxy_context.host,
             uri=proxy_context.url,
             version="1.1",
             user_agent=proxy_context.user_agent,
-            request_body_len=request_body_len,
-            response_body_len=generator_utils._proxy_http_response_body_len(
-                proxy_context,
-                resp_bytes=request.resp_bytes,
-            ),
+            request_body_len=proxy_context.request_body_bytes,
+            response_body_len=proxy_context.response_body_bytes,
+            canonical_request_time=request_time,
             status_code=proxy_context.status_code,
             status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
             referrer=proxy_context.referrer,
@@ -671,58 +680,63 @@ class ProxyTransactionActionBundle:
     def _shape_failed_connect(
         self,
         proxy_context: ProxyContext,
-        client_http: HttpContext,
     ) -> None:
-        """Apply source-native byte/status shape for failed CONNECT requests."""
+        """Plan bounded wire/body accounting for a failed CONNECT request."""
 
-        rng = _get_rng()
+        rng = random.Random(_stable_seed(f"proxy_failed_connect:{self.request.stable_id}"))
         host_len = len(proxy_context.host or "")
         proxy_context.cs_bytes = rng.randint(180 + host_len, 520 + host_len)
         proxy_context.sc_bytes = rng.randint(250, 2000)
-        proxy_context.time_taken = rng.randint(20, 1500)
+        proxy_context.request_body_bytes = 0
+        proxy_context.response_body_bytes = max(
+            0,
+            proxy_context.sc_bytes - rng.randint(120, min(320, proxy_context.sc_bytes)),
+        )
         proxy_context.tunnel_status_code = proxy_context.status_code
-        client_http.status_code = proxy_context.status_code
-        client_http.status_msg = proxy_connect_status_message(
-            proxy_context.status_code,
-            proxy_context.host,
-            proxy_context.user_agent,
-            self.request.time,
-        )
-        from evidenceforge.generation.activity import generator as generator_utils
 
-        client_http.response_body_len = generator_utils._proxy_http_response_body_len(
-            proxy_context,
-            resp_bytes=self.request.resp_bytes,
-        )
-        client_http.resp_mime_types = (
-            [proxy_context.content_type] if proxy_context.content_type else []
-        )
-
-    def _egress_delay(self, dst_ip: str, *, proxy_context: ProxyContext) -> timedelta:
-        """Return the deterministic delay between client proxy request and egress."""
+    def _finalize_proxy_byte_semantics(self, proxy_context: ProxyContext) -> None:
+        """Separate HTTP entity bodies from proxy transfer totals once."""
 
         request = self.request
-        proxy_delay_window = get_timing_window(
-            "network.proxy_upstream_after_client",
-            default_min_ms=950,
-            default_max_ms=1800,
-            default_position="after",
-            default_class="causal_prerequisite",
-        )
-        rng = random.Random(
-            _stable_seed(
-                "proxy_egress_delay:"
-                f"{request.src_ip}:{dst_ip}:{request.dst_port}:{proxy_context.host}:"
-                f"{request.time.timestamp()}:{proxy_context.cache_result}"
+        method = proxy_context.method.upper()
+        request_body = 0
+        if method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:
+            if request.http is not None:
+                request_body = max(0, request.http.request_body_len)
+            elif request.orig_bytes is not None:
+                request_body = max(0, request.orig_bytes)
+
+        if method == "HEAD" or proxy_context.status_code in {204, 304}:
+            response_body = 0
+        elif method == "CONNECT" and proxy_context.status_code < 400:
+            response_body = 0
+        elif request.http is not None and request.http.status_code == proxy_context.status_code:
+            response_body = max(0, request.http.response_body_len)
+        elif proxy_context.status_code >= 400:
+            overhead = min(
+                proxy_context.sc_bytes,
+                120
+                + _stable_seed(
+                    f"proxy_error_response_overhead:{request.stable_id}:{proxy_context.status_code}"
+                )
+                % 201,
             )
-        )
-        base_ms = rng.randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
-        if proxy_context.cache_result in {"MISS", "REVALIDATED", "NONE"}:
-            dns_component_ms = rng.randint(150, 2400)
-            tcp_tls_component_ms = rng.randint(80, 2600 if request.dst_port == 443 else 900)
-            retry_component_ms = rng.choice([0, 0, 0, 0, rng.randint(1200, 8500)])
-            base_ms += dns_component_ms + tcp_tls_component_ms + retry_component_ms
-        return timedelta(milliseconds=base_ms)
+            response_body = max(0, proxy_context.sc_bytes - overhead)
+        else:
+            from evidenceforge.generation.activity import generator as generator_utils
+
+            response_body = generator_utils._proxy_http_response_body_len(
+                proxy_context,
+                resp_bytes=request.resp_bytes,
+                http=request.http,
+            )
+
+        proxy_context.request_body_bytes = request_body
+        proxy_context.response_body_bytes = response_body
+        request_overhead = 0 if request_body == 0 and proxy_context.cs_bytes > 0 else 80
+        response_overhead = 0 if response_body == 0 and proxy_context.sc_bytes > 0 else 50
+        proxy_context.cs_bytes = max(proxy_context.cs_bytes, request_body + request_overhead)
+        proxy_context.sc_bytes = max(proxy_context.sc_bytes, response_body + response_overhead)
 
     def _resolve_client_process(
         self,
@@ -767,169 +781,6 @@ class ProxyTransactionActionBundle:
                 client_process_image = owned_process_image
         return client_pid, client_process_image
 
-    def _resolve_egress_time(
-        self,
-        *,
-        client_time: datetime,
-        src_port: int,
-        proxy_sys: System,
-        listener_port: int,
-        egress_delay: timedelta,
-        will_emit_egress: bool,
-        generator_utils: object,
-    ) -> datetime:
-        """Resolve proxy-origin egress time through the temporal graph."""
-
-        request = self.request
-        egress_time = request.time + egress_delay
-        if not will_emit_egress:
-            return egress_time
-
-        client_observed_time = generator_utils._zeek_conn_observation_time(
-            client_time,
-            request.src_ip,
-            src_port,
-            proxy_sys.ip,
-            listener_port,
-            "tcp",
-            "http",
-        )
-        connect_window = get_timing_window(
-            "source.zeek_http_request",
-            default_min_ms=1,
-            default_max_ms=450,
-            default_position="after",
-            default_class="same_observation",
-        )
-        client_connect_visible_by = client_observed_time + timedelta(
-            milliseconds=connect_window.max_ms + 1
-        )
-        proxy_graph = TemporalConstraintGraph()
-        proxy_graph.add_node("client_connection", client_time)
-        proxy_graph.add_node("client_proxy_request_visible", client_connect_visible_by)
-        proxy_graph.add_node("origin_egress", egress_time)
-        proxy_graph.constrain_after(
-            "client_proxy_request_visible",
-            "client_connection",
-            min_gap=timedelta(milliseconds=connect_window.max_ms + 1),
-        )
-        proxy_graph.constrain_after(
-            "origin_egress",
-            "client_proxy_request_visible",
-            min_gap=egress_delay,
-        )
-        return proxy_graph.resolved_time("origin_egress")
-
-    def _resolve_durations_and_sizes(
-        self,
-        *,
-        dst_ip: str,
-        proxy_context: ProxyContext,
-        client_orig_bytes: int,
-        client_resp_bytes: int,
-        client_time: datetime,
-        egress_time: datetime,
-        will_emit_egress: bool,
-        generator_utils: object,
-    ) -> tuple[float | None, float | None, int, int]:
-        """Resolve client duration, egress duration, and proxy accounting fields."""
-
-        request = self.request
-        proxy_sys = request.proxy_chain[0]
-        proxy_client_cap = random.Random(
-            _stable_seed(
-                "proxy_client_duration_cap:"
-                f"{request.src_ip}:{proxy_sys.ip}:{dst_ip}:{request.dst_port}:"
-                f"{request.time.timestamp()}"
-            )
-        ).uniform(1.72, 2.36)
-        flow_transaction_count = (
-            request.http.flow_transaction_count
-            if request.http is not None and request.http.flow_transaction_count is not None
-            else 1
-        )
-        if request.duration is not None and flow_transaction_count > 1:
-            client_duration = request.duration
-        else:
-            client_duration = min(
-                request.duration if request.duration is not None else 0.2,
-                proxy_client_cap,
-            )
-        if request.duration is None:
-            client_duration = generator_utils._jitter_default_connection_duration(
-                client_duration,
-                caller_provided_duration=False,
-                seed_parts=(
-                    request.src_ip,
-                    proxy_sys.ip,
-                    dst_ip,
-                    request.dst_port,
-                    request.time,
-                    "proxy_client",
-                ),
-            )
-        if request.dst_port == 443 and proxy_context.status_code < 400:
-            client_duration = request.duration or _get_rng().uniform(0.5, 10.0)
-            if proxy_context.method == "CONNECT":
-                rng = _get_rng()
-                client_orig_bytes += max(request.orig_bytes or 0, rng.randint(180, 900))
-                client_resp_bytes += max(request.resp_bytes or 0, rng.randint(900, 4500))
-            else:
-                framing_rng = random.Random(
-                    _stable_seed(
-                        "proxy_client_tls_framing:"
-                        f"{request.src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
-                        f"{request.time.timestamp()}:{proxy_context.method}"
-                    )
-                )
-                client_orig_bytes += framing_rng.randint(160, 900)
-                client_resp_bytes += framing_rng.randint(180, 2400)
-
-        egress_duration = request.duration
-        if will_emit_egress:
-            egress_duration = (
-                request.duration
-                or generator_utils._jitter_default_connection_duration(
-                    0.1,
-                    caller_provided_duration=False,
-                    seed_parts=(
-                        proxy_sys.ip,
-                        dst_ip,
-                        request.dst_port,
-                        request.time,
-                        "proxy_egress",
-                    ),
-                )
-            )
-            response_flush = random.Random(
-                _stable_seed(
-                    f"proxy_response_flush:{request.src_ip}:{dst_ip}:{request.time.timestamp()}"
-                )
-            ).uniform(0.02, 0.25)
-            egress_start_after_client = max(0.0, (egress_time - client_time).total_seconds())
-            client_duration = max(
-                client_duration,
-                egress_start_after_client + egress_duration + response_flush,
-            )
-            proxy_context.time_taken = max(
-                proxy_context.time_taken,
-                generator_utils._proxy_time_taken_ms(
-                    client_duration,
-                    random.Random(
-                        _stable_seed(
-                            "proxy_context_total_time:"
-                            f"{request.src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
-                            f"{request.dst_port}:{request.time.timestamp()}"
-                        )
-                    ),
-                    method=proxy_context.method,
-                    status_code=proxy_context.status_code,
-                    cache_result=proxy_context.cache_result,
-                ),
-            )
-
-        return client_duration, egress_duration, client_orig_bytes, client_resp_bytes
-
     def _build_proxied_http_file_transfer_pair(
         self,
         *,
@@ -942,7 +793,6 @@ class ProxyTransactionActionBundle:
         client_dst_ip: str,
         egress_dst_ip: str,
         proxy_context: ProxyContext,
-        generator_utils: object,
     ) -> tuple[
         FileTransferContext | None,
         PeContext | None,
@@ -997,61 +847,37 @@ class ProxyTransactionActionBundle:
             ),
         ).execute()
 
-        egress_duration = max(
-            egress_duration or 0.0,
-            egress_result.file_transfer.duration + 0.002,
+        phase_plan = proxy_context.transaction
+        client_response_anchor = (
+            phase_plan.client_flush_at if phase_plan is not None else egress_time
         )
-        client_not_before = egress_time + timedelta(
-            milliseconds=1100
-            + (
-                _stable_seed(
-                    "proxy_client_file_not_before:"
-                    f"{request.src_ip}:{proxy_sys.ip}:{client_http.host}:"
-                    f"{client_http.uri}:{client_time.isoformat()}"
-                )
-                % 900
+        client_not_before = client_response_anchor + timedelta(
+            milliseconds=2
+            + _stable_seed(
+                "proxy_client_file_not_before:"
+                f"{request.src_ip}:{proxy_sys.ip}:{client_http.host}:"
+                f"{client_http.uri}:{client_time.isoformat()}"
             )
+            % 29
         )
         client_result.file_transfer.observation_not_before = client_not_before
-        client_result.file_transfer.duration = max(
-            client_result.file_transfer.duration,
-            egress_result.file_transfer.duration
-            + random.Random(
-                _stable_seed(
-                    "proxy_client_file_tail_gap:"
-                    f"{request.src_ip}:{proxy_sys.ip}:{client_http.host}:"
-                    f"{client_http.uri}:{client_time.isoformat()}"
-                )
-            ).uniform(0.02, 0.18),
+        available_client_duration = (
+            max(0.001, (phase_plan.close_at - client_not_before).total_seconds() - 0.002)
+            if phase_plan is not None
+            else client_duration or client_result.file_transfer.duration
         )
-        client_file_floor = (
-            max(0.0, (client_not_before - client_time).total_seconds())
-            + client_result.file_transfer.duration
-            + 0.002
+        client_result.file_transfer.duration = min(
+            max(
+                client_result.file_transfer.duration,
+                egress_result.file_transfer.duration,
+            ),
+            available_client_duration,
         )
-        client_duration = max(client_duration or 0.0, client_file_floor)
 
         client_http.resp_fuids = [client_result.file_transfer.fuid]
         client_http.resp_mime_types = [client_result.file_transfer.mime_type]
         egress_http.resp_fuids = [egress_result.file_transfer.fuid]
         egress_http.resp_mime_types = [egress_result.file_transfer.mime_type]
-
-        proxy_context.time_taken = max(
-            proxy_context.time_taken,
-            generator_utils._proxy_time_taken_ms(
-                client_duration,
-                random.Random(
-                    _stable_seed(
-                        "proxy_context_file_transfer_time:"
-                        f"{request.src_ip}:{proxy_sys.ip}:{client_http.host}:"
-                        f"{client_http.uri}:{client_time.isoformat()}"
-                    )
-                ),
-                method=proxy_context.method,
-                status_code=proxy_context.status_code,
-                cache_result=proxy_context.cache_result,
-            ),
-        )
 
         return (
             client_result.file_transfer,
@@ -1101,6 +927,8 @@ class ProxyTransactionActionBundle:
                 egress_http,
                 user_agent=proxy_context.user_agent,
                 referrer=proxy_context.referrer,
+                request_body_len=proxy_context.request_body_bytes,
+                response_body_len=proxy_context.response_body_bytes,
             )
         if (
             egress_http is not None
@@ -1121,20 +949,14 @@ class ProxyTransactionActionBundle:
             503: "Service Unavailable",
             504: "Gateway Timeout",
         }
-        response_body_len = generator_utils._proxy_http_response_body_len(
-            proxy_context,
-            resp_bytes=request.resp_bytes,
-        )
-        request_body_len = 0
-        if proxy_context.method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:
-            request_body_len = max(request.orig_bytes or 0, proxy_context.cs_bytes)
+        response_body_len = proxy_context.response_body_bytes
         return HttpContext(
             method=proxy_context.method,
             host=proxy_context.host,
             uri=generator_utils._origin_form_uri_from_proxy_url(proxy_context.url),
             version="1.1",
             user_agent=proxy_context.user_agent,
-            request_body_len=request_body_len,
+            request_body_len=proxy_context.request_body_bytes,
             response_body_len=response_body_len,
             status_code=proxy_context.status_code,
             status_msg=status_messages.get(proxy_context.status_code, "OK"),

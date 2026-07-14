@@ -155,4 +155,61 @@ Verification:
 
 ### Milestone 3 — Proxy phase and byte contract
 
-Pending.
+Implementation and expanded-scenario acceptance complete:
+
+- Added an immutable proxy transaction plan and data-driven resolver profiles. The proxy action
+  bundle now owns a conditional phase graph covering client connect, request/CONNECT, policy/cache
+  decision, optional DNS, origin transport, optional TLS, origin response, client flush, and close.
+  Cache hits, denies, authentication requirements, misses/revalidation, and gateway failures emit
+  only phases that occurred.
+- Routed both client/proxy and proxy/origin legs through the canonical network contract and attached
+  them as independently admitted children of the proxy action lifecycle. Planned prerequisite DNS
+  uses the same parent action and preserves its explicit phase anchor.
+- Split proxy request/response body sizes from transferred totals. Zeek HTTP renders body sizes;
+  proxy access fields render transfer totals; the network ledger retains transport payload and IP
+  accounting. CONNECT setup bytes are included exactly once in inspected-tunnel ledgers.
+- Removed aggregate proxy egress delay and implemented the 65/32/3 resolver mixture. Visible,
+  phase-bounded DNS/origin pairs have a fast majority plus a deterministic retry tail rather than a
+  universal one-second floor.
+- Corrected source-owned ordering defects exposed by blind review: Zeek HTTP and DNS now anchor to
+  the finalized transaction interval; TCP IP-byte accounting cannot exceed modeled MTU capacity;
+  machine-account logon/logoff endpoint evidence shares lifecycle identity; and proxy child FLOWs
+  share one host-local source offset.
+- Preserved higher-level phase anchors when endpoint process visibility is late. The network planner
+  now drops unsafe process attribution on preserved bundle transports instead of moving transport
+  truth behind a dependent proxy origin phase.
+
+Acceptance history:
+
+- The first milestone panel found 85 HTTP rows preceding their same-UID connection and three proxy
+  setup byte overruns. Both were fixed at the Zeek source-timing and proxy-ledger owners.
+- A repeated network review established DNS rows after short parent connections and 12 MTU
+  accounting violations. DNS source anchoring and the canonical network ledger were corrected.
+- Host review established orphan machine-account endpoint logout rows. Canonical machine-session
+  lifecycle identity and eCAR projection were added; paired Windows lifecycles now have zero eCAR
+  logout-only groups.
+- A final pre-gate review found related proxy eCAR child FLOWs independently delayed. Group-coherent
+  source timing removed 185/746 inversions; the last case exposed a canonical late-process shift and
+  was eliminated by preserving the proxy bundle's transport anchor. The final corpus has 0/749
+  origin-before-client proxy-host eCAR inversions.
+
+Verification:
+
+- Focused proxy/network/source-timing regression set: 270 passed.
+- Complete default suite: 4,951 passed and 19 skipped.
+- Repository-wide Ruff lint and format checks passed.
+- Final `iteration-test-expanded` generation produced 83,122 records across 21 sources and passed
+  automated evaluation at 95.91662287509753.
+- Hard probes found zero HTTP and DNS protocol rows outside parent intervals, zero modeled-MTU
+  accounting violations, zero proxy setup byte overruns, and no paired Windows/eCAR machine-session
+  logout orphan.
+- The bounded visible DNS-response-to-origin set contained 266 pairs: 255/266 (95.86%) below 250 ms
+  and 11 above 500 ms.
+- The final independent detection, network, host/EDR, and threat-hunting panel passed 4/4 after the
+  required scope/semantics deliberation. Final synthetic-confidence scores were 24, 16, 6, and 24
+  (17.5 average). No hard network transaction, observation, admission, or explicit-proxy
+  contradiction remained.
+- General process-lifecycle completeness and broader baseline/storyline texture were retained as
+  separate improvement families rather than patched in this network/proxy milestone.
+- The hash-verified acceptance bundle is under
+  `scenarios/iteration-test-expanded/blind-test/network-contract-milestone-3/`.

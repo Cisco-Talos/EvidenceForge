@@ -46,6 +46,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
     RemoteThreadContext,
 )
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
@@ -69,6 +70,40 @@ def emitter(tmp_path):
 @pytest.fixture
 def ts():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+
+
+def test_machine_account_logon_projects_as_user_session_login(emitter, ts):
+    """Canonical machine-account logons must not leave endpoint logout orphans."""
+    emitter.emit_event = Mock()
+    event = SecurityEvent(
+        timestamp=ts,
+        event_type="machine_logon",
+        dst_host=HostContext(
+            hostname="DC-01",
+            fqdn="DC-01.example.local",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+        ),
+        auth=AuthContext(
+            username="WS-01$",
+            logon_id="0x537dab7",
+            logon_type=3,
+            source_ip="10.0.1.10",
+            source_port=49355,
+        ),
+        edr=EdrContext(object_id="machine-session-object"),
+    )
+
+    assert emitter.can_handle(event)
+    emitter.emit(event)
+
+    rendered = emitter.emit_event.call_args.args[0]
+    assert rendered["object"] == "USER_SESSION"
+    assert rendered["action"] == "LOGIN"
+    assert rendered["logon_id"] == "0x537dab7"
+    assert rendered["objectID"] == "machine-session-object"
 
 
 class TestPidEmission:
@@ -1309,6 +1344,110 @@ class TestChronologicalOutput:
             ),
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
+
+    def test_proxy_child_flows_preserve_ingress_before_origin_order(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """One proxy host observes related ingress before its origin egress."""
+
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        proxy_host = HostContext(
+            hostname="PROXY-01",
+            ip="10.0.3.20",
+            os="Ubuntu Linux",
+            os_category="linux",
+            system_type="server",
+            fqdn="proxy-01.example.org",
+        )
+        client_host = HostContext(
+            hostname="WS-01",
+            ip="10.0.4.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.org",
+        )
+        parent_group_id = "proxy-transaction-1234"
+
+        def proxy_child(
+            timestamp: datetime,
+            *,
+            src_host: HostContext,
+            dst_host: HostContext | None,
+            src_ip: str,
+            dst_ip: str,
+            src_port: int,
+            dst_port: int,
+            uid: str,
+        ) -> SecurityEvent:
+            network = NetworkContext(
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                protocol="tcp",
+                duration=0.5,
+                conn_state="SF",
+                history="ShADadFf",
+                orig_bytes=120,
+                resp_bytes=240,
+                orig_pkts=3,
+                resp_pkts=4,
+                orig_ip_bytes=240,
+                resp_ip_bytes=400,
+                zeek_uid=uid,
+                source_visible_start_time=timestamp,
+                source_visible_close_time=timestamp + timedelta(milliseconds=500),
+            )
+            network.finalize_transaction(f"network-{uid}")
+            return SecurityEvent(
+                timestamp=timestamp,
+                event_type="connection",
+                src_host=src_host,
+                dst_host=dst_host,
+                network=network,
+                lifecycle=ActionLifecycleContext(
+                    group_id=f"network-{uid}",
+                    canonical_start=timestamp,
+                    phase="start",
+                    parent_group_id=parent_group_id,
+                ),
+            )
+
+        ingress = proxy_child(
+            ts,
+            src_host=client_host,
+            dst_host=proxy_host,
+            src_ip=client_host.ip,
+            dst_ip=proxy_host.ip,
+            src_port=52193,
+            dst_port=8080,
+            uid="CproxyIngress",
+        )
+        origin = proxy_child(
+            ts + timedelta(milliseconds=12),
+            src_host=proxy_host,
+            dst_host=None,
+            src_ip=proxy_host.ip,
+            dst_ip="13.107.246.52",
+            src_port=41003,
+            dst_port=443,
+            uid="CproxyOrigin",
+        )
+
+        emitter._render_connection(ingress)
+        emitter._render_connection(origin)
+
+        proxy_rows = [row for row in emitted if row["hostname"] == proxy_host.hostname]
+        assert [row["direction"] for row in proxy_rows] == [
+            "INBOUND",
+            "OUTBOUND",
+        ]
+        assert proxy_rows[0]["timestamp"] < proxy_rows[1]["timestamp"]
 
     def test_short_flow_stays_inside_canonical_connection_interval(
         self,
