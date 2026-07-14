@@ -13837,6 +13837,11 @@ class ActivityGenerator:
         if not uid:
             return ""
         dispatcher = getattr(self, "dispatcher", None)
+        identifier_lookup = getattr(dispatcher, "network_identifier_for_format", None)
+        if callable(identifier_lookup):
+            observed_uid = identifier_lookup(uid, format_name)
+            if observed_uid is not None:
+                return observed_uid
         visibility = getattr(dispatcher, "visibility_engine", None)
         if visibility is None:
             return uid
@@ -13847,10 +13852,7 @@ class ActivityGenerator:
         for sensor in sensors:
             if format_name not in expand_formats(sensor.log_formats):
                 continue
-            from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-
-            sensor_hostname = sensor.hostname or sensor.name
-            return SensorMultiplexEmitter._derive_sensor_uid(uid, sensor_hostname)
+            return uid
         return uid
 
     @staticmethod

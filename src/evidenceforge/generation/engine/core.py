@@ -309,6 +309,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             emitters=self.emitters,
             visibility_engine=visibility_engine,
             output_start_time=self.start_time,
+            output_end_time=self.end_time,
             observation_policy=ObservationPolicy(self.scenario.observation_profile),
         )
         self.activity_generator = ActivityGenerator(

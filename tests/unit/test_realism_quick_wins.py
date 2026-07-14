@@ -25,7 +25,7 @@
 1. External client IP special-use range exclusion
 2. ASA connection ID non-round start
 3. PAT port gaps (non-sequential)
-4. Snort microsecond timestamps
+4. Snort emitter timestamp preservation
 5. ASA chronological sort on flush
 """
 
@@ -284,8 +284,8 @@ def test_pat_port_start_not_round():
 # ---------------------------------------------------------------------------
 
 
-def test_snort_timestamp_has_microseconds(tmp_path):
-    """Snort alert timestamps should have non-zero microseconds."""
+def test_snort_direct_emission_preserves_canonical_timestamps(tmp_path):
+    """Snort does not invent clock jitter when no observation plan exists."""
     fmt = load_format("snort_alert")
     emitter = SnortEmitter(
         format_def=fmt,
@@ -320,18 +320,12 @@ def test_snort_timestamp_has_microseconds(tmp_path):
     lines = [line for line in output.strip().split("\n") if line.strip()]
     assert len(lines) >= 5, f"Expected at least 5 alert lines, got {len(lines)}"
 
-    # Check that at least some timestamps have non-zero millisecond part
-    zero_ms_count = 0
+    # Sensor clock and jitter belong to NetworkObservationPlanner.
     for line in lines:
-        # Format: MM/DD-HH:MM:SS.mmm
+        # Format: MM/DD-HH:MM:SS.ffffff
         ts_part = line.split("[")[0].strip()
-        ms_part = ts_part.split(".")[-1]
-        if ms_part == "000":
-            zero_ms_count += 1
-
-    assert zero_ms_count < len(lines), (
-        "All Snort timestamps end in .000 — microsecond jitter is not working"
-    )
+        fractional_part = ts_part.split(".")[-1]
+        assert fractional_part == "000000"
 
 
 # ---------------------------------------------------------------------------

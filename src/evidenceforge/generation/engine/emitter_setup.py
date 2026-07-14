@@ -257,7 +257,6 @@ class EmitterSetupMixin:
         # Configure ASA emitters with network topology for interface resolution
         if "cisco_asa" in self.emitters:
             asa_emitter = self.emitters["cisco_asa"]
-            asa_emitter._output_end_time = self.end_time
             if self.scenario.environment.network:
                 asa_emitter._segment_config = [
                     {"name": seg.name, "cidr": seg.cidr}
@@ -274,9 +273,6 @@ class EmitterSetupMixin:
                         for rule in sensor.nat_rules:
                             if rule.type == "static" and rule.mapped_ip and rule.real_ip:
                                 asa_emitter._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
-
-        if "ecar" in self.emitters:
-            self.emitters["ecar"]._output_end_time = self.end_time
 
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.

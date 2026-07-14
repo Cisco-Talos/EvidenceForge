@@ -59,10 +59,8 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
             "lease_time": dhcp.lease_time,
             "msg_types": dhcp.msg_types,
             "duration": dhcp.duration,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            **self._sensor_metadata(event, self.format_def.name),
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

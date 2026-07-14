@@ -1493,11 +1493,18 @@ def validate_config() -> ValidationResult:
                         )
                     )
                     continue
-                for field_name, minimum in {
-                    "clock_skew_us": -1_000_000,
-                    "path_delay_us": 0,
-                }.items():
+                sensor_ranges = {
+                    "clock_offset_us": (-1_000_000, "clock_skew_us", True),
+                    "clock_drift_ppm": (-500, None, False),
+                    "route_delay_us": (0, "path_delay_us", True),
+                    "event_jitter_us": (-1_000_000, None, False),
+                }
+                for field_name, (minimum, legacy_name, required) in sensor_ranges.items():
                     bounds = profile_data.get(field_name)
+                    if bounds is None and legacy_name is not None:
+                        bounds = profile_data.get(legacy_name)
+                    if bounds is None and not required:
+                        continue
                     if not isinstance(bounds, dict):
                         result.issues.append(
                             Issue(
@@ -1535,6 +1542,39 @@ def validate_config() -> ValidationResult:
                                 "ERROR",
                                 "timing_profiles.yaml",
                                 f"network_sensor_observation.profiles.{profile_name}.{field_name}.max must be >= min",
+                            )
+                        )
+                capture_loss = profile_data.get("capture_loss")
+                if capture_loss is not None and not isinstance(capture_loss, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"network_sensor_observation.profiles.{profile_name}.capture_loss must be a mapping",
+                        )
+                    )
+                elif isinstance(capture_loss, dict):
+                    for probability_field in ("probability", "min_fraction", "max_fraction"):
+                        value = capture_loss.get(probability_field, 0.0)
+                        if (
+                            not isinstance(value, (int, float))
+                            or isinstance(value, bool)
+                            or not 0.0 <= float(value) <= 1.0
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    f"network_sensor_observation.profiles.{profile_name}.capture_loss.{probability_field} must be between 0 and 1",
+                                )
+                            )
+                    max_missed = capture_loss.get("max_missed_bytes", 0)
+                    if not isinstance(max_missed, int) or max_missed < 0:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.capture_loss.max_missed_bytes must be an integer >= 0",
                             )
                         )
 

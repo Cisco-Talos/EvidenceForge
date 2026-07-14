@@ -105,10 +105,8 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "established": ssl.established,
             "ssl_history": ssl.ssl_history or None,
             "cert_chain_fuids": cert_chain_fuids,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            **self._sensor_metadata(event, self.format_def.name),
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

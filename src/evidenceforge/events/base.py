@@ -68,6 +68,8 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
+from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.events.network import NetworkSensorObservation
 
 if TYPE_CHECKING:
     from evidenceforge.generation.source_timing import SourceTimingPlan
@@ -156,6 +158,11 @@ class SecurityEvent:
     # Planned source-native observation times keyed by source family/profile.
     # SecurityEvent.timestamp remains canonical world time.
     source_timing: SourceTimingPlan | None = None
+
+    # Correlated action lifecycle and frozen network-sensor projections.
+    lifecycle: ActionLifecycleContext | None = None
+    network_observations: tuple[NetworkSensorObservation, ...] = ()
+    network_observations_planned: bool = False
 
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format

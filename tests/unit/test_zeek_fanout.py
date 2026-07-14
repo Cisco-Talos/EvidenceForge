@@ -112,7 +112,7 @@ class TestSslFanOut:
                 ssl_data = json.loads(f.readline())
 
             assert conn_data["uid"] == ssl_data["uid"]
-            assert conn_data["uid"] != "CTestFanout12345"
+            assert conn_data["uid"] == "CTestFanout12345"
             assert conn_data["uid"].startswith("C")
 
 
@@ -271,11 +271,11 @@ class TestHttpFilesFanOut:
 
             # UID consistency
             assert conn_data["uid"] == http_data["uid"] == files_data["conn_uids"][0]
-            assert conn_data["uid"] != "CTestHttpFiles01"
+            assert conn_data["uid"] == "CTestHttpFiles01"
             assert conn_data["uid"].startswith("C")
 
             # File cross-reference: files fuid appears in http resp_fuids
-            assert files_data["fuid"] != "FTestFile01234567"
+            assert files_data["fuid"] == "FTestFile01234567"
             assert files_data["fuid"].startswith("F")
             assert files_data["fuid"] in http_data["resp_fuids"]
 
@@ -388,8 +388,8 @@ class TestMultiSensorFanOut:
                 assert (base / sensor / "conn.json").exists()
                 assert (base / sensor / "ssl.json").exists()
 
-            # Each real Zeek sensor generates its own UID namespace, while
-            # preserving correlation within that sensor's Zeek log family.
+            # Direct emitters preserve canonical identity. Sensor-local identity
+            # is introduced only by a frozen NetworkSensorObservation.
             with open(base / "fw01" / "conn.json") as f:
                 uid1 = json.loads(f.readline())["uid"]
             with open(base / "fw01" / "ssl.json") as f:
@@ -400,14 +400,14 @@ class TestMultiSensorFanOut:
                 ssl_uid2 = json.loads(f.readline())["uid"]
             assert uid1 == ssl_uid1
             assert uid2 == ssl_uid2
-            assert uid1 != "CMultiSensor1234"
-            assert uid2 != "CMultiSensor1234"
-            assert uid2 != uid1
+            assert uid1 == "CMultiSensor1234"
+            assert uid2 == "CMultiSensor1234"
+            assert uid2 == uid1
             assert uid1.startswith("C")
             assert uid2.startswith("C")
 
-    def test_lossy_secondary_sensor_varies_observation_counters(self):
-        """Explicit capture loss may vary counters without impossible packet accounting."""
+    def test_missed_bytes_do_not_trigger_emitter_loss_synthesis(self):
+        """A counter alone cannot replace an explicit capture-loss observation."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(
@@ -445,7 +445,7 @@ class TestMultiSensorFanOut:
 
             core = json.loads((base / "core" / "conn.json").read_text())
             dmz = json.loads((base / "dmz" / "conn.json").read_text())
-            varied_fields = {
+            accounting_fields = {
                 "duration",
                 "orig_bytes",
                 "resp_bytes",
@@ -454,7 +454,7 @@ class TestMultiSensorFanOut:
                 "orig_ip_bytes",
                 "resp_ip_bytes",
             }
-            assert any(core[field] != dmz[field] for field in varied_fields)
+            assert all(core[field] == dmz[field] for field in accounting_fields)
             assert dmz["orig_ip_bytes"] >= dmz["orig_bytes"] + dmz["orig_pkts"] * 40
             assert dmz["resp_ip_bytes"] >= dmz["resp_bytes"] + dmz["resp_pkts"] * 40
 
@@ -515,10 +515,9 @@ class TestMultiSensorFanOut:
                 "orig_ip_bytes",
                 "resp_ip_bytes",
             )
-            assert core["uid"] != dmz["uid"]
-            assert core["ts"] != dmz["ts"]
+            assert core["uid"] == dmz["uid"]
+            assert core["ts"] == dmz["ts"]
             assert all(core[field] == dmz[field] for field in locked_fields)
-            assert dmz["duration"] > core["duration"]
-            assert dmz["duration"] - core["duration"] <= 0.05
+            assert dmz["duration"] == core["duration"]
             assert core["orig_ip_bytes"] - core["orig_bytes"] == 28
             assert core["resp_ip_bytes"] - core["resp_bytes"] == 28

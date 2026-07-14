@@ -2869,16 +2869,19 @@ class StorylineMixin:
         def _ground_truth_uid(uid: str, src_ip: str, dst_ip: str) -> str:
             if not uid:
                 return "(filtered by sensor placement)"
+            identifier_lookup = getattr(dispatcher, "network_identifier_for_format", None)
+            if callable(identifier_lookup):
+                observed_uid = identifier_lookup(uid, "zeek_conn")
+                if observed_uid is not None:
+                    return observed_uid or "(filtered by sensor placement)"
             visibility = getattr(dispatcher, "visibility_engine", None)
             if visibility is None:
                 return uid
             from evidenceforge.events.dispatcher import expand_formats
-            from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
             for sensor in visibility.get_observing_sensors(src_ip, dst_ip):
                 if "zeek_conn" in expand_formats(sensor.log_formats):
-                    hostname = sensor.hostname or sensor.name
-                    return SensorMultiplexEmitter._derive_sensor_uid(uid, hostname)
+                    return uid
             return "(filtered by sensor placement)"
 
         if spec.type == "logon":

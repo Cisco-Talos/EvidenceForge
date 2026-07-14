@@ -113,7 +113,45 @@ Verification:
 
 ### Milestone 2 — Sensor observation and final-window admission
 
-Pending.
+Implementation and expanded-scenario acceptance complete:
+
+- Added immutable per-sensor observations after visibility routing. Each observation owns its
+  sensor identity and path role, NAT-adjusted tuple, sensor-local UID/FUID values, clock-adjusted
+  interval, visible formats, and loss-adjusted traffic ledger with explicit directional missed
+  bytes.
+- Extended data-driven observation profiles with stable sensor clock offset/drift, route delay,
+  bounded per-event jitter, and capture-loss parameters, including an explicit `lossy_span`
+  profile. Existing scenarios inherit the lossless default when no capture profile is specified.
+- Made protocol siblings consume the same observation tuple, identity, interval, and accounting.
+  Lossless and NAT-only mirrors now preserve canonical counters; only an explicit lossy profile
+  may diverge, and it records positive missed bytes.
+- Added typed lifecycle metadata and final dispatcher admission after source-native timing. Fresh
+  groups starting outside `[start, end)` are suppressed, closure tails are retained only for
+  groups that began in-window, nested children are admitted independently, and canonical state is
+  still applied for suppressed warm-up/post-window actions.
+- Moved ASA teardown timer/reason selection from its emitter into network observation planning.
+  Embryonic connections now use the configured sensor timeout instead of a random per-row value,
+  and short non-embryonic flows are no longer mislabeled `Conn-timeout`. Snort timestamps now
+  retain the source-native six-digit fractional precision.
+
+Verification:
+
+- Pre-gate focused tests and the default suite passed; the latter reported 4,931 passed and 19
+  skipped. After the panel-driven ownership correction, 124 focused tests passed and the complete
+  default suite reported 4,933 passed and 19 skipped.
+- Repository-wide Ruff lint and format checks passed.
+- `iteration-test-expanded` generated 93,317 records and passed automated evaluation at
+  95.63900732058868.
+- The independent panel initially split 2–2 (48.0 average synthetic confidence). Required
+  deliberation converged to 67.0 average with two Synthetic and two Inconclusive judgments. The
+  reviewers independently confirmed identical lossless accounting, coherent NAT/path visibility,
+  stable approximately 2 ppm sensor drift, and intact parent/fan-out joins.
+- The only contract-owned defect was uniform ASA timeout synthesis in the renderer; it was fixed
+  at the observation-planning layer and covered by focused regression tests. Scanner application
+  fan-out and repetitive endpoint file/process noise were recorded as separate owning families,
+  not patched in network rendering. No material contract rework required a repeated panel.
+- The ignored assessment bundle is under
+  `scenarios/iteration-test-expanded/blind-test/network-contract-milestone-2/`.
 
 ### Milestone 3 — Proxy phase and byte contract
 

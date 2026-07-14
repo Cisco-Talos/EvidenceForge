@@ -81,13 +81,8 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         file_timestamp: datetime,
         chain_not_before: datetime | None,
     ) -> datetime:
-        x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
-            self.format_def.name if self.format_def else "zeek_x509", []
-        )
-        ssl_sensor_hostnames = event._sensor_hostnames_by_format.get("zeek_ssl", [])
-        sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
-        targets = sensor_hostnames or self._sensor_hostnames
-        new_targets = targets
+        format_name = self.format_def.name if self.format_def else "zeek_x509"
+        sensor_metadata = self._sensor_metadata(event, format_name)
         timestamp = _tls_certificate_x509_timestamp(
             event,
             x509,
@@ -120,10 +115,8 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
             "basic_constraints_ca": x509.basic_constraints_ca,
             "host_cert": x509.host_cert,
             "client_cert": x509.client_cert,
-            "_sensor_hostnames": new_targets,
+            **sensor_metadata,
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
         return timestamp
 

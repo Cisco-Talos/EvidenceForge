@@ -55,6 +55,39 @@ class SourceTimingPlanner:
         self._ensure_plan(event)
         return event
 
+    def admission_time(self, event: SecurityEvent, format_name: str) -> datetime:
+        """Return the finalized source-visible timestamp used for window admission."""
+
+        if event.network_observations:
+            observed = [
+                observation.observed_start_time
+                for observation in event.network_observations
+                if format_name in observation.visible_formats
+            ]
+            if observed:
+                return min(observed)
+        if format_name == "ecar" and event.network is not None:
+            return self.source_time(
+                event,
+                "source.ecar_flow",
+                seed_parts=(
+                    "dispatcher-admission",
+                    event.network.zeek_uid,
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                ),
+                within=(
+                    event.network.source_visible_start_time,
+                    event.network.source_visible_close_time,
+                )
+                if event.network.source_visible_start_time is not None
+                and event.network.source_visible_close_time is not None
+                else None,
+            )
+        return event.timestamp
+
     def source_time(
         self,
         event: SecurityEvent,

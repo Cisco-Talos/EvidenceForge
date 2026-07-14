@@ -72,6 +72,9 @@ class _NetworkOccurrenceDraft:
 
         if self.network is None or self.network.transaction is None:
             raise ValueError("Cannot construct a network event before transaction finalization")
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+
+        transaction = self.network.transaction
         return generator_module.SecurityEvent(
             timestamp=self.timestamp,
             event_type="connection",
@@ -96,6 +99,14 @@ class _NetworkOccurrenceDraft:
             pe=self.pe,
             proxy=self.proxy,
             firewall=self.firewall,
+            lifecycle=ActionLifecycleContext(
+                group_id=transaction.stable_id,
+                canonical_start=transaction.started_at,
+                phase="start",
+                parent_group_id=(
+                    transaction.conn_id if self.network.application_layer_only else None
+                ),
+            ),
         )
 
 

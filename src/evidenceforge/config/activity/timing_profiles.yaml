@@ -332,19 +332,70 @@ network_sensor_observation:
   default_profile: distributed_taps
   profiles:
     distributed_taps:
-      clock_skew_us:
+      clock_offset_us:
         min: -18000
         max: 22000
-      path_delay_us:
+      clock_drift_ppm:
+        min: -2
+        max: 2
+      route_delay_us:
         min: 1200
-        max: 58000
+        max: 18000
+      event_jitter_us:
+        min: -750
+        max: 750
+      capture_loss:
+        probability: 0.0
+        min_fraction: 0.0
+        max_fraction: 0.0
+        max_missed_bytes: 0
     well_synced:
-      clock_skew_us:
+      clock_offset_us:
         min: -4000
         max: 4000
-      path_delay_us:
+      clock_drift_ppm:
+        min: -1
+        max: 1
+      route_delay_us:
         min: 250
         max: 8000
+      event_jitter_us:
+        min: -250
+        max: 250
+      capture_loss:
+        probability: 0.0
+        min_fraction: 0.0
+        max_fraction: 0.0
+        max_missed_bytes: 0
+    lossy_span:
+      clock_offset_us:
+        min: -24000
+        max: 28000
+      clock_drift_ppm:
+        min: -4
+        max: 4
+      route_delay_us:
+        min: 1800
+        max: 24000
+      event_jitter_us:
+        min: -1200
+        max: 1200
+      capture_loss:
+        probability: 0.12
+        min_fraction: 0.001
+        max_fraction: 0.035
+        max_missed_bytes: 65536
+
+firewall_observation:
+  # ASA connection-table timers are device policy, not per-flow randomness.
+  # Sensor-specific overrides may select another named policy without moving
+  # timeout synthesis back into the emitter.
+  default_policy: asa_default
+  sensor_policies: {}
+  policies:
+    asa_default:
+      tcp_embryonic_timeout_seconds: 30
+      tcp_idle_timeout_seconds: 3600
 
 windows_event_time:
   collision_spacing:

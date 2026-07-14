@@ -850,16 +850,14 @@ class TestChronologicalOutput:
         ]
         assert len(rows) == 1
 
-    def test_close_drops_rows_shifted_after_output_window(self, tmp_path, ts):
-        """Final eCAR source ordering should not leak records after scenario end."""
+    def test_close_does_not_apply_output_window_admission(self, tmp_path, ts):
+        """Direct eCAR rendering leaves output-window admission to the dispatcher."""
         fmt = Mock()
         fmt.output.template = "{}"
         fmt.output.header_template = None
         fmt.output.footer_template = None
         fmt.output.encoding = "utf-8"
         emitter = EcarEmitter(fmt, tmp_path, threaded=False)
-        emitter._output_end_time = ts + timedelta(seconds=10)
-
         for offset in (5, 10, 11):
             emitter.emit_event(
                 {
@@ -878,8 +876,7 @@ class TestChronologicalOutput:
             json.loads(line)
             for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
         ]
-        assert len(rows) == 1
-        assert rows[0]["pid"] == 105
+        assert [row["pid"] for row in rows] == [105, 110, 111]
 
     def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
         """eCAR output should not terminate a process before later same-process telemetry."""

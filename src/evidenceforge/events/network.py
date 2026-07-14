@@ -92,6 +92,90 @@ class NetworkTrafficLedger:
 
 
 @dataclass(frozen=True, slots=True)
+class NetworkTuple:
+    """One sensor-visible network five-tuple."""
+
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str
+
+    def __post_init__(self) -> None:
+        """Reject invalid ports at the observation boundary."""
+
+        if self.src_port < 0 or self.dst_port < 0:
+            raise ValueError("Observed network tuple ports must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkSensorObservation:
+    """Frozen view of one canonical transaction at one network sensor."""
+
+    sensor_identity: str
+    path_role: str
+    capture_profile: str
+    tuple_view: NetworkTuple
+    connection_uid: str
+    connection_ids: tuple[tuple[str, str], ...]
+    file_ids: tuple[tuple[str, str], ...]
+    local_orig: bool
+    local_resp: bool
+    observed_start_time: datetime
+    observed_close_time: datetime | None
+    traffic: NetworkTrafficLedger
+    visible_formats: frozenset[str]
+    firewall_teardown_reason: str = ""
+    firewall_teardown_time: datetime | None = None
+
+    def __post_init__(self) -> None:
+        """Validate source-local interval and identifier invariants."""
+
+        if not self.sensor_identity:
+            raise ValueError("Network sensor observations require a sensor identity")
+        if not self.connection_uid:
+            raise ValueError("Network sensor observations require a connection UID")
+        if (
+            self.observed_close_time is not None
+            and self.observed_close_time < self.observed_start_time
+        ):
+            raise ValueError("Observed network close cannot precede its start")
+        if self.firewall_teardown_time is not None and self.firewall_teardown_time < (
+            self.observed_start_time
+        ):
+            raise ValueError("Firewall teardown cannot precede the observed connection start")
+        if self.firewall_teardown_reason and self.firewall_teardown_time is None:
+            raise ValueError("Firewall teardown reasons require a planned teardown time")
+        canonical_ids = [canonical for canonical, _observed in self.file_ids]
+        if len(canonical_ids) != len(set(canonical_ids)):
+            raise ValueError("Canonical file IDs must be unique within one sensor observation")
+
+    @property
+    def observed_duration(self) -> float | None:
+        """Return the source-visible connection duration in seconds."""
+
+        if self.observed_close_time is None:
+            return None
+        return (self.observed_close_time - self.observed_start_time).total_seconds()
+
+    def file_id(self, canonical_id: str) -> str:
+        """Return the sensor-local form of a canonical file identifier."""
+
+        for candidate, observed in self.file_ids:
+            if candidate == canonical_id:
+                return observed
+        return canonical_id
+
+    def connection_id(self, canonical_id: str) -> str:
+        """Return the sensor-local form of a canonical connection identifier."""
+
+        for candidate, observed in self.connection_ids:
+            if candidate == canonical_id:
+                return observed
+        return canonical_id
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkTransactionPlan:
     """Final canonical truth for one connection occurrence."""
 

@@ -319,7 +319,7 @@ class TestPermitRecords:
         assert "duration 0:01:23" in lines[1]
         byte_match = re.search(r"bytes (\d+)", lines[1])
         assert byte_match is not None
-        assert int(byte_match.group(1)) > 5120
+        assert int(byte_match.group(1)) == 5120
         assert "SYN Timeout" not in lines[1]
 
     def test_connection_crossing_year_boundary_keeps_id_pairing(self, asa_emitter, tmp_path):
@@ -340,8 +340,8 @@ class TestPermitRecords:
         assert teardown_id is not None
         assert built_id.group(1) == teardown_id.group(1)
 
-    def test_teardown_after_collection_end_is_suppressed(self, asa_emitter, tmp_path):
-        """A slice ending before connection close should show a dangling Built record."""
+    def test_output_admission_is_not_owned_by_emitter(self, asa_emitter, tmp_path):
+        """Direct emission renders the full lifecycle; dispatcher owns window admission."""
         asa_emitter._output_end_time = T0 + timedelta(seconds=10)
         event = _make_connection_event(protocol="tcp", duration=83.5)
 
@@ -350,12 +350,12 @@ class TestPermitRecords:
 
         output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         lines = [line for line in output.strip().split("\n") if line]
-        assert len(lines) == 1
+        assert len(lines) == 2
         assert "%ASA-6-302013:" in lines[0]
-        assert "%ASA-6-302014:" not in output
+        assert "%ASA-6-302014:" in output
 
-    def test_nat_teardown_after_collection_end_is_suppressed(self, asa_emitter, tmp_path):
-        """Dynamic NAT should not remain perfectly paired when connection close is out of slice."""
+    def test_nat_output_admission_is_not_owned_by_emitter(self, asa_emitter, tmp_path):
+        """Direct NAT emission leaves lifecycle admission to the dispatcher."""
         asa_emitter._output_end_time = T0 + timedelta(seconds=10)
         event = _make_connection_event(
             protocol="tcp",
@@ -375,11 +375,11 @@ class TestPermitRecords:
         output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "%ASA-6-302013:" in output
         assert "%ASA-6-305011:" in output
-        assert "%ASA-6-302014:" not in output
-        assert "%ASA-6-305012:" not in output
+        assert "%ASA-6-302014:" in output
+        assert "%ASA-6-305012:" in output
 
-    def test_teardown_byte_count_is_not_exact_zeek_payload_sum(self, asa_emitter, tmp_path):
-        """ASA teardown accounting should not exactly mirror Zeek payload bytes."""
+    def test_teardown_byte_count_uses_canonical_transfer_total(self, asa_emitter, tmp_path):
+        """ASA renders canonical transfer accounting without emitter-local variance."""
         event = _make_connection_event(protocol="tcp", orig_bytes=1024, resp_bytes=4096)
 
         asa_emitter.emit(event)
@@ -389,7 +389,7 @@ class TestPermitRecords:
         teardown = next(line for line in output.splitlines() if "%ASA-6-302014:" in line)
         byte_match = re.search(r"bytes (\d+)", teardown)
         assert byte_match is not None
-        assert int(byte_match.group(1)) != 5120
+        assert int(byte_match.group(1)) == 5120
 
     def test_successful_tcp_teardown_uses_fin_reason(self, asa_emitter, tmp_path):
         """ASA teardown reason should agree with a normal Zeek SF/FIN close."""
@@ -1148,4 +1148,5 @@ class TestNatRecords:
         teardown_ts = datetime.strptime(teardown[5:20], "%b %d %H:%M:%S").replace(year=2024)
         match = re.search(r"duration 0:00:(\d{2})", teardown)
         assert match is not None
+        assert int(match.group(1)) == 30
         assert int((teardown_ts - built_ts).total_seconds()) == int(match.group(1))

@@ -123,15 +123,12 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             event_data["answers"] = dns.answers
         if dns.TTLs:
             event_data["TTLs"] = dns.TTLs
-        event_data["_allow_sensor_observation_variance"] = True
-
-        # Sensor hostname routing (set by dispatcher for network visibility)
-        event_data["_sensor_hostnames"] = event._sensor_hostnames_by_format.get(
-            self.format_def.name if self.format_def else "zeek_dns", []
+        event_data.update(
+            self._sensor_metadata(
+                event,
+                self.format_def.name if self.format_def else "zeek_dns",
+            )
         )
-
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
