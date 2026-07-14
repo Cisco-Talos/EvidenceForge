@@ -2962,15 +2962,53 @@ class TestChronologicalOutput:
         assert create_tid == pid
         assert terminate_tid == pid
 
-    def test_linux_dependent_tids_keep_source_thread_texture(self, ts):
-        """Linux non-lifecycle eCAR rows may still carry source-native thread texture."""
+    def test_linux_dependent_tids_default_to_process_leader(self, ts):
+        """Linux dependent rows should not invent threads absent canonical identity."""
         tids = {
             EcarEmitter._stable_tid("linux-01", 3200, ts + timedelta(seconds=i), salt, "linux")
             for i, salt in enumerate(["flow_inbound", "flow_outbound", "file", "module"])
         }
 
-        assert all(tid > 3200 for tid in tids)
-        assert len(tids) > 1
+        assert tids == {3200}
+
+    def test_linux_flow_preserves_explicit_canonical_tid(self, emitter, monkeypatch, ts):
+        """An explicit modeled Linux thread should override leader-thread inference."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="linux-01",
+                ip="10.0.0.10",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux-01.example.org",
+            ),
+            process=ProcessContext(
+                pid=3200,
+                parent_pid=1,
+                image="/usr/bin/wget",
+                command_line="wget https://example.org/package",
+                username="root",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=3200,
+            ),
+            edr=EdrContext(tid=3207),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["pid"] == 3200
+        assert emitted[0]["tid"] == 3207
 
     def test_flow_principal_visibility_is_stable_for_same_process_and_direction(self, ts):
         """FLOW principal attribution should be a process-level source decision."""

@@ -460,3 +460,41 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Sibling risks:** cover known/unknown processes, process start before/after query, service and
   user processes, Windows/Linux sources, terminated processes, companion queries, cached lookups,
   and resolver transport PID. Preserve deterministic caching, DNS timing, TTLs, and fan-out counts.
+
+## Loop 71 Outcome
+
+- **Commit:** `6053153d fix: preserve DNS query process ownership`.
+- **Verification:** focused DNS action/Sysmon/proxy tests passed; final full suite passed with 4,910
+  tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 93,351 records from `iteration-test-expanded`; automated score
+  95.83901668531391, PASS across all hard gates.
+- **Hard probe:** 729 Event 22 rows used 73 distinct PID/image/user identities; 541 carried
+  non-fallback canonical process ownership; all 69 visible Event 1 joins agreed on GUID/PID/image/
+  user; 90/106 direct Event 22-to-Event 3 joins agreed on image.
+- **Blind panel:** Threat Hunter 66, Detection Engineer 77, Network Forensics 72, and Host/EDR 94;
+  standalone average 77.25 (`likely synthetic`). All verdicts were Synthetic, average verdict
+  confidence was 90.75, and score spread was 28, so deliberation did not trigger.
+- **Target result:** no reviewer repeated the one-resolver-identity-per-host Sysmon DNS finding.
+- **Highest next root contracts:** Linux eCAR thread identity; stable sensor clock/path state;
+  maintenance/configuration state; durable file/session objects; and failed TLS analyzer lifecycles.
+
+## Loop 72 Family Contract
+
+- **Selected family:** Linux process-owned eCAR thread identity for dependent endpoint evidence.
+- **Finding classification:** `existing_family_sibling` in source-native eCAR identity rendering.
+- **Owning abstraction:** canonical `EdrContext.tid` owns an explicitly modeled thread; otherwise
+  the eCAR source renderer uses the Linux process leader as the only safe inferred TID.
+- **Invariant:** when a Linux eCAR row has a PID but no explicit canonical TID, its inferred TID is
+  the process leader (`tid == pid`). A modeled explicit TID is preserved. Unknown process identity
+  produces neither a fake PID nor a fake TID. Windows keeps its source-native aligned thread texture.
+- **Entry paths:** outbound and inbound FLOW, file, module, registry-compatible dependent events,
+  process create/terminate, and low-level explicit eCAR contexts.
+- **Consumers:** eCAR thread/process joins, endpoint flow attribution, actor/object graphs, process
+  lifecycle validation, hunting pivots, and blind Host/EDR review.
+- **Layer rationale:** Linux TID is a source-native forensic identity. The current eCAR fallback
+  fabricates a new thread inside the emitter for every dependent event, with no thread lifecycle or
+  canonical owner. Defaulting to the known process leader is valid; non-leader identity requires an
+  explicit modeled thread context.
+- **Sibling risks:** cover main-thread inference for every dependent family, explicit non-leader
+  TIDs, PID/TID omission when PID is unknown, Linux PID morphology rewrites, process termination,
+  and unchanged Windows alignment. Do not synthesize a thread merely to add distribution texture.

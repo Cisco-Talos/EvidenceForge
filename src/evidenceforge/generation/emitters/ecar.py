@@ -356,12 +356,10 @@ class EcarEmitter(HostMultiplexEmitter):
         if pid <= 0:
             return -1
         if os_category == "linux":
-            if salt in {"process_create", "process_terminate"}:
-                return pid
-            seed = _stable_seed(
-                f"ecar_linux_tid:{hostname}:{pid}:{salt}:{int(timestamp.timestamp()) // 30}"
-            )
-            return pid + 1 + (seed % 997)
+            # A Linux process ID is also the thread-group leader's TID. Without
+            # an explicit modeled thread context, that leader is the only safe
+            # source-native identity to infer for process-owned evidence.
+            return pid
         bucket_ms = int(timestamp.timestamp() * 1000)
         tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
         if os_category == "windows":
