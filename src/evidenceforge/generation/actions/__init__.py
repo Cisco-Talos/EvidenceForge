@@ -101,6 +101,10 @@ from evidenceforge.generation.actions.linux_shell_command import (
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
 )
+from evidenceforge.generation.actions.linux_sudo_session import (
+    LinuxSudoSessionActionBundle,
+    LinuxSudoSessionRequest,
+)
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
@@ -230,6 +234,8 @@ __all__ = [
     "file_transfer_hashes",
     "LinuxShellCommandActionBundle",
     "LinuxShellCommandRequest",
+    "LinuxSudoSessionActionBundle",
+    "LinuxSudoSessionRequest",
     "NetworkConnectionActionBundle",
     "NetworkConnectionRequest",
     "NmapCommandProbeActionBundle",

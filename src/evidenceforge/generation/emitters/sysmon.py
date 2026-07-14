@@ -1700,21 +1700,34 @@ class SysmonEventEmitter(LogEmitter):
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # DESIGN DECISION: svchost.exe is correct here. Windows DNS Client
-        # service (dnscache, hosted by svchost.exe -k LocalService) proxies
-        # all DnsQuery_A() / getaddrinfo() calls from applications. Real
-        # Sysmon Event 22 shows svchost.exe, not the originating process.
-        # Only tools that bypass the DNS Client (nslookup.exe, certain
-        # malware doing raw UDP to port 53) would show a different process.
-        # Use the seeded svchost PID for the DNS Client service group
-        # (svchost_local_svc = svchost.exe -k LocalService) so the PID
-        # exists in StateManager's process tree and correlates with Event 1.
-        sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
-        dns_client_pid = sys_pids.get(
-            "svchost_local_svc",
-            sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
-        )
-        process_guid = self._get_stable_process_guid(host.hostname, dns_client_pid, event.timestamp)
+        # Sysmon Event 22 attributes the query to the initiating application,
+        # while WFP/eCAR may separately identify the DNS Client service that
+        # owns UDP/53 transport. Fall back to that service only when the
+        # canonical DNS action could not safely preserve a query process.
+        query_process = dns.query_process
+        if query_process is not None:
+            dns_client_pid = query_process.pid
+            process_start_time = query_process.start_time or event.timestamp
+            process_guid = self._get_stable_process_guid(
+                host.hostname,
+                dns_client_pid,
+                process_start_time,
+            )
+            image = query_process.image
+            user = self._format_user(query_process.username, host.netbios_domain)
+        else:
+            sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+            dns_client_pid = sys_pids.get(
+                "svchost_local_svc",
+                sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
+            )
+            process_guid = self._get_stable_process_guid(
+                host.hostname,
+                dns_client_pid,
+                event.timestamp,
+            )
+            image = r"C:\Windows\System32\svchost.exe"
+            user = "NT AUTHORITY\\LOCAL SERVICE"
 
         # Map DNS rcode to Windows QueryStatus
         query_status = _DNS_STATUS_MAP.get(dns.rcode, "0")
@@ -1739,8 +1752,8 @@ class SysmonEventEmitter(LogEmitter):
             "QueryName": dns.query,
             "QueryStatus": query_status,
             "QueryResults": query_results,
-            "Image": r"C:\Windows\System32\svchost.exe",
-            "User": "NT AUTHORITY\\LOCAL SERVICE",
+            "Image": image,
+            "User": user,
         }
         self.emit_event(event_data)
 

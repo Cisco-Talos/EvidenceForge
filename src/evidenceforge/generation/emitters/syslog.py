@@ -766,7 +766,7 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _normalize_sudo_session_lifecycles_for_lines(lines: list[str]) -> list[str]:
-        """Return RFC5424 syslog lines with sudo open/command/close order repaired."""
+        """Return RFC5424 lines with sudo command/open/close order repaired."""
         parsed: dict[int, dict[str, Any]] = {}
         rows_by_pid: dict[str, dict[str, list[int]]] = {}
         for index, line in enumerate(lines):
@@ -799,47 +799,55 @@ class SyslogEmitter(HostMultiplexEmitter):
             close_indices = bucket["close"]
             for command_index in bucket["command"]:
                 command_time = parsed[command_index]["timestamp"]
-                has_open_before = any(
-                    parsed[open_index]["timestamp"] <= command_time for open_index in open_indices
+                has_open_after = any(
+                    command_time < parsed[open_index]["timestamp"] for open_index in open_indices
                 )
-                if not has_open_before:
-                    future_opens = [
+                if not has_open_after:
+                    prior_opens = [
                         open_index
                         for open_index in open_indices
-                        if command_time
-                        < parsed[open_index]["timestamp"]
-                        <= command_time + max_repair_gap
+                        if command_time - max_repair_gap
+                        <= parsed[open_index]["timestamp"]
+                        <= command_time
                     ]
-                    if future_opens:
+                    if prior_opens:
                         open_index = min(
-                            future_opens,
-                            key=lambda index: parsed[index]["timestamp"],
+                            prior_opens,
+                            key=lambda index: abs(
+                                (parsed[index]["timestamp"] - command_time).total_seconds()
+                            ),
                         )
-                        repaired_time = command_time - min_gap
+                        repaired_time = command_time + min_gap
                         parsed[open_index]["timestamp"] = repaired_time
                         normalized[open_index] = _replace_rfc5424_timestamp(
                             normalized[open_index],
                             repaired_time,
                         )
 
+                matching_open_times = [
+                    parsed[open_index]["timestamp"]
+                    for open_index in open_indices
+                    if command_time < parsed[open_index]["timestamp"]
+                ]
+                lifecycle_floor = min(matching_open_times) if matching_open_times else command_time
                 has_close_after = any(
-                    parsed[close_index]["timestamp"] >= command_time
+                    parsed[close_index]["timestamp"] > lifecycle_floor
                     for close_index in close_indices
                 )
                 if not has_close_after:
                     prior_closes = [
                         close_index
                         for close_index in close_indices
-                        if command_time - max_repair_gap
+                        if lifecycle_floor - max_repair_gap
                         <= parsed[close_index]["timestamp"]
-                        < command_time
+                        <= lifecycle_floor
                     ]
                     if prior_closes:
                         close_index = max(
                             prior_closes,
                             key=lambda index: parsed[index]["timestamp"],
                         )
-                        repaired_time = command_time + min_gap
+                        repaired_time = lifecycle_floor + min_gap
                         parsed[close_index]["timestamp"] = repaired_time
                         normalized[close_index] = _replace_rfc5424_timestamp(
                             normalized[close_index],

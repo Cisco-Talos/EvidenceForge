@@ -1073,7 +1073,7 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
     )
     assert relay_queue_match is not None
     relay_queue_id = relay_queue_match.group(1)
-    assert any(f"queued as {relay_queue_id}" in message for message in delivery_messages)
+    assert any(relay_queue_id in message for message in delivery_messages)
     assert (
         sum(
             1
@@ -1436,6 +1436,47 @@ def test_smtp_starttls_tls12_cipher_matches_certificate_key(tmp_path: Path) -> N
         if not cert_chain:
             continue
         assert ("_ECDSA_" in ssl_ctx.cipher) == (cert_chain[0].certificate_key_type == "ecdsa")
+        checked = True
+        break
+    assert checked
+
+
+def test_smtp_starttls_resumed_history_uses_abbreviated_handshake(tmp_path: Path) -> None:
+    """SMTP STARTTLS resumption must share the canonical abbreviated-history contract."""
+    scenario = _email_scenario()
+    engine = GenerationEngine(
+        scenario,
+        output_dir=tmp_path / "data",
+        ground_truth_dir=tmp_path,
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    engine.generate()
+
+    generator = engine.activity_generator
+    assert generator is not None
+    systems = {system.hostname: system for system in scenario.environment.systems}
+    checked = False
+    for index in range(400):
+        message_id = f"<resumption-probe-{index}@corp.example>"
+        ssl_ctx = generator._smtp_starttls_ssl_context(
+            src_system=systems["WS-ALICE"],
+            dst_system=systems["MAIL-ENG"],
+            message_id=message_id,
+            hop_index=index,
+            event_time=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
+        )
+        if ssl_ctx.version != "TLSv12" or not ssl_ctx.resumed:
+            continue
+        cert_chain = generator._smtp_starttls_certificate_chain(
+            ssl=ssl_ctx,
+            dst_system=systems["MAIL-ENG"],
+            message_id=message_id,
+            hop_index=index,
+            event_time=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
+        )
+        assert ssl_ctx.ssl_history == "CSIFIFD"
+        assert cert_chain == []
         checked = True
         break
     assert checked

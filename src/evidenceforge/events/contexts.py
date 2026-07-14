@@ -84,6 +84,16 @@ class AuthContext:
 
 
 @dataclass(slots=True)
+class ProcessTargetSecurityContext:
+    """Optional alternate security context used to create a process."""
+
+    user_sid: str
+    username: str
+    domain: str
+    logon_id: str
+
+
+@dataclass(slots=True)
 class ProcessContext:
     """Process creation/termination details."""
 
@@ -102,6 +112,7 @@ class ProcessContext:
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
     current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
+    target_security_context: ProcessTargetSecurityContext | None = None
 
 
 @dataclass(slots=True)
@@ -152,6 +163,8 @@ class NetworkContext:
     zeek_uid: str = ""  # From StateManager.open_connection()
     conn_id: str = ""  # From StateManager.open_connection()
     duration: float | None = None
+    source_visible_start_time: datetime | None = None
+    source_visible_close_time: datetime | None = None
     orig_bytes: int | None = None
     resp_bytes: int | None = None
     orig_pkts: int = 0
@@ -197,6 +210,7 @@ class DnsContext:
     opcode: int = 0
     opcode_name: str = "query"
     Z: int = 0
+    query_process: ProcessContext | None = None
 
 
 @dataclass(slots=True)
@@ -321,7 +335,8 @@ class KerberosContext:
     target_username: str
     target_domain: str
     target_sid: str = ""
-    service_name: str = ""  # "krbtgt" for TGT, SPN for service ticket
+    service_name: str = ""  # "krbtgt" for TGT, requested SPN for service ticket
+    service_account_name: str = ""  # AD account ticketed for the requested service
     service_sid: str = ""
     ticket_options: str = ""
     ticket_status: str = "0x0"

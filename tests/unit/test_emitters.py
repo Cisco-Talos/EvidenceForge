@@ -37,6 +37,7 @@ from evidenceforge.events.contexts import (
     KerberosContext,
     NetworkContext,
     ProcessContext,
+    ProcessTargetSecurityContext,
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
@@ -737,6 +738,98 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "<EventID>4689</EventID>" in content
         assert '<Data Name="ProcessName">C:\\Windows\\System32\\cmd.exe</Data>' in content
+
+    @pytest.mark.parametrize("event_type", ["process_create", "system_process_create"])
+    def test_process_create_uses_null_target_for_same_token(
+        self, format_def, temp_output, event_type
+    ):
+        """Ordinary 4688 rows should not copy Creator Subject into Target Subject."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type=event_type,
+            src_host=host,
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                subject_username="jsmith",
+                subject_sid="S-1-5-21-1-2-3-1001",
+                subject_domain="CORP",
+                subject_logon_id="0xabc123",
+            ),
+            process=ProcessContext(
+                pid=7420,
+                parent_pid=4556,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="jsmith",
+                logon_id="0xabc123",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="SubjectUserName">jsmith</Data>' in content
+        assert '<Data Name="TargetUserSid">S-1-0-0</Data>' in content
+        assert '<Data Name="TargetUserName">-</Data>' in content
+        assert '<Data Name="TargetDomainName">-</Data>' in content
+        assert '<Data Name="TargetLogonId">0x0</Data>' in content
+
+    def test_process_create_renders_explicit_target_security_context(self, format_def, temp_output):
+        """Alternate-token 4688 rows should render the canonical target security context."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+            ),
+            process=ProcessContext(
+                pid=7420,
+                parent_pid=4556,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="admin",
+                logon_id="0xdef456",
+                target_security_context=ProcessTargetSecurityContext(
+                    user_sid="S-1-5-21-1-2-3-1100",
+                    username="admin",
+                    domain="CORP",
+                    logon_id="0xdef456",
+                ),
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="TargetUserSid">S-1-5-21-1-2-3-1100</Data>' in content
+        assert '<Data Name="TargetUserName">admin</Data>' in content
+        assert '<Data Name="TargetDomainName">CORP</Data>' in content
+        assert '<Data Name="TargetLogonId">0xdef456</Data>' in content
 
     def test_spooled_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
         """Spooled 4634 fixups should run without materializing all events."""
@@ -2728,6 +2821,7 @@ class TestWindowsEventEmitter:
                 target_username="alice@CORP.LOCAL",
                 target_domain="CORP.LOCAL",
                 service_name="cifs/FILE-01",
+                service_account_name="FILE-01$",
                 service_sid="S-1-5-21-123-456-789-1104",
                 ticket_options="0x40810010",
                 ticket_status="0x0",
@@ -2745,6 +2839,8 @@ class TestWindowsEventEmitter:
         assert "<EventID>4769</EventID>" in content
         assert '<Data Name="TargetUserName">alice</Data>' in content
         assert '<Data Name="TargetDomainName">CORP.LOCAL</Data>' in content
+        assert '<Data Name="ServiceName">FILE-01$</Data>' in content
+        assert "cifs/FILE-01" not in content
         assert "alice@CORP.LOCAL" not in content
 
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
@@ -2847,8 +2943,8 @@ class TestWindowsEventEmitter:
         assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0
 
-    def test_event_record_id_remains_monotonic_after_log_cleared(self, format_def, temp_output):
-        """Security EventRecordID should remain monotonic in a rendered output stream."""
+    def test_event_record_id_starts_new_epoch_after_log_cleared(self, format_def, temp_output):
+        """Security EventRecordID should restart with the native channel after a clear."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
         base = {
             "Computer": "WIN-TEST-01.corp.local",
@@ -2905,8 +3001,8 @@ class TestWindowsEventEmitter:
             int(value) for value in re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content)
         ]
         assert len(record_ids) == 3
-        assert record_ids == sorted(record_ids)
-        assert record_ids[1] > record_ids[0]
+        assert record_ids[0] > 1
+        assert record_ids[1] == 1
         assert record_ids[2] > record_ids[1]
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):

@@ -1095,6 +1095,7 @@ class TestChronologicalOutput:
                 "action": "CONNECT",
                 "actorID": process_id,
                 "pid": 100,
+                "tid": 144,
                 "principal": "alice",
                 "image_path": r"C:\Program Files\App\app.exe",
                 "_host_fqdn": "ws01.example.org",
@@ -1110,6 +1111,7 @@ class TestChronologicalOutput:
         flow = next(row for row in rows if row["object"] == "FLOW")
         assert "actorID" not in flow
         assert "pid" not in flow
+        assert "tid" not in flow
         assert "principal" not in flow
         assert "image_path" not in flow["properties"]
 
@@ -1131,6 +1133,7 @@ class TestChronologicalOutput:
                 "objectID": "flow-123",
                 "actorID": "missing-process",
                 "pid": 1234,
+                "tid": 1280,
                 "principal": "alice",
                 "image_path": r"C:\Program Files\App\app.exe",
                 "command_line": r'"C:\Program Files\App\app.exe" --sync',
@@ -1153,6 +1156,7 @@ class TestChronologicalOutput:
         assert flow["objectID"] == "flow-123"
         assert "actorID" not in flow
         assert "pid" not in flow
+        assert "tid" not in flow
         assert "principal" not in flow
         assert "image_path" not in flow["properties"]
         assert "command_line" not in flow["properties"]
@@ -1190,6 +1194,7 @@ class TestChronologicalOutput:
                 "objectID": "flow-123",
                 "actorID": process_id,
                 "pid": 1234,
+                "tid": 1280,
                 "principal": "alice",
                 "image_path": r"C:\Program Files\App\app.exe",
                 "command_line": r'"C:\Program Files\App\app.exe" --sync',
@@ -1211,6 +1216,7 @@ class TestChronologicalOutput:
         flow = next(row for row in rows if row["object"] == "FLOW")
         assert flow["actorID"] == process_id
         assert flow["pid"] == 1234
+        assert flow["tid"] == 1280
         assert flow["principal"] == "alice"
         assert flow["properties"]["image_path"] == r"C:\Program Files\App\app.exe"
 
@@ -1307,13 +1313,13 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
-    def test_short_flow_uses_endpoint_completion_latency(
+    def test_short_flow_stays_inside_canonical_connection_interval(
         self,
         emitter,
         monkeypatch,
         ts,
     ):
-        """Very short FLOW rows should not share Zeek's packet-level timestamp."""
+        """Very short FLOW rows retain texture without moving past transport close."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         process = ProcessContext(
@@ -1351,9 +1357,46 @@ class TestChronologicalOutput:
         emitter._render_connection(event)
 
         assert ts + timedelta(milliseconds=18) <= emitted[0]["timestamp"]
-        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=424)
-        assert emitted[0]["pid"] == 1234
-        assert emitted[0]["actorID"] == "process-1"
+        assert emitted[0]["timestamp"] < ts + timedelta(milliseconds=50)
+        assert emitted[0]["pid"] == -1
+        assert "actorID" not in emitted[0]
+
+    def test_delayed_flow_uses_finalized_canonical_interval(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Collection delay must not shift an endpoint FLOW beyond canonical close."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts + timedelta(milliseconds=700),
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.53",
+                dst_port=53,
+                protocol="udp",
+                conn_state="SF",
+                duration=0.04,
+                initiating_pid=-1,
+                source_visible_start_time=ts,
+                source_visible_close_time=ts + timedelta(milliseconds=40),
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert ts <= emitted[0]["timestamp"] <= ts + timedelta(milliseconds=40)
 
     def test_incomplete_flow_without_duration_uses_attempt_result_latency(
         self,
@@ -2919,15 +2962,53 @@ class TestChronologicalOutput:
         assert create_tid == pid
         assert terminate_tid == pid
 
-    def test_linux_dependent_tids_keep_source_thread_texture(self, ts):
-        """Linux non-lifecycle eCAR rows may still carry source-native thread texture."""
+    def test_linux_dependent_tids_default_to_process_leader(self, ts):
+        """Linux dependent rows should not invent threads absent canonical identity."""
         tids = {
             EcarEmitter._stable_tid("linux-01", 3200, ts + timedelta(seconds=i), salt, "linux")
             for i, salt in enumerate(["flow_inbound", "flow_outbound", "file", "module"])
         }
 
-        assert all(tid > 3200 for tid in tids)
-        assert len(tids) > 1
+        assert tids == {3200}
+
+    def test_linux_flow_preserves_explicit_canonical_tid(self, emitter, monkeypatch, ts):
+        """An explicit modeled Linux thread should override leader-thread inference."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="linux-01",
+                ip="10.0.0.10",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux-01.example.org",
+            ),
+            process=ProcessContext(
+                pid=3200,
+                parent_pid=1,
+                image="/usr/bin/wget",
+                command_line="wget https://example.org/package",
+                username="root",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=3200,
+            ),
+            edr=EdrContext(tid=3207),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["pid"] == 3200
+        assert emitted[0]["tid"] == 3207
 
     def test_flow_principal_visibility_is_stable_for_same_process_and_direction(self, ts):
         """FLOW principal attribution should be a process-level source decision."""

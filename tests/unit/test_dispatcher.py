@@ -153,6 +153,32 @@ class TestObservationProfiles:
         with pytest.raises(ValueError, match="Unknown observation_profile: missing_profile"):
             ObservationPolicy("missing_profile")
 
+    def test_observation_policy_exposes_cross_source_delay_budget(self, monkeypatch):
+        """Action bundles should budget the active profile's worst relative delay."""
+
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                },
+                "sources": {
+                    "ecar": {"delay_ms": {"min_ms": 10, "max_ms": 500}},
+                    "syslog": {"delay_ms": {"min_ms": 20, "max_ms": 250}},
+                },
+            },
+        )
+
+        policy = ObservationPolicy("remote_session_delay_test")
+
+        assert policy.delay_bounds("ecar") == (
+            timedelta(milliseconds=10),
+            timedelta(milliseconds=500),
+        )
+        assert policy.maximum_delay_difference("ecar", "syslog") == timedelta(milliseconds=480)
+        assert policy.maximum_delay_difference("syslog", "ecar") == timedelta(milliseconds=240)
+
     def test_source_missingness_drops_rendering_without_skipping_state(self, monkeypatch):
         """Non-complete profiles can drop source rows without corrupting canonical state."""
         monkeypatch.setattr(
@@ -987,6 +1013,10 @@ class TestObservationProfiles:
                         "missingness": 0.0,
                         "delay_ms": {"min_ms": 20, "max_ms": 2000},
                     },
+                    "syslog": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
                 },
             },
         )
@@ -1016,7 +1046,7 @@ class TestObservationProfiles:
             auth=auth,
         )
 
-        for format_name in ("windows_event_security", "ecar"):
+        for format_name in ("windows_event_security", "ecar", "syslog"):
             assert (
                 policy.decide(format_name, logon).delay == policy.decide(format_name, logoff).delay
             )

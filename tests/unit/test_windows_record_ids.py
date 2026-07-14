@@ -47,6 +47,41 @@ def test_record_id_sequence_is_deterministic_per_host_channel() -> None:
     assert first == second
 
 
+def test_security_clear_starts_a_new_native_channel_epoch() -> None:
+    """Event 1102 should become the first record in the newly cleared Security channel."""
+    sequence = WindowsRecordIdSequence("security", "DC-01")
+    base = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+    before_clear = sequence.next(base, 4688)
+    clear = sequence.next(base + timedelta(seconds=1), 1102)
+    after_clear = sequence.next(base + timedelta(seconds=2), 5156)
+
+    assert before_clear > 1
+    assert clear == 1
+    assert after_clear > clear
+
+
+def test_multiple_security_clears_each_start_a_new_epoch() -> None:
+    """Every visible clear should reset only its Security-channel sequence."""
+    sequence = WindowsRecordIdSequence("security", "DC-01")
+    base = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+    assert sequence.next(base, 1102) == 1
+    assert sequence.next(base + timedelta(seconds=1), 4624) > 1
+    assert sequence.next(base + timedelta(seconds=2), 1102) == 1
+
+
+def test_sysmon_sequence_does_not_reset_for_numeric_1102() -> None:
+    """The clear event ID is meaningful only inside the Security channel."""
+    sequence = WindowsRecordIdSequence("sysmon", "DC-01")
+    base = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+    first = sequence.next(base, 1)
+    second = sequence.next(base + timedelta(seconds=1), 1102)
+
+    assert second > first
+
+
 def test_coerce_windows_event_id_ignores_malformed_raw_values() -> None:
     """Malformed raw EventID values should not abort record-ID sequencing."""
     assert coerce_windows_event_id("4624") == 4624

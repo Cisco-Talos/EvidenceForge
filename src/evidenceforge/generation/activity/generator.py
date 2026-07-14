@@ -124,6 +124,8 @@ from evidenceforge.generation.actions import (
     KerberosTgtRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    LinuxSudoSessionActionBundle,
+    LinuxSudoSessionRequest,
     LogClearedActionBundle,
     LogClearedRequest,
     LogoffActionBundle,
@@ -2740,20 +2742,22 @@ _TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
 # SSL history patterns (weighted).  Zeek's ssl_history values are handshake
 # message-type codes, not conn.log-style originator/responder direction flags;
 # established TLS rows should include "S" for the ServerHello.
-_SSL_HISTORY_TLS12_SUCCESS = (
+_SSL_HISTORY_TLS12_FULL_HANDSHAKE = (
     ("CSXKNGIFIFD", 34),  # ECDHE full handshake plus encrypted app data
     ("CSXNGIFIFD", 18),  # RSA/static-key full handshake
     ("CSXKNGIFIFT", 18),  # full handshake with NewSessionTicket
-    ("CSIFIFD", 20),  # abbreviated/resumed session
     ("CSXKNGIFIFL", 10),  # established then alert/close
 )
-_SSL_HISTORY_TLS13_SUCCESS = (
+_SSL_HISTORY_TLS12_RESUMED = (("CSIFIFD", 20),)  # abbreviated session, no cert/key exchange
+_SSL_HISTORY_TLS13_FULL_HANDSHAKE = (
     ("CSOXYFFD", 36),  # full TLS 1.3 handshake plus encrypted app data
-    ("CSOFFD", 26),  # resumed/PSK-style handshake
     ("CSOXYFFTD", 18),  # full handshake with ticket
     ("CSJOXYFFD", 8),  # HelloRetryRequest path
     ("CSOXYFFL", 12),  # established then alert/close
 )
+_SSL_HISTORY_TLS13_RESUMED = (("CSOFFD", 26),)  # PSK-style handshake, no cert messages
+_SSL_HISTORY_TLS12_SUCCESS = _SSL_HISTORY_TLS12_FULL_HANDSHAKE + _SSL_HISTORY_TLS12_RESUMED
+_SSL_HISTORY_TLS13_SUCCESS = _SSL_HISTORY_TLS13_FULL_HANDSHAKE + _SSL_HISTORY_TLS13_RESUMED
 _SSL_HISTORY_SUCCESS = _SSL_HISTORY_TLS12_SUCCESS + _SSL_HISTORY_TLS13_SUCCESS
 _SSL_HIST_SUCCESS_VALUES = tuple(h[0] for h in _SSL_HISTORY_SUCCESS)
 _SSL_HIST_SUCCESS_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_SUCCESS)
@@ -2802,17 +2806,17 @@ def _choose_ssl_history_from_roll(
 
     if tls_version == "TLSv13":
         if resumed:
-            values = ("CSOFFD", "CSOXYFFTD", "CSOXYFFD")
-            weights = (60, 25, 15)
+            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_RESUMED)
+            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_RESUMED)
         else:
-            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_SUCCESS)
-            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_SUCCESS)
+            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
+            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
     elif resumed:
-        values = ("CSIFIFD", "CSXKNGIFIFT", "CSXKNGIFIFD")
-        weights = (55, 30, 15)
+        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_RESUMED)
+        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_RESUMED)
     else:
-        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_SUCCESS)
-        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_SUCCESS)
+        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
+        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
 
     return _weighted_choice_from_roll(values, weights, roll)
 
@@ -9000,6 +9004,26 @@ class ActivityGenerator:
             )
             if source_ip is None:
                 logon_type = 2
+        if (
+            logon_type == 10
+            and os_cat == "windows"
+            and source_ip not in (None, "", "-", system.ip)
+            and emit_network_evidence
+        ):
+            explicit_source_system = source_system
+            if explicit_source_system is None and source_ip is not None:
+                explicit_source_system = self._ip_to_system.get(source_ip)
+            _, rendered_logon_id = self._execute_rdp_session_bundle(
+                user=user,
+                target_system=system,
+                time=time,
+                source_ip=source_ip,
+                source_system=explicit_source_system,
+                source_port=source_port,
+                logon_id=logon_id,
+                preserve_explicit_source=True,
+            )
+            return rendered_logon_id
         if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
             existing_interactive = self._active_user_workstation_windows_session(
                 user,
@@ -17232,32 +17256,6 @@ class ActivityGenerator:
             and dst_port in (80, 443)
             and src_ip_is_local
         )
-        if force_visible_prereq_dns:
-            self._emit_dns_lookup(
-                src_ip,
-                dst_ip,
-                time - timedelta(seconds=2),
-                hostname=hostname,
-                force_address=True,
-                bypass_cache=True,
-            )
-        elif (
-            (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
-            and proto == "tcp"
-            and dst_port not in (53,)
-            and src_ip_is_local
-        ):
-            self._expand_and_emit(
-                "connection",
-                time,
-                src_ip=src_ip,
-                dst_ip=dst_ip,
-                dst_port=dst_port,
-                proto=proto,
-                service=service,
-                hostname=hostname,
-            )
-
         # Same-host connections are valid for host-based logs (eCAR FLOW)
         # but invisible to network sensors (Zeek/Snort)
         local_only = src_ip == dst_ip
@@ -17478,6 +17476,41 @@ class ActivityGenerator:
                 pid,
                 time,
                 "source.windows_wfp_connection",
+            )
+
+        # Preserve the initiating application on the canonical DNS occurrence
+        # after connection ownership has been resolved. The DNS bundle still
+        # assigns resolver-service ownership to its separate UDP/53 transport.
+        if force_visible_prereq_dns:
+            self._emit_dns_lookup(
+                src_ip,
+                dst_ip,
+                time - timedelta(seconds=2),
+                hostname=hostname,
+                force_address=True,
+                bypass_cache=True,
+                source_system=resolved_source_system,
+                source_pid=pid,
+                source_process_image=process_image or "",
+            )
+        elif (
+            (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
+            and proto == "tcp"
+            and dst_port not in (53,)
+            and src_ip_is_local
+        ):
+            self._expand_and_emit(
+                "connection",
+                time,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                proto=proto,
+                service=service,
+                hostname=hostname,
+                source_system=resolved_source_system,
+                source_pid=pid,
+                source_image=process_image or "",
             )
 
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and dns is not None:
@@ -18947,6 +18980,22 @@ class ActivityGenerator:
             if adjusted_time > event.timestamp:
                 event.timestamp = adjusted_time
                 time = adjusted_time
+
+        # Finalize the canonical source-visible interval only after every protocol,
+        # payload, and process-visibility adjustment has settled. Dispatch creates
+        # source-local event copies with collection delay, so the immutable interval
+        # must live on NetworkContext rather than be re-derived from those copies.
+        event.network.source_visible_start_time = event.timestamp
+        event.network.source_visible_close_time = (
+            event.timestamp + timedelta(seconds=max(0.0, event.network.duration))
+            if event.network.duration is not None
+            else None
+        )
+        self.state_manager.update_connection_interval(
+            event.network.conn_id,
+            event.network.source_visible_start_time,
+            event.network.source_visible_close_time,
+        )
 
         # Automatic weird.log synthesis is intentionally disabled for now. The
         # Zeek weird type space is broad and state-sensitive; poorly matched
@@ -20857,6 +20906,9 @@ class ActivityGenerator:
         hostname: str | None = None,
         force_address: bool = False,
         bypass_cache: bool = False,
+        source_system: System | None = None,
+        source_pid: int = -1,
+        source_process_image: str = "",
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -20879,8 +20931,39 @@ class ActivityGenerator:
             hostname=hostname,
             force_address=force_address,
             bypass_cache=bypass_cache,
+            source_system=source_system,
+            source_pid=source_pid,
+            source_process_image=source_process_image,
         )
         DnsLookupActionBundle(executor=self, request=request).execute()
+
+    def _dns_query_process_context(
+        self,
+        request: DnsLookupRequest,
+        source_system: System | None,
+        query_time: datetime,
+    ) -> ProcessContext | None:
+        """Return a query process only when it existed at the DNS occurrence time."""
+        if source_system is None or request.source_pid <= 0:
+            return None
+        running = self.state_manager.get_process(source_system.hostname, request.source_pid)
+        if running is None or ensure_utc(running.start_time) > ensure_utc(query_time):
+            return None
+        if self._process_termination_recorded(
+            source_system.hostname,
+            request.source_pid,
+            running.start_time,
+        ):
+            return None
+        return ProcessContext(
+            pid=running.pid,
+            parent_pid=running.parent_pid,
+            image=running.image or request.source_process_image,
+            command_line=running.command_line,
+            username=running.username,
+            logon_id=running.logon_id,
+            start_time=running.start_time,
+        )
 
     def _execute_dns_lookup_bundle(self, request: DnsLookupRequest) -> None:
         """Expand one DNS lookup request into canonical evidence."""
@@ -20945,7 +21028,7 @@ class ActivityGenerator:
         # proxies use a sticky configured resolver policy instead of rotating
         # evenly across unrelated public DNS providers.
         dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-        src_system = getattr(self, "_ip_to_system", {}).get(src_ip)
+        src_system = request.source_system or getattr(self, "_ip_to_system", {}).get(src_ip)
         if src_system and "forward_proxy" in (src_system.roles or []) and not is_internal:
             resolver_pool = [ip for ip in dns_ips if _is_private_ip(ip)] or [
                 "1.1.1.1",
@@ -20978,6 +21061,7 @@ class ActivityGenerator:
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
         dns_time = time - timedelta(milliseconds=rng.randint(900, 1400))
+        query_process = self._dns_query_process_context(request, src_system, dns_time)
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
         )
@@ -20995,6 +21079,7 @@ class ActivityGenerator:
                 query_type="A",
                 rcode="SERVFAIL",
                 rcode_num=2,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -21106,6 +21191,7 @@ class ActivityGenerator:
                 src_os=_src_os,
                 domain=ad_domain,
                 rng=rng,
+                query_process=query_process,
             )
 
         # Internal authoritative names use stable TTLs. External answers may be
@@ -21147,6 +21233,7 @@ class ActivityGenerator:
             RD=True,
             RA=True,
             preserve_ttls=True,
+            query_process=query_process,
         )
         self.generate_connection(
             src_ip=src_ip,
@@ -21259,6 +21346,7 @@ class ActivityGenerator:
                 RD=True,
                 RA=True,
                 preserve_ttls=True,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -21331,6 +21419,7 @@ class ActivityGenerator:
                         RD=True,
                         RA=True,
                         preserve_ttls=True,
+                        query_process=query_process,
                     )
                     self.generate_connection(
                         src_ip=src_ip,
@@ -21376,6 +21465,7 @@ class ActivityGenerator:
                 AA=nx_is_internal,
                 RD=True,
                 RA=True,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -21400,6 +21490,7 @@ class ActivityGenerator:
         src_os: str,
         domain: str,
         rng: random.Random,
+        query_process: ProcessContext | None,
     ) -> None:
         """Emit low-volume AD SRV service-discovery DNS for domain clients."""
         dc_systems = list(getattr(self, "_dc_systems", []) or [])
@@ -21461,6 +21552,7 @@ class ActivityGenerator:
                 AA=True,
                 RD=True,
                 RA=True,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -22741,6 +22833,7 @@ class ActivityGenerator:
         time: datetime,
         domain: str = "",
         source_port: int | None = None,
+        service_account_name: str = "",
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         request = KerberosServiceTicketRequest(
@@ -22751,8 +22844,29 @@ class ActivityGenerator:
             time=time,
             domain=domain,
             source_port=source_port,
+            service_account_name=service_account_name,
         )
         KerberosServiceTicketActionBundle(self, request).execute()
+
+    @staticmethod
+    def _service_account_for_spn(service_name: str) -> str:
+        """Resolve the default AD account identity ticketed for an SPN.
+
+        Machine-hosted SPNs map to the target computer account. Callers with an
+        explicit user or managed-service account pass that identity on the action
+        request instead of relying on this default.
+        """
+
+        account_or_spn = service_name.strip().split("@", 1)[0]
+        if "/" not in account_or_spn:
+            return account_or_spn
+
+        service_class, target = account_or_spn.split("/", 1)
+        if service_class.lower() == "krbtgt":
+            return "krbtgt"
+
+        hostname = target.split(":", 1)[0].rstrip(".").split(".", 1)[0]
+        return f"{hostname}$" if hostname else account_or_spn
 
     def _execute_kerberos_service_ticket_bundle(
         self,
@@ -22763,6 +22877,9 @@ class ActivityGenerator:
 
         username = request.username
         service_name = request.service_name
+        service_account_name = request.service_account_name or self._service_account_for_spn(
+            service_name
+        )
         source_ip = request.source_ip
         dc_hostname = request.dc_hostname
         time = request.time
@@ -22808,13 +22925,8 @@ class ActivityGenerator:
                 ),
                 target_domain=domain,
                 service_name=service_name,
-                service_sid=(
-                    self._get_sid("krbtgt")
-                    if service_name.lower().startswith("krbtgt/")
-                    else self._get_sid(
-                        f"{service_name.split('/')[1]}$" if "/" in service_name else service_name
-                    )
-                ),
+                service_account_name=service_account_name,
+                service_sid=self._get_sid(service_account_name),
                 ticket_options=rng.choices(
                     ["0x40810000", "0x40810010", "0x40000000", "0x10"],
                     weights=[50, 25, 15, 10],
@@ -23340,15 +23452,48 @@ class ActivityGenerator:
         source_ip: str,
         source_system: Optional["System"] = None,
         source_pid: int = -1,
+        source_port: int | None = None,
         logon_id: str | None = None,
         source_process_time: datetime | None = None,
         source_process_factory: RdpSourceProcessFactory | None = None,
+        preserve_explicit_source: bool = False,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
         Compound event ensuring network and host evidence are always paired.
         Returns Zeek UID.
         """
+        uid, _ = self._execute_rdp_session_bundle(
+            user=user,
+            target_system=target_system,
+            time=time,
+            source_ip=source_ip,
+            source_system=source_system,
+            source_pid=source_pid,
+            source_port=source_port,
+            logon_id=logon_id,
+            source_process_time=source_process_time,
+            source_process_factory=source_process_factory,
+            preserve_explicit_source=preserve_explicit_source,
+        )
+        return uid
+
+    def _execute_rdp_session_bundle(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_system: Optional["System"] = None,
+        source_pid: int = -1,
+        source_port: int | None = None,
+        logon_id: str | None = None,
+        source_process_time: datetime | None = None,
+        source_process_factory: RdpSourceProcessFactory | None = None,
+        preserve_explicit_source: bool = False,
+    ) -> tuple[str, str]:
+        """Execute the canonical RDP bundle and return transport and session IDs."""
+
         bundle = RdpSessionActionBundle(
             executor=self,
             request=RdpSessionRequest(
@@ -23358,12 +23503,15 @@ class ActivityGenerator:
                 source_ip=source_ip,
                 source_system=source_system,
                 source_pid=source_pid,
+                source_port=source_port,
                 source_process_time=source_process_time,
                 logon_id=logon_id or "",
+                preserve_explicit_source=preserve_explicit_source,
             ),
             source_process_factory=source_process_factory,
         )
-        return bundle.execute()
+        uid = bundle.execute()
+        return uid, bundle.rendered_logon_id
 
     def _resolve_direct_rdp_source_system(
         self,
@@ -25255,6 +25403,32 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def generate_linux_sudo_session(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        command_message: str,
+        sudo_user: str,
+        uid: int,
+        pid: int,
+        runtime: timedelta,
+    ) -> None:
+        """Generate one allowed sudo command and its ordered PAM lifecycle."""
+
+        LinuxSudoSessionActionBundle(
+            executor=self,
+            request=LinuxSudoSessionRequest(
+                system=system,
+                time=time,
+                command_message=command_message,
+                sudo_user=sudo_user,
+                uid=uid,
+                pid=pid,
+                runtime=runtime,
+            ),
+        ).execute()
 
     def generate_raw(
         self,

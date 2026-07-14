@@ -139,11 +139,13 @@ class ZeekEmitter(SensorMultiplexEmitter):
                     and abs(float(duration) - 1.2) < 0.000001
                 )
             ):
-                duration = _tls_completed_duration_floor(
+                sampled_duration = _tls_completed_duration_floor(
                     event,
                     tls_min_window.min_ms,
                     tls_min_window.max_ms,
                 )
+                canonical_duration = float(duration or 0.0)
+                duration = max(sampled_duration, canonical_duration + 0.001)
         event_ts = _SOURCE_TIMING.source_time(
             event,
             "source.zeek_conn_start",

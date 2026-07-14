@@ -471,14 +471,11 @@ def _linux_baseline_session_initiator(
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
     if system_type == "server":
-        if user == "root":
-            service = rng.choices(("login", "sudo", "su"), weights=(3, 70, 27), k=1)[0]
-        else:
-            service = rng.choices(("login", "sudo"), weights=(5, 95), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(10, 90), k=1)[0]
     elif user == "root":
-        service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(70, 30), k=1)[0]
     else:
-        service = rng.choices(("login", "sudo"), weights=(76, 24), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(90, 10), k=1)[0]
     app_name = service
     opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
     message = (
@@ -9050,36 +9047,24 @@ class BaselineMixin:
                         uid = _linux_uid_for_user(sudo_user)
                         sudo_command = msg.split("COMMAND=", 1)[1].strip()
                         sudo_runtime = _linux_sudo_command_runtime(sudo_command, rng)
-                        self.activity_generator.generate_syslog_event(
+                        self.activity_generator.generate_linux_sudo_session(
                             system=system,
-                            time=ts - timedelta(milliseconds=rng.randint(80, 420)),
-                            app_name="sudo",
-                            message=(
-                                "pam_unix(sudo:session): session opened for user "
-                                f"root(uid=0) by {sudo_user}(uid={uid})"
-                            ),
+                            time=ts,
+                            command_message=msg,
+                            sudo_user=sudo_user,
+                            uid=uid,
                             pid=pid,
-                            facility=10,
-                            severity=6,
+                            runtime=sudo_runtime,
                         )
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name=app,
-                        message=msg,
-                        pid=pid,
-                        facility=facility,
-                        severity=severity,
-                    )
-                    if sudo_has_session:
+                    else:
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + sudo_runtime + timedelta(milliseconds=rng.randint(120, 950)),
-                            app_name="sudo",
-                            message="pam_unix(sudo:session): session closed for user root",
+                            time=ts,
+                            app_name=app,
+                            message=msg,
                             pid=pid,
-                            facility=10,
-                            severity=6,
+                            facility=facility,
+                            severity=severity,
                         )
                     if limit_key and ts >= self.start_time:
                         self._extra_syslog_entry_counts[limit_key] = (

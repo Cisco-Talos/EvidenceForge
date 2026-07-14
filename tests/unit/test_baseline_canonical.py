@@ -330,7 +330,7 @@ def test_linux_baseline_session_initiator_creates_pam_session_message():
         _linux_baseline_session_initiator("root", rng=random.Random(seed)) for seed in range(30)
     )
 
-    assert {service for _app_name, service, _message in samples} <= {"login", "sudo", "su"}
+    assert {service for _app_name, service, _message in samples} <= {"login", "su"}
     assert all(app_name != "CRON" for app_name, _service, _message in samples)
     assert all(service != "cron" for _app_name, service, _message in samples)
     assert all("pam_unix(" in message for _app_name, _service, message in samples)
@@ -399,16 +399,17 @@ def test_server_like_persona_sessions_use_server_admin_overlay():
     assert engine._use_server_admin_persona(other_workstation, remote_session)
 
 
-def test_server_pam_initiator_favors_sudo_over_local_login():
-    """Server baseline session noise should not overproduce LOGIN(uid=0)."""
+def test_server_pam_initiator_excludes_sudo_and_limits_local_login():
+    """Ambient logind noise must not bypass the owned sudo lifecycle."""
     samples = [
         _linux_baseline_session_initiator("admin", rng=random.Random(seed), system_type="server")
         for seed in range(120)
     ]
     services = [service for _app_name, service, _message in samples]
 
-    assert services.count("sudo") > services.count("login")
-    assert services.count("login") <= 12
+    assert "sudo" not in services
+    assert services.count("su") > services.count("login")
+    assert services.count("login") <= 20
 
 
 def test_baseline_ssh_identity_uses_role_scoped_user_and_owned_source():

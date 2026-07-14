@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
@@ -720,6 +721,55 @@ class TestSslContextPopulation:
 
         assert accepted_event.timestamp > transport_event.timestamp + timedelta(
             milliseconds=flow_window.max_ms
+        )
+
+    def test_ssh_auth_budgets_messy_collection_ecar_delay(self, activity_gen):
+        """SSH acceptance must remain after target eCAR FLOW under delayed collection."""
+
+        gen, events = activity_gen
+        gen.dispatcher.observation_policy = ObservationPolicy("messy_collection")
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51112,
+        )
+
+        transport_event = _ssh_transport_event(events)
+        accepted_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Accepted password")
+        )
+        flow_window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+        observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
+            "ecar",
+            "syslog",
+        )
+
+        assert (
+            accepted_event.timestamp
+            > transport_event.timestamp
+            + timedelta(milliseconds=flow_window.max_ms)
+            + observation_gap
         )
 
     def test_ssh_connection_syslog_precedes_responder_process_source_time(self, activity_gen):
@@ -1572,6 +1622,9 @@ class TestSslContextPopulation:
             hostname=None,
             force_address=False,
             bypass_cache=False,
+            source_system=None,
+            source_pid=-1,
+            source_process_image="",
         ):
             dns_requests.append(
                 {
@@ -1580,6 +1633,9 @@ class TestSslContextPopulation:
                     "hostname": hostname,
                     "force_address": force_address,
                     "bypass_cache": bypass_cache,
+                    "source_system": source_system,
+                    "source_pid": source_pid,
+                    "source_process_image": source_process_image,
                 }
             )
             return original_emit_dns_lookup(
@@ -1589,6 +1645,9 @@ class TestSslContextPopulation:
                 hostname=hostname,
                 force_address=force_address,
                 bypass_cache=bypass_cache,
+                source_system=source_system,
+                source_pid=source_pid,
+                source_process_image=source_process_image,
             )
 
         monkeypatch.setattr(gen, "_emit_dns_lookup", capture_emit_dns_lookup)
@@ -3086,6 +3145,10 @@ class TestSslContextPopulation:
         for event in resumed_events:
             assert event.x509 is None
             assert event.ssl.cert_chain_fuids == []
+            if event.ssl.version == "TLSv12":
+                assert event.ssl.ssl_history == "CSIFIFD"
+            else:
+                assert event.ssl.ssl_history == "CSOFFD"
 
     def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
         """TLS resumption should require prior client/server pair state."""
