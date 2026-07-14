@@ -334,3 +334,47 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Sibling risks:** preserve TID when a visible positive PID remains; remove it across all four
   identity-scrub call sites; do not drop `objectID` or network properties; cover Windows/Linux,
   source/destination directions, stale lifetimes, late process visibility, and missing creates.
+
+## Loop 68 Outcome
+
+- **Commit:** `286cf8bb fix: drop orphan eCAR flow thread identity`.
+- **Verification:** focused eCAR identity tests passed; final full suite passed with 4,904 tests and
+  19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.91799130579982, PASS across all hard gates.
+- **Hard probe:** all 17,370 FLOW rows were inspected; 1,849 retained positive PID/TID pairs and
+  zero retained positive TID without positive PID.
+- **Blind panel:** Threat Hunter 73, Detection Engineer 84, Network Forensics 72, and Host/EDR 86;
+  standalone average 78.75 (`likely synthetic`). All verdicts were Synthetic, average verdict
+  confidence was 89.0, and score spread was 14, so deliberation did not trigger.
+- **Target result:** no reviewer repeated the orphan-TID defect; Host/EDR explicitly verified zero
+  FLOW rows with TID but no PID.
+- **Highest next root contracts:** Event 4688 creator versus target-token semantics; single-owner
+  SSH/SCP receiver lifecycles; process-aware Sysmon DNS; Event 4648 native field names; registry
+  state/value typing; and NTP analyzer/payload agreement.
+
+## Loop 69 Family Contract
+
+- **Selected family:** Windows Security Event 4688 creator identity versus optional target-token
+  identity.
+- **Finding classification:** `new_family` in canonical process security-context ownership and
+  source-native Windows rendering.
+- **Owning abstraction:** `ProcessContext` owns an optional target security context separately from
+  the creator/subject `AuthContext`; the Windows emitter renders those already-resolved identities.
+- **Invariant:** ordinary same-token process creation renders the native null Target Subject block
+  (`S-1-0-0`, `-`, `-`, `0x0`). Only a process action that explicitly models a different target
+  token may populate target SID, name, domain, and logon ID, and those fields must describe one
+  coherent security context rather than copy Creator Subject mechanically.
+- **Entry paths:** ordinary user processes, SYSTEM/service processes, scheduled tasks, remote
+  service execution, WMI, runas/explicit credentials, RDP/SSH compatibility paths, and future
+  alternate-token process actions.
+- **Consumers:** Security 4688 XML/Snare, creator/target token detections, process-context joins,
+  downstream parsers, rendered hard probes, and blind endpoint/detection review.
+- **Layer rationale:** the emitter currently has no canonical target-token truth, so it substitutes
+  the creator in every Target field. Adding optional truth to the process context makes ordinary
+  and alternate-token semantics explicit and prevents each process entry path or renderer from
+  inventing identity independently.
+- **Sibling risks:** cover SYSTEM and ordinary-user same-token creation, explicit different-token
+  creation, partial/invalid target contexts, Security/Snare fan-out, and process create/terminate
+  joins. Do not change Subject identity, process ownership, LogonID, Sysmon identity, or eCAR actor
+  attribution while correcting only the optional Event 4688 Target Subject block.

@@ -84,6 +84,16 @@ class AuthContext:
 
 
 @dataclass(slots=True)
+class ProcessTargetSecurityContext:
+    """Optional alternate security context used to create a process."""
+
+    user_sid: str
+    username: str
+    domain: str
+    logon_id: str
+
+
+@dataclass(slots=True)
 class ProcessContext:
     """Process creation/termination details."""
 
@@ -102,6 +112,7 @@ class ProcessContext:
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
     current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
+    target_security_context: ProcessTargetSecurityContext | None = None
 
 
 @dataclass(slots=True)

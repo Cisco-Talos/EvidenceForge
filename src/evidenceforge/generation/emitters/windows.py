@@ -892,6 +892,7 @@ class WindowsEventEmitter(LogEmitter):
             seed_parts=process_seed,
             not_before=process_start_time,
         )
+        target = proc.target_security_context
 
         event_data = {
             "EventID": 4688,
@@ -910,10 +911,10 @@ class WindowsEventEmitter(LogEmitter):
             "TokenElevationType": proc.token_elevation or "%%1938",
             "ProcessId": f"0x{proc.parent_pid:x}",
             "CommandLine": proc.command_line,
-            "TargetUserSid": auth.user_sid,
-            "TargetUserName": auth.username,
-            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
-            "TargetLogonId": proc.logon_id,
+            "TargetUserSid": target.user_sid if target else "S-1-0-0",
+            "TargetUserName": target.username if target else "-",
+            "TargetDomainName": target.domain if target else "-",
+            "TargetLogonId": target.logon_id if target else "0x0",
             "ParentProcessName": proc.parent_image,
             "MandatoryLabel": proc.mandatory_label or "S-1-16-8192",
         }
@@ -967,6 +968,7 @@ class WindowsEventEmitter(LogEmitter):
             seed_parts=process_seed,
             not_before=process_start_time,
         )
+        target = proc.target_security_context
 
         event_data = {
             "EventID": 4688,
@@ -985,10 +987,10 @@ class WindowsEventEmitter(LogEmitter):
             "TokenElevationType": proc.token_elevation or "%%1936",
             "ProcessId": f"0x{proc.parent_pid:x}",
             "CommandLine": proc.command_line,
-            "TargetUserSid": auth.user_sid,
-            "TargetUserName": auth.username,
-            "TargetDomainName": auth.subject_domain,
-            "TargetLogonId": proc.logon_id,
+            "TargetUserSid": target.user_sid if target else "S-1-0-0",
+            "TargetUserName": target.username if target else "-",
+            "TargetDomainName": target.domain if target else "-",
+            "TargetLogonId": target.logon_id if target else "0x0",
             "ParentProcessName": proc.parent_image,
             "MandatoryLabel": proc.mandatory_label or "S-1-16-16384",
         }
