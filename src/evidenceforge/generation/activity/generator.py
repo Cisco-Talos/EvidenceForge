@@ -17256,32 +17256,6 @@ class ActivityGenerator:
             and dst_port in (80, 443)
             and src_ip_is_local
         )
-        if force_visible_prereq_dns:
-            self._emit_dns_lookup(
-                src_ip,
-                dst_ip,
-                time - timedelta(seconds=2),
-                hostname=hostname,
-                force_address=True,
-                bypass_cache=True,
-            )
-        elif (
-            (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
-            and proto == "tcp"
-            and dst_port not in (53,)
-            and src_ip_is_local
-        ):
-            self._expand_and_emit(
-                "connection",
-                time,
-                src_ip=src_ip,
-                dst_ip=dst_ip,
-                dst_port=dst_port,
-                proto=proto,
-                service=service,
-                hostname=hostname,
-            )
-
         # Same-host connections are valid for host-based logs (eCAR FLOW)
         # but invisible to network sensors (Zeek/Snort)
         local_only = src_ip == dst_ip
@@ -17502,6 +17476,41 @@ class ActivityGenerator:
                 pid,
                 time,
                 "source.windows_wfp_connection",
+            )
+
+        # Preserve the initiating application on the canonical DNS occurrence
+        # after connection ownership has been resolved. The DNS bundle still
+        # assigns resolver-service ownership to its separate UDP/53 transport.
+        if force_visible_prereq_dns:
+            self._emit_dns_lookup(
+                src_ip,
+                dst_ip,
+                time - timedelta(seconds=2),
+                hostname=hostname,
+                force_address=True,
+                bypass_cache=True,
+                source_system=resolved_source_system,
+                source_pid=pid,
+                source_process_image=process_image or "",
+            )
+        elif (
+            (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
+            and proto == "tcp"
+            and dst_port not in (53,)
+            and src_ip_is_local
+        ):
+            self._expand_and_emit(
+                "connection",
+                time,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                proto=proto,
+                service=service,
+                hostname=hostname,
+                source_system=resolved_source_system,
+                source_pid=pid,
+                source_image=process_image or "",
             )
 
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and dns is not None:
@@ -20897,6 +20906,9 @@ class ActivityGenerator:
         hostname: str | None = None,
         force_address: bool = False,
         bypass_cache: bool = False,
+        source_system: System | None = None,
+        source_pid: int = -1,
+        source_process_image: str = "",
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -20919,8 +20931,39 @@ class ActivityGenerator:
             hostname=hostname,
             force_address=force_address,
             bypass_cache=bypass_cache,
+            source_system=source_system,
+            source_pid=source_pid,
+            source_process_image=source_process_image,
         )
         DnsLookupActionBundle(executor=self, request=request).execute()
+
+    def _dns_query_process_context(
+        self,
+        request: DnsLookupRequest,
+        source_system: System | None,
+        query_time: datetime,
+    ) -> ProcessContext | None:
+        """Return a query process only when it existed at the DNS occurrence time."""
+        if source_system is None or request.source_pid <= 0:
+            return None
+        running = self.state_manager.get_process(source_system.hostname, request.source_pid)
+        if running is None or ensure_utc(running.start_time) > ensure_utc(query_time):
+            return None
+        if self._process_termination_recorded(
+            source_system.hostname,
+            request.source_pid,
+            running.start_time,
+        ):
+            return None
+        return ProcessContext(
+            pid=running.pid,
+            parent_pid=running.parent_pid,
+            image=running.image or request.source_process_image,
+            command_line=running.command_line,
+            username=running.username,
+            logon_id=running.logon_id,
+            start_time=running.start_time,
+        )
 
     def _execute_dns_lookup_bundle(self, request: DnsLookupRequest) -> None:
         """Expand one DNS lookup request into canonical evidence."""
@@ -20985,7 +21028,7 @@ class ActivityGenerator:
         # proxies use a sticky configured resolver policy instead of rotating
         # evenly across unrelated public DNS providers.
         dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-        src_system = getattr(self, "_ip_to_system", {}).get(src_ip)
+        src_system = request.source_system or getattr(self, "_ip_to_system", {}).get(src_ip)
         if src_system and "forward_proxy" in (src_system.roles or []) and not is_internal:
             resolver_pool = [ip for ip in dns_ips if _is_private_ip(ip)] or [
                 "1.1.1.1",
@@ -21018,6 +21061,7 @@ class ActivityGenerator:
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
         dns_time = time - timedelta(milliseconds=rng.randint(900, 1400))
+        query_process = self._dns_query_process_context(request, src_system, dns_time)
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
         )
@@ -21035,6 +21079,7 @@ class ActivityGenerator:
                 query_type="A",
                 rcode="SERVFAIL",
                 rcode_num=2,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -21146,6 +21191,7 @@ class ActivityGenerator:
                 src_os=_src_os,
                 domain=ad_domain,
                 rng=rng,
+                query_process=query_process,
             )
 
         # Internal authoritative names use stable TTLs. External answers may be
@@ -21187,6 +21233,7 @@ class ActivityGenerator:
             RD=True,
             RA=True,
             preserve_ttls=True,
+            query_process=query_process,
         )
         self.generate_connection(
             src_ip=src_ip,
@@ -21299,6 +21346,7 @@ class ActivityGenerator:
                 RD=True,
                 RA=True,
                 preserve_ttls=True,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -21371,6 +21419,7 @@ class ActivityGenerator:
                         RD=True,
                         RA=True,
                         preserve_ttls=True,
+                        query_process=query_process,
                     )
                     self.generate_connection(
                         src_ip=src_ip,
@@ -21416,6 +21465,7 @@ class ActivityGenerator:
                 AA=nx_is_internal,
                 RD=True,
                 RA=True,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,
@@ -21440,6 +21490,7 @@ class ActivityGenerator:
         src_os: str,
         domain: str,
         rng: random.Random,
+        query_process: ProcessContext | None,
     ) -> None:
         """Emit low-volume AD SRV service-discovery DNS for domain clients."""
         dc_systems = list(getattr(self, "_dc_systems", []) or [])
@@ -21501,6 +21552,7 @@ class ActivityGenerator:
                 AA=True,
                 RD=True,
                 RA=True,
+                query_process=query_process,
             )
             self.generate_connection(
                 src_ip=src_ip,

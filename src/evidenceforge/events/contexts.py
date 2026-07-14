@@ -210,6 +210,7 @@ class DnsContext:
     opcode: int = 0
     opcode_name: str = "query"
     Z: int = 0
+    query_process: ProcessContext | None = None
 
 
 @dataclass(slots=True)

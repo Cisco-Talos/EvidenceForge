@@ -418,3 +418,45 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Sibling risks:** cover equal and unequal canonical duration/RTT, short sub-millisecond queries,
   UDP/TCP, two or more sensors, rounding to Zeek microseconds, NAT-derived UIDs, and absent RTT.
   Preserve independent sensor UID/clock identity and exact DNS packet accounting.
+
+## Loop 70 Outcome
+
+- **Commit:** `0b8a3875 fix: share DNS sensor response timing`.
+- **Verification:** focused equal/unequal multi-sensor tests passed; final full suite passed with
+  4,908 tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.86827539670891, PASS across all hard gates.
+- **Hard probe:** all 4,837 timed DNS rows had RTT inside their same-sensor parent lifetime; zero
+  overruns on either sensor, down from 662 on `zeek-dmz`.
+- **Blind panel:** Threat Hunter 81, Detection Engineer 67, Network Forensics 72, and Host/EDR 78;
+  standalone average 74.5 (`likely synthetic`). All verdicts were Synthetic, average verdict
+  confidence was 85.25, and score spread was 14, so deliberation did not trigger.
+- **Target result:** no reviewer repeated the DNS RTT/parent-duration contradiction.
+- **Highest next root contracts:** initiating-process DNS ownership; machine-account eCAR lifecycle
+  grouping; native MRU values; Type 5 WorkstationName semantics; DNS-to-TLS timing texture;
+  ProcessAccess stacks; OCSP issuer families; rare Zeek states; and output-window admission.
+
+## Loop 71 Family Contract
+
+- **Selected family:** initiating application identity for automatic DNS queries, separate from
+  resolver transport ownership.
+- **Finding classification:** `existing_family_sibling` in the canonical DNS prerequisite action.
+- **Owning abstraction:** `DnsContext` owns an optional query-process context; `DnsLookupRequest`
+  carries the triggering connection's source process, while the canonical network event retains the
+  OS resolver process that actually owns UDP/53 transport.
+- **Invariant:** Sysmon Event 22 renders the visible process that initiated the query when that
+  process existed at query time. Resolver service identity is the explicit fallback for unknown,
+  pre-process, cache/companion, or truly resolver-owned queries. WFP/eCAR/Zeek transport continues
+  to identify the resolver/network owner rather than being overwritten by the application.
+- **Entry paths:** causal DNS before TCP, forced proxy-origin DNS, browser/service connections,
+  direct automatic lookup calls, companion A/AAAA/PTR/NS/MX/SOA/SRV/NXDOMAIN queries, and cache
+  bypasses.
+- **Consumers:** Sysmon Event 22, DNS/WFP process joins, canonical DNS context, eCAR and Zeek
+  transport attribution, process lifecycles, detection rules, and blind endpoint/detection review.
+- **Layer rationale:** the current action discards the triggering process before constructing DNS,
+  forcing Sysmon to invent one resolver identity per host. Query intent and transport ownership are
+  distinct canonical facts, so preserving both prevents an emitter rewrite from corrupting WFP or
+  network telemetry.
+- **Sibling risks:** cover known/unknown processes, process start before/after query, service and
+  user processes, Windows/Linux sources, terminated processes, companion queries, cached lookups,
+  and resolver transport PID. Preserve deterministic caching, DNS timing, TTLs, and fan-out counts.

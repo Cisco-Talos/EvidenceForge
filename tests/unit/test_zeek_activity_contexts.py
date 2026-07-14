@@ -1622,6 +1622,9 @@ class TestSslContextPopulation:
             hostname=None,
             force_address=False,
             bypass_cache=False,
+            source_system=None,
+            source_pid=-1,
+            source_process_image="",
         ):
             dns_requests.append(
                 {
@@ -1630,6 +1633,9 @@ class TestSslContextPopulation:
                     "hostname": hostname,
                     "force_address": force_address,
                     "bypass_cache": bypass_cache,
+                    "source_system": source_system,
+                    "source_pid": source_pid,
+                    "source_process_image": source_process_image,
                 }
             )
             return original_emit_dns_lookup(
@@ -1639,6 +1645,9 @@ class TestSslContextPopulation:
                 hostname=hostname,
                 force_address=force_address,
                 bypass_cache=bypass_cache,
+                source_system=source_system,
+                source_pid=source_pid,
+                source_process_image=source_process_image,
             )
 
         monkeypatch.setattr(gen, "_emit_dns_lookup", capture_emit_dns_lookup)
