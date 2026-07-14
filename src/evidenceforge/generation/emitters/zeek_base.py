@@ -404,6 +404,35 @@ def _texture_locked_packet_accounting_observation(
     uid: Any,
 ) -> None:
     """Vary sensor-local timing for DNS/ICMP while keeping packet sizes exact."""
+    proto = str(render_data.get("proto") or "").lower()
+    service = str(render_data.get("service") or "").lower()
+    is_dns = proto == "udp" and (
+        service == "dns" or render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
+    )
+    if is_dns:
+        response_interval = render_data.get("_min_duration")
+        if not isinstance(response_interval, (int, float)) or isinstance(response_interval, bool):
+            response_interval = render_data.get("rtt")
+        if (
+            isinstance(response_interval, (int, float))
+            and not isinstance(response_interval, bool)
+            and 0 < response_interval <= 10**18
+        ):
+            seed = _stable_seed(f"zeek_sensor_dns_response_timing:{hostname}:{uid}")
+            fraction = 0.0005 + ((seed % 6500) / 1_000_000)
+            response_delta = max(0.000001, response_interval * fraction)
+            if response_delta > 0.025:
+                cap_fraction = 0.2 + (((seed >> 8) % 7000) / 10_000)
+                response_delta = 0.025 * cap_fraction
+            for field in ("duration", "rtt"):
+                value = render_data.get(field)
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and 0 < value <= 10**18
+                ):
+                    render_data[field] = value + response_delta
+            return
     _extend_locked_sensor_timing_field(
         render_data,
         "duration",

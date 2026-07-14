@@ -378,3 +378,43 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
   creation, partial/invalid target contexts, Security/Snare fan-out, and process create/terminate
   joins. Do not change Subject identity, process ownership, LogonID, Sysmon identity, or eCAR actor
   attribution while correcting only the optional Event 4688 Target Subject block.
+
+## Loop 69 Outcome
+
+- **Commit:** `42373185 fix: model process target security context`.
+- **Verification:** focused ordinary/SYSTEM/explicit-target tests passed; final full suite passed
+  with 4,907 tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.86827539670891, PASS across all hard gates.
+- **Hard probe:** all 927 Event 4688 rows used the native null Target Subject block and zero copied
+  Creator Subject; no explicit alternate-token process exists in this scenario.
+- **Blind panel:** Threat Hunter 72, Detection Engineer 86, Network Forensics 68, and Host/EDR 76;
+  standalone average 75.5 (`likely synthetic`). All verdicts were Synthetic, average verdict
+  confidence was 85.5, and score spread was 18, so deliberation did not trigger.
+- **Target result:** no reviewer repeated the prior Event 4688 target-subject defect.
+- **Highest next root contracts:** sensor-shared DNS response/parent duration; process-aware Sysmon
+  DNS; Type 5 workstation semantics; stateful/native MRU values; ProcessAccess stack families;
+  rare Zeek state/history combinations; and collection-window admission.
+
+## Loop 70 Family Contract
+
+- **Selected family:** sensor-local DNS RTT bounded by the same-UID Zeek connection lifetime.
+- **Finding classification:** `existing_family_regression` in multi-sensor source-observation
+  timing.
+- **Owning abstraction:** the Zeek sensor-observation layer owns one response/end anchor for each
+  sensor's DNS connection and analyzer views; the canonical network/DNS bundle continues to own the
+  unobserved base duration and RTT.
+- **Invariant:** on every sensor, a DNS row's response interval must fit inside its same-UID parent
+  connection. Sensor clock/path texture may shift the shared start and response anchors, but it may
+  not independently extend DNS RTT beyond connection duration. Packet accounting remains exact.
+- **Entry paths:** automatic prerequisite DNS, explicit storyline queries, resolver companions, AD
+  SRV discovery, proxy-origin DNS, UDP and TCP DNS, multi-sensor NAT views, and direct emitter tests.
+- **Consumers:** Zeek conn/dns rows, source-timing planners, fan-out evaluators, network detections,
+  rendered hard probes, and blind network/detection/hunting review.
+- **Layer rationale:** canonical generation already guarantees `duration >= rtt`; the contradiction
+  appears only on the second sensor because conn duration and DNS RTT receive independent
+  source-observation extensions. One sensor-local response delta shared by both views preserves
+  canonical truth without flattening legitimate sensor clocks or patching output files.
+- **Sibling risks:** cover equal and unequal canonical duration/RTT, short sub-millisecond queries,
+  UDP/TCP, two or more sensors, rounding to Zeek microseconds, NAT-derived UIDs, and absent RTT.
+  Preserve independent sensor UID/clock identity and exact DNS packet accounting.

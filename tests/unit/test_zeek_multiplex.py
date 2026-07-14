@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier, Thread
 
+import pytest
+
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import DnsContext, HttpContext, NetworkContext, X509Context
 from evidenceforge.formats import load_format
@@ -234,7 +236,8 @@ class TestPerSensorDirectoryRouting:
             assert dmz["duration"] != core["duration"]
             assert 0 < dmz["duration"] - core["duration"] <= 0.05
 
-    def test_dns_sensor_observation_textures_timing_not_packet_accounting(self):
+    @pytest.mark.parametrize("conn_duration", [0.024625, 0.024925])
+    def test_dns_sensor_observation_textures_timing_not_packet_accounting(self, conn_duration):
         """Dual DNS sensors should vary timing while preserving packet sizes."""
         conn_fmt = load_format("zeek_conn")
         dns_fmt = load_format("zeek_dns")
@@ -253,7 +256,7 @@ class TestPerSensorDirectoryRouting:
                     protocol="udp",
                     service="dns",
                     zeek_uid="CTestDns1234567",
-                    duration=0.024625,
+                    duration=conn_duration,
                     orig_bytes=80,
                     resp_bytes=177,
                     orig_pkts=1,
@@ -301,6 +304,12 @@ class TestPerSensorDirectoryRouting:
             assert 0 < dmz_conn["duration"] - core_conn["duration"] <= 0.05
             assert dmz_dns["rtt"] != core_dns["rtt"]
             assert 0 < dmz_dns["rtt"] - core_dns["rtt"] <= 0.025
+            assert core_dns["rtt"] <= core_conn["duration"]
+            assert dmz_dns["rtt"] <= dmz_conn["duration"]
+            assert dmz_conn["duration"] - core_conn["duration"] == pytest.approx(
+                dmz_dns["rtt"] - core_dns["rtt"],
+                abs=0.000001,
+            )
             assert core_dns["query"] == dmz_dns["query"] == "updates.example.com"
             assert core_dns["answers"] == dmz_dns["answers"] == ["10.0.0.20"]
 
