@@ -291,3 +291,46 @@ from the P0 contracts in the loop 62 report; do not patch those defects as isola
 - **Sibling risks:** cover `krbtgt/REALM`, host/CIFS/LDAP/DNS/HTTP machine-hosted SPNs, slashless
   account requests, explicit managed/user service accounts, and contexts created outside the
   primary bundle. Preserve deterministic ticket timing, cache identity, and ServiceSid values.
+
+## Loop 67 Outcome
+
+- **Commit:** `27ccb505 fix: separate Kerberos SPN and service identity`.
+- **Verification:** focused Kerberos context/bundle/emitter tests passed; final full suite passed
+  with 4,904 tests and 19 skips; repository-wide Ruff lint/format passed.
+- **Generation and eval:** 91,524 records from `iteration-test-expanded`; automated score
+  95.91799130579982, PASS across all hard gates.
+- **Hard probe:** all 1,212 Event 4769 rows use account-style `ServiceName`, with zero slash-
+  delimited names and zero empty `ServiceSid` values.
+- **Blind panel:** standalone Threat Hunter 34, Detection Engineer 58, Network Forensics 28, and
+  Host/EDR 78; average 49.5 (`mixed / inconclusive`). Verdict disagreement and the 50-point spread
+  triggered deliberation; its separate final average was 54.0.
+- **Adjudication:** the host report's two PsExec hard contradictions were false associations with a
+  later Diego SMB tuple. The earlier Aisha transport and target session correctly precede file and
+  service evidence. The missing source PsExec client remains an isolated contract gap.
+- **Target result:** no report repeated the Event 4769 SPN/account defect.
+- **Highest next root contracts:** eCAR FLOW PID/TID coherence; process-aware Sysmon DNS ownership;
+  stateful/native MRU registry evidence; ProcessAccess stack diversity; shared DNS RTT/connection
+  duration; remote-admin source callers; and coherent endpoint clock processes.
+
+## Loop 68 Family Contract
+
+- **Selected family:** eCAR FLOW process-attribution coherence when process identity is unavailable.
+- **Finding classification:** `existing_family_sibling` in source-local FLOW identity removal.
+- **Owning abstraction:** the eCAR FLOW identity group owns PID, TID, actor ID, principal, and process
+  provenance as one source-native attribution unit. Finalization may remove that unit when process
+  visibility/lifetime conflicts with the transport occurrence.
+- **Invariant:** a FLOW TID may appear only with a positive owning PID. Whenever eCAR drops process
+  attribution because the process is absent, late, terminated, or not source-visible, it must remove
+  PID, TID, actor ID, principal, image, command line, and parent provenance together. Transport tuple,
+  direction, outcome, and FLOW object identity remain intact.
+- **Entry paths:** outbound and inbound canonical connections, short SSH/RDP transports, pre-window
+  processes, post-termination flows, observation-dropped process creates, and close-time normalization.
+- **Consumers:** eCAR FLOW JSON, endpoint actor/process joins, lifecycle finalizers, detection rules,
+  strict schema checks, and rendered hard probes.
+- **Layer rationale:** the canonical transport remains valid when endpoint process attribution cannot
+  be safely exposed. The defect is created by eCAR's source-local identity scrubber removing PID and
+  actor fields but leaving the process-owned TID behind, so the fix belongs in that shared scrubber,
+  not in connection generation or post-render JSON text.
+- **Sibling risks:** preserve TID when a visible positive PID remains; remove it across all four
+  identity-scrub call sites; do not drop `objectID` or network properties; cover Windows/Linux,
+  source/destination directions, stale lifetimes, late process visibility, and missing creates.

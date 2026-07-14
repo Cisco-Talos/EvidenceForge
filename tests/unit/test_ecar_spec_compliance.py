@@ -1095,6 +1095,7 @@ class TestChronologicalOutput:
                 "action": "CONNECT",
                 "actorID": process_id,
                 "pid": 100,
+                "tid": 144,
                 "principal": "alice",
                 "image_path": r"C:\Program Files\App\app.exe",
                 "_host_fqdn": "ws01.example.org",
@@ -1110,6 +1111,7 @@ class TestChronologicalOutput:
         flow = next(row for row in rows if row["object"] == "FLOW")
         assert "actorID" not in flow
         assert "pid" not in flow
+        assert "tid" not in flow
         assert "principal" not in flow
         assert "image_path" not in flow["properties"]
 
@@ -1131,6 +1133,7 @@ class TestChronologicalOutput:
                 "objectID": "flow-123",
                 "actorID": "missing-process",
                 "pid": 1234,
+                "tid": 1280,
                 "principal": "alice",
                 "image_path": r"C:\Program Files\App\app.exe",
                 "command_line": r'"C:\Program Files\App\app.exe" --sync',
@@ -1153,6 +1156,7 @@ class TestChronologicalOutput:
         assert flow["objectID"] == "flow-123"
         assert "actorID" not in flow
         assert "pid" not in flow
+        assert "tid" not in flow
         assert "principal" not in flow
         assert "image_path" not in flow["properties"]
         assert "command_line" not in flow["properties"]
@@ -1190,6 +1194,7 @@ class TestChronologicalOutput:
                 "objectID": "flow-123",
                 "actorID": process_id,
                 "pid": 1234,
+                "tid": 1280,
                 "principal": "alice",
                 "image_path": r"C:\Program Files\App\app.exe",
                 "command_line": r'"C:\Program Files\App\app.exe" --sync',
@@ -1211,6 +1216,7 @@ class TestChronologicalOutput:
         flow = next(row for row in rows if row["object"] == "FLOW")
         assert flow["actorID"] == process_id
         assert flow["pid"] == 1234
+        assert flow["tid"] == 1280
         assert flow["principal"] == "alice"
         assert flow["properties"]["image_path"] == r"C:\Program Files\App\app.exe"
 

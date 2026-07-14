@@ -2847,6 +2847,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Remove process attribution from a FLOW that cannot safely claim it."""
         record.pop("actorID", None)
         record.pop("pid", None)
+        record.pop("tid", None)
         record.pop("principal", None)
         props = record.get("properties")
         if isinstance(props, dict):
