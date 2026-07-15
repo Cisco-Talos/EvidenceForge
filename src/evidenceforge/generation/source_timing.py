@@ -10,10 +10,11 @@ profiles and explicit constraints instead of independent emitter-local jitter.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.activity.timing_profiles import (
     endpoint_clock_timing,
     get_timing_window,
@@ -33,6 +34,7 @@ _PROCESS_CREATE_SOURCE_KEYS = {
     "source.sysmon_process_create",
     "source.ecar_process_create",
 }
+_PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create"}
 
 
 @dataclass(slots=True)
@@ -49,11 +51,116 @@ class SourceTimingPlanner:
 
     def __init__(self, clock_profile_name: str = "complete") -> None:
         self.clock_profile_name = clock_profile_name or "complete"
+        self._ecar_process_create_times: dict[str, datetime] = {}
 
-    def plan_event(self, event: SecurityEvent) -> SecurityEvent:
+    def plan_event(
+        self,
+        event: SecurityEvent,
+        format_name: str | None = None,
+    ) -> SecurityEvent:
         """Return ``event`` with an attached source timing plan."""
         self._ensure_plan(event)
+        if format_name in {None, "ecar"}:
+            self._plan_ecar_identity_times(event)
         return event
+
+    def _plan_ecar_identity_times(self, event: SecurityEvent) -> None:
+        """Prime stable process-create anchors for eCAR lifecycle consumers.
+
+        Process creation and dependent telemetry are separate canonical events.
+        Their independent source-latency samples must still share the exact
+        source-visible process-create anchor, including parent-before-child
+        ordering. The dispatcher-owned planner retains that cross-event state;
+        emitters only consume the timestamp recorded on each event plan.
+        """
+
+        identity_plan = event.identity_plan
+        if identity_plan is None:
+            return
+        identities: list[ProcessIdentity] = []
+        for identity in (
+            identity_plan.subject,
+            identity_plan.actor,
+            identity_plan.target,
+        ):
+            if isinstance(identity, ProcessIdentity) and identity not in identities:
+                identities.append(identity)
+        if not identities:
+            return
+
+        subject = (
+            identity_plan.subject if isinstance(identity_plan.subject, ProcessIdentity) else None
+        )
+        parent = (
+            identity_plan.actor
+            if event.event_type in _PROCESS_START_EVENT_TYPES
+            and isinstance(identity_plan.actor, ProcessIdentity)
+            else None
+        )
+        parent_time = self._ecar_process_create_times.get(parent.object_id) if parent else None
+        if parent is not None and parent_time is None:
+            parent_time = self._prime_ecar_process_create_time(event, parent)
+
+        for identity in identities:
+            anchor_timestamp = (
+                event.timestamp
+                if event.event_type in _PROCESS_START_EVENT_TYPES and identity is subject
+                else identity.started_at
+            )
+            not_before = None
+            if identity is subject and parent_time is not None:
+                not_before = parent_time + sample_timing_delta(
+                    "source.ecar_dependent_after_process_create",
+                    seed_parts=(
+                        "parent-before-child",
+                        parent.object_id,
+                        identity.object_id,
+                    ),
+                )
+            create_time = self._prime_ecar_process_create_time(
+                event,
+                identity,
+                anchor_timestamp=anchor_timestamp,
+                not_before=not_before,
+            )
+            self.record_source_time(
+                event,
+                "source.ecar_process_create",
+                create_time,
+                seed_parts=(identity.hostname, identity.pid, identity.started_at),
+            )
+
+    def _prime_ecar_process_create_time(
+        self,
+        event: SecurityEvent,
+        identity: ProcessIdentity,
+        *,
+        anchor_timestamp: datetime | None = None,
+        not_before: datetime | None = None,
+    ) -> datetime:
+        """Return and retain one source-visible eCAR create time per process object."""
+
+        cached = self._ecar_process_create_times.get(identity.object_id)
+        if cached is not None:
+            if not_before is not None and cached < not_before:
+                cached = not_before
+                self._ecar_process_create_times[identity.object_id] = cached
+            return cached
+        anchor = replace(
+            event,
+            timestamp=anchor_timestamp or identity.started_at,
+            source_timing=None,
+        )
+        create_time = self.source_time(
+            anchor,
+            "source.ecar_process_create",
+            seed_parts=(identity.hostname, identity.pid, identity.started_at),
+            not_before=max(identity.started_at, not_before)
+            if not_before is not None
+            else identity.started_at,
+        )
+        self._ecar_process_create_times[identity.object_id] = create_time
+        return create_time
 
     def admission_time(self, event: SecurityEvent, format_name: str) -> datetime:
         """Return the finalized source-visible timestamp used for window admission."""

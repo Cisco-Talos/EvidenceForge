@@ -68,6 +68,7 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
+from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkSensorObservation
 
@@ -160,7 +161,10 @@ class SecurityEvent:
     source_timing: SourceTimingPlan | None = None
 
     # Correlated action lifecycle and frozen network-sensor projections.
+    # EventDispatcher allocates event_id before state application and observation.
+    event_id: str = ""
     lifecycle: ActionLifecycleContext | None = None
+    identity_plan: EventIdentityPlan | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()
     network_observations_planned: bool = False
 

@@ -67,7 +67,7 @@ from evidenceforge.generation.emitters import (
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.world_model import database_services_for_host
 from evidenceforge.models.scenario import System
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -652,20 +652,17 @@ class EmitterSetupMixin:
             image = normalize_defender_platform_path(image, hn)
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
-        # PID 4 is always the Windows System process (parent of smss.exe).
-        # Register it directly — create_process() auto-allocates PIDs so we
-        # bypass it to hardcode PID 4 as Windows requires.
-        from evidenceforge.models.state import RunningProcess
-
-        sm.state.running_processes[(hn, 4)] = RunningProcess(
+        # PID 4 is always the Windows System process. Keep the fixed native PID
+        # while registering it through the same canonical identity boundary.
+        sm.register_process(
+            system=hn,
             pid=4,
             parent_pid=0,
             image="System",
             command_line="",
             username="SYSTEM",
-            system=hn,
-            start_time=sm.state.current_time,
             integrity_level="System",
+            os_category="windows",
         )
         pids["system"] = 4
         pids["smss"] = _c(4, r"C:\Windows\System32\smss.exe", "smss.exe", "SYSTEM")
@@ -806,21 +803,16 @@ class EmitterSetupMixin:
             _advance_boot_clock()
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
-        from evidenceforge.models.state import RunningProcess
-
-        systemd_object_id = stable_uuid("linux-systemd", hn)
-        sm.state.running_processes[(hn, 1)] = RunningProcess(
+        sm.register_process(
+            system=hn,
             pid=1,
             parent_pid=0,
             image="/usr/lib/systemd/systemd",
             command_line="/usr/lib/systemd/systemd --system --deserialize 26",
             username="root",
-            system=hn,
-            start_time=sm.state.current_time,
             integrity_level="System",
-            ecar_object_id=systemd_object_id,
+            os_category="linux",
         )
-        sm._process_object_ids[(hn, 1)] = systemd_object_id
         pids["systemd"] = 1
 
         journal_path = "/usr/lib/systemd/systemd-journald"

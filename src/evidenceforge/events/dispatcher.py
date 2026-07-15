@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
@@ -43,6 +43,7 @@ from evidenceforge.events.observation import (
     ObservationSummary,
     source_family_for_format,
 )
+from evidenceforge.utils.rng import stable_uuid
 
 if TYPE_CHECKING:
     from evidenceforge.generation.emitters.base import LogEmitter
@@ -132,6 +133,7 @@ class EventDispatcher:
         self.observation_policy = observation_policy or ObservationPolicy("complete")
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self._network_identifiers_by_format: dict[tuple[str, str], str] = {}
+        self._event_sequence = 0
         self.storyline_cluster_id: str | None = None
         from evidenceforge.generation.source_timing import SourceTimingPlanner
 
@@ -141,6 +143,9 @@ class EventDispatcher:
         from evidenceforge.generation.network_observation import NetworkObservationPlanner
 
         self.network_observation_planner = NetworkObservationPlanner(visibility_engine)
+        from evidenceforge.generation.identity_lifecycle import IdentityLifecyclePlanner
+
+        self.identity_lifecycle_planner = IdentityLifecyclePlanner(state_manager)
 
     @property
     def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
@@ -197,6 +202,16 @@ class EventDispatcher:
             event.storyline_cluster_id = self.storyline_cluster_id
         if event.network is not None:
             event.network.validate_finalized_transaction()
+        self.identity_lifecycle_planner.plan(event)
+        if not event.event_id:
+            event.event_id = stable_uuid(
+                "security-event",
+                self._event_sequence,
+                event.event_type,
+                event.timestamp.isoformat(),
+                event.storyline_cluster_id or "",
+            )
+            self._event_sequence += 1
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
@@ -233,7 +248,10 @@ class EventDispatcher:
                 event_to_emit = replace(event, timestamp=event.timestamp + decision.delay)
                 status = "delayed"
             event_to_emit._observed_formats = observed_formats
-            event_to_emit = self.source_timing_planner.plan_event(event_to_emit)
+            event_to_emit = self.source_timing_planner.plan_event(
+                event_to_emit,
+                format_name=format_name,
+            )
             if not self._admit_source_event(event_to_emit, format_name):
                 self._record_observation(event, format_name, "out_of_window")
                 continue
@@ -326,7 +344,10 @@ class EventDispatcher:
                 self.output_end_time,
             )
 
-        source_start = visible_time + (lifecycle.canonical_start - event.timestamp)
+        source_start = visible_time + self._timestamp_delta(
+            lifecycle.canonical_start,
+            event.timestamp,
+        )
         if self.output_end_time is not None and not self._is_before(
             source_start,
             self.output_end_time,
@@ -355,6 +376,18 @@ class EventDispatcher:
         elif ts.tzinfo is None and normalized_gate.tzinfo is not None:
             normalized_gate = normalized_gate.replace(tzinfo=None)
         return ts < normalized_gate
+
+    @staticmethod
+    def _timestamp_delta(later: datetime, earlier: datetime) -> timedelta:
+        """Return a delta after aligning naive/aware canonical timestamps."""
+
+        normalized_later = later
+        normalized_earlier = earlier
+        if normalized_later.tzinfo is not None and normalized_earlier.tzinfo is None:
+            normalized_earlier = normalized_earlier.replace(tzinfo=normalized_later.tzinfo)
+        elif normalized_later.tzinfo is None and normalized_earlier.tzinfo is not None:
+            normalized_later = normalized_later.replace(tzinfo=normalized_earlier.tzinfo)
+        return normalized_later - normalized_earlier
 
     def _enforce_source_observation_contracts(
         self,

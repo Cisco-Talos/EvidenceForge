@@ -7,7 +7,7 @@
 # Full schema: see commands/eforge/references/config-formats.md
 
 name: ecar
-version: "1.0"
+version: "1.1"
 description: "eCAR (extended Cyber Analytics Repository) - EDR/XDR host telemetry"
 category: host
 
@@ -236,6 +236,41 @@ fields:
     type: string
     required: false
     description: "Target process objectID UUID for cross-reference"
+
+  - name: source_process_uuid
+    type: string
+    required: false
+    description: "Canonical UUID of the process performing a cross-process action"
+
+  - name: source_pid
+    type: string
+    required: false
+    description: "Canonical source process PID (string in properties)"
+
+  - name: source_tid
+    type: string
+    required: false
+    description: "Canonical source thread TID when an owning thread is explicitly modeled"
+
+  - name: source_image_path
+    type: string
+    required: false
+    description: "Canonical source process image for cross-process actions"
+
+  - name: source_principal
+    type: string
+    required: false
+    description: "Canonical source process principal for cross-process actions"
+
+  - name: target_tid
+    type: string
+    required: false
+    description: "Canonical target thread TID when an owning thread is explicitly modeled"
+
+  - name: target_principal
+    type: string
+    required: false
+    description: "Canonical target process principal for cross-process actions"
 
   - name: target_image_path
     type: string

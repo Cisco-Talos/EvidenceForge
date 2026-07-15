@@ -341,6 +341,12 @@ class SshSessionActionBundle:
     def execute(self) -> str:
         """Expand and dispatch SSH session evidence through the generator runtime."""
 
+        uid, _logon_id = self.execute_with_identity()
+        return uid
+
+    def execute_with_identity(self) -> tuple[str, str]:
+        """Expand the bundle and return its transport UID and owned session LogonID."""
+
         state = self._plan_transport()
         self._ensure_session_identity(state)
         auth_plan = self._prepare_linux_auth_plan(state)
@@ -366,7 +372,7 @@ class SshSessionActionBundle:
             self.request.target_system.hostname,
             state.uid,
         )
-        return state.uid if state.network_visible else ""
+        return (state.uid if state.network_visible else ""), state.logon_id
 
     def _source_os(self) -> str:
         """Return the source OS category used for source-port reservation."""
@@ -480,6 +486,11 @@ class SshSessionActionBundle:
                 source_port=state.source_port,
                 session_kind="ssh",
                 start_time=request.time,
+                lifecycle_group_id=(
+                    state.execution_anchor.stable_id
+                    if state.execution_anchor is not None
+                    else request.stable_id
+                ),
             )
         if not state.session_obj_id:
             state.session_obj_id = executor.state_manager.get_session_object_id(state.logon_id)

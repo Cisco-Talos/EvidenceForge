@@ -967,20 +967,12 @@ class WorldPlanner:
                 result.session.storyline_protected = True
             return result
 
-        logon_id = self.state_manager.create_session(
-            username=user.username,
-            system=target_system.hostname,
-            logon_type=plan.logon_type,
-            source_ip=plan.source_ip,
-            session_kind=plan.session_kind,
-        )
-        self.activity_generator.generate_logon(
+        logon_id = self.activity_generator.generate_logon(
             user=user,
             system=target_system,
             time=logon_time,
             logon_type=plan.logon_type,
             source_ip=plan.source_ip,
-            logon_id=logon_id,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -1230,15 +1222,6 @@ class WorldPlanner:
             else "windows"
         )
         source_port = _ephemeral_port(rng, source_os)
-        logon_id = self.state_manager.create_session(
-            username=user.username,
-            system=plan.target_system.hostname,
-            logon_type=plan.logon_type,
-            source_ip=plan.source_ip,
-            source_port=source_port,
-            session_kind="ssh",
-        )
-        session_obj_id = self.state_manager.get_session_object_id(logon_id)
         min_duration = max(
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
@@ -1253,15 +1236,13 @@ class WorldPlanner:
                 min_duration,
                 (required_until - logon_time).total_seconds() + rng.uniform(20.0, 90.0),
             )
-        uid = self.activity_generator.generate_ssh_session(
+        uid, logon_id = self.activity_generator._execute_ssh_session_bundle(
             user=user,
             target_system=plan.target_system,
             time=logon_time,
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_port=source_port,
-            logon_id=logon_id,
-            session_obj_id=session_obj_id,
             min_duration=min_duration,
         )
         session = self.state_manager.get_session(logon_id)
@@ -1313,21 +1294,13 @@ class WorldPlanner:
                 logon_time += shift
                 activity_time += shift
             source_process_factory = self._rdp_source_process_factory(rng)
-        logon_id = self.state_manager.create_session(
-            username=user.username,
-            system=plan.target_system.hostname,
-            logon_type=plan.logon_type,
-            source_ip=plan.source_ip,
-            session_kind="rdp",
-        )
-        uid = self.activity_generator.generate_rdp_session(
+        uid, logon_id = self.activity_generator._execute_rdp_session_bundle(
             user=user,
             target_system=plan.target_system,
             time=logon_time,
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_pid=source_pid,
-            logon_id=logon_id,
             source_process_time=source_process_time if plan.source_system is not None else None,
             source_process_factory=source_process_factory,
         )

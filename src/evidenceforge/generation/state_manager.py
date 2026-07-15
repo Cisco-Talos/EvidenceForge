@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from threading import RLock
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
@@ -40,6 +41,7 @@ from evidenceforge.models.state import (
     GeneratorState,
     OpenConnection,
     RunningProcess,
+    RunningThread,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -113,6 +115,8 @@ class StateManager:
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
+        self._thread_id_counters: dict[str, int] = {}
+        self._thread_id_rngs: dict[str, random.Random] = {}
         self._windows_session_id_counters: dict[str, int] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
@@ -127,6 +131,8 @@ class StateManager:
         self._system_boot_times: dict[str, datetime] = {}
         self._ended_sessions: dict[str, tuple[ActiveSession, datetime]] = {}
         self._process_object_ids: dict[tuple[str, int], str] = {}
+        self._processes_by_object_id: dict[str, RunningProcess] = {}
+        self._ended_threads: dict[tuple[str, str, int], RunningThread] = {}
 
     # ========================================
     # Session Management
@@ -303,6 +309,8 @@ class StateManager:
         start_time: datetime | None = None,
         logon_guid: str = "",
         session_id: int | None = None,
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
     ) -> str:
         """Create a new active session.
 
@@ -341,6 +349,18 @@ class StateManager:
                     session_kind,
                 )
             )
+            session_object_id = stable_uuid(
+                "session",
+                system,
+                username,
+                logon_type,
+                session_kind,
+                source_ip,
+                source_port,
+                session_start_time.isoformat(),
+                logon_id,
+                windows_session_id,
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -352,19 +372,11 @@ class StateManager:
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=stable_uuid(
-                    "session",
-                    system,
-                    username,
-                    logon_type,
-                    session_kind,
-                    source_ip,
-                    source_port,
-                    session_start_time.isoformat(),
-                    logon_id,
-                    windows_session_id,
-                ),
+                ecar_object_id=session_object_id,
                 logon_guid=logon_guid,
+                lifecycle_group_id=lifecycle_group_id
+                or stable_uuid("session-lifecycle", session_object_id),
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
             )
 
             self.state.active_sessions[logon_id] = session
@@ -447,6 +459,8 @@ class StateManager:
         transport_pid: int | None = None,
         logon_guid: str = "",
         session_id: int | None = None,
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -470,6 +484,18 @@ class StateManager:
                     session_kind,
                 )
             )
+            session_object_id = stable_uuid(
+                "registered-session",
+                system,
+                username,
+                logon_type,
+                session_kind,
+                source_ip,
+                source_port,
+                ensure_utc(start_time).isoformat(),
+                logon_id,
+                windows_session_id,
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -481,19 +507,11 @@ class StateManager:
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=stable_uuid(
-                    "registered-session",
-                    system,
-                    username,
-                    logon_type,
-                    session_kind,
-                    source_ip,
-                    source_port,
-                    ensure_utc(start_time).isoformat(),
-                    logon_id,
-                    windows_session_id,
-                ),
+                ecar_object_id=session_object_id,
                 logon_guid=logon_guid,
+                lifecycle_group_id=lifecycle_group_id
+                or stable_uuid("session-lifecycle", session_object_id),
+                parent_lifecycle_group_id=parent_lifecycle_group_id,
             )
             self.state.active_sessions[logon_id] = session
             self._logon_id_aliases.pop(logon_id, None)
@@ -515,6 +533,8 @@ class StateManager:
         source_ready_time: datetime | None = None,
         logon_guid: str | None = None,
         session_id: int | None = None,
+        lifecycle_group_id: str | None = None,
+        parent_lifecycle_group_id: str | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -541,7 +561,36 @@ class StateManager:
                 session.logon_guid = logon_guid
             if session_id is not None:
                 session.session_id = session_id
+            if lifecycle_group_id is not None:
+                session.lifecycle_group_id = lifecycle_group_id
+            if parent_lifecycle_group_id is not None:
+                session.parent_lifecycle_group_id = parent_lifecycle_group_id
             return True
+
+    def get_session_identity(self, logon_id: str) -> SessionIdentity | None:
+        """Return an immutable snapshot of an active or ended session identity."""
+
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if session is None:
+                ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                    logon_id
+                )
+                session = ended[0] if ended is not None else None
+            if session is None:
+                return None
+            return SessionIdentity(
+                hostname=session.system,
+                object_id=session.ecar_object_id,
+                logon_id=session.logon_id,
+                session_id=session.session_id,
+                principal=session.username,
+                session_kind=session.session_kind,
+                started_at=session.start_time,
+                lifecycle_group_id=session.lifecycle_group_id,
+                parent_lifecycle_group_id=session.parent_lifecycle_group_id,
+            )
 
     def get_session_id(self, logon_id: str) -> int:
         """Return the canonical rendered session ID for an active or ended logon."""
@@ -947,6 +996,104 @@ class StateManager:
             pid_rng = self._pid_rngs[system]
             return self._allocate_linux_pid(system, pid_rng, event_time)
 
+    def register_process(
+        self,
+        system: str,
+        pid: int,
+        parent_pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        integrity_level: str,
+        *,
+        os_category: str,
+        start_time: datetime | None = None,
+        logon_id: str = "",
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+    ) -> RunningProcess:
+        """Register a fixed host-native process through the canonical state boundary.
+
+        This is reserved for kernel/bootstrap identities such as Windows PID 4
+        and Linux PID 1 that cannot use the ordinary PID allocator.
+        """
+
+        with self._lock:
+            effective_start = start_time or self.state.current_time
+            if effective_start is None:
+                raise StateError("Cannot register process: current_time not set")
+            if pid < 0:
+                raise StateError("Cannot register process: PID must be non-negative")
+            if (system, pid) in self.state.running_processes:
+                raise StateError(f"Cannot register process: PID {pid} already exists on {system}")
+            if (
+                parent_pid not in {0, 4}
+                and (system, parent_pid) not in self.state.running_processes
+            ):
+                raise StateError(
+                    f"Cannot register process: parent PID {parent_pid} does not exist on {system}"
+                )
+
+            normalized_start = ensure_utc(effective_start)
+            self._initialize_pid_allocator(system, os_category)
+            if os_category == "linux":
+                self._linux_pid_used_ids.setdefault(system, set()).add(pid)
+                self._linux_pid_allocations.setdefault(system, []).append((normalized_start, pid))
+            object_id = stable_uuid(
+                "registered-process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                normalized_start.isoformat(),
+                logon_id,
+            )
+            owning_session = self.get_session(logon_id) if logon_id else None
+            process_lifecycle_group_id = lifecycle_group_id or stable_uuid(
+                "process-lifecycle", object_id
+            )
+            process_parent_group_id = self._process_parent_lifecycle_group(
+                process_lifecycle_group_id,
+                parent_lifecycle_group_id,
+                owning_session,
+            )
+            process = RunningProcess(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                system=system,
+                start_time=normalized_start,
+                integrity_level=integrity_level,
+                logon_id=logon_id,
+                ecar_object_id=object_id,
+                lifecycle_group_id=process_lifecycle_group_id,
+                parent_lifecycle_group_id=process_parent_group_id,
+            )
+            self.state.running_processes[(system, pid)] = process
+            self._process_object_ids[(system, pid)] = object_id
+            self._processes_by_object_id[object_id] = process
+            primary_tid = (
+                pid
+                if os_category == "linux"
+                else self._allocate_thread_id(
+                    system,
+                    object_id,
+                    pid,
+                )
+            )
+            thread = self._register_thread(
+                process,
+                tid=primary_tid,
+                kind="primary",
+                start_time=normalized_start,
+            )
+            process.primary_tid = thread.tid
+            return process
+
     def create_process(
         self,
         system: str,
@@ -956,6 +1103,8 @@ class StateManager:
         username: str,
         integrity_level: str,
         logon_id: str = "",
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
     ) -> int:
         """Create a new running process.
 
@@ -1042,6 +1191,15 @@ class StateManager:
                 self.state.current_time.isoformat(),
                 logon_id,
             )
+            owning_session = self.get_session(logon_id) if logon_id else None
+            process_lifecycle_group_id = lifecycle_group_id or stable_uuid(
+                "process-lifecycle", ecar_object_id
+            )
+            process_parent_group_id = self._process_parent_lifecycle_group(
+                process_lifecycle_group_id,
+                parent_lifecycle_group_id,
+                owning_session,
+            )
             process = RunningProcess(
                 pid=pid,
                 parent_pid=parent_pid,
@@ -1053,13 +1211,253 @@ class StateManager:
                 integrity_level=integrity_level,
                 logon_id=logon_id,
                 ecar_object_id=ecar_object_id,
+                lifecycle_group_id=process_lifecycle_group_id,
+                parent_lifecycle_group_id=process_parent_group_id,
             )
 
             key = (system, pid)
             self.state.running_processes[key] = process
             self._process_object_ids[key] = ecar_object_id
+            self._processes_by_object_id[ecar_object_id] = process
+            primary_tid = (
+                pid
+                if self._pid_os.get(system) == "linux"
+                else self._allocate_thread_id(
+                    system,
+                    ecar_object_id,
+                    pid,
+                )
+            )
+            primary_thread = self._register_thread(
+                process,
+                tid=primary_tid,
+                kind="primary",
+                start_time=self.state.current_time,
+            )
+            process.primary_tid = primary_thread.tid
             logger.debug(f"Created process {pid} on {system}: {image}")
             return pid
+
+    @staticmethod
+    def _process_parent_lifecycle_group(
+        lifecycle_group_id: str,
+        explicit_parent_group_id: str,
+        owning_session: ActiveSession | None,
+    ) -> str:
+        """Return process lifecycle parentage without a self-parenting group.
+
+        Ordinary processes are children of their owning session. Session-bootstrap
+        helpers intentionally share the session group so their parent is instead
+        the session's parent, if one exists.
+        """
+
+        if explicit_parent_group_id and explicit_parent_group_id != lifecycle_group_id:
+            return explicit_parent_group_id
+        if owning_session is None:
+            return ""
+        if owning_session.lifecycle_group_id == lifecycle_group_id:
+            return owning_session.parent_lifecycle_group_id
+        return owning_session.lifecycle_group_id
+
+    def _allocate_thread_id(self, system: str, process_object_id: str, pid: int) -> int:
+        """Allocate a deterministic host-native TID for an explicitly modeled thread."""
+
+        os_category = self._pid_os.get(system, "windows")
+        if os_category == "linux":
+            candidate = pid + 1 + (_stable_seed(f"linux_tid:{system}:{process_object_id}") % 1024)
+            used = {
+                thread.tid
+                for thread in self.state.running_threads.values()
+                if thread.hostname == system and thread.process_object_id == process_object_id
+            }
+            while candidate in used:
+                candidate += 1
+            return candidate
+
+        counter = self._thread_id_counters.get(
+            system,
+            2000 + (4 * (_stable_seed(f"windows_tid_initial:{system}") % 5000)),
+        )
+        rng = self._thread_id_rngs.setdefault(
+            system,
+            random.Random(_stable_seed(f"windows_tid_alloc:{system}")),
+        )
+        used = {
+            thread.tid
+            for thread in self.state.running_threads.values()
+            if thread.hostname == system
+        }
+        candidate = counter - (counter % 4)
+        while candidate in used or candidate <= 0:
+            candidate += 4
+        self._thread_id_counters[system] = candidate + (4 * rng.randint(1, 17))
+        return candidate
+
+    def _register_thread(
+        self,
+        process: RunningProcess,
+        *,
+        tid: int,
+        kind: str,
+        start_time: datetime,
+    ) -> RunningThread:
+        """Register a thread after its live owning process has been validated."""
+
+        key = (process.system, process.ecar_object_id, tid)
+        existing = self.state.running_threads.get(key)
+        if existing is not None:
+            return existing
+        thread = RunningThread(
+            hostname=process.system,
+            process_object_id=process.ecar_object_id,
+            pid=process.pid,
+            tid=tid,
+            object_id=stable_uuid(
+                "thread",
+                process.system,
+                process.ecar_object_id,
+                process.pid,
+                tid,
+                ensure_utc(start_time).isoformat(),
+                kind,
+            ),
+            start_time=ensure_utc(start_time),
+            kind=kind,
+        )
+        self.state.running_threads[key] = thread
+        self._ended_threads.pop(key, None)
+        return thread
+
+    def create_thread(
+        self,
+        system: str,
+        process_object_id: str,
+        *,
+        tid: int | None = None,
+        kind: str = "worker",
+        start_time: datetime | None = None,
+    ) -> ThreadIdentity:
+        """Create an explicit thread owned by a live canonical process."""
+
+        with self._lock:
+            process = self._processes_by_object_id.get(process_object_id)
+            if (
+                process is None
+                or process.system != system
+                or self.state.running_processes.get((system, process.pid)) is not process
+            ):
+                raise StateError(
+                    f"Cannot create thread: owning process object is not live on {system}"
+                )
+            thread_id = tid
+            if thread_id is None:
+                thread_id = self._allocate_thread_id(system, process_object_id, process.pid)
+            if thread_id < 0:
+                raise StateError("Cannot create thread: TID must be non-negative")
+            effective_start = start_time or self.state.current_time
+            if effective_start is None:
+                raise StateError("Cannot create thread: current_time not set")
+            thread = self._register_thread(
+                process,
+                tid=thread_id,
+                kind=kind,
+                start_time=effective_start,
+            )
+            return self._thread_identity(thread)
+
+    @staticmethod
+    def _thread_identity(thread: RunningThread) -> ThreadIdentity:
+        """Project mutable runtime thread state to an immutable identity snapshot."""
+
+        return ThreadIdentity(
+            hostname=thread.hostname,
+            process_object_id=thread.process_object_id,
+            pid=thread.pid,
+            tid=thread.tid,
+            object_id=thread.object_id,
+            started_at=thread.start_time,
+            kind=thread.kind,
+        )
+
+    def get_thread(
+        self,
+        system: str,
+        process_object_id: str,
+        tid: int,
+    ) -> ThreadIdentity | None:
+        """Resolve an active thread by its collision-safe canonical key."""
+
+        with self._lock:
+            thread = self.state.running_threads.get((system, process_object_id, tid))
+            return self._thread_identity(thread) if thread is not None else None
+
+    def get_primary_thread(self, system: str, pid: int) -> ThreadIdentity | None:
+        """Return the immutable primary-thread identity for a live process."""
+
+        with self._lock:
+            process = self.state.running_processes.get((system, pid))
+            if process is None or process.primary_tid < 0:
+                return None
+            return self.get_thread(system, process.ecar_object_id, process.primary_tid)
+
+    def end_thread(
+        self,
+        system: str,
+        process_object_id: str,
+        tid: int,
+        end_time: datetime | None = None,
+    ) -> bool:
+        """End one explicit thread without affecting identically numbered threads."""
+
+        with self._lock:
+            key = (system, process_object_id, tid)
+            thread = self.state.running_threads.pop(key, None)
+            if thread is None:
+                return False
+            effective_end = end_time or self.state.current_time
+            thread.end_time = ensure_utc(effective_end) if effective_end is not None else None
+            self._ended_threads[key] = thread
+            return True
+
+    def get_process_identity(self, system: str, pid: int) -> ProcessIdentity | None:
+        """Return an immutable snapshot for the currently live process at a host-local PID."""
+
+        with self._lock:
+            process = self.state.running_processes.get((system, pid))
+            if process is None:
+                return None
+            return self._process_identity(process)
+
+    def get_process_identity_by_object_id(self, object_id: str) -> ProcessIdentity | None:
+        """Resolve a live or ended process by its durable process object identity."""
+
+        with self._lock:
+            process = self._processes_by_object_id.get(object_id)
+            return self._process_identity(process) if process is not None else None
+
+    def _process_identity(self, process: RunningProcess) -> ProcessIdentity:
+        """Project mutable runtime process state to an immutable identity snapshot."""
+
+        primary_thread = None
+        if process.primary_tid >= 0:
+            key = (process.system, process.ecar_object_id, process.primary_tid)
+            thread = self.state.running_threads.get(key) or self._ended_threads.get(key)
+            if thread is not None:
+                primary_thread = self._thread_identity(thread)
+        return ProcessIdentity(
+            hostname=process.system,
+            object_id=process.ecar_object_id,
+            pid=process.pid,
+            parent_pid=process.parent_pid,
+            image=process.image,
+            command_line=process.command_line,
+            principal=process.username,
+            logon_id=process.logon_id,
+            started_at=process.start_time,
+            lifecycle_group_id=process.lifecycle_group_id,
+            parent_lifecycle_group_id=process.parent_lifecycle_group_id,
+            primary_thread=primary_thread,
+        )
 
     def get_process(self, system: str, pid: int) -> RunningProcess | None:
         """Get a running process.
@@ -1157,7 +1555,12 @@ class StateManager:
             if proc:
                 proc.story_created = True
 
-    def end_process(self, system: str, pid: int) -> bool:
+    def end_process(
+        self,
+        system: str,
+        pid: int,
+        end_time: datetime | None = None,
+    ) -> bool:
         """End a running process.
 
         Args:
@@ -1169,7 +1572,15 @@ class StateManager:
         """
         with self._lock:
             key = (system, pid)
-            if key in self.state.running_processes:
+            process = self.state.running_processes.get(key)
+            if process is not None:
+                thread_keys = [
+                    thread_key
+                    for thread_key in self.state.running_threads
+                    if thread_key[0] == system and thread_key[1] == process.ecar_object_id
+                ]
+                for thread_key in thread_keys:
+                    self.end_thread(*thread_key, end_time=end_time)
                 del self.state.running_processes[key]
                 self._clear_session_process_references(system, pid)
                 logger.debug(f"Ended process {pid} on {system}")
@@ -1591,19 +2002,31 @@ class StateManager:
         process termination) and updates (connection bytes).
         """
         with self._lock:
-            if event.event_type != "process_terminate" and event.process and event.src_host:
-                proc = self.state.running_processes.get(
-                    (event.src_host.hostname, event.process.pid)
-                )
+            process_pid = -1
+            process_host = ""
+            if event.process is not None and event.src_host is not None:
+                process_pid = event.process.pid
+                process_host = event.src_host.hostname
+            elif event.identity_plan is not None and isinstance(
+                event.identity_plan.actor, ProcessIdentity
+            ):
+                process_pid = event.identity_plan.actor.pid
+                process_host = event.identity_plan.actor.hostname
+            if event.event_type != "process_terminate" and process_pid >= 0 and process_host:
+                proc = self.state.running_processes.get((process_host, process_pid))
                 if proc is not None:
                     activity_time = ensure_utc(event.timestamp)
+                    if event.network is not None and event.network.transaction is not None:
+                        closed_at = event.network.transaction.closed_at
+                        if closed_at is not None:
+                            activity_time = max(activity_time, ensure_utc(closed_at))
                     if proc.last_activity_time is None or activity_time > proc.last_activity_time:
                         proc.last_activity_time = activity_time
 
             if event.event_type == "logoff" and event.auth:
                 self.end_session(event.auth.logon_id, event.timestamp)
             elif event.event_type == "process_terminate" and event.process and event.src_host:
-                self.end_process(event.src_host.hostname, event.process.pid)
+                self.end_process(event.src_host.hostname, event.process.pid, event.timestamp)
             elif event.event_type == "connection" and event.network:
                 event.network.validate_finalized_transaction()
                 if event.network.conn_id:

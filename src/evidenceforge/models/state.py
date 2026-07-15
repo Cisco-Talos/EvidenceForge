@@ -79,6 +79,8 @@ class ActiveSession:
     ecar_object_id: str = ""
     storyline_protected: bool = False
     logon_guid: str = ""
+    lifecycle_group_id: str = ""
+    parent_lifecycle_group_id: str = ""
 
 
 @dataclass
@@ -112,6 +114,28 @@ class RunningProcess:
     logon_id: str = ""
     ecar_object_id: str = ""
     story_created: bool = False
+    primary_tid: int = -1
+    lifecycle_group_id: str = ""
+    parent_lifecycle_group_id: str = ""
+
+
+@dataclass
+class RunningThread:
+    """Durable state for one explicitly modeled host-native thread.
+
+    Thread identity is never keyed by PID or TID alone. The owning process
+    object's host- and start-scoped UUID is part of the canonical key, so
+    identical numeric identifiers across hosts and PID reuse cannot collide.
+    """
+
+    hostname: str
+    process_object_id: str
+    pid: int
+    tid: int
+    object_id: str
+    start_time: datetime
+    kind: str = "worker"
+    end_time: datetime | None = None
 
 
 @dataclass
@@ -178,6 +202,7 @@ class GeneratorState:
 
     active_sessions: dict[str, ActiveSession] = field(default_factory=dict)
     running_processes: dict[tuple[str, int], RunningProcess] = field(default_factory=dict)
+    running_threads: dict[tuple[str, str, int], RunningThread] = field(default_factory=dict)
     open_connections: dict[str, OpenConnection] = field(default_factory=dict)
     dns_cache: dict[str, str] = field(default_factory=dict)
     current_time: datetime | None = None

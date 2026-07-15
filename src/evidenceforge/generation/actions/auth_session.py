@@ -47,6 +47,7 @@ class LogonRequest:
     emit_transport_syslog: bool = True
     emit_network_evidence: bool = True
     logon_id: str | None = None
+    lifecycle_group_id: str = ""
     source: str = "activity_generator"
 
     @property
@@ -60,6 +61,7 @@ class LogonRequest:
             f"{self.logon_type}:{self.source_ip or ''}:{self.source_port or ''}:"
             f"{self.emit_transport_syslog}:{self.emit_network_evidence}:"
             f"{self.logon_id or ''}:{source_host}:{self.source}"
+            f":{self.lifecycle_group_id}"
         )
         return f"logon-{seed:016x}"
 
