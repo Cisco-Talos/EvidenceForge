@@ -46,6 +46,30 @@ from evidenceforge.models.scenario import ConnectionEventSpec
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
 
 
+def _mock_activity_generator_factory(mock_instance: Mock):
+    """Bind mocked generation to the bundle-owned session postcondition."""
+
+    def factory(**kwargs):
+        state_manager = kwargs["state_manager"]
+
+        def generate_logon(**request):
+            state_manager.set_current_time(request["time"])
+            return state_manager.create_session(
+                username=request["user"].username,
+                system=request["system"].hostname,
+                logon_type=request.get("logon_type", 2),
+                source_ip=request.get("source_ip") or "-",
+                start_time=request["time"],
+                session_kind="interactive",
+                lifecycle_group_id="mock-logon-bundle",
+            )
+
+        mock_instance.generate_logon.side_effect = generate_logon
+        return mock_instance
+
+    return factory
+
+
 def test_service_wrapper_storyline_process_lifetimes_are_source_native():
     """Remote service wrappers should use the lifecycle of the modeled tool."""
     assert _estimate_process_lifetime(
@@ -619,7 +643,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = []
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
@@ -675,7 +699,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = []
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
@@ -783,7 +807,7 @@ class TestGenerationEngine:
         mock_activity_instance.get_baseline_pattern.return_value = []
         mock_activity_instance.generate_process.return_value = 1234
         mock_activity_instance.generate_logon.return_value = "0x12345"
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(scenario_with_storyline, tmp_path)
         engine._initialize()
@@ -844,7 +868,7 @@ class TestGenerationEngine:
         mock_activity_instance.get_baseline_pattern.return_value = []
         mock_activity_instance.generate_process.return_value = 1234
         mock_activity_instance.generate_logon.return_value = "0x12345"
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         mock_gt_instance = Mock()
         mock_gt_gen.return_value = mock_gt_instance
@@ -904,7 +928,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = []
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         mock_gt_instance = Mock()
         mock_gt_gen.return_value = mock_gt_instance
@@ -964,7 +988,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = []
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine.generate()
@@ -1097,7 +1121,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = []
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         callback = Mock()
         engine = GenerationEngine(minimal_scenario, tmp_path, progress_callback=callback)
@@ -1159,7 +1183,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = []
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         # No progress_callback provided
         engine = GenerationEngine(minimal_scenario, tmp_path)
@@ -1224,7 +1248,7 @@ class TestGenerationEngine:
 
         mock_activity_instance = Mock()
         mock_activity_instance.generate_logon.return_value = "0x12345"
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(scenario_with_storyline, tmp_path)
         engine._initialize()
@@ -1288,7 +1312,7 @@ class TestGenerationEngine:
         mock_activity_instance = Mock()
         mock_activity_instance.generate_connection.return_value = "UID123"
         mock_activity_instance.generate_logon.return_value = "0x12345"
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(scenario_with_storyline, tmp_path)
         engine._initialize()
@@ -1359,7 +1383,7 @@ class TestGenerationEngine:
         mock_activity_instance = Mock()
         mock_activity_instance.get_baseline_pattern.return_value = [("logon", 1.0)]
         mock_activity_instance.execute_baseline_activity.return_value = None
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
@@ -1428,7 +1452,7 @@ class TestGenerationEngine:
         mock_load_format.return_value = mock_format_def
 
         mock_activity_instance = Mock()
-        mock_activity_gen.return_value = mock_activity_instance
+        mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
         engine = GenerationEngine(scenario_with_storyline, tmp_path)
         engine._initialize()

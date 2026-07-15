@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
@@ -141,6 +141,9 @@ class EventDispatcher:
         from evidenceforge.generation.network_observation import NetworkObservationPlanner
 
         self.network_observation_planner = NetworkObservationPlanner(visibility_engine)
+        from evidenceforge.generation.identity_lifecycle import IdentityLifecyclePlanner
+
+        self.identity_lifecycle_planner = IdentityLifecyclePlanner(state_manager)
 
     @property
     def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
@@ -197,6 +200,7 @@ class EventDispatcher:
             event.storyline_cluster_id = self.storyline_cluster_id
         if event.network is not None:
             event.network.validate_finalized_transaction()
+        self.identity_lifecycle_planner.plan(event)
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
@@ -326,7 +330,10 @@ class EventDispatcher:
                 self.output_end_time,
             )
 
-        source_start = visible_time + (lifecycle.canonical_start - event.timestamp)
+        source_start = visible_time + self._timestamp_delta(
+            lifecycle.canonical_start,
+            event.timestamp,
+        )
         if self.output_end_time is not None and not self._is_before(
             source_start,
             self.output_end_time,
@@ -355,6 +362,18 @@ class EventDispatcher:
         elif ts.tzinfo is None and normalized_gate.tzinfo is not None:
             normalized_gate = normalized_gate.replace(tzinfo=None)
         return ts < normalized_gate
+
+    @staticmethod
+    def _timestamp_delta(later: datetime, earlier: datetime) -> timedelta:
+        """Return a delta after aligning naive/aware canonical timestamps."""
+
+        normalized_later = later
+        normalized_earlier = earlier
+        if normalized_later.tzinfo is not None and normalized_earlier.tzinfo is None:
+            normalized_earlier = normalized_earlier.replace(tzinfo=normalized_later.tzinfo)
+        elif normalized_later.tzinfo is None and normalized_earlier.tzinfo is not None:
+            normalized_later = normalized_later.replace(tzinfo=normalized_earlier.tzinfo)
+        return normalized_later - normalized_earlier
 
     def _enforce_source_observation_contracts(
         self,

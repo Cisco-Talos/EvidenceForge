@@ -996,6 +996,98 @@ class StateManager:
             pid_rng = self._pid_rngs[system]
             return self._allocate_linux_pid(system, pid_rng, event_time)
 
+    def register_process(
+        self,
+        system: str,
+        pid: int,
+        parent_pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        integrity_level: str,
+        *,
+        os_category: str,
+        start_time: datetime | None = None,
+        logon_id: str = "",
+        lifecycle_group_id: str = "",
+        parent_lifecycle_group_id: str = "",
+    ) -> RunningProcess:
+        """Register a fixed host-native process through the canonical state boundary.
+
+        This is reserved for kernel/bootstrap identities such as Windows PID 4
+        and Linux PID 1 that cannot use the ordinary PID allocator.
+        """
+
+        with self._lock:
+            effective_start = start_time or self.state.current_time
+            if effective_start is None:
+                raise StateError("Cannot register process: current_time not set")
+            if pid < 0:
+                raise StateError("Cannot register process: PID must be non-negative")
+            if (system, pid) in self.state.running_processes:
+                raise StateError(f"Cannot register process: PID {pid} already exists on {system}")
+            if (
+                parent_pid not in {0, 4}
+                and (system, parent_pid) not in self.state.running_processes
+            ):
+                raise StateError(
+                    f"Cannot register process: parent PID {parent_pid} does not exist on {system}"
+                )
+
+            normalized_start = ensure_utc(effective_start)
+            self._initialize_pid_allocator(system, os_category)
+            if os_category == "linux":
+                self._linux_pid_used_ids.setdefault(system, set()).add(pid)
+                self._linux_pid_allocations.setdefault(system, []).append((normalized_start, pid))
+            object_id = stable_uuid(
+                "registered-process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                normalized_start.isoformat(),
+                logon_id,
+            )
+            owning_session = self.get_session(logon_id) if logon_id else None
+            process = RunningProcess(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                system=system,
+                start_time=normalized_start,
+                integrity_level=integrity_level,
+                logon_id=logon_id,
+                ecar_object_id=object_id,
+                lifecycle_group_id=lifecycle_group_id
+                or stable_uuid("process-lifecycle", object_id),
+                parent_lifecycle_group_id=parent_lifecycle_group_id
+                or (owning_session.lifecycle_group_id if owning_session is not None else ""),
+            )
+            self.state.running_processes[(system, pid)] = process
+            self._process_object_ids[(system, pid)] = object_id
+            self._processes_by_object_id[object_id] = process
+            primary_tid = (
+                pid
+                if os_category == "linux"
+                else self._allocate_thread_id(
+                    system,
+                    object_id,
+                    pid,
+                )
+            )
+            thread = self._register_thread(
+                process,
+                tid=primary_tid,
+                kind="primary",
+                start_time=normalized_start,
+            )
+            process.primary_tid = thread.tid
+            return process
+
     def create_process(
         self,
         system: str,

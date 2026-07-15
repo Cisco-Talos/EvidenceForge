@@ -897,6 +897,42 @@ class TestCanonicalIdentityState:
         assert process.primary_thread is not None
         assert process.primary_thread.tid == pid
 
+    @pytest.mark.parametrize(
+        ("system", "pid", "image", "os_category"),
+        [
+            ("WS-01", 4, "System", "windows"),
+            ("LINUX-01", 1, "/usr/lib/systemd/systemd", "linux"),
+        ],
+    )
+    def test_fixed_boot_process_registration_uses_canonical_identity_boundary(
+        self,
+        system: str,
+        pid: int,
+        image: str,
+        os_category: str,
+    ) -> None:
+        """Kernel-native fixed PIDs receive object, lifecycle, and primary-thread state."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        process = sm.register_process(
+            system,
+            pid,
+            0,
+            image,
+            image,
+            "SYSTEM" if os_category == "windows" else "root",
+            "System",
+            os_category=os_category,
+        )
+        identity = sm.get_process_identity(system, pid)
+
+        assert identity is not None
+        assert identity.object_id == process.ecar_object_id
+        assert identity.lifecycle_group_id == process.lifecycle_group_id
+        assert identity.primary_thread is not None
+        if os_category == "linux":
+            assert identity.primary_thread.tid == pid
+
     def test_explicit_thread_requires_live_owning_process(self) -> None:
         """Worker and remote threads cannot outlive or bypass their owning process."""
         sm = StateManager()

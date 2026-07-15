@@ -302,9 +302,39 @@ class TestSessionKindMatching:
         wm = WorldModel(scenario, "corp.local")
         state = StateManager()
         ag = Mock()
-        ag.generate_logon = Mock(return_value="0x1234")
-        ag.generate_ssh_session = Mock(return_value="CxUID1")
-        ag.generate_rdp_session = Mock(return_value="CxUID2")
+
+        def create_session(*, session_kind, logon_type, time, source_ip):
+            state.set_current_time(time)
+            return state.create_session(
+                username="admin",
+                system="SRV-01",
+                logon_type=logon_type,
+                source_ip=source_ip,
+                start_time=time,
+                session_kind=session_kind,
+                lifecycle_group_id=f"mock-{session_kind}-{time.isoformat()}",
+            )
+
+        def generate_logon(**kwargs):
+            logon_type = kwargs.get("logon_type", 2)
+            return create_session(
+                session_kind="network" if logon_type == 3 else "interactive",
+                logon_type=logon_type,
+                time=kwargs["time"],
+                source_ip=kwargs.get("source_ip") or "-",
+            )
+
+        def execute_ssh_session_bundle(**kwargs):
+            logon_id = create_session(
+                session_kind="ssh",
+                logon_type=10,
+                time=kwargs["time"],
+                source_ip=kwargs["source_ip"],
+            )
+            return "CxUID1", logon_id
+
+        ag.generate_logon.side_effect = generate_logon
+        ag._execute_ssh_session_bundle.side_effect = execute_ssh_session_bundle
         planner = WorldPlanner(
             world_model=wm,
             state_manager=state,

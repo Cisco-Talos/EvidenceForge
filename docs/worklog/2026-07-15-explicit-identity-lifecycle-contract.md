@@ -59,9 +59,38 @@ Focused acceptance:
 
 ### Milestone 2 — Process and session lifecycle ownership
 
-- Status: pending
+- Status: complete
 - Acceptance: action-bundle ownership, durable lifecycle groups, upstream identity planning,
   causally safe actor attribution, and lifecycle-compatible observation/timing/admission.
+
+Implemented `IdentityLifecyclePlanner` in the dispatcher before state application, observation,
+and source timing. It freezes process/session/thread subject, actor, and target roles while live
+state still exists; assigns process and session lifecycle groups; models Type 7 unlock as a child
+reauthentication; and omits unavailable attribution instead of inventing it. Process access no
+longer synthesizes a per-event source TID, and remote-thread creation now registers one durable
+target-owned thread.
+
+Process and logon action bundles pass their stable group IDs into state. SSH and RDP bundles now
+allocate their own session identities and return them to `WorldPlanner`; ordinary World planning
+also requests logon intent without pre-allocating state. Service logons use the same contract, and
+session bootstrap process teardown now routes through the process-termination bundle. Fixed
+kernel/bootstrap identities (Windows PID 4 and Linux PID 1) use a dedicated canonical
+`register_process()` boundary instead of direct dictionary insertion.
+
+Focused acceptance:
+
+- Identity/lifecycle, dispatcher, observation, source timing, eCAR, LogonID, proxy, and systemd
+  compatibility sets — 333 passed.
+- Activity, World planning, SSH/RDP, process access, and remote-thread sets — 445 passed.
+- Regression repairs (thread-local timing, engine mocks honoring bundle ownership, session-kind
+  reuse, Sysmon cross-process semantics) — 70 passed.
+- Representative deterministic/inbound integrations — 8 passed.
+- Adversarial generation integration family — 68 passed.
+- `uv run pytest --no-cov -q` — 4,968 passed, 19 skipped in 321.26 seconds.
+
+The first full-suite attempt exposed boot-seeded PID 4/System and PID 1/systemd bypassing the
+canonical registration boundary. The fix was made at `StateManager`/engine setup rather than in
+the identity planner or emitter; the complete suite passed after that owning-layer repair.
 
 ### Milestone 3 — Explicit eCAR roles and renderer simplification
 

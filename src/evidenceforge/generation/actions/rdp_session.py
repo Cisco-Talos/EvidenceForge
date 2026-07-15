@@ -273,6 +273,7 @@ class RdpSessionActionBundle:
             source_port=src_port,
             emit_network_evidence=False,
             logon_id=logon_id or None,
+            lifecycle_group_id=self._request.stable_id,
         )
         self._rendered_logon_id = rendered_logon_id
         self._executor.state_manager.update_session_metadata(

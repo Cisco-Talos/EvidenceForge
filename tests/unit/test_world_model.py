@@ -317,15 +317,26 @@ def test_world_model_ssh_admin_roster_is_role_and_group_scoped(scenario: Scenari
     assert {"alice.admin", "helpdesk.user"} <= web_roster
 
 
-def test_world_planner_preallocates_sessions_before_logon_emission(
+def test_world_planner_delegates_session_allocation_to_logon_bundle(
     world_model: WorldModel,
     state_manager: StateManager,
     systems: dict[str, System],
     users: dict[str, User],
 ) -> None:
-    """Planner-owned session state should not depend on generator side effects."""
+    """World planning requests session intent without allocating shadow state."""
     activity_generator = Mock()
-    activity_generator.generate_logon.return_value = "0xdeadbeef"
+
+    def generate_logon(**kwargs):
+        return state_manager.create_session(
+            username=kwargs["user"].username,
+            system=kwargs["system"].hostname,
+            logon_type=kwargs["logon_type"],
+            source_ip=kwargs["source_ip"],
+            start_time=kwargs["time"],
+            lifecycle_group_id="bundle-owned-session",
+        )
+
+    activity_generator.generate_logon.side_effect = generate_logon
     planner = WorldPlanner(world_model, state_manager, activity_generator)
 
     result = planner.bootstrap_user_session(
@@ -337,10 +348,10 @@ def test_world_planner_preallocates_sessions_before_logon_emission(
         allow_existing=False,
     )
 
-    assert result.session.logon_id != "0xdeadbeef"
     assert state_manager.get_session(result.session.logon_id) is result.session
+    assert result.session.lifecycle_group_id == "bundle-owned-session"
     call_kwargs = activity_generator.generate_logon.call_args.kwargs
-    assert call_kwargs["logon_id"] == result.session.logon_id
+    assert "logon_id" not in call_kwargs
     assert call_kwargs["logon_type"] == 2
 
 

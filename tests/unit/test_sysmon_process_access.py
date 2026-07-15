@@ -132,7 +132,7 @@ class TestSysmonProcessAccess:
         assert event.process_access is not None
         assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
         assert event.process_access.granted_access == "0x1010"
-        assert event.process_access.source_thread_id % 4 == 0
+        assert event.process_access.source_thread_id == -1
 
     def test_create_remote_thread_ids_are_windows_aligned(
         self, state_manager, activity_gen, mock_emitters, windows_system, test_user
@@ -159,7 +159,7 @@ class TestSysmonProcessAccess:
         event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
         assert event.remote_thread is not None
         assert event.remote_thread.new_thread_id % 4 == 0
-        assert event.remote_thread.source_thread_id % 4 == 0
+        assert event.remote_thread.source_thread_id == -1
         assert event.remote_thread.target_thread_id % 4 == 0
 
     def test_process_access_skips_missing_target_pid(

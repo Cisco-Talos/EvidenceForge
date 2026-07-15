@@ -733,11 +733,11 @@ class EdrContext:
     def validate_identity_plan(self, plan: EventIdentityPlan) -> None:
         """Validate populated compatibility fields against canonical identity truth."""
 
-        if self.object_id and self.object_id != plan.object_id:
+        if plan.object_id and self.object_id and self.object_id != plan.object_id:
             raise ValueError("EdrContext object_id contradicts the canonical identity subject")
-        if self.actor_id and self.actor_id != plan.actor_id:
+        if plan.actor_id and self.actor_id and self.actor_id != plan.actor_id:
             raise ValueError("EdrContext actor_id contradicts the canonical identity actor")
-        if self.tid >= 0 and self.tid != plan.canonical_tid:
+        if plan.canonical_tid >= 0 and self.tid >= 0 and self.tid != plan.canonical_tid:
             raise ValueError("EdrContext tid contradicts the canonical identity thread")
 
 

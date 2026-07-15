@@ -209,7 +209,6 @@ from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
-from evidenceforge.utils.windows_ids import windows_id_randint
 
 from .helpers import _get_os_category, _get_rng, _parameterize_command
 from .network import (
@@ -8957,6 +8956,7 @@ class ActivityGenerator:
         emit_transport_syslog: bool = True,
         emit_network_evidence: bool = True,
         logon_id: str | None = None,
+        lifecycle_group_id: str = "",
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -8987,6 +8987,7 @@ class ActivityGenerator:
             emit_transport_syslog=emit_transport_syslog,
             emit_network_evidence=emit_network_evidence,
             logon_id=logon_id,
+            lifecycle_group_id=lifecycle_group_id,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -9002,6 +9003,7 @@ class ActivityGenerator:
         emit_transport_syslog = request.emit_transport_syslog
         emit_network_evidence = request.emit_network_evidence
         logon_id = request.logon_id
+        lifecycle_group_id = request.lifecycle_group_id or request.stable_id
 
         self.state_manager.set_current_time(time)
         os_cat = _get_os_category(system.os)
@@ -9119,6 +9121,7 @@ class ActivityGenerator:
                     source_ip=auth_source_ip,
                     source_port=source_port or 0,
                     session_kind="ssh",
+                    lifecycle_group_id=lifecycle_group_id,
                 )
             else:
                 existing_session = self.state_manager.get_session(logon_id)
@@ -9132,6 +9135,7 @@ class ActivityGenerator:
                         start_time=time,
                         source_port=source_port or 0,
                         session_kind="ssh",
+                        lifecycle_group_id=lifecycle_group_id,
                     )
                 else:
                     self.state_manager.update_session_metadata(
@@ -9179,6 +9183,7 @@ class ActivityGenerator:
                 source_ip=auth_source_ip,
                 source_port=source_port or 0,
                 session_kind=session_kind,
+                lifecycle_group_id=lifecycle_group_id,
             )
         else:
             existing_session = self.state_manager.get_session(logon_id)
@@ -9192,6 +9197,7 @@ class ActivityGenerator:
                     start_time=time,
                     source_port=source_port or 0,
                     session_kind=session_kind,
+                    lifecycle_group_id=lifecycle_group_id,
                 )
             else:
                 self.state_manager.update_session_metadata(
@@ -10330,14 +10336,34 @@ class ActivityGenerator:
                 self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
                     time
                 )
-            if session.explorer_pid is not None:
-                self.state_manager.end_process(session.system, session.explorer_pid)
-            # Clean up per-RDP-session winlogon chain
-            if session.session_winlogon_pid is not None:
-                self.state_manager.end_process(session.system, session.session_winlogon_pid)
-            # Clean up per-SSH-session bash
-            if session.session_shell_pid is not None:
-                self.state_manager.end_process(session.system, session.session_shell_pid)
+            bootstrap_pids = [
+                pid
+                for pid in (
+                    session.session_shell_pid,
+                    session.explorer_pid,
+                    session.session_winlogon_pid,
+                )
+                if pid is not None
+            ]
+            for ordinal, bootstrap_pid in enumerate(dict.fromkeys(bootstrap_pids)):
+                bootstrap_process = self.state_manager.get_process(
+                    session.system,
+                    bootstrap_pid,
+                )
+                if bootstrap_process is None:
+                    continue
+                requested_termination_time = time - timedelta(
+                    milliseconds=450 - min(ordinal, 2) * 125
+                )
+                self.generate_process_termination(
+                    user=user,
+                    system=system,
+                    time=requested_termination_time,
+                    pid=bootstrap_pid,
+                    process_name=bootstrap_process.image,
+                    logon_id=logon_id,
+                    from_storyline=from_storyline,
+                )
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
@@ -11206,6 +11232,7 @@ class ActivityGenerator:
             username=process_username,
             integrity_level=_integrity,
             logon_id=process_logon_id,
+            lifecycle_group_id=request.stable_id,
         )
 
         # Phase 2: Build SecurityEvent
@@ -16998,6 +17025,55 @@ class ActivityGenerator:
         )
         return SshSessionActionBundle(request=request, executor=self).execute()
 
+    def _execute_ssh_session_bundle(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_system: Optional["System"] = None,
+        source_port: int | None = None,
+        source_pid: int = -1,
+        source_process_image: str = "",
+        sshd_pid: int | None = None,
+        logon_id: str = "",
+        session_obj_id: str = "",
+        min_duration: float | None = None,
+        duration: float | None = None,
+        orig_bytes: int | None = None,
+        resp_bytes: int | None = None,
+        auth_method: str = "password",
+        public_key_type: str = "",
+        public_key_hash: str = "",
+        emit_session_close: bool = False,
+        source: str = "activity_generator",
+    ) -> tuple[str, str]:
+        """Execute the canonical SSH bundle and return transport and session IDs."""
+
+        request = SshSessionRequest(
+            user=user,
+            target_system=target_system,
+            time=time,
+            source_ip=source_ip,
+            source_system=source_system,
+            source_port=source_port,
+            source_pid=source_pid,
+            source_process_image=source_process_image,
+            sshd_pid=sshd_pid,
+            logon_id=logon_id,
+            session_obj_id=session_obj_id,
+            min_duration=min_duration,
+            duration=duration,
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
+            auth_method=auth_method,
+            public_key_type=public_key_type,
+            public_key_hash=public_key_hash,
+            emit_session_close=emit_session_close,
+            source=source,
+        )
+        return SshSessionActionBundle(request=request, executor=self).execute_with_identity()
+
     @staticmethod
     def _ssh_tcp_success_history(rng: random.Random) -> str:
         """Choose a plausible Zeek TCP history string for SSH bundle expansion."""
@@ -21530,6 +21606,7 @@ class ActivityGenerator:
             source_ip="-",
             start_time=time,
             session_kind="service",
+            lifecycle_group_id=request.stable_id,
         )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
@@ -22600,13 +22677,13 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
-        thread_obj_id = stable_uuid(
-            "ecar-remote-thread",
+        if target_proc is None:
+            return False
+        remote_thread_identity = self.state_manager.create_thread(
             system.hostname,
-            source_pid,
-            target_pid,
-            time.isoformat(),
-            start_address,
+            target_proc.ecar_object_id,
+            kind="remote",
+            start_time=time,
         )
         stack_base = 0x000000C0000000 + (rng.randint(0, 0x7FFF) << 12)
         user_stack_base = stack_base
@@ -22631,20 +22708,24 @@ class ActivityGenerator:
             remote_thread=RemoteThreadContext(
                 target_pid=target_pid,
                 target_image=target_image,
-                new_thread_id=windows_id_randint(rng, 100, 9999),
+                new_thread_id=remote_thread_identity.tid,
                 start_address=start_address,
                 start_module=start_module,
                 start_function=start_function,
-                source_thread_id=windows_id_randint(rng, 1000, 9999),
-                target_thread_id=windows_id_randint(rng, 1000, 9999),
+                source_thread_id=-1,
+                target_thread_id=remote_thread_identity.tid,
                 target_process_object_id=target_obj_id,
-                thread_object_id=thread_obj_id,
+                thread_object_id=remote_thread_identity.object_id,
                 stack_base=stack_base,
                 stack_limit=stack_base - 0x6000,
                 user_stack_base=user_stack_base,
                 user_stack_limit=user_stack_base - 0x100000,
             ),
-            edr=EdrContext(object_id=thread_obj_id, actor_id=source_obj_id),
+            edr=EdrContext(
+                object_id=remote_thread_identity.object_id,
+                actor_id=source_obj_id,
+                tid=remote_thread_identity.tid,
+            ),
         )
         self.dispatcher.dispatch(event)
         return True
@@ -22734,12 +22815,6 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
-        source_thread_id = -1
-        if source_proc is not None:
-            source_thread_rng = random.Random(
-                _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
-            )
-            source_thread_id = windows_id_randint(source_thread_rng, 1000, 9999)
         from evidenceforge.generation.activity.calltrace_patterns import (
             render_call_trace_for_source,
         )
@@ -22768,7 +22843,7 @@ class ActivityGenerator:
             process_access=ProcessAccessContext(
                 source_pid=source_pid,
                 source_image=source_image,
-                source_thread_id=source_thread_id,
+                source_thread_id=-1,
                 target_pid=target_pid,
                 target_image=target_image,
                 target_user=target_proc.username
