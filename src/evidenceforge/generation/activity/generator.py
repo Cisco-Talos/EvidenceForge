@@ -82,7 +82,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
-from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -204,6 +204,7 @@ from evidenceforge.generation.identity import IdentityDirectory, default_linux_u
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, ProxyAuthPolicyConfig, System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
@@ -4252,6 +4253,25 @@ class ActivityGenerator:
         if pid <= 0 or close_time is None:
             return
         close_time = ensure_utc(close_time)
+        end_plan = self.state_manager.process_session_end_plan(system.hostname, pid)
+        if end_plan is not None and end_plan.is_authoritative:
+            deadline = ensure_utc(end_plan.canonical_end)
+            close_gap_ms = 100 + (
+                _stable_seed(
+                    "process_hold_before_authoritative_session_end:"
+                    f"{system.hostname}:{pid}:{deadline.isoformat()}"
+                )
+                % 1401
+            )
+            latest_hold = deadline - timedelta(milliseconds=close_gap_ms)
+            process = self.state_manager.get_process(system.hostname, pid)
+            if (
+                process is not None
+                and process.last_activity_time is not None
+                and latest_hold <= ensure_utc(process.last_activity_time)
+            ):
+                latest_hold = deadline - timedelta(milliseconds=1)
+            close_time = min(close_time, latest_hold)
         key = (system.hostname, pid)
         previous = self._process_connection_hold_until.get(key)
         if previous is None or close_time > previous:
@@ -8958,6 +8978,7 @@ class ActivityGenerator:
         emit_network_evidence: bool = True,
         logon_id: str | None = None,
         lifecycle_group_id: str = "",
+        session_end_plan: SessionEndPlan | None = None,
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -8989,6 +9010,7 @@ class ActivityGenerator:
             emit_network_evidence=emit_network_evidence,
             logon_id=logon_id,
             lifecycle_group_id=lifecycle_group_id,
+            session_end_plan=session_end_plan,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -9052,6 +9074,7 @@ class ActivityGenerator:
                 source_port=source_port,
                 logon_id=logon_id,
                 preserve_explicit_source=True,
+                session_end_plan=request.session_end_plan,
             )
             return rendered_logon_id
         if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
@@ -9159,6 +9182,7 @@ class ActivityGenerator:
                 source_port=source_port,
                 logon_id=logon_id,
                 session_obj_id=session_obj_id,
+                session_end_plan=request.session_end_plan,
                 source="linux_logon_compat",
             )
             session = self.state_manager.get_session(logon_id)
@@ -9213,6 +9237,9 @@ class ActivityGenerator:
             ):
                 time = existing_session.start_time
                 self.state_manager.set_current_time(time)
+
+        if request.session_end_plan is not None:
+            self.state_manager.plan_session_end(logon_id, request.session_end_plan)
 
         requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
         auth_logon_guid = self.state_manager.get_or_create_session_logon_guid(
@@ -10236,6 +10263,7 @@ class ActivityGenerator:
         logon_id: str,
         logon_type: int = 2,
         from_storyline: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> None:
         """Generate logoff event across all applicable log formats.
 
@@ -10259,6 +10287,7 @@ class ActivityGenerator:
             logon_id=logon_id,
             logon_type=logon_type,
             from_storyline=from_storyline,
+            session_end_plan=session_end_plan,
         )
         LogoffActionBundle(self, request).execute()
 
@@ -10270,6 +10299,15 @@ class ActivityGenerator:
         logon_id = request.logon_id
         logon_type = request.logon_type
         from_storyline = request.from_storyline
+        session_end_plan = request.session_end_plan
+        authoritative_end_plan = (
+            session_end_plan
+            if session_end_plan is not None and session_end_plan.is_authoritative
+            else None
+        )
+        if authoritative_end_plan is not None:
+            time = ensure_utc(authoritative_end_plan.canonical_end)
+            self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
 
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
@@ -10284,7 +10322,7 @@ class ActivityGenerator:
                 if is_ssh_session and session.network_close_time is not None
                 else None
             )
-            if ssh_transport_close_time is not None:
+            if ssh_transport_close_time is not None and authoritative_end_plan is None:
                 transport_logoff_time = ssh_transport_close_time + sample_timing_delta(
                     "windows.logoff_after_last_activity",
                     seed_parts=(system.hostname, logon_id, ssh_transport_close_time),
@@ -10358,7 +10396,14 @@ class ActivityGenerator:
                 key=lambda proc: (_session_process_depth(proc.pid), proc.start_time, proc.pid),
                 reverse=True,
             )
-            termination_span = timedelta(milliseconds=max(500, 50 * (len(session_processes) + 1)))
+            if authoritative_end_plan is not None:
+                termination_span = timedelta(
+                    milliseconds=min(3000, max(250, 100 * (len(session_processes) + 1)))
+                )
+            else:
+                termination_span = timedelta(
+                    milliseconds=max(500, 50 * (len(session_processes) + 1))
+                )
             termination_start = time - termination_span
             prior_visible_termination = self._session_process_source_terminate_times.get(
                 (session.system, logon_id)
@@ -10367,9 +10412,22 @@ class ActivityGenerator:
                 [prior_visible_termination] if prior_visible_termination is not None else []
             )
             for ordinal, session_process in enumerate(session_processes):
-                requested_termination_time = termination_start + timedelta(
-                    milliseconds=50 * ordinal
-                )
+                if authoritative_end_plan is not None:
+                    slot_ms = (
+                        termination_span.total_seconds()
+                        * 1000
+                        / max(
+                            1,
+                            len(session_processes) + 1,
+                        )
+                    )
+                    requested_termination_time = termination_start + timedelta(
+                        milliseconds=slot_ms * ordinal
+                    )
+                else:
+                    requested_termination_time = termination_start + timedelta(
+                        milliseconds=50 * ordinal
+                    )
                 self.generate_process_termination(
                     user=user,
                     system=system,
@@ -10378,6 +10436,7 @@ class ActivityGenerator:
                     process_name=session_process.image,
                     logon_id=logon_id,
                     from_storyline=from_storyline,
+                    session_end_plan=authoritative_end_plan,
                 )
                 visible_termination_time = self.process_source_terminate_time(
                     session.system,
@@ -10385,13 +10444,33 @@ class ActivityGenerator:
                 )
                 if visible_termination_time is not None:
                     visible_termination_times.append(visible_termination_time)
-            if visible_termination_times:
+            if visible_termination_times and authoritative_end_plan is None:
                 latest_visible_termination = max(visible_termination_times)
                 minimum_logoff_time = latest_visible_termination + sample_timing_delta(
                     "windows.logoff_after_rendered_dependents",
                     seed_parts=(system.hostname, logon_id, latest_visible_termination),
                 )
                 time = max(time, minimum_logoff_time)
+
+            if authoritative_end_plan is not None:
+                remaining_processes = [
+                    proc
+                    for proc in self.state_manager.list_running_processes()
+                    if proc.system == session.system and proc.logon_id == logon_id
+                ]
+                if remaining_processes:
+                    raise StateError(
+                        "Authoritative session closure left running processes: "
+                        f"{system.hostname} logon_id={logon_id} "
+                        f"pids={[proc.pid for proc in remaining_processes]}"
+                    )
+                if ssh_transport_close_time is not None and ssh_transport_close_time >= ensure_utc(
+                    authoritative_end_plan.canonical_end
+                ):
+                    raise StateError(
+                        "SSH transport extends beyond authoritative session end: "
+                        f"{system.hostname} logon_id={logon_id}"
+                    )
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
@@ -10415,6 +10494,16 @@ class ActivityGenerator:
             ),
             edr=EdrContext(object_id=session_obj_id),
             storyline_origin=from_storyline,
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=session.lifecycle_group_id,
+                    canonical_start=session.start_time,
+                    phase="closure",
+                    parent_group_id=session.parent_lifecycle_group_id or None,
+                )
+                if session is not None
+                else None
+            ),
         )
 
         # Attach SyslogContext for Linux SSH sessions only (sshd session closed).
@@ -10453,6 +10542,43 @@ class ActivityGenerator:
                     message=f"pam_unix(sshd:session): session closed for user {user.username}",
                 )
 
+        if authoritative_end_plan is not None:
+            ecar_close_time = time + sample_timing_delta(
+                "source.ecar_session_logout",
+                seed_parts=(system.hostname, logon_id, time),
+            )
+            windows_close_time = time + sample_timing_delta(
+                "source.windows_security_session_logout",
+                seed_parts=(system.hostname, logon_id, time),
+            )
+            self._source_timing_planner.record_session_closure_source_time(
+                event,
+                "ecar",
+                ecar_close_time,
+            )
+            self._source_timing_planner.record_session_closure_source_time(
+                event,
+                "windows_event_security",
+                windows_close_time,
+            )
+            if is_ssh_session and ssh_transport_close_time is not None and event.syslog is not None:
+                pam_delay_ms = 120 + (
+                    _stable_seed(
+                        "ssh_pam_close_after_transport:"
+                        f"{system.hostname}:{logon_id}:{ssh_transport_close_time.isoformat()}"
+                    )
+                    % 2381
+                )
+                pam_close_time = min(
+                    ssh_transport_close_time + timedelta(milliseconds=pam_delay_ms),
+                    ensure_utc(authoritative_end_plan.canonical_end) + timedelta(seconds=4),
+                )
+                self._source_timing_planner.record_session_closure_source_time(
+                    event,
+                    "syslog",
+                    pam_close_time,
+                )
+
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
         if event.syslog is not None and event.dst_host and event.dst_host.os_category == "linux":
@@ -10462,12 +10588,19 @@ class ActivityGenerator:
                     f"{system.hostname}:{user.username}:{logon_id}:{session_id}:"
                     f"{time.isoformat()}"
                 )
+                syslog_close_time = self._source_timing_planner.session_closure_source_time(
+                    event,
+                    "syslog",
+                )
                 self.dispatcher.dispatch(
                     SecurityEvent(
-                        timestamp=time
-                        + timedelta(
-                            milliseconds=120 + (remove_seed % 880),
-                            microseconds=701 + (remove_seed % 173),
+                        timestamp=min(
+                            syslog_close_time
+                            + timedelta(
+                                milliseconds=120 + (remove_seed % 880),
+                                microseconds=701 + (remove_seed % 173),
+                            ),
+                            ensure_utc(time) + timedelta(seconds=4),
                         ),
                         event_type="syslog",
                         src_host=event.dst_host,
@@ -10963,6 +11096,16 @@ class ActivityGenerator:
         concurrency_group_id = request.concurrency_group_id
 
         self.state_manager.set_current_time(time)
+        session_end_plan = self.state_manager.get_session_end_plan(logon_id)
+        if (
+            session_end_plan is not None
+            and session_end_plan.is_authoritative
+            and ensure_utc(time) >= ensure_utc(session_end_plan.canonical_end)
+        ):
+            raise StateError(
+                "Process activity cannot begin at or after its authoritative session end: "
+                f"{system.hostname} logon_id={logon_id} time={ensure_utc(time).isoformat()}"
+            )
         if _get_os_category(system.os) == "windows":
             process_name, command_line = _windows_script_host_process(
                 process_name,
@@ -12424,6 +12567,7 @@ class ActivityGenerator:
         process_name: str,
         logon_id: str,
         from_storyline: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> None:
         """Generate process termination event across all applicable log formats.
 
@@ -12446,6 +12590,7 @@ class ActivityGenerator:
             process_name=process_name,
             logon_id=logon_id,
             from_storyline=from_storyline,
+            session_end_plan=session_end_plan,
         )
         ProcessTerminationActionBundle(self, request).execute()
 
@@ -12460,6 +12605,7 @@ class ActivityGenerator:
         process_name = request.process_name
         logon_id = request.logon_id
         from_storyline = request.from_storyline
+        authoritative_end_plan = request.session_end_plan
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
         if self._process_termination_recorded(
@@ -12474,13 +12620,18 @@ class ActivityGenerator:
             and running_proc.last_activity_time is not None
             and time <= running_proc.last_activity_time
         ):
-            delay_rng = random.Random(
-                _stable_seed(
-                    "process_terminate_after_activity:"
-                    f"{system.hostname}:{pid}:{running_proc.last_activity_time.isoformat()}"
+            if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
+                time = ensure_utc(running_proc.last_activity_time) + timedelta(milliseconds=25)
+            else:
+                delay_rng = random.Random(
+                    _stable_seed(
+                        "process_terminate_after_activity:"
+                        f"{system.hostname}:{pid}:{running_proc.last_activity_time.isoformat()}"
+                    )
                 )
-            )
-            time = running_proc.last_activity_time + timedelta(seconds=delay_rng.uniform(2.0, 30.0))
+                time = running_proc.last_activity_time + timedelta(
+                    seconds=delay_rng.uniform(2.0, 30.0)
+                )
         if running_proc is not None:
             process_name = running_proc.image
         process_username = running_proc.username if running_proc is not None else user.username
@@ -12499,11 +12650,29 @@ class ActivityGenerator:
                 latest_allowed = running_proc.start_time + timedelta(milliseconds=100)
             if latest_allowed < session_end_time:
                 time = min(time, latest_allowed)
-        time = self._held_process_termination_time(
-            system=system,
-            pid=pid,
-            requested_time=time,
-        )
+        if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
+            deadline = ensure_utc(authoritative_end_plan.canonical_end)
+            hold_until = self._process_connection_hold_until.get((system.hostname, pid))
+            if hold_until is not None and ensure_utc(hold_until) >= deadline:
+                raise StateError(
+                    "Process connection hold extends beyond authoritative session end: "
+                    f"{system.hostname} pid={pid} hold={ensure_utc(hold_until).isoformat()} "
+                    f"end={deadline.isoformat()}"
+                )
+            end_margin_ms = 25 + (
+                _stable_seed(
+                    "process_terminate_before_authoritative_logoff:"
+                    f"{system.hostname}:{pid}:{process_logon_id}:{deadline.isoformat()}"
+                )
+                % 176
+            )
+            time = min(ensure_utc(time), deadline - timedelta(milliseconds=end_margin_ms))
+        else:
+            time = self._held_process_termination_time(
+                system=system,
+                pid=pid,
+                requested_time=time,
+            )
         if not process_logon_id:
             if process_username in _SYSTEM_ACCOUNTS:
                 process_logon_id = "0x3e7"
@@ -17026,6 +17195,7 @@ class ActivityGenerator:
         public_key_type: str = "",
         public_key_hash: str = "",
         emit_session_close: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
         source: str = "activity_generator",
     ) -> str:
         """Generate an SSH session through the SSH action-bundle adapter.
@@ -17059,6 +17229,7 @@ class ActivityGenerator:
             public_key_type=public_key_type,
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
+            session_end_plan=session_end_plan,
             source=source,
         )
         return SshSessionActionBundle(request=request, executor=self).execute()
@@ -17084,6 +17255,7 @@ class ActivityGenerator:
         public_key_type: str = "",
         public_key_hash: str = "",
         emit_session_close: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
         source: str = "activity_generator",
     ) -> tuple[str, str]:
         """Execute the canonical SSH bundle and return transport and session IDs."""
@@ -17108,6 +17280,7 @@ class ActivityGenerator:
             public_key_type=public_key_type,
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
+            session_end_plan=session_end_plan,
             source=source,
         )
         return SshSessionActionBundle(request=request, executor=self).execute_with_identity()
@@ -21417,6 +21590,7 @@ class ActivityGenerator:
         source_process_time: datetime | None = None,
         source_process_factory: RdpSourceProcessFactory | None = None,
         preserve_explicit_source: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
@@ -21435,6 +21609,7 @@ class ActivityGenerator:
             source_process_time=source_process_time,
             source_process_factory=source_process_factory,
             preserve_explicit_source=preserve_explicit_source,
+            session_end_plan=session_end_plan,
         )
         return uid
 
@@ -21451,6 +21626,7 @@ class ActivityGenerator:
         source_process_time: datetime | None = None,
         source_process_factory: RdpSourceProcessFactory | None = None,
         preserve_explicit_source: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> tuple[str, str]:
         """Execute the canonical RDP bundle and return transport and session IDs."""
 
@@ -21467,6 +21643,7 @@ class ActivityGenerator:
                 source_process_time=source_process_time,
                 logon_id=logon_id or "",
                 preserve_explicit_source=preserve_explicit_source,
+                session_end_plan=session_end_plan,
             ),
             source_process_factory=source_process_factory,
         )

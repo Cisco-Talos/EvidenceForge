@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import (
     ActionAnchor,
     endpoint_clock_difference,
@@ -47,6 +48,7 @@ from evidenceforge.generation.activity.timing_profiles import get_timing_window,
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
 
@@ -65,6 +67,7 @@ class RdpSessionRequest:
     source_process_time: datetime | None = None
     logon_id: str = ""
     preserve_explicit_source: bool = False
+    session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -78,7 +81,9 @@ class RdpSessionRequest:
             f"{self.source_port or ''}:{self.preserve_explicit_source}:"
             f"{self.source_process_time.isoformat() if self.source_process_time else ''}:"
             f"{self.target_system.hostname}:{self.target_system.ip}:"
-            f"{self.logon_id}:{self.source}:{self.time.isoformat()}"
+            f"{self.logon_id}:"
+            f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
+            f"{self.source}:{self.time.isoformat()}"
         )
         return f"rdp-session-{seed:016x}"
 
@@ -194,6 +199,23 @@ class RdpSessionActionBundle:
         )
         source_ip, source_system, source_pid = self._resolve_source(rng, user)
         duration = rng.uniform(60.0, 3600.0)
+        end_plan = self._request.session_end_plan
+        if end_plan is not None and end_plan.is_authoritative:
+            close_gap_ms = 100 + (
+                _stable_seed(
+                    "rdp_transport_before_explicit_logoff:"
+                    f"{self._request.stable_id}:{end_plan.canonical_end.isoformat()}"
+                )
+                % 1401
+            )
+            latest_close = end_plan.canonical_end - timedelta(milliseconds=close_gap_ms)
+            if latest_close <= self._request.time:
+                raise StateError(
+                    "Explicit RDP session end must follow transport open: "
+                    f"{self._request.target_system.hostname} at "
+                    f"{end_plan.canonical_end.isoformat()}"
+                )
+            duration = min(duration, (latest_close - self._request.time).total_seconds())
         source_pid = self._materialize_source_process(
             user=user,
             source_system=source_system,
@@ -274,6 +296,7 @@ class RdpSessionActionBundle:
             emit_network_evidence=False,
             logon_id=logon_id or None,
             lifecycle_group_id=self._request.stable_id,
+            session_end_plan=self._request.session_end_plan,
         )
         self._rendered_logon_id = rendered_logon_id
         self._executor.state_manager.update_session_metadata(

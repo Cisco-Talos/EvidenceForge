@@ -45,6 +45,7 @@ from evidenceforge.events.contexts import (
     SyslogContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import (
     ActionAnchor,
     source_observation_delay_difference,
@@ -59,6 +60,7 @@ from evidenceforge.generation.identity import IdentityDirectory, default_linux_u
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
@@ -119,6 +121,7 @@ class SshSessionRequest:
     public_key_type: str = ""
     public_key_hash: str = ""
     emit_session_close: bool = False
+    session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -135,7 +138,9 @@ class SshSessionRequest:
             f"{self.min_duration or ''}:{self.duration or ''}:"
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
-            f"{self.emit_session_close}:{self.source}:{self.time.isoformat()}"
+            f"{self.emit_session_close}:"
+            f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
+            f"{self.source}:{self.time.isoformat()}"
         )
         return f"ssh-session-{seed:016x}"
 
@@ -151,6 +156,7 @@ class SshSessionRequest:
             f"{self.logon_id}:{self.session_obj_id}:{self.min_duration or ''}:"
             f"{self.duration or ''}:{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
+            f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.emit_session_close}:{self.source}:{self.time.isoformat()}"
         )
         return f"ssh-session-exec-{seed:016x}"
@@ -428,12 +434,6 @@ class SshSessionActionBundle:
             self._source_os(),
             time=request.time,
         )
-        if request.duration is not None:
-            duration = max(1.0, request.duration)
-        else:
-            duration = rng.uniform(30.0, 3600.0)
-        if request.min_duration is not None and request.duration is None:
-            duration = max(duration, request.min_duration)
         transport_open_time = request.time + sample_packet_timing_delta(
             "network.connection_start_jitter",
             seed_parts=(
@@ -446,6 +446,30 @@ class SshSessionActionBundle:
                 request.time,
             ),
         )
+        if request.duration is not None:
+            duration = max(1.0, request.duration)
+        else:
+            duration = rng.uniform(30.0, 3600.0)
+        if request.min_duration is not None and request.duration is None:
+            duration = max(duration, request.min_duration)
+        end_plan = request.session_end_plan
+        if end_plan is not None and end_plan.is_authoritative:
+            close_gap_ms = 100 + (
+                _stable_seed(
+                    "ssh_transport_before_explicit_logoff:"
+                    f"{request.stable_id}:{end_plan.canonical_end.isoformat()}"
+                )
+                % 1401
+            )
+            planned_close = ensure_utc(end_plan.canonical_end) - timedelta(
+                milliseconds=close_gap_ms
+            )
+            if planned_close <= ensure_utc(transport_open_time):
+                raise StateError(
+                    "Explicit SSH session end must follow transport open: "
+                    f"{request.target_system.hostname} at {end_plan.canonical_end.isoformat()}"
+                )
+            duration = (planned_close - ensure_utc(transport_open_time)).total_seconds()
         orig_bytes = (
             request.orig_bytes if request.orig_bytes is not None else rng.randint(2000, 50000)
         )
@@ -494,6 +518,8 @@ class SshSessionActionBundle:
             )
         if not state.session_obj_id:
             state.session_obj_id = executor.state_manager.get_session_object_id(state.logon_id)
+        if request.session_end_plan is not None:
+            executor.state_manager.plan_session_end(state.logon_id, request.session_end_plan)
 
     def _open_transport(self, state: _SshTransportState, responding_pid: int | None) -> None:
         """Delegate SSH TCP transport to the canonical network connection contract."""

@@ -45,6 +45,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import (
     IdsAlertActionBundle,
     IdsAlertRequest,
@@ -70,6 +71,7 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import (
     MAX_HTTP_RESPONSE_BODY_LEN,
     BeaconHttpSequenceEntry,
@@ -1781,10 +1783,19 @@ class StorylineMixin:
         logon_id: str,
         source_ip: str | None = None,
     ) -> None:
-        """Record the latest storyline-created session by actor and target host."""
+        """Record a storyline-created session and bind any planned explicit close."""
+        self._ensure_storyline_session_end_pairs()
+        key = (actor.username, system.hostname)
+        registry = getattr(self, "_storyline_logon_registry", None)
+        if registry is None:
+            registry = self._storyline_logon_registry = {}
+        ordered_logons = registry.setdefault(key, [])
+        if logon_id not in ordered_logons:
+            ordered_logons.append(logon_id)
+
         if not hasattr(self, "_last_storyline_logon_by_actor_system"):
             self._last_storyline_logon_by_actor_system: dict[tuple[str, str], str] = {}
-        self._last_storyline_logon_by_actor_system[(actor.username, system.hostname)] = logon_id
+        self._last_storyline_logon_by_actor_system[key] = logon_id
         if source_ip is None and hasattr(self, "state_manager"):
             get_session = getattr(self.state_manager, "get_session", None)
             if callable(get_session):
@@ -1793,9 +1804,21 @@ class StorylineMixin:
         if source_ip:
             if not hasattr(self, "_last_storyline_logon_source_by_actor_system"):
                 self._last_storyline_logon_source_by_actor_system: dict[tuple[str, str], str] = {}
-            self._last_storyline_logon_source_by_actor_system[(actor.username, system.hostname)] = (
-                source_ip
-            )
+            self._last_storyline_logon_source_by_actor_system[key] = source_ip
+            if not hasattr(self, "_storyline_logon_source_by_id"):
+                self._storyline_logon_source_by_id: dict[str, str] = {}
+            self._storyline_logon_source_by_id[logon_id] = source_ip
+
+        spec_id = getattr(self, "_current_storyline_spec_id", "")
+        logoff_id = getattr(self, "_storyline_start_to_logoff", {}).get(spec_id)
+        if logoff_id:
+            plan = self._storyline_session_end_plans[logoff_id]
+            if not self.state_manager.plan_session_end(logon_id, plan):
+                raise StateError(
+                    f"Cannot bind explicit storyline close {logoff_id} to missing session "
+                    f"{logon_id}"
+                )
+            self._storyline_logoff_to_logon[logoff_id] = logon_id
 
     def _last_storyline_logon_for_actor_system(
         self,
@@ -1804,21 +1827,82 @@ class StorylineMixin:
         at_time: datetime | None = None,
     ) -> str | None:
         """Return the latest storyline-created active LogonID for this actor/host."""
-        logons = getattr(self, "_last_storyline_logon_by_actor_system", {})
-        logon_id = logons.get((actor.username, system.hostname))
-        if not logon_id:
-            return None
+        key = (actor.username, system.hostname)
+        registry = getattr(self, "_storyline_logon_registry", {})
+        ordered = registry.get(key)
+        if ordered is None:
+            latest = getattr(self, "_last_storyline_logon_by_actor_system", {}).get(key)
+            ordered = [latest] if latest else []
+        valid_ids = None
         if at_time is not None:
-            valid_sessions = self.state_manager.get_sessions_for_user_at(actor.username, at_time)
-            if not any(
-                session.logon_id == logon_id and session.system == system.hostname
-                for session in valid_sessions
+            valid_ids = {
+                session.logon_id
+                for session in self.state_manager.get_sessions_for_user_at(actor.username, at_time)
+                if session.system == system.hostname
+            }
+        for logon_id in reversed(ordered):
+            if valid_ids is not None and logon_id not in valid_ids:
+                continue
+            session = self.state_manager.get_session(logon_id)
+            if session is not None and session.system == system.hostname:
+                return logon_id
+        return None
+
+    def _ensure_storyline_session_end_pairs(self) -> None:
+        """Pair explicit logoffs with the latest preceding durable session intent."""
+        if hasattr(self, "_storyline_start_to_logoff"):
+            return
+        pending: dict[tuple[str, str], list[str]] = {}
+        start_to_logoff: dict[str, str] = {}
+        logoff_plans: dict[str, SessionEndPlan] = {}
+        scenario = getattr(self, "scenario", None)
+        for storyline_event in getattr(scenario, "storyline", []):
+            if not all(
+                hasattr(storyline_event, field)
+                for field in ("actor", "system", "id", "time", "events")
             ):
-                return None
-        session = self.state_manager.get_session(logon_id)
-        if session is None or session.system != system.hostname:
+                continue
+            key = (storyline_event.actor, storyline_event.system)
+            for spec_index, spec in enumerate(storyline_event.events):
+                spec_id = f"{storyline_event.id}:{spec_index}"
+                is_durable_logon = spec.type == "logon" and getattr(
+                    spec,
+                    "logon_type",
+                    3,
+                ) in {2, 10, 11}
+                if spec.type in {"ssh_session", "rdp_session"} or is_durable_logon:
+                    pending.setdefault(key, []).append(spec_id)
+                elif spec.type == "logoff" and pending.get(key):
+                    start_id = pending[key].pop()
+                    start_to_logoff[start_id] = spec_id
+                    end_time = self._parse_storyline_time(storyline_event.time)
+                    if end_time.tzinfo is None:
+                        end_time = end_time.replace(tzinfo=UTC)
+                    logoff_plans[spec_id] = SessionEndPlan(
+                        canonical_end=end_time.astimezone(UTC),
+                        authority="explicit_storyline",
+                        storyline_event_id=storyline_event.id,
+                    )
+        self._storyline_start_to_logoff = start_to_logoff
+        self._storyline_session_end_plans = logoff_plans
+        self._storyline_logoff_to_logon: dict[str, str] = {}
+
+    def _session_end_plan_for_current_start(self) -> SessionEndPlan | None:
+        """Return the explicit end paired with the current session-start spec."""
+        self._ensure_storyline_session_end_pairs()
+        spec_id = getattr(self, "_current_storyline_spec_id", "")
+        logoff_id = self._storyline_start_to_logoff.get(spec_id)
+        return self._storyline_session_end_plans.get(logoff_id or "")
+
+    def _session_end_plan_for_current_logoff(self) -> tuple[str, SessionEndPlan] | None:
+        """Return the exact session and close plan paired with the current logoff."""
+        self._ensure_storyline_session_end_pairs()
+        spec_id = getattr(self, "_current_storyline_spec_id", "")
+        plan = self._storyline_session_end_plans.get(spec_id)
+        logon_id = self._storyline_logoff_to_logon.get(spec_id)
+        if plan is None or logon_id is None:
             return None
-        return logon_id
+        return logon_id, plan
 
     def _resolve_storyline_process_spill_logon_id(
         self,
@@ -1858,8 +1942,6 @@ class StorylineMixin:
             return logon_id
 
         required_until = self._next_storyline_logoff_time_for_actor_system(actor, system, time)
-        if required_until is not None:
-            required_until += timedelta(minutes=2)
         plan = self.world_model.plan_session(
             user=actor,
             target_system=system,
@@ -1917,8 +1999,12 @@ class StorylineMixin:
         at_time: datetime | None = None,
     ) -> str | None:
         """Return the latest storyline network-logon source for this actor/host."""
-        if self._last_storyline_logon_for_actor_system(actor, system, at_time=at_time) is None:
+        logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=at_time)
+        if logon_id is None:
             return None
+        by_logon = getattr(self, "_storyline_logon_source_by_id", {})
+        if logon_id in by_logon:
+            return by_logon[logon_id]
         sources = getattr(self, "_last_storyline_logon_source_by_actor_system", {})
         return sources.get((actor.username, system.hostname))
 
@@ -2685,6 +2771,8 @@ class StorylineMixin:
             self.dispatcher.storyline_cluster_id = storyline_event.id
             try:
                 for i, spec in enumerate(storyline_event.events):
+                    previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
+                    self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
                     event_t = event_time + timedelta(seconds=cadence_offsets[i])
                     event_t = self._apply_storyline_shell_availability(
                         actor=actor,
@@ -2693,17 +2781,20 @@ class StorylineMixin:
                         rng=rng,
                     )
                     self.state_manager.set_current_time(event_t)
-                    malicious_event = self._execute_typed_event(
-                        spec=spec,
-                        actor=actor,
-                        system=system,
-                        time=event_t,
-                        activity=storyline_event.activity,
-                        explicit_types=explicit_types,
-                        future_specs=itertools.islice(storyline_event.events, i + 1, None),
-                    )
-                    if malicious_event:
-                        self.malicious_events.append(malicious_event)
+                    try:
+                        malicious_event = self._execute_typed_event(
+                            spec=spec,
+                            actor=actor,
+                            system=system,
+                            time=event_t,
+                            activity=storyline_event.activity,
+                            explicit_types=explicit_types,
+                            future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                        )
+                        if malicious_event:
+                            self.malicious_events.append(malicious_event)
+                    finally:
+                        self._current_storyline_spec_id = previous_spec_id
                 self._flush_story_process_terminations()
             finally:
                 self.dispatcher.storyline_cluster_id = previous_cluster
@@ -2752,6 +2843,8 @@ class StorylineMixin:
         self.dispatcher.storyline_cluster_id = storyline_event.id
         try:
             for i, spec in enumerate(storyline_event.events):
+                previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
+                self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
                 event_t = event_time + timedelta(seconds=cadence_offsets[i])
                 event_t = self._apply_storyline_shell_availability(
                     actor=actor,
@@ -2760,17 +2853,20 @@ class StorylineMixin:
                     rng=rng,
                 )
                 self.state_manager.set_current_time(event_t)
-                malicious_event = self._execute_typed_event(
-                    spec=spec,
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    activity=storyline_event.activity,
-                    explicit_types=explicit_types,
-                    future_specs=itertools.islice(storyline_event.events, i + 1, None),
-                )
-                if malicious_event:
-                    self.malicious_events.append(malicious_event)
+                try:
+                    malicious_event = self._execute_typed_event(
+                        spec=spec,
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        activity=storyline_event.activity,
+                        explicit_types=explicit_types,
+                        future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                    )
+                    if malicious_event:
+                        self.malicious_events.append(malicious_event)
+                finally:
+                    self._current_storyline_spec_id = previous_spec_id
             self._flush_story_process_terminations()
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
@@ -2886,12 +2982,14 @@ class StorylineMixin:
 
         if spec.type == "logon":
             source_ip = spec.source_ip or pick_external_actor_ip("logon_source_ips", rng)
+            session_end_plan = self._session_end_plan_for_current_start()
             logon_id = self.activity_generator.generate_logon(
                 user=actor,
                 system=system,
                 time=time,
                 logon_type=spec.logon_type,
                 source_ip=source_ip,
+                session_end_plan=session_end_plan,
             )
             # Protect storyline-created sessions from baseline logoff
             session = self.state_manager.get_session(logon_id)
@@ -2922,20 +3020,37 @@ class StorylineMixin:
             malicious_event["source_ip"] = source_ip
 
         elif spec.type == "logoff":
-            sessions = [
-                session
-                for session in self.state_manager.get_sessions_for_user(actor.username)
-                if session.system == system.hostname
-            ]
-            target_session = max(
-                sessions,
-                key=lambda session: session.start_time,
-                default=None,
-            )
-            if target_session:
+            paired_close = self._session_end_plan_for_current_logoff()
+            if paired_close is not None:
+                logon_id, session_end_plan = paired_close
+                target_session = self.state_manager.get_session(logon_id)
+                if target_session is None or target_session.system != system.hostname:
+                    raise StateError(
+                        f"Explicit storyline logoff {session_end_plan.storyline_event_id} "
+                        f"lost its paired session {logon_id} on {system.hostname}"
+                    )
                 self.activity_generator.generate_logoff(
-                    actor, system, time, target_session.logon_id, from_storyline=True
+                    actor,
+                    system,
+                    session_end_plan.canonical_end,
+                    logon_id,
+                    from_storyline=True,
+                    session_end_plan=session_end_plan,
                 )
+            else:
+                logon_id = self._last_storyline_logon_for_actor_system(
+                    actor,
+                    system,
+                    at_time=time,
+                )
+                if logon_id is not None:
+                    self.activity_generator.generate_logoff(
+                        actor,
+                        system,
+                        time,
+                        logon_id,
+                        from_storyline=True,
+                    )
 
         elif spec.type == "email_message":
             result = self.activity_generator.generate_email_message(
@@ -3019,8 +3134,6 @@ class StorylineMixin:
                             system,
                             time,
                         )
-                        if required_until is not None:
-                            required_until += timedelta(minutes=2)
                         # Pre-compute the session kind via the planner so reuse
                         # filtering matches the correct transport type.
                         plan = self.world_model.plan_session(
@@ -3878,6 +3991,7 @@ class StorylineMixin:
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
+                    session_end_plan=self._session_end_plan_for_current_start(),
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -3935,6 +4049,7 @@ class StorylineMixin:
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
+                    session_end_plan=self._session_end_plan_for_current_start(),
                 )
             else:
                 source_ip = spec.source_ip or system.ip

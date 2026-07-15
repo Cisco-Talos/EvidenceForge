@@ -33,6 +33,7 @@ runtime state tracking.
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger
 
 
@@ -81,6 +82,7 @@ class ActiveSession:
     logon_guid: str = ""
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
+    end_plan: SessionEndPlan | None = None
 
 
 @dataclass

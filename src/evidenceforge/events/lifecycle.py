@@ -10,6 +10,32 @@ from datetime import datetime
 from typing import Literal
 
 LifecyclePhase = Literal["start", "dependent", "closure"]
+SessionEndAuthority = Literal["explicit_storyline", "generated"]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionEndPlan:
+    """Canonical intent for one durable session end.
+
+    Explicit storyline plans are authoritative deadlines. Generated plans may
+    still be moved after later activity by the owning session bundle.
+    """
+
+    canonical_end: datetime
+    authority: SessionEndAuthority
+    storyline_event_id: str = ""
+
+    @property
+    def is_authoritative(self) -> bool:
+        """Return whether dependents must be bounded by this end time."""
+
+        return self.authority == "explicit_storyline"
+
+    def __post_init__(self) -> None:
+        """Require explicit plans to retain their storyline owner."""
+
+        if self.authority == "explicit_storyline" and not self.storyline_event_id:
+            raise ValueError("Explicit session end plans require a storyline_event_id")
 
 
 @dataclass(frozen=True, slots=True)

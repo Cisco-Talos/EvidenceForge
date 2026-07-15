@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_ntp_ips
@@ -820,6 +821,7 @@ class WorldPlanner:
         allow_existing: bool = True,
         storyline_protected: bool = False,
         required_until: datetime | None = None,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> ActiveSession:
         return self.bootstrap_user_session(
             user=user,
@@ -831,6 +833,7 @@ class WorldPlanner:
             allow_existing=allow_existing,
             storyline_protected=storyline_protected,
             required_until=required_until,
+            session_end_plan=session_end_plan,
         ).session
 
     def _find_windows_interactive_session(
@@ -869,6 +872,7 @@ class WorldPlanner:
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
         required_until: datetime | None = None,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> SessionBootstrapResult:
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
@@ -878,6 +882,11 @@ class WorldPlanner:
             )
             if existing_interactive is not None:
                 existing_interactive.last_activity_time = time
+                if session_end_plan is not None:
+                    self.state_manager.plan_session_end(
+                        existing_interactive.logon_id,
+                        session_end_plan,
+                    )
                 if storyline_protected:
                     existing_interactive.storyline_protected = True
                 return SessionBootstrapResult(session=existing_interactive, network_uid=None)
@@ -897,6 +906,7 @@ class WorldPlanner:
                 and required_until is not None
                 and existing.session_kind == "ssh"
                 and existing.network_close_time is not None
+                and not (existing.end_plan and existing.end_plan.is_authoritative)
             ):
                 required_until_utc = (
                     required_until.replace(tzinfo=UTC)
@@ -912,6 +922,8 @@ class WorldPlanner:
                     transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
+                if session_end_plan is not None:
+                    self.state_manager.plan_session_end(existing.logon_id, session_end_plan)
                 if existing.session_kind == "ssh":
                     ensure_shell = getattr(
                         self.activity_generator,
@@ -957,12 +969,20 @@ class WorldPlanner:
                 time,
                 rng,
                 required_until=required_until,
+                session_end_plan=session_end_plan,
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
             return result
         if plan.session_kind == "rdp":
-            result = self._bootstrap_rdp_session(user, plan, logon_time, time, rng)
+            result = self._bootstrap_rdp_session(
+                user,
+                plan,
+                logon_time,
+                time,
+                rng,
+                session_end_plan=session_end_plan,
+            )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
             return result
@@ -973,6 +993,7 @@ class WorldPlanner:
             time=logon_time,
             logon_type=plan.logon_type,
             source_ip=plan.source_ip,
+            session_end_plan=session_end_plan,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -1215,6 +1236,7 @@ class WorldPlanner:
         activity_time: datetime,
         rng: random.Random,
         required_until: datetime | None = None,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> SessionBootstrapResult:
         source_os = (
             self.world_model.hosts[plan.source_system.hostname].os_category
@@ -1226,7 +1248,7 @@ class WorldPlanner:
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
         )
-        if required_until is not None:
+        if required_until is not None and session_end_plan is None:
             required_until = (
                 required_until.replace(tzinfo=UTC)
                 if required_until.tzinfo is None
@@ -1244,6 +1266,7 @@ class WorldPlanner:
             source_system=plan.source_system,
             source_port=source_port,
             min_duration=min_duration,
+            session_end_plan=session_end_plan,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -1277,6 +1300,7 @@ class WorldPlanner:
         logon_time: datetime,
         activity_time: datetime,
         rng: random.Random,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
         source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
@@ -1303,6 +1327,7 @@ class WorldPlanner:
             source_pid=source_pid,
             source_process_time=source_process_time if plan.source_system is not None else None,
             source_process_factory=source_process_factory,
+            session_end_plan=session_end_plan,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
