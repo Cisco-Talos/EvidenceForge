@@ -30,6 +30,7 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, ProcessContext
+from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.generation import state_manager as state_manager_module
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
@@ -1196,6 +1197,28 @@ class TestProcessManagement:
                     command_line="proc.exe",
                     username="jdoe",
                 ),
+            )
+        )
+
+        proc = sm.get_process("WS-01", pid)
+        assert proc is not None
+        assert proc.last_activity_time == activity_time
+
+    def test_apply_tracks_canonical_actor_activity_without_process_context(self):
+        """Canonical network actors extend lifetime without a compatibility process context."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        activity_time = start + timedelta(minutes=3)
+        sm.set_current_time(start)
+        pid = sm.create_process("WS-01", 0, "browser.exe", "browser.exe", "jdoe", "Medium")
+        actor = sm.get_process_identity("WS-01", pid)
+        assert actor is not None
+
+        sm.apply(
+            SecurityEvent(
+                timestamp=activity_time,
+                event_type="connection",
+                identity_plan=EventIdentityPlan(actor=actor),
             )
         )
 

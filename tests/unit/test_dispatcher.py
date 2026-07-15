@@ -100,6 +100,27 @@ class TestDispatchRouting:
         sm.apply.assert_called_once_with(event)
         emitter.emit.assert_not_called()
 
+    def test_dispatch_allocates_unique_deterministic_canonical_event_ids(self):
+        """Distinct occurrences receive stable IDs before state application and rendering."""
+        first_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
+        first_events = [
+            SecurityEvent(timestamp=_make_ts(), event_type="failed_logon") for _ in range(2)
+        ]
+        for event in first_events:
+            first_dispatcher.dispatch(event)
+
+        second_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
+        second_events = [
+            SecurityEvent(timestamp=_make_ts(), event_type="failed_logon") for _ in range(2)
+        ]
+        for event in second_events:
+            second_dispatcher.dispatch(event)
+
+        first_ids = [event.event_id for event in first_events]
+        second_ids = [event.event_id for event in second_events]
+        assert len(set(first_ids)) == 2
+        assert first_ids == second_ids
+
     def test_dispatch_applies_storyline_cluster_provenance_only(self):
         """storyline_cluster_id marks context provenance without changing origin flag."""
         sm = MagicMock(spec=StateManager)

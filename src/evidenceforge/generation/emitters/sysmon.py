@@ -1123,26 +1123,17 @@ class SysmonEventEmitter(LogEmitter):
         return image
 
     def _terminal_session_id(self, hostname: str, auth, logon_id: str) -> int:
-        """Return a source-native TerminalSessionId for Sysmon process creates."""
+        """Return the canonical TerminalSessionId for Sysmon process creates."""
         if auth is None:
             return 0
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
         key = (hostname, logon_id or username)
-        cached_session_id = self._terminal_session_ids_by_logon.get(key)
-        if cached_session_id is not None:
-            return cached_session_id
         if auth.session_id > 0:
             self._terminal_session_ids_by_logon[key] = auth.session_id
             return auth.session_id
-        if auth.logon_type in {2, 7, 10, 11}:
-            session_id = 1 + (
-                _stable_seed(f"sysmon_terminal_session:{hostname}:{logon_id or username}") % 8
-            )
-            self._terminal_session_ids_by_logon[key] = session_id
-            return session_id
-        return 0
+        return self._terminal_session_ids_by_logon.get(key, 0)
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
@@ -1237,6 +1228,8 @@ class SysmonEventEmitter(LogEmitter):
             if access and access.target_user
             else "NT AUTHORITY\\SYSTEM"
         )
+        if access is None or access.source_thread_id < 0:
+            raise ValueError("Sysmon ProcessAccess requires a canonical source thread ID")
 
         event_data = {
             "EventID": 10,
@@ -1250,7 +1243,7 @@ class SysmonEventEmitter(LogEmitter):
             "SourceProcessGUID": source_guid,
             "SourceProcessId": proc.pid,
             "SourceImage": proc.image,
-            "SourceThreadId": access.source_thread_id if access else -1,
+            "SourceThreadId": access.source_thread_id,
             "SourceUser": user,
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,

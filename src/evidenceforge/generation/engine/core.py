@@ -416,10 +416,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if "windows_event_security" in self.emitters:
             self.emitters["windows_event_security"]._state_manager = self.state_manager
             self.emitters["windows_event_security"]._system_pids = self._system_pids
-        if "ecar" in self.emitters:
-            self.emitters["ecar"]._state_manager = self.state_manager
-            self.emitters["ecar"]._system_pids = self._system_pids
-
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
         if self.scenario.storyline:

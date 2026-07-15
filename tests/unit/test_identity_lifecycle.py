@@ -141,6 +141,33 @@ def test_process_create_and_terminate_share_identity_and_primary_thread() -> Non
     assert terminate.edr.tid == create.edr.tid
 
 
+def test_system_process_create_uses_canonical_process_and_primary_thread() -> None:
+    state, planner, logon_id, parent_pid, child_pid = _identity_state()
+    child = state.get_process_identity("WS-01", child_pid)
+    assert child is not None
+    assert child.primary_thread is not None
+    event = SecurityEvent(
+        timestamp=child.started_at,
+        event_type="system_process_create",
+        src_host=_host(),
+        auth=AuthContext(username="analyst", logon_id=logon_id),
+        process=_process_context(child_pid, parent_pid, logon_id),
+        edr=EdrContext(),
+    )
+
+    planner.plan(event)
+
+    assert event.identity_plan is not None
+    assert event.identity_plan.subject == child
+    assert isinstance(event.identity_plan.actor, ProcessIdentity)
+    assert event.identity_plan.actor.pid == parent_pid
+    assert event.edr is not None
+    assert event.edr.tid == child.primary_thread.tid
+    assert event.lifecycle is not None
+    assert event.lifecycle.group_id == "child-process-group"
+    assert event.lifecycle.phase == "start"
+
+
 def test_dependent_process_event_keeps_object_semantics_without_synthesized_tid() -> None:
     state, planner, logon_id, parent_pid, child_pid = _identity_state()
     event = SecurityEvent(
@@ -271,6 +298,30 @@ def test_session_start_unlock_child_and_logoff_lifecycle() -> None:
     assert logoff.lifecycle is not None
     assert logoff.lifecycle.group_id == logon.lifecycle.group_id
     assert logoff.lifecycle.phase == "closure"
+
+
+def test_ssh_and_machine_logons_start_their_durable_session_lifecycle() -> None:
+    state, planner, logon_id, _parent_pid, _child_pid = _identity_state()
+    session = state.get_session_identity(logon_id)
+    assert session is not None
+
+    for event_type in ("ssh_session", "machine_logon"):
+        start = SecurityEvent(
+            timestamp=session.started_at,
+            event_type=event_type,
+            dst_host=_host(),
+            auth=AuthContext(username="analyst", logon_id=logon_id, logon_type=10),
+            edr=EdrContext(),
+        )
+        planner.plan(start)
+
+        assert start.identity_plan is not None
+        assert start.identity_plan.subject == session
+        assert start.edr is not None
+        assert start.edr.object_id == session.object_id
+        assert start.lifecycle is not None
+        assert start.lifecycle.group_id == session.lifecycle_group_id
+        assert start.lifecycle.phase == "start"
 
 
 def test_flow_actor_is_canonical_or_omitted_as_complete_group() -> None:

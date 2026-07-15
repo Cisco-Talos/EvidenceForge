@@ -85,14 +85,7 @@ _KERNEL_UPTIME_RE = re.compile(
     r"(?P<uptime>\d+\.\d{6})"
     r"(?P<suffix>\])"
 )
-_SSHD_PID_RFC3164_RE = re.compile(r"(?P<prefix>\bsshd\[)(?P<pid>\d+)(?P<suffix>\]:)")
-_SSHD_PID_RFC5424_RE = re.compile(
-    r"(?P<prefix>^<\d{1,3}>1\s+\S+\s+\S+\s+sshd\s+)"
-    r"(?P<pid>\d+)"
-    r"(?P<suffix>\s+-\s+-\s+)"
-)
 _MAX_LOGIND_SESSION_ID_DIGITS = 18
-_MAX_SSHD_PID_DIGITS = 18
 _PAM_OPEN_VISIBLE_WINDOW = timedelta(seconds=20)
 
 
@@ -154,16 +147,6 @@ def _linux_uid_collision_repaired(lines: list[str], host_key: str) -> list[str]:
 def _parse_logind_session_id(value: str) -> int | None:
     """Parse bounded systemd-logind session IDs without triggering huge-int failures."""
     if len(value) > _MAX_LOGIND_SESSION_ID_DIGITS:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
-def _parse_sshd_pid(value: str) -> int | None:
-    """Parse bounded sshd PID strings without triggering huge-int failures."""
-    if len(value) > _MAX_SSHD_PID_DIGITS:
         return None
     try:
         return int(value)
@@ -391,7 +374,6 @@ class SyslogEmitter(HostMultiplexEmitter):
         self._normalize_pam_uid_collisions()
         self._normalize_sudo_session_lifecycles()
         self._normalize_kernel_uptime_stamps()
-        self._normalize_sshd_child_pids()
         self.flush(force=True)
 
     def _normalize_sof_elk_buffers(self) -> None:
@@ -404,7 +386,6 @@ class SyslogEmitter(HostMultiplexEmitter):
                 normalized = self._normalize_logind_session_ids_for_lines(normalized, host_key)
                 normalized = self._normalize_sudo_session_lifecycles_for_lines(normalized)
                 normalized = self._normalize_kernel_uptime_stamps_for_lines(normalized)
-                normalized = self._normalize_sshd_child_pids_for_lines(normalized, host_key)
                 self._replace_buffers_by_sorted_rows(rows, normalized)
 
     def _sorted_lines_by_host(self) -> dict[str, list[tuple[int, tuple[Any, ...], str, str]]]:
@@ -530,66 +511,6 @@ class SyslogEmitter(HostMultiplexEmitter):
                     [line for _year, _sort_key, _route_key, line in rows]
                 )
                 self._replace_buffers_by_sorted_rows(rows, normalized)
-
-    def _normalize_sshd_child_pids(self) -> None:
-        """Keep visible sshd child PIDs monotonic in final syslog order."""
-        with self._writers_lock:
-            for host_key, rows in self._sorted_lines_by_host().items():
-                if not rows:
-                    continue
-                normalized = self._normalize_sshd_child_pids_for_lines(
-                    [line for _year, _sort_key, _route_key, line in rows],
-                    host_key,
-                )
-                self._replace_buffers_by_sorted_rows(rows, normalized)
-
-    @staticmethod
-    def _sshd_pid_match(line: str) -> re.Match[str] | None:
-        """Return the sshd PID match for RFC5424 or RFC3164 syslog."""
-        return _SSHD_PID_RFC5424_RE.search(line) or _SSHD_PID_RFC3164_RE.search(line)
-
-    @classmethod
-    def _normalize_sshd_child_pids_for_lines(cls, lines: list[str], host_key: str) -> list[str]:
-        """Return lines with per-session sshd child PIDs increasing by source time."""
-        pid_map: dict[str, int] = {}
-        latest_session_pid = 0
-        normalized: list[str] = []
-        for line in lines:
-            match = cls._sshd_pid_match(line)
-            if match is None:
-                normalized.append(line)
-                continue
-            old_pid = match.group("pid")
-            new_pid = pid_map.get(old_pid)
-            if new_pid is None:
-                parsed_old_pid = _parse_sshd_pid(old_pid)
-                if parsed_old_pid is None:
-                    normalized.append(line)
-                    continue
-                opens_visible_session = (
-                    "Connection from " in line
-                    or "Accepted " in line
-                    or "pam_unix(sshd:session): session opened" in line
-                )
-                if not opens_visible_session:
-                    new_pid = parsed_old_pid
-                    pid_map[old_pid] = new_pid
-                elif parsed_old_pid > latest_session_pid:
-                    new_pid = parsed_old_pid
-                    latest_session_pid = new_pid
-                    pid_map[old_pid] = new_pid
-                else:
-                    bump = 1 + (
-                        _stable_seed(f"syslog_sshd_pid:{host_key}:{old_pid}:{len(pid_map)}") % 17
-                    )
-                    new_pid = latest_session_pid + bump
-                    latest_session_pid = new_pid
-                    pid_map[old_pid] = new_pid
-            normalized.append(
-                f"{line[: match.start()]}{match.group('prefix')}{new_pid}{match.group('suffix')}"
-                f"{line[match.end() :]}"
-            )
-        return normalized
 
     @staticmethod
     def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:

@@ -1138,6 +1138,15 @@ def test_linux_local_session_shell_has_visible_terminal_parent(
     parent_proc = state_manager.get_process(system.hostname, shell_proc.parent_pid)
     assert parent_proc is not None
     assert parent_proc.image in {"/bin/login", "/usr/libexec/gnome-terminal-server"}
+    user_manager = state_manager.get_process(system.hostname, parent_proc.parent_pid)
+    session = state_manager.get_session(logon_id)
+    assert user_manager is not None
+    assert session is not None
+    assert {
+        user_manager.lifecycle_group_id,
+        parent_proc.lifecycle_group_id,
+        shell_proc.lifecycle_group_id,
+    } == {session.lifecycle_group_id}
 
 
 def test_find_user_session_handles_mixed_timezone_start_times(

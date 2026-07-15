@@ -1051,6 +1051,14 @@ class StateManager:
                 logon_id,
             )
             owning_session = self.get_session(logon_id) if logon_id else None
+            process_lifecycle_group_id = lifecycle_group_id or stable_uuid(
+                "process-lifecycle", object_id
+            )
+            process_parent_group_id = self._process_parent_lifecycle_group(
+                process_lifecycle_group_id,
+                parent_lifecycle_group_id,
+                owning_session,
+            )
             process = RunningProcess(
                 pid=pid,
                 parent_pid=parent_pid,
@@ -1062,10 +1070,8 @@ class StateManager:
                 integrity_level=integrity_level,
                 logon_id=logon_id,
                 ecar_object_id=object_id,
-                lifecycle_group_id=lifecycle_group_id
-                or stable_uuid("process-lifecycle", object_id),
-                parent_lifecycle_group_id=parent_lifecycle_group_id
-                or (owning_session.lifecycle_group_id if owning_session is not None else ""),
+                lifecycle_group_id=process_lifecycle_group_id,
+                parent_lifecycle_group_id=process_parent_group_id,
             )
             self.state.running_processes[(system, pid)] = process
             self._process_object_ids[(system, pid)] = object_id
@@ -1189,8 +1195,10 @@ class StateManager:
             process_lifecycle_group_id = lifecycle_group_id or stable_uuid(
                 "process-lifecycle", ecar_object_id
             )
-            process_parent_group_id = parent_lifecycle_group_id or (
-                owning_session.lifecycle_group_id if owning_session is not None else ""
+            process_parent_group_id = self._process_parent_lifecycle_group(
+                process_lifecycle_group_id,
+                parent_lifecycle_group_id,
+                owning_session,
             )
             process = RunningProcess(
                 pid=pid,
@@ -1229,6 +1237,27 @@ class StateManager:
             process.primary_tid = primary_thread.tid
             logger.debug(f"Created process {pid} on {system}: {image}")
             return pid
+
+    @staticmethod
+    def _process_parent_lifecycle_group(
+        lifecycle_group_id: str,
+        explicit_parent_group_id: str,
+        owning_session: ActiveSession | None,
+    ) -> str:
+        """Return process lifecycle parentage without a self-parenting group.
+
+        Ordinary processes are children of their owning session. Session-bootstrap
+        helpers intentionally share the session group so their parent is instead
+        the session's parent, if one exists.
+        """
+
+        if explicit_parent_group_id and explicit_parent_group_id != lifecycle_group_id:
+            return explicit_parent_group_id
+        if owning_session is None:
+            return ""
+        if owning_session.lifecycle_group_id == lifecycle_group_id:
+            return owning_session.parent_lifecycle_group_id
+        return owning_session.lifecycle_group_id
 
     def _allocate_thread_id(self, system: str, process_object_id: str, pid: int) -> int:
         """Allocate a deterministic host-native TID for an explicitly modeled thread."""
@@ -1973,12 +2002,24 @@ class StateManager:
         process termination) and updates (connection bytes).
         """
         with self._lock:
-            if event.event_type != "process_terminate" and event.process and event.src_host:
-                proc = self.state.running_processes.get(
-                    (event.src_host.hostname, event.process.pid)
-                )
+            process_pid = -1
+            process_host = ""
+            if event.process is not None and event.src_host is not None:
+                process_pid = event.process.pid
+                process_host = event.src_host.hostname
+            elif event.identity_plan is not None and isinstance(
+                event.identity_plan.actor, ProcessIdentity
+            ):
+                process_pid = event.identity_plan.actor.pid
+                process_host = event.identity_plan.actor.hostname
+            if event.event_type != "process_terminate" and process_pid >= 0 and process_host:
+                proc = self.state.running_processes.get((process_host, process_pid))
                 if proc is not None:
                     activity_time = ensure_utc(event.timestamp)
+                    if event.network is not None and event.network.transaction is not None:
+                        closed_at = event.network.transaction.closed_at
+                        if closed_at is not None:
+                            activity_time = max(activity_time, ensure_utc(closed_at))
                     if proc.last_activity_time is None or activity_time > proc.last_activity_time:
                         proc.last_activity_time = activity_time
 

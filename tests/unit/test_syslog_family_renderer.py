@@ -24,6 +24,9 @@
 
 from datetime import UTC, datetime
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HostContext, SyslogContext
+from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.syslog import (
     SyslogEmitter,
     _fallback_linux_uid,
@@ -111,35 +114,43 @@ def test_rfc3164_timestamp_sort_key_handles_single_digit_day() -> None:
     )
 
 
-def test_normalize_sshd_child_pids_preserves_session_mapping_and_monotonicity() -> None:
-    lines = [
-        "<86>1 2024-03-18T12:37:10.283139Z app sshd 839794 - - Connection from 10.0.1.10 port 50000 on 10.0.2.10 port 22",
-        "<86>1 2024-03-18T12:37:11.001000Z app sshd 839794 - - Accepted password for admin from 10.0.1.10 port 50000 ssh2",
-        "<86>1 2024-03-18T12:45:43.059582Z app sshd 838687 - - Connection from 10.0.1.11 port 50001 on 10.0.2.10 port 22",
-        "<86>1 2024-03-18T12:45:44.100000Z app sshd 838687 - - Accepted password for admin from 10.0.1.11 port 50001 ssh2",
+def test_syslog_close_preserves_canonical_sshd_child_pids(tmp_path) -> None:
+    """Source rendering must not rewrite canonical sshd process identities."""
+    emitter = SyslogEmitter(load_format("syslog"), tmp_path, threaded=False)
+    host = HostContext(
+        hostname="app",
+        ip="10.0.2.10",
+        os="Ubuntu 24.04",
+        os_category="linux",
+        system_type="server",
+        fqdn="app.example",
+    )
+    rows = [
+        (datetime(2024, 3, 18, 12, 37, 10, tzinfo=UTC), 839794, "10.0.1.10", 50000),
+        (datetime(2024, 3, 18, 12, 45, 43, tzinfo=UTC), 838687, "10.0.1.11", 50001),
     ]
+    for timestamp, pid, source_ip, source_port in rows:
+        emitter.emit(
+            SecurityEvent(
+                timestamp=timestamp,
+                event_type="syslog",
+                src_host=host,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=pid,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        f"Connection from {source_ip} port {source_port} on 10.0.2.10 port 22"
+                    ),
+                ),
+            )
+        )
+    emitter.close()
 
-    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
-
-    pids = [int(line.split(" sshd ")[1].split(" ")[0]) for line in normalized]
-    assert pids[0] == pids[1]
-    assert pids[2] == pids[3]
-    assert pids[2] > pids[0]
-
-
-def test_normalize_sshd_child_pids_does_not_let_orphan_closes_rewrite_session_open() -> None:
-    lines = [
-        "<86>1 2024-03-18T15:51:34.963802Z app sshd 784323 - - Connection from 10.0.1.33 port 63690 on 10.0.2.10 port 22",
-        "<86>1 2024-03-18T15:51:35.491983Z app sshd 784323 - - Accepted publickey for user from 10.0.1.33 port 63690 ssh2",
-        "<86>1 2024-03-18T15:52:24.705921Z app sshd 784329 - - pam_unix(sshd:session): session closed for user other",
-        "<86>1 2024-03-18T15:54:22.189035Z app sshd 784327 - - Connection from 10.0.1.31 port 63843 on 10.0.2.10 port 22",
-        "<86>1 2024-03-18T15:54:23.876283Z app sshd 784327 - - Accepted password for user from 10.0.1.31 port 63843 ssh2",
-    ]
-
-    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
-
-    pids = [int(line.split(" sshd ")[1].split(" ")[0]) for line in normalized]
-    assert pids == [784323, 784323, 784329, 784327, 784327]
+    lines = (tmp_path / "app.example" / "syslog.log").read_text().splitlines()
+    pids = [int(line.split(" sshd ")[1].split(" ")[0]) for line in lines]
+    assert pids == [839794, 838687]
 
 
 def test_normalize_logind_session_ids_preserves_monotonic_canonical_ids() -> None:
@@ -261,16 +272,3 @@ def test_normalize_sudo_session_lifecycles_preserves_non_rfc5424_order() -> None
     normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
 
     assert normalized == lines
-
-
-def test_normalize_sshd_child_pids_skips_oversized_pid_without_crashing() -> None:
-    huge_pid = "9" * 5000
-    lines = [
-        f"<86>1 2024-03-18T12:37:10.283139Z app sshd {huge_pid} - - Connection from 10.0.1.10 port 50000 on 10.0.2.10 port 22",
-        "<86>1 2024-03-18T12:37:11.001000Z app sshd 100 - - Accepted password for admin from 10.0.1.10 port 50000 ssh2",
-    ]
-
-    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
-
-    assert normalized[0] == lines[0]
-    assert " sshd 100 " in normalized[1]

@@ -161,6 +161,8 @@ class SecurityEvent:
     source_timing: SourceTimingPlan | None = None
 
     # Correlated action lifecycle and frozen network-sensor projections.
+    # EventDispatcher allocates event_id before state application and observation.
+    event_id: str = ""
     lifecycle: ActionLifecycleContext | None = None
     identity_plan: EventIdentityPlan | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()

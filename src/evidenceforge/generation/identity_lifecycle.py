@@ -38,9 +38,9 @@ from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils.rng import stable_uuid
 
-_PROCESS_START_TYPES = {"process_create"}
+_PROCESS_START_TYPES = {"process_create", "system_process_create"}
 _PROCESS_CLOSURE_TYPES = {"process_terminate"}
-_SESSION_START_TYPES = {"logon"}
+_SESSION_START_TYPES = {"logon", "machine_logon", "ssh_session"}
 _SESSION_CLOSURE_TYPES = {"logoff"}
 
 
@@ -87,7 +87,7 @@ class IdentityLifecyclePlanner:
             )
             return EventIdentityPlan(
                 subject=process,
-                actor=actor if event.event_type == "process_create" else None,
+                actor=actor if event.event_type in _PROCESS_START_TYPES else None,
                 session=session,
             )
 
@@ -142,8 +142,9 @@ class IdentityLifecyclePlanner:
             return EventIdentityPlan(subject=session, session=session)
 
         actor = process or self._network_actor_identity(event)
-        if actor is not None or session is not None:
-            return EventIdentityPlan(actor=actor, session=session)
+        target = self._network_target_identity(event)
+        if actor is not None or target is not None or session is not None:
+            return EventIdentityPlan(actor=actor, target=target, session=session)
         return None
 
     def _plan_lifecycle(
@@ -153,8 +154,12 @@ class IdentityLifecyclePlanner:
         process: ProcessIdentity | None,
         session: SessionIdentity | None,
     ) -> ActionLifecycleContext | None:
-        if event.event_type == "logon" and session is not None:
-            if event.auth is not None and event.auth.logon_type == 7:
+        if event.event_type in _SESSION_START_TYPES and session is not None:
+            if (
+                event.event_type == "logon"
+                and event.auth is not None
+                and event.auth.logon_type == 7
+            ):
                 return ActionLifecycleContext(
                     group_id=stable_uuid(
                         "session-reauth-lifecycle",
@@ -223,6 +228,14 @@ class IdentityLifecyclePlanner:
         return self._state_manager.get_process_identity(
             event.src_host.hostname,
             event.network.initiating_pid,
+        )
+
+    def _network_target_identity(self, event: SecurityEvent) -> ProcessIdentity | None:
+        if event.network is None or event.dst_host is None or event.network.responding_pid < 0:
+            return None
+        return self._state_manager.get_process_identity(
+            event.dst_host.hostname,
+            event.network.responding_pid,
         )
 
     def _target_process_identity(self, event: SecurityEvent) -> ProcessIdentity | None:

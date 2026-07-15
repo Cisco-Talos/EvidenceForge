@@ -12,11 +12,13 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
+    FileContext,
     HostContext,
     NetworkContext,
     ProcessAccessContext,
     ProcessContext,
 )
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
@@ -93,6 +95,51 @@ def _process_context(start_time: datetime) -> ProcessContext:
     )
 
 
+def _process_identity(
+    *,
+    hostname: str,
+    pid: int,
+    parent_pid: int,
+    started_at: datetime,
+    image: str,
+) -> ProcessIdentity:
+    object_id = f"process-{hostname}-{pid}-{started_at.isoformat()}"
+    primary_thread = ThreadIdentity(
+        hostname=hostname,
+        process_object_id=object_id,
+        pid=pid,
+        tid=max(4, ((pid + 3) // 4) * 4),
+        object_id=f"thread-{object_id}",
+        started_at=started_at,
+        kind="primary",
+    )
+    return ProcessIdentity(
+        hostname=hostname,
+        object_id=object_id,
+        pid=pid,
+        parent_pid=parent_pid,
+        image=image,
+        command_line=image,
+        principal=r"CORP\alice",
+        logon_id="0x12345",
+        started_at=started_at,
+        lifecycle_group_id=f"lifecycle-{object_id}",
+        primary_thread=primary_thread,
+    )
+
+
+def _context_from_identity(identity: ProcessIdentity) -> ProcessContext:
+    return ProcessContext(
+        pid=identity.pid,
+        parent_pid=identity.parent_pid,
+        image=identity.image,
+        command_line=identity.command_line,
+        username=identity.principal,
+        logon_id=identity.logon_id,
+        start_time=identity.started_at,
+    )
+
+
 def test_source_time_is_deterministic() -> None:
     """The same event/source/seed should produce the same planned source time."""
     planner = SourceTimingPlanner()
@@ -112,6 +159,88 @@ def test_source_time_is_deterministic() -> None:
     )
 
     assert first == second
+
+
+def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(
+    tmp_path: Path,
+) -> None:
+    """Dispatcher timing owns visible process lifecycle order before serialization."""
+
+    base = _base_time()
+    host = _host_context()
+    parent = _process_identity(
+        hostname=host.hostname,
+        pid=3000,
+        parent_pid=4,
+        started_at=base,
+        image=r"C:\Windows\explorer.exe",
+    )
+    child = _process_identity(
+        hostname=host.hostname,
+        pid=4242,
+        parent_pid=parent.pid,
+        started_at=base + timedelta(milliseconds=15),
+        image=r"C:\Windows\System32\cmd.exe",
+    )
+    parent_event = SecurityEvent(
+        timestamp=parent.started_at,
+        event_type="process_create",
+        src_host=host,
+        process=_context_from_identity(parent),
+        identity_plan=EventIdentityPlan(subject=parent),
+    )
+    child_event = SecurityEvent(
+        timestamp=child.started_at,
+        event_type="process_create",
+        src_host=host,
+        process=_context_from_identity(child),
+        identity_plan=EventIdentityPlan(subject=child, actor=parent),
+    )
+    file_event = SecurityEvent(
+        timestamp=child.started_at + timedelta(milliseconds=25),
+        event_type="file_create",
+        src_host=host,
+        process=_context_from_identity(child),
+        file=FileContext(
+            path=r"C:\Users\alice\AppData\Local\Temp\result.txt",
+            action="create",
+            pid=child.pid,
+        ),
+        identity_plan=EventIdentityPlan(actor=child),
+    )
+    terminate_event = SecurityEvent(
+        timestamp=child.started_at + timedelta(seconds=2),
+        event_type="process_terminate",
+        src_host=host,
+        process=_context_from_identity(child),
+        identity_plan=EventIdentityPlan(subject=child),
+    )
+    planner = SourceTimingPlanner()
+    for event in (parent_event, child_event, file_event, terminate_event):
+        planner.plan_event(event, format_name="ecar")
+
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    for event in (parent_event, child_event, file_event, terminate_event):
+        emitter.emit(event)
+    emitter.close()
+
+    rows = [
+        json.loads(line) for line in (tmp_path / host.fqdn / "ecar.json").read_text().splitlines()
+    ]
+    parent_create = next(row for row in rows if row.get("objectID") == parent.object_id)
+    child_create = next(
+        row for row in rows if row.get("objectID") == child.object_id and row["action"] == "CREATE"
+    )
+    file_create = next(row for row in rows if row["object"] == "FILE")
+    child_terminate = next(
+        row
+        for row in rows
+        if row.get("objectID") == child.object_id and row["action"] == "TERMINATE"
+    )
+
+    assert parent_create["timestamp_ms"] < child_create["timestamp_ms"]
+    assert child_create["timestamp_ms"] < file_create["timestamp_ms"]
+    assert file_create["timestamp_ms"] < child_terminate["timestamp_ms"]
 
 
 def test_nested_action_children_share_host_local_source_offset() -> None:
@@ -512,174 +641,14 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     assert dependent_time > process_time
 
 
-def test_ecar_session_dependents_shift_after_visible_login() -> None:
-    """eCAR PROCESS/FILE/MODULE rows should not precede their same LogonID login."""
-    login_ms = 1_710_781_261_000
-    rows = [
-        {
-            "timestamp_ms": login_ms - 200,
-            "id": "process-event",
-            "hostname": "FILE-SRV-01",
-            "object": "PROCESS",
-            "action": "CREATE",
-            "objectID": "process-object",
-            "pid": 4242,
-            "principal": "MERIDIANHCS\\svc_mhsync",
-            "properties": {"logon_id": "0xf88578c", "image_path": "powershell.exe"},
-        },
-        {
-            "timestamp_ms": login_ms,
-            "id": "session-event",
-            "hostname": "FILE-SRV-01",
-            "object": "USER_SESSION",
-            "action": "LOGIN",
-            "objectID": "session-object",
-            "principal": "MERIDIANHCS\\svc_mhsync",
-            "properties": {
-                "logon_id": "0xf88578c",
-                "outcome": "success",
-                "logon_type": "3",
-            },
-        },
-        {
-            "timestamp_ms": login_ms + 50,
-            "id": "other-process",
-            "hostname": "FILE-SRV-01",
-            "object": "PROCESS",
-            "action": "CREATE",
-            "objectID": "other-object",
-            "pid": 5000,
-            "principal": "NT AUTHORITY\\SYSTEM",
-            "properties": {"logon_id": "0x3e7", "image_path": "svchost.exe"},
-        },
-    ]
-    normalized = EcarEmitter._normalize_session_dependents_after_login(
-        [json.dumps(row, separators=(",", ":")) for row in rows]
-    )
-    process = json.loads(normalized[0])
-    system_process = json.loads(normalized[2])
-
-    assert process["timestamp_ms"] > login_ms
-    assert process["properties"]["logon_id"] == "0xf88578c"
-    assert system_process["timestamp_ms"] == login_ms + 50
-
-
-def test_ecar_type7_unlock_does_not_reanchor_session_dependents() -> None:
-    """Type 7 unlock reauth rows are not original eCAR session creation anchors."""
-    unlock_ms = 1_710_770_188_500
-    rows = [
-        {
-            "timestamp_ms": unlock_ms - 60 * 60 * 1000,
-            "id": "process-event",
-            "hostname": "WS-AJOHNSON-01",
-            "object": "PROCESS",
-            "action": "CREATE",
-            "objectID": "process-object",
-            "pid": 5536,
-            "principal": "aisha.johnson",
-            "properties": {
-                "logon_id": "0x24de089",
-                "logon_type": "7",
-                "session_id": "2",
-                "image_path": r"C:\Windows\System32\mstsc.exe",
-            },
-        },
-        {
-            "timestamp_ms": unlock_ms,
-            "id": "unlock-session",
-            "hostname": "WS-AJOHNSON-01",
-            "object": "USER_SESSION",
-            "action": "LOGIN",
-            "objectID": "session-object",
-            "principal": "aisha.johnson",
-            "properties": {
-                "logon_id": "0x24de089",
-                "outcome": "success",
-                "logon_type": "7",
-                "session_id": "2",
-            },
-        },
-    ]
-
-    normalized = EcarEmitter._normalize_session_dependents_after_login(
-        [json.dumps(row, separators=(",", ":")) for row in rows]
-    )
-    process = json.loads(normalized[0])
-
-    assert process["timestamp_ms"] == unlock_ms - 60 * 60 * 1000
-
-
-def test_ecar_original_login_anchors_dependents_without_later_unlock() -> None:
-    """Original session logons still anchor dependents when a later type 7 row exists."""
-    login_ms = 1_710_770_000_000
-    unlock_ms = login_ms + 60 * 60 * 1000
-    rows = [
-        {
-            "timestamp_ms": login_ms - 200,
-            "id": "process-event",
-            "hostname": "WS-AJOHNSON-01",
-            "object": "PROCESS",
-            "action": "CREATE",
-            "objectID": "process-object",
-            "pid": 5536,
-            "principal": "aisha.johnson",
-            "properties": {
-                "logon_id": "0x24de089",
-                "session_id": "2",
-                "image_path": r"C:\Windows\System32\mstsc.exe",
-            },
-        },
-        {
-            "timestamp_ms": login_ms,
-            "id": "interactive-session",
-            "hostname": "WS-AJOHNSON-01",
-            "object": "USER_SESSION",
-            "action": "LOGIN",
-            "objectID": "session-object",
-            "principal": "aisha.johnson",
-            "properties": {
-                "logon_id": "0x24de089",
-                "outcome": "success",
-                "logon_type": "2",
-                "session_id": "2",
-            },
-        },
-        {
-            "timestamp_ms": unlock_ms,
-            "id": "unlock-session",
-            "hostname": "WS-AJOHNSON-01",
-            "object": "USER_SESSION",
-            "action": "LOGIN",
-            "objectID": "session-object",
-            "principal": "aisha.johnson",
-            "properties": {
-                "logon_id": "0x24de089",
-                "outcome": "success",
-                "logon_type": "7",
-                "session_id": "2",
-            },
-        },
-    ]
-
-    normalized = EcarEmitter._normalize_session_dependents_after_login(
-        [json.dumps(row, separators=(",", ":")) for row in rows]
-    )
-    process = json.loads(normalized[0])
-
-    assert login_ms < process["timestamp_ms"] < unlock_ms
-
-
-def test_ecar_type3_login_timestamp_follows_matching_inbound_flow(tmp_path: Path) -> None:
-    """eCAR type-3 USER_SESSION rows should not visibly precede same-tuple FLOW rows."""
+def test_ecar_type3_login_uses_upstream_canonical_transport_order(tmp_path: Path) -> None:
+    """eCAR preserves bundle-owned transport-before-auth canonical ordering."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
     base = _base_time()
     host = _host_context()
     flow_time = base + timedelta(milliseconds=750)
-    emitter._remote_inbound_flow_times[(host.hostname, "10.0.0.30", 50123, host.ip, 445)] = (
-        flow_time
-    )
     event = SecurityEvent(
-        timestamp=base,
+        timestamp=flow_time + timedelta(milliseconds=1),
         event_type="logon",
         dst_host=host,
         auth=AuthContext(
@@ -719,680 +688,41 @@ def test_ecar_dependent_timestamp_for_long_running_process_uses_event_time(
 
 
 def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> None:
-    """eCAR process-create latency should not collapse visible command duration."""
+    """Canonical source timing preserves visible process lifetime before rendering."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
     base = _base_time()
     host = _host_context()
-    proc = _process_context(base)
+    identity = _process_identity(
+        hostname=host.hostname,
+        pid=4242,
+        parent_pid=888,
+        started_at=base,
+        image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+    )
+    proc = _context_from_identity(identity)
     create_event = SecurityEvent(
         timestamp=base,
         event_type="process_create",
         src_host=host,
         process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
     )
     terminate_event = SecurityEvent(
         timestamp=base + timedelta(seconds=6),
         event_type="process_terminate",
         src_host=host,
         process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
     )
+    planner = SourceTimingPlanner()
+    planner.plan_event(create_event, format_name="ecar")
+    planner.plan_event(terminate_event, format_name="ecar")
 
-    process_time = emitter._process_create_timestamp(create_event, proc)
-    terminate_time = emitter._process_terminate_timestamp(terminate_event, proc)
+    process_time = emitter._process_create_timestamp(create_event, identity)
+    terminate_time = emitter._process_terminate_timestamp(terminate_event, identity)
 
     assert terminate_time >= process_time + timedelta(seconds=6)
     assert terminate_time < process_time + timedelta(seconds=12)
-
-
-def test_ecar_process_create_normalization_preserves_canonical_order() -> None:
-    """eCAR PROCESS/CREATE rows should not invert canonical same-chain process order."""
-    first = {
-        "timestamp_ms": 1_710_783_739_979,
-        "_canonical_ms": 1_710_783_736_520,
-        "id": "event-a",
-        "hostname": "dc-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "proc-a",
-        "actorID": "parent",
-        "pid": 6340,
-        "ppid": 6200,
-    }
-    second = {
-        "timestamp_ms": 1_710_783_737_093,
-        "_canonical_ms": 1_710_783_737_022,
-        "id": "event-b",
-        "hostname": "dc-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "proc-b",
-        "actorID": "parent",
-        "pid": 6352,
-        "ppid": 6200,
-    }
-
-    normalized = EcarEmitter._normalize_process_create_canonical_order(
-        [
-            json.dumps(first, separators=(",", ":")),
-            json.dumps(second, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[1]["timestamp_ms"] > rows[0]["timestamp_ms"]
-    assert 3 <= rows[1]["timestamp_ms"] - rows[0]["timestamp_ms"] <= 49
-    assert "_canonical_ms" not in rows[0]
-    assert "_canonical_ms" not in rows[1]
-
-
-def test_ecar_process_create_normalization_does_not_batch_linux_rows() -> None:
-    """Linux process-create rows keep their source-native timestamp texture."""
-    first = {
-        "timestamp_ms": 1_710_783_755_003,
-        "_canonical_ms": 1_710_777_592_000,
-        "id": "event-sshd-a",
-        "hostname": "WEB-EXT-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "proc-sshd-a",
-        "actorID": "init-process",
-        "pid": 779693,
-        "ppid": 500,
-        "properties": {"image_path": "/usr/sbin/sshd"},
-    }
-    second = {
-        "timestamp_ms": 1_710_777_613_250,
-        "_canonical_ms": 1_710_777_613_000,
-        "id": "event-sshd-b",
-        "hostname": "WEB-EXT-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "proc-sshd-b",
-        "actorID": "init-process",
-        "pid": 779701,
-        "ppid": 500,
-        "properties": {"image_path": "/usr/sbin/sshd"},
-    }
-
-    normalized = EcarEmitter._normalize_process_create_canonical_order(
-        [
-            json.dumps(first, separators=(",", ":")),
-            json.dumps(second, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[0]["timestamp_ms"] == first["timestamp_ms"]
-    assert rows[1]["timestamp_ms"] == second["timestamp_ms"]
-    assert rows[1]["timestamp_ms"] < rows[0]["timestamp_ms"]
-    assert "_canonical_ms" not in rows[0]
-    assert "_canonical_ms" not in rows[1]
-
-
-def test_ecar_linux_shell_foreground_order_serializes_visible_commands() -> None:
-    """eCAR should not show one shell foreground command starting before the prior exits."""
-    editor_create = {
-        "timestamp_ms": 1_710_780_154_204,
-        "id": "event-editor-create",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "editor-process",
-        "actorID": "bash-process",
-        "pid": 785286,
-        "ppid": 33760,
-        "principal": "lina.nguyen",
-        "properties": {
-            "image_path": "/usr/bin/emacs",
-            "command_line": "emacs -nw deploy.sh",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    next_create = {
-        "timestamp_ms": 1_710_780_209_982,
-        "id": "event-npm-create",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "npm-process",
-        "actorID": "bash-process",
-        "pid": 785296,
-        "ppid": 33760,
-        "principal": "lina.nguyen",
-        "properties": {
-            "image_path": "/usr/bin/npm",
-            "command_line": "npm install",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    editor_terminate = {
-        "timestamp_ms": 1_710_780_284_534,
-        "id": "event-editor-terminate",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "editor-process",
-        "pid": 785286,
-        "principal": "lina.nguyen",
-        "properties": {"image_path": "/usr/bin/emacs"},
-    }
-    next_terminate = {
-        "timestamp_ms": 1_710_780_230_000,
-        "id": "event-npm-terminate",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "npm-process",
-        "pid": 785296,
-        "principal": "lina.nguyen",
-        "properties": {"image_path": "/usr/bin/npm"},
-    }
-    third_create = {
-        "timestamp_ms": 1_710_780_235_000,
-        "id": "event-vim-create",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "vim-process",
-        "actorID": "bash-process",
-        "pid": 785297,
-        "ppid": 33760,
-        "principal": "lina.nguyen",
-        "properties": {
-            "image_path": "/usr/bin/vim",
-            "command_line": "vim config.yaml",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    third_terminate = {
-        "timestamp_ms": 1_710_780_245_000,
-        "id": "event-vim-terminate",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "vim-process",
-        "pid": 785297,
-        "principal": "lina.nguyen",
-        "properties": {"image_path": "/usr/bin/vim"},
-    }
-
-    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
-        [
-            json.dumps(editor_create, separators=(",", ":")),
-            json.dumps(next_create, separators=(",", ":")),
-            json.dumps(editor_terminate, separators=(",", ":")),
-            json.dumps(next_terminate, separators=(",", ":")),
-            json.dumps(third_create, separators=(",", ":")),
-            json.dumps(third_terminate, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
-    assert rows[3]["timestamp_ms"] > rows[1]["timestamp_ms"]
-    assert rows[4]["timestamp_ms"] > rows[3]["timestamp_ms"]
-    assert rows[5]["timestamp_ms"] > rows[4]["timestamp_ms"]
-
-
-def test_ecar_linux_shell_foreground_order_covers_scp_transfer_chain() -> None:
-    """eCAR should serialize bounded foreground transfer commands from one shell."""
-    gzip_create = {
-        "timestamp_ms": 1_710_782_144_698,
-        "id": "gzip-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "gzip-process",
-        "actorID": "bash-process",
-        "pid": 706031,
-        "ppid": 705932,
-        "principal": "root",
-        "properties": {
-            "image_path": "/usr/bin/gzip",
-            "command_line": "gzip -9 /tmp/rpt_0318.sql",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    scp_create = {
-        "timestamp_ms": 1_710_782_165_966,
-        "id": "scp-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "scp-process",
-        "actorID": "bash-process",
-        "pid": 706051,
-        "ppid": 705932,
-        "principal": "root",
-        "properties": {
-            "image_path": "/usr/bin/scp",
-            "command_line": "scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt.sql.gz",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    gzip_terminate = {
-        "timestamp_ms": 1_710_782_173_346,
-        "id": "gzip-terminate",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "gzip-process",
-        "pid": 706031,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/gzip"},
-    }
-    scp_flow = {
-        "timestamp_ms": 1_710_782_166_500,
-        "id": "scp-flow",
-        "hostname": "DB-PROD-01",
-        "object": "FLOW",
-        "action": "START",
-        "objectID": "flow-1",
-        "actorID": "scp-process",
-        "pid": 706051,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/scp"},
-    }
-    scp_terminate = {
-        "timestamp_ms": 1_710_782_235_832,
-        "id": "scp-terminate",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "scp-process",
-        "pid": 706051,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/scp"},
-    }
-
-    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
-        [
-            json.dumps(gzip_create, separators=(",", ":")),
-            json.dumps(scp_create, separators=(",", ":")),
-            json.dumps(gzip_terminate, separators=(",", ":")),
-            json.dumps(scp_flow, separators=(",", ":")),
-            json.dumps(scp_terminate, separators=(",", ":")),
-        ]
-    )
-    normalized = EcarEmitter._normalize_process_reference_order(normalized)
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
-    assert rows[3]["timestamp_ms"] > rows[1]["timestamp_ms"]
-    assert rows[4]["timestamp_ms"] > rows[3]["timestamp_ms"]
-
-
-def test_ecar_flow_reference_order_drops_late_process_identity() -> None:
-    """FLOW timing stays near the connection when process attribution is too late."""
-    process_create = {
-        "timestamp_ms": 1_710_789_025_000,
-        "id": "ldap-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "ldap-process",
-        "actorID": "bash-process",
-        "pid": 699858,
-        "ppid": 699820,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/ldapsearch"},
-    }
-    flow = {
-        "timestamp_ms": 1_710_780_340_700,
-        "id": "ldap-flow",
-        "hostname": "DB-PROD-01",
-        "object": "FLOW",
-        "action": "CONNECT",
-        "objectID": "flow-ldap",
-        "actorID": "ldap-process",
-        "pid": 699858,
-        "principal": "root",
-        "properties": {
-            "src_ip": "10.10.4.10",
-            "src_port": "42430",
-            "dst_ip": "10.10.2.10",
-            "dst_port": "389",
-            "protocol": "tcp",
-            "direction": "OUTBOUND",
-            "image_path": "/usr/bin/ldapsearch",
-            "command_line": "ldapsearch -x -H ldap://DC-01",
-        },
-    }
-
-    normalized = EcarEmitter._normalize_process_reference_order(
-        [
-            json.dumps(flow, separators=(",", ":")),
-            json.dumps(process_create, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[0]["timestamp_ms"] == flow["timestamp_ms"]
-    assert "actorID" not in rows[0]
-    assert "pid" not in rows[0]
-    assert "principal" not in rows[0]
-    assert "image_path" not in rows[0]["properties"]
-    assert "command_line" not in rows[0]["properties"]
-
-
-def test_ecar_flow_connect_keeps_network_time_for_close_process_conflict() -> None:
-    """FLOW/CONNECT drops actor identity instead of moving outside the tuple interval."""
-    process_create = {
-        "timestamp_ms": 1_710_789_025_000,
-        "id": "docker-create",
-        "hostname": "WEB-EXT-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "docker-process",
-        "actorID": "bash-process",
-        "pid": 771204,
-        "ppid": 771190,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/docker"},
-    }
-    flow = {
-        "timestamp_ms": 1_710_789_000_300,
-        "id": "proxy-flow",
-        "hostname": "WEB-EXT-01",
-        "object": "FLOW",
-        "action": "CONNECT",
-        "objectID": "flow-proxy",
-        "actorID": "docker-process",
-        "pid": 771204,
-        "principal": "root",
-        "properties": {
-            "src_ip": "10.10.3.15",
-            "src_port": "52844",
-            "dst_ip": "10.10.3.20",
-            "dst_port": "8080",
-            "protocol": "tcp",
-            "direction": "OUTBOUND",
-            "image_path": "/usr/bin/docker",
-            "command_line": "docker ps",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-
-    normalized = EcarEmitter._normalize_process_reference_order(
-        [
-            json.dumps(flow, separators=(",", ":")),
-            json.dumps(process_create, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[0]["timestamp_ms"] == flow["timestamp_ms"]
-    assert "actorID" not in rows[0]
-    assert "pid" not in rows[0]
-    assert "principal" not in rows[0]
-    assert "image_path" not in rows[0]["properties"]
-    assert "command_line" not in rows[0]["properties"]
-    assert "parent_image_path" not in rows[0]["properties"]
-
-
-def test_ecar_linux_shell_foreground_order_serializes_close_unrelated_commands() -> None:
-    """Same-shell commands without an explicit pipeline group should not overlap."""
-    sleep_create = {
-        "timestamp_ms": 1_000_000,
-        "id": "sleep-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "sleep-process",
-        "actorID": "bash-process",
-        "pid": 706031,
-        "ppid": 705932,
-        "principal": "root",
-        "properties": {
-            "image_path": "/usr/bin/sleep",
-            "command_line": "sleep 5",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    whoami_create = {
-        "timestamp_ms": 1_000_500,
-        "id": "whoami-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "whoami-process",
-        "actorID": "bash-process",
-        "pid": 706032,
-        "ppid": 705932,
-        "principal": "root",
-        "properties": {
-            "image_path": "/usr/bin/whoami",
-            "command_line": "whoami",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    sleep_terminate = {
-        "timestamp_ms": 1_005_000,
-        "id": "sleep-terminate",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "sleep-process",
-        "pid": 706031,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/sleep"},
-    }
-
-    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
-        [
-            json.dumps(sleep_create, separators=(",", ":")),
-            json.dumps(whoami_create, separators=(",", ":")),
-            json.dumps(sleep_terminate, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
-
-
-def test_ecar_linux_shell_foreground_order_preserves_bash_history_sync() -> None:
-    """Bash-history-synchronized process rows should keep their sibling timestamp."""
-    npm_create = {
-        "timestamp_ms": 1_000_000,
-        "id": "npm-create",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "npm-process",
-        "actorID": "bash-process",
-        "pid": 781867,
-        "ppid": 780919,
-        "principal": "lina.nguyen",
-        "properties": {
-            "image_path": "/usr/bin/npm",
-            "command_line": "npm run ci",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    npm_terminate = {
-        "timestamp_ms": 1_060_000,
-        "id": "npm-terminate",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "npm-process",
-        "pid": 781867,
-        "principal": "lina.nguyen",
-        "properties": {"image_path": "/usr/bin/npm"},
-    }
-    emacs_create = {
-        "timestamp_ms": 1_020_000,
-        "id": "emacs-create",
-        "hostname": "WS-LNGUYEN-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "emacs-process",
-        "actorID": "bash-process",
-        "_concurrency_group_id": "bash-history:abc123",
-        "pid": 781901,
-        "ppid": 780919,
-        "principal": "lina.nguyen",
-        "properties": {
-            "image_path": "/usr/bin/emacs",
-            "command_line": "emacs -nw /home/lina.nguyen/repos/infra-config/requirements.txt",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-
-    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
-        [
-            json.dumps(npm_create, separators=(",", ":")),
-            json.dumps(emacs_create, separators=(",", ":")),
-            json.dumps(npm_terminate, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[1]["timestamp_ms"] == emacs_create["timestamp_ms"]
-    assert "_concurrency_group_id" not in rows[1]
-
-
-def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() -> None:
-    """Pipeline children are concurrent shell work, not sequential foreground prompts."""
-    cat_create = {
-        "timestamp_ms": 1_710_782_144_000,
-        "id": "cat-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "cat-process",
-        "_concurrency_group_id": "pipeline-1",
-        "actorID": "bash-process",
-        "pid": 706031,
-        "ppid": 705932,
-        "principal": "root",
-        "properties": {
-            "image_path": "/usr/bin/cat",
-            "command_line": "cat /etc/passwd",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    head_create = {
-        "timestamp_ms": 1_710_782_144_035,
-        "id": "head-create",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "head-process",
-        "_concurrency_group_id": "pipeline-1",
-        "actorID": "bash-process",
-        "pid": 706032,
-        "ppid": 705932,
-        "principal": "root",
-        "properties": {
-            "image_path": "/usr/bin/head",
-            "command_line": "head -5",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    cat_terminate = {
-        "timestamp_ms": 1_710_782_147_000,
-        "id": "cat-terminate",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "cat-process",
-        "pid": 706031,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/cat"},
-    }
-    head_terminate = {
-        "timestamp_ms": 1_710_782_146_500,
-        "id": "head-terminate",
-        "hostname": "DB-PROD-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "head-process",
-        "pid": 706032,
-        "principal": "root",
-        "properties": {"image_path": "/usr/bin/head"},
-    }
-
-    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
-        [
-            json.dumps(cat_create, separators=(",", ":")),
-            json.dumps(head_create, separators=(",", ":")),
-            json.dumps(head_terminate, separators=(",", ":")),
-            json.dumps(cat_terminate, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[1]["timestamp_ms"] == head_create["timestamp_ms"]
-    assert "_concurrency_group_id" not in rows[0]
-    assert "_concurrency_group_id" not in rows[1]
-    assert max(rows[0]["timestamp_ms"], rows[1]["timestamp_ms"]) < min(
-        rows[2]["timestamp_ms"], rows[3]["timestamp_ms"]
-    )
-
-
-def test_ecar_linux_shell_foreground_order_preserves_pipeline_stage_order() -> None:
-    """Tiny source-timing inversions should not put the pipe reader before the writer."""
-    find_create = {
-        "timestamp_ms": 1_710_780_034_167,
-        "id": "find-create",
-        "hostname": "WS-OHADDAD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "find-process",
-        "actorID": "bash-process",
-        "_concurrency_group_id": "pipeline-1",
-        "pid": 470150,
-        "ppid": 467288,
-        "principal": "omar.haddad",
-        "properties": {
-            "image_path": "/usr/bin/find",
-            "command_line": "find . -name *.csv -o -name *.xlsx",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    head_create = {
-        "timestamp_ms": 1_710_780_034_152,
-        "id": "head-create",
-        "hostname": "WS-OHADDAD-01",
-        "object": "PROCESS",
-        "action": "CREATE",
-        "objectID": "head-process",
-        "actorID": "bash-process",
-        "_concurrency_group_id": "pipeline-1",
-        "pid": 470137,
-        "ppid": 467288,
-        "principal": "omar.haddad",
-        "properties": {
-            "image_path": "/usr/bin/head",
-            "command_line": "head",
-            "parent_image_path": "/bin/bash",
-        },
-    }
-    head_terminate = {
-        "timestamp_ms": 1_710_780_038_468,
-        "id": "head-terminate",
-        "hostname": "WS-OHADDAD-01",
-        "object": "PROCESS",
-        "action": "TERMINATE",
-        "objectID": "head-process",
-        "pid": 470137,
-        "principal": "omar.haddad",
-        "properties": {"image_path": "/usr/bin/head"},
-    }
-
-    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
-        [
-            json.dumps(find_create, separators=(",", ":")),
-            json.dumps(head_create, separators=(",", ":")),
-            json.dumps(head_terminate, separators=(",", ":")),
-        ]
-    )
-    rows = [json.loads(line) for line in normalized]
-
-    assert rows[0]["timestamp_ms"] < rows[1]["timestamp_ms"]
-    assert rows[1]["timestamp_ms"] == rows[0]["timestamp_ms"] + 15
-    assert rows[2]["timestamp_ms"] > rows[1]["timestamp_ms"]
 
 
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
@@ -1474,6 +804,7 @@ def test_sysmon_process_access_timestamp_follows_process_create(tmp_path: Path) 
             target_pid=640,
             target_image=r"C:\Windows\System32\lsass.exe",
             granted_access="0x1010",
+            source_thread_id=9912,
         ),
     )
 
