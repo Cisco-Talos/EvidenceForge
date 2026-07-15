@@ -22,6 +22,7 @@
 
 """Unit tests for StateManager."""
 
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
@@ -801,6 +802,113 @@ class TestSessionManagement:
 
         sessions = sm.list_active_sessions()
         assert len(sessions) == 2
+
+
+class TestCanonicalIdentityState:
+    """Tests for host-scoped process, session, and thread identity."""
+
+    @staticmethod
+    def _create_windows_process(sm: StateManager, system: str, pid: int = 4000) -> int:
+        sm._pid_counters[system] = pid
+        sm._pid_os[system] = "windows"
+        return sm.create_process(
+            system,
+            0,
+            rf"C:\\Windows\\System32\\{system}.exe",
+            f"{system}.exe",
+            "SYSTEM",
+            "System",
+        )
+
+    def test_identical_pid_and_tid_on_different_hosts_do_not_collide(self) -> None:
+        """Host and process object scope identical host-local numeric identifiers."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        pid_a = self._create_windows_process(sm, "WS-01")
+        pid_b = self._create_windows_process(sm, "WS-02")
+        process_a = sm.get_process_identity("WS-01", pid_a)
+        process_b = sm.get_process_identity("WS-02", pid_b)
+        assert process_a is not None
+        assert process_b is not None
+        assert pid_a == pid_b
+        assert process_a.object_id != process_b.object_id
+
+        thread_a = sm.create_thread("WS-01", process_a.object_id, tid=9124)
+        thread_b = sm.create_thread("WS-02", process_b.object_id, tid=9124)
+        assert thread_a.tid == thread_b.tid
+        assert thread_a.canonical_key != thread_b.canonical_key
+        assert thread_a.object_id != thread_b.object_id
+
+    def test_same_host_pid_reuse_gets_new_process_and_thread_identity(self) -> None:
+        """A reused PID starts a new object scope even when a TID also repeats."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        first_pid = self._create_windows_process(sm, "WS-01")
+        first = sm.get_process_identity("WS-01", first_pid)
+        assert first is not None
+        first_thread = sm.create_thread("WS-01", first.object_id, tid=9912)
+        assert sm.end_process("WS-01", first_pid, start + timedelta(seconds=2))
+
+        sm.set_current_time(start + timedelta(minutes=1))
+        sm._pid_counters["WS-01"] = first_pid
+        second_pid = sm.create_process(
+            "WS-01",
+            0,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe /c whoami",
+            "analyst",
+            "Medium",
+        )
+        second = sm.get_process_identity("WS-01", second_pid)
+        assert second is not None
+        second_thread = sm.create_thread("WS-01", second.object_id, tid=9912)
+
+        assert second_pid == first_pid
+        assert second.object_id != first.object_id
+        assert second_thread.canonical_key != first_thread.canonical_key
+        assert sm.get_thread("WS-01", first.object_id, 9912) is None
+        assert sm.get_thread("WS-01", second.object_id, 9912) == second_thread
+
+    def test_primary_thread_is_deterministic_and_immutable(self) -> None:
+        """Primary-thread allocation is stable and snapshots cannot mutate runtime state."""
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        snapshots = []
+        for _ in range(2):
+            sm = StateManager()
+            sm.set_current_time(start)
+            pid = self._create_windows_process(sm, "WS-01")
+            process = sm.get_process_identity("WS-01", pid)
+            assert process is not None
+            assert process.primary_thread is not None
+            snapshots.append(process)
+
+        assert snapshots[0] == snapshots[1]
+        with pytest.raises(FrozenInstanceError):
+            snapshots[0].primary_thread.tid = 1234
+
+    def test_linux_primary_thread_is_process_leader(self) -> None:
+        """Linux process leaders use the kernel's TID-equals-PID convention."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        pid = sm.create_process("LINUX-01", 0, "/usr/bin/bash", "bash", "analyst", "Medium")
+        process = sm.get_process_identity("LINUX-01", pid)
+        assert process is not None
+        assert process.primary_thread is not None
+        assert process.primary_thread.tid == pid
+
+    def test_explicit_thread_requires_live_owning_process(self) -> None:
+        """Worker and remote threads cannot outlive or bypass their owning process."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        pid = self._create_windows_process(sm, "WS-01")
+        process = sm.get_process_identity("WS-01", pid)
+        assert process is not None
+        assert sm.end_process("WS-01", pid, start + timedelta(seconds=1))
+
+        with pytest.raises(StateError, match="owning process object is not live"):
+            sm.create_thread("WS-01", process.object_id, tid=7000, kind="remote")
 
 
 class TestProcessManagement:
