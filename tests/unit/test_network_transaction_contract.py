@@ -23,13 +23,17 @@
 """Tests for the canonical network transaction and traffic-ledger contract."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import NetworkContext
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import DirectionalTrafficLedger, NetworkTrafficLedger
+from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models import System
 
 
 def _network_context(start: datetime) -> NetworkContext:
@@ -238,3 +242,66 @@ def test_state_manager_accumulates_persistent_application_transactions() -> None
     assert connection.traffic_ledger.resp.payload_bytes == 4396
     assert connection.traffic_ledger.orig.packets == 9
     assert connection.traffic_ledger.resp.packets == 14
+
+
+def test_process_owned_connection_is_capped_before_authoritative_session_end() -> None:
+    """The network planner must shorten a child transport instead of moving logoff."""
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    deadline = start + timedelta(hours=1)
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    state.set_current_time(start)
+    logon_id = state.create_session(
+        username="alice",
+        system=source.hostname,
+        logon_type=10,
+        source_ip="10.0.0.50",
+        start_time=start,
+        session_kind="rdp",
+    )
+    plan = SessionEndPlan(deadline, "explicit_storyline", "rdp-close")
+    state.plan_session_end(logon_id, plan)
+    pid = state.create_process(
+        source.hostname,
+        4,
+        r"C:\Windows\System32\OpenSSH\ssh.exe",
+        "ssh app@example",
+        "alice",
+        "Medium",
+        logon_id=logon_id,
+    )
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+    generator._ip_to_system = {source.ip: source}
+    connection_start = deadline - timedelta(minutes=10)
+
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip="203.0.113.20",
+        time=connection_start,
+        dst_port=22,
+        proto="tcp",
+        service="ssh",
+        duration=3600.0,
+        source_system=source,
+        pid=pid,
+        conn_state="SF",
+    )
+
+    event = next(
+        call.args[0]
+        for call in emitter.emit.call_args_list
+        if call.args[0].event_type == "connection"
+    )
+    assert event.network.source_visible_close_time is not None
+    assert event.network.source_visible_close_time <= deadline - timedelta(milliseconds=100)
+    assert event.network.duration < 600
+    process = state.get_process(source.hostname, pid)
+    assert process is not None
+    assert process.last_activity_time < deadline

@@ -31,6 +31,7 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation import state_manager as state_manager_module
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
@@ -162,6 +163,58 @@ class TestStateManagerInit:
         ] == [logon_id]
         assert sm.get_sessions_for_user_at("alice", close) == []
         assert sm.get_sessions_for_user_at("alice", close + timedelta(minutes=1)) == []
+
+    def test_authoritative_end_keeps_durable_ssh_session_live_past_early_disconnect(self):
+        """An early SSH transport close must not create a shadow durable session."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        transport_close = start + timedelta(minutes=8)
+        deadline = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="ssh",
+        )
+        sm.update_session_metadata(logon_id, network_close_time=transport_close)
+        plan = SessionEndPlan(deadline, "explicit_storyline", "story-logoff")
+
+        assert sm.plan_session_end(logon_id, plan)
+        assert [
+            session.logon_id
+            for session in sm.get_sessions_for_user_at(
+                "alice",
+                transport_close + timedelta(minutes=10),
+            )
+        ] == [logon_id]
+        assert sm.get_sessions_for_user_at("alice", deadline) == []
+
+    def test_authoritative_end_plan_cannot_be_replaced(self):
+        """The first explicit storyline close remains the immutable session authority."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = sm.create_session(
+            username="alice",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="ssh",
+        )
+        first = SessionEndPlan(start + timedelta(hours=1), "explicit_storyline", "first")
+        replacement = SessionEndPlan(
+            start + timedelta(hours=2),
+            "explicit_storyline",
+            "replacement",
+        )
+
+        assert sm.plan_session_end(logon_id, first)
+        assert sm.plan_session_end(logon_id, first)
+        with pytest.raises(StateError, match="Cannot replace authoritative"):
+            sm.plan_session_end(logon_id, replacement)
+        assert sm.get_session_end_plan(logon_id) == first
 
     def test_linux_logind_session_collision_ids_avoid_elapsed_second_deltas(self):
         """Collision bumps should not recreate an exact session-time delta."""

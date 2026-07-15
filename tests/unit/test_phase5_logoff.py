@@ -28,6 +28,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.state_manager import StateManager
@@ -498,6 +499,63 @@ class TestLogoffLinux:
         )
         assert syslog_event.timestamp == close_time + expected_delta
         assert ecar_event.timestamp == close_time + expected_delta
+
+    def test_authoritative_ssh_deadline_owns_transport_and_source_closure(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Explicit SSH closure keeps canonical and source-native deadlines distinct."""
+        deadline = timestamp + timedelta(hours=1)
+        plan = SessionEndPlan(deadline, "explicit_storyline", "ssh-explicit-close")
+        activity_gen._ip_to_system = {linux_system.ip: linux_system}
+
+        activity_gen.generate_ssh_session(
+            user=test_user,
+            target_system=linux_system,
+            time=timestamp,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_end_plan=plan,
+        )
+        session = next(
+            session
+            for session in state_manager.get_sessions_for_user(test_user.username)
+            if session.system == linux_system.hostname
+        )
+        assert session.end_plan == plan
+        assert session.network_close_time is not None
+        assert deadline - timedelta(milliseconds=1500) <= session.network_close_time
+        assert session.network_close_time <= deadline - timedelta(milliseconds=100)
+        mock_emitters["syslog"].reset_mock()
+        mock_emitters["ecar"].reset_mock()
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            deadline + timedelta(minutes=20),
+            session.logon_id,
+            logon_type=10,
+            from_storyline=True,
+            session_end_plan=plan,
+        )
+
+        pam_close = _emitted_pam_close_event(mock_emitters)
+        logind_close = next(
+            event
+            for event in _emitted_syslog_events(mock_emitters)
+            if event.syslog.message.startswith("Removed session ")
+        )
+        ecar_close = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "logoff"
+        )
+        assert state_manager.get_session_end_time(session.logon_id) == deadline
+        assert timedelta(milliseconds=120) <= pam_close.timestamp - session.network_close_time
+        assert pam_close.timestamp - session.network_close_time <= timedelta(milliseconds=2500)
+        assert pam_close.source_timing.canonical_timestamp == deadline
+        assert deadline <= ecar_close.timestamp <= deadline + timedelta(seconds=15)
+        assert pam_close.timestamp < logind_close.timestamp <= deadline + timedelta(seconds=4)
 
     def test_linux_type10_logoff_gets_pam_close_even_when_kind_was_not_preserved(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
