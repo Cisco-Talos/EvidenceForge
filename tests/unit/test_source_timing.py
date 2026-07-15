@@ -17,6 +17,7 @@ from evidenceforge.events.contexts import (
     ProcessAccessContext,
     ProcessContext,
 )
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -111,6 +112,55 @@ def test_source_time_is_deterministic() -> None:
     )
 
     assert first == second
+
+
+def test_nested_action_children_share_host_local_source_offset() -> None:
+    """Nested transport children preserve canonical order on one endpoint source."""
+
+    planner = SourceTimingPlanner()
+    parent_group_id = "proxy-transaction-1234"
+    first_time = _base_time()
+    second_time = first_time + timedelta(milliseconds=12)
+
+    def child_event(timestamp: datetime, uid: str) -> SecurityEvent:
+        network = _network_context(duration=0.2)
+        network.source_visible_start_time = timestamp
+        network.source_visible_close_time = timestamp + timedelta(milliseconds=200)
+        network.zeek_uid = uid
+        network.finalize_transaction(f"network-{uid}")
+        return SecurityEvent(
+            timestamp=timestamp,
+            event_type="connection",
+            src_host=_linux_host_context(),
+            network=network,
+            lifecycle=ActionLifecycleContext(
+                group_id=f"network-{uid}",
+                canonical_start=timestamp,
+                phase="start",
+                parent_group_id=parent_group_id,
+            ),
+        )
+
+    first = child_event(first_time, "CproxyIngress")
+    second = child_event(second_time, "CproxyOrigin")
+    first_observed = planner.lifecycle_child_source_time(
+        first,
+        "source.ecar_flow",
+        host_key="PROXY-01",
+        seed_parts=("inbound", "PROXY-01"),
+        within=(first_time, first_time + timedelta(milliseconds=200)),
+    )
+    second_observed = planner.lifecycle_child_source_time(
+        second,
+        "source.ecar_flow",
+        host_key="PROXY-01",
+        seed_parts=("outbound", "PROXY-01"),
+        within=(second_time, second_time + timedelta(milliseconds=200)),
+    )
+
+    assert first_observed is not None
+    assert second_observed is not None
+    assert second_observed - first_observed == second_time - first_time
 
 
 def test_endpoint_sources_share_host_clock_offset() -> None:

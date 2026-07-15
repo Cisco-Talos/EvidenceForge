@@ -32,10 +32,10 @@ partitioned by event year.
 
 import hashlib
 import ipaddress
-import math
 import re
 from collections import deque
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -57,9 +57,6 @@ from evidenceforge.output_targets import OutputTarget
 
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
-
-_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs",)
-_TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 
 
 class CiscoAsaEmitter(SensorMultiplexEmitter):
@@ -98,8 +95,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._sensor_interfaces: dict[str, dict[str, str]] = {}
         # VIP→real_ip for interface resolution (set by emitter_setup)
         self._vip_to_real_ip: dict[str, str] = {}
-        self._output_end_time: datetime | None = None
-
         # Threat detection: per-(sensor, src_ip) deny rate tracking
         self._deny_timestamps: dict[tuple[str, str], deque[datetime]] = {}
         self._last_alert_time: dict[tuple[str, str], datetime | None] = {}
@@ -304,21 +299,22 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             path.write_text("\n".join(normalized) + "\n", encoding="utf-8")
 
     @staticmethod
-    def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:
-        """Choose an ASA teardown reason consistent with connection outcome."""
+    def _compatibility_teardown_plan(net: Any, protocol: str) -> tuple[str, float]:
+        """Project legacy direct-emitter calls without per-flow random synthesis."""
+
         if protocol != "tcp":
-            return ""
+            return "", float(getattr(net, "duration", None) or 0)
         state = getattr(net, "conn_state", "") or ""
         payload_bytes = (getattr(net, "orig_bytes", 0) or 0) + (getattr(net, "resp_bytes", 0) or 0)
         if state in {"S0", "S1", "SH", "SHR"} and payload_bytes == 0:
-            return "SYN Timeout"
+            return "SYN Timeout", 30.0
         if state in {"REJ", "RSTO"}:
-            return "TCP Reset-O"
+            return "TCP Reset-O", float(getattr(net, "duration", None) or 0)
         if state == "RSTR":
-            return "TCP Reset-I"
-        reasons = _TCP_SUCCESS_TEARDOWN_REASONS if payload_bytes else _TCP_PARTIAL_TEARDOWN_REASONS
-        reason_idx = int(hashlib.md5(f"{conn_id}".encode()).hexdigest()[:4], 16) % len(reasons)
-        return reasons[reason_idx]
+            return "TCP Reset-I", float(getattr(net, "duration", None) or 0)
+        if state == "OTH":
+            return "TCP Reset-O", float(getattr(net, "duration", None) or 0)
+        return "TCP FINs", float(getattr(net, "duration", None) or 0)
 
     def _resolve_interface(self, ip: str, sensor_hostname: str) -> str:
         """Resolve an IP address to an ASA interface name.
@@ -361,34 +357,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         return f"{hours}:{minutes:02d}:{secs:02d}"
 
     @staticmethod
-    def _teardown_duration_seconds(net: Any, protocol: str, reason: str, conn_id: int) -> float:
-        """Return teardown duration, including realistic SYN timeout waits."""
-        duration = getattr(net, "duration", None)
-        if protocol == "tcp" and reason == "SYN Timeout" and (duration is None or duration < 1):
-            return float(15 + (conn_id % 31))
-        return float(duration or 0)
-
-    @staticmethod
-    def _format_teardown_duration(net: Any, protocol: str, reason: str, conn_id: int) -> str:
-        """Format teardown duration, including realistic SYN timeout waits."""
-        seconds = CiscoAsaEmitter._teardown_duration_seconds(net, protocol, reason, conn_id)
-        return CiscoAsaEmitter._format_duration(seconds)
-
-    def _is_after_output_end(self, timestamp: datetime) -> bool:
-        """Return whether a source-native timestamp falls beyond the collection window."""
-        if self._output_end_time is None:
-            return False
-        ts = timestamp
-        gate = self._output_end_time
-        if ts.tzinfo is not None and gate.tzinfo is None:
-            ts = ts.replace(tzinfo=None)
-        elif ts.tzinfo is None and gate.tzinfo is not None:
-            gate = gate.replace(tzinfo=None)
-        return ts > gate
-
-    @staticmethod
     def _teardown_byte_count(net: Any, protocol: str, conn_id: int) -> int:
-        """Return ASA source-native byte accounting for a connection teardown."""
+        """Project finalized sensor accounting into ASA's total-byte field."""
         orig_payload = getattr(net, "orig_bytes", 0) or 0
         resp_payload = getattr(net, "resp_bytes", 0) or 0
         payload_total = orig_payload + resp_payload
@@ -398,23 +368,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         orig_ip_bytes = getattr(net, "orig_ip_bytes", None)
         resp_ip_bytes = getattr(net, "resp_ip_bytes", None)
         if orig_ip_bytes is not None or resp_ip_bytes is not None:
-            base_total = (orig_ip_bytes or orig_payload) + (resp_ip_bytes or resp_payload)
-        else:
-            packet_total = (getattr(net, "orig_pkts", 0) or 0) + (getattr(net, "resp_pkts", 0) or 0)
-            if packet_total <= 0:
-                packet_total = max(1, math.ceil(payload_total / 1460))
-                if protocol == "tcp":
-                    packet_total += 2
-            header_bytes = 28 if protocol in {"udp", "icmp"} else 40
-            base_total = payload_total + packet_total * header_bytes
-
-        variance_seed = (
-            f"asa-bytes:{conn_id}:{getattr(net, 'src_ip', '')}:{getattr(net, 'dst_ip', '')}"
-        )
-        variance = int(hashlib.md5(variance_seed.encode()).hexdigest()[:4], 16) % 96
-        if protocol == "tcp":
-            variance += 20
-        return max(payload_total + 1, int(base_total) + variance)
+            return int((orig_ip_bytes or orig_payload) + (resp_ip_bytes or resp_payload))
+        return int(payload_total)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
@@ -439,22 +394,57 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         protocol = (net.protocol or "tcp").lower()
 
         # Get sensor routing from visibility metadata
-        sensor_hosts: list[str] = []
-        if hasattr(event, "_sensor_hostnames_by_format"):
+        observations = {
+            observation.sensor_identity: observation
+            for observation in event.network_observations
+            if "cisco_asa" in observation.visible_formats
+        }
+        sensor_hosts: list[str] = list(observations)
+        if not event.network_observations_planned:
             sensor_hosts = event._sensor_hostnames_by_format.get("cisco_asa", [])
         if not sensor_hosts:
+            if event.network_observations_planned:
+                return
             sensor_hosts = self._sensor_hostnames or [""]
 
         for sensor_hostname in sensor_hosts:
-            src_iface = self._resolve_interface(net.src_ip, sensor_hostname)
-            dst_iface = self._resolve_interface(net.dst_ip, sensor_hostname)
+            sensor_event = event
+            sensor_net = net
+            observation = observations.get(sensor_hostname)
+            if observation is not None:
+                ledger = observation.traffic
+                sensor_net = replace(
+                    net,
+                    src_ip=observation.tuple_view.src_ip,
+                    src_port=observation.tuple_view.src_port,
+                    dst_ip=observation.tuple_view.dst_ip,
+                    dst_port=observation.tuple_view.dst_port,
+                    protocol=observation.tuple_view.protocol,
+                    duration=observation.observed_duration,
+                    source_visible_start_time=observation.observed_start_time,
+                    source_visible_close_time=observation.observed_close_time,
+                    orig_bytes=ledger.orig.payload_bytes,
+                    resp_bytes=ledger.resp.payload_bytes,
+                    orig_pkts=ledger.orig.packets,
+                    resp_pkts=ledger.resp.packets,
+                    orig_ip_bytes=ledger.orig.ip_bytes,
+                    resp_ip_bytes=ledger.resp.ip_bytes,
+                    missed_bytes=ledger.missed_bytes,
+                )
+                sensor_event = replace(
+                    event,
+                    timestamp=observation.observed_start_time,
+                    network=sensor_net,
+                )
+            src_iface = self._resolve_interface(sensor_net.src_ip, sensor_hostname)
+            dst_iface = self._resolve_interface(sensor_net.dst_ip, sensor_hostname)
             if fw is not None:
                 src_iface = fw.src_interface or src_iface
                 dst_iface = fw.dst_interface or dst_iface
             conn_id = (
                 fw.connection_id
                 if fw is not None and fw.connection_id > 0
-                else self._next_conn_id(sensor_hostname, event.timestamp)
+                else self._next_conn_id(sensor_hostname, sensor_event.timestamp)
             )
             fw_hostname = sensor_hostname or "fw01"
 
@@ -462,16 +452,24 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 if src_iface == dst_iface and event.nat is None:
                     continue
                 if self._should_suppress_outside_private_deny(
-                    net, src_iface, dst_iface, sensor_hostname
+                    sensor_net, src_iface, dst_iface, sensor_hostname
                 ):
                     continue
-                self._emit_deny(event, net, fw, src_iface, dst_iface, sensor_hostname, fw_hostname)
+                self._emit_deny(
+                    sensor_event,
+                    sensor_net,
+                    fw,
+                    src_iface,
+                    dst_iface,
+                    sensor_hostname,
+                    fw_hostname,
+                )
             else:
                 if src_iface == dst_iface and event.nat is None:
                     continue
                 self._emit_built(
-                    event,
-                    net,
+                    sensor_event,
+                    sensor_net,
                     protocol,
                     conn_id,
                     src_iface,
@@ -479,24 +477,37 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                 )
-                if event.nat and event.nat.nat_type != "static":
+                if sensor_event.nat and sensor_event.nat.nat_type != "static":
                     self._emit_nat_built(
-                        event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
+                        sensor_event,
+                        sensor_net,
+                        protocol,
+                        src_iface,
+                        dst_iface,
+                        sensor_hostname,
+                        fw_hostname,
                     )
                 teardown_emitted = self._emit_teardown(
-                    event,
-                    net,
+                    sensor_event,
+                    sensor_net,
                     protocol,
                     conn_id,
                     src_iface,
                     dst_iface,
                     sensor_hostname,
                     fw_hostname,
+                    observation,
                 )
-                if event.nat and event.nat.nat_type != "static":
+                if sensor_event.nat and sensor_event.nat.nat_type != "static":
                     if teardown_emitted:
                         self._emit_nat_teardown(
-                            event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
+                            sensor_event,
+                            sensor_net,
+                            protocol,
+                            src_iface,
+                            dst_iface,
+                            sensor_hostname,
+                            fw_hostname,
                         )
 
     def _emit_built(
@@ -592,15 +603,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         dst_iface: str,
         sensor_hostname: str,
         fw_hostname: str,
+        observation: Any | None = None,
     ) -> bool:
         """Emit a Teardown connection record (302014/302016/302021)."""
-        reason = self._teardown_reason(net, protocol, conn_id)
-        duration_seconds = self._teardown_duration_seconds(net, protocol, reason, conn_id)
+        if observation is not None and observation.firewall_teardown_time is not None:
+            reason = observation.firewall_teardown_reason
+            teardown_ts = observation.firewall_teardown_time
+            duration_seconds = max(0.0, (teardown_ts - event.timestamp).total_seconds())
+        else:
+            reason, duration_seconds = self._compatibility_teardown_plan(net, protocol)
+            teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
         duration = self._format_duration(duration_seconds)
         total_bytes = self._teardown_byte_count(net, protocol, conn_id)
-        teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
-        if self._is_after_output_end(teardown_ts):
-            return False
 
         if protocol == "icmp":
             msg_id = 302021
@@ -787,8 +801,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         teardown_ts = event.timestamp
         if net.duration and net.duration > 0:
             teardown_ts = event.timestamp + timedelta(seconds=net.duration)
-        if self._is_after_output_end(teardown_ts):
-            return
         is_src_nat = nat.mapped_src_ip != net.src_ip
         if is_src_nat:
             mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(

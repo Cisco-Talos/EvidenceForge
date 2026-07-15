@@ -1,0 +1,56 @@
+# Explicit forward-proxy transaction timing profiles.
+#
+# Resolver weights and gaps describe the proxy's own resolver/cache behavior.
+# All values are milliseconds and are sampled deterministically per transaction.
+
+resolver_mixture:
+  - name: resolver_cache_hit
+    weight: 65
+    origin_after_request_ms:
+      min: 5
+      max: 75
+  - name: ordinary_lookup
+    weight: 32
+    dns_completion_after_request_ms:
+      min: 8
+      max: 120
+    origin_after_dns_ms:
+      min: 2
+      max: 35
+  - name: retry_queue
+    weight: 3
+    dns_completion_after_request_ms:
+      min: 350
+      max: 2500
+    origin_after_dns_ms:
+      min: 5
+      max: 80
+
+phase_timing:
+  request_after_connect_ms:
+    min: 1
+    max: 18
+  inspected_request_after_connect_setup_ms:
+    min: 10
+    max: 80
+  policy_decision_after_request_ms:
+    min: 0
+    max: 4
+  tls_after_origin_connect_ms:
+    min: 18
+    max: 180
+  origin_service_ms:
+    min: 35
+    max: 650
+  client_flush_after_response_ms:
+    min: 2
+    max: 80
+  terminal_response_after_decision_ms:
+    min: 5
+    max: 280
+  close_after_flush_ms:
+    min: 2
+    max: 120
+  gateway_attempt_ms:
+    min: 80
+    max: 1800

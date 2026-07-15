@@ -22,12 +22,14 @@
 
 """Tests for Phase 6.2 P1 realism fixes."""
 
+import random
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator, _is_private_ip
+from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -156,6 +158,20 @@ class TestTCPOverhead:
         net = event.network
         overhead_per_pkt = (net.orig_ip_bytes - net.orig_bytes) / net.orig_pkts
         assert 40 <= overhead_per_pkt <= 64
+
+    def test_bulk_tcp_ip_bytes_fit_standard_mtu(self):
+        """Canonical packet and IP-byte accounting must fit the modeled MTU."""
+        payload_bytes = 314_783_351
+        packet_count = generator_module._tcp_payload_segment_count(payload_bytes)
+
+        for seed in range(20):
+            ip_bytes = generator_module._tcp_ip_byte_count(
+                payload_bytes,
+                packet_count,
+                random.Random(seed),
+            )
+            assert payload_bytes + packet_count * 40 <= ip_bytes
+            assert ip_bytes <= packet_count * 1500
 
     def test_udp_overhead_is_28(self, activity_gen, state_manager, mock_emitters):
         state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC))

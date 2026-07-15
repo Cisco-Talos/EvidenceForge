@@ -146,19 +146,26 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 )
                 canonical_duration = float(duration or 0.0)
                 duration = max(sampled_duration, canonical_duration + 0.001)
-        event_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
+        if event.network_observations_planned and net.transaction is not None:
+            # The observation planner owns the sensor-visible connection start.
+            # Protocol siblings are projected from this same canonical anchor by
+            # SensorMultiplexEmitter, so applying another conn-only source delay
+            # here can place HTTP/TLS rows before their parent connection.
+            event_ts = net.transaction.started_at
+        else:
+            event_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
         event_data = {
             "ts": event_ts,
             "uid": net.zeek_uid,
@@ -200,11 +207,8 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 if event.http
                 else None
             ),
-            "_allow_sensor_observation_variance": True,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            **self._sensor_metadata(event, self.format_def.name),
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

@@ -39,7 +39,6 @@ that explicitly request one file.
 
 import json
 import logging
-import math
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -47,16 +46,12 @@ from queue import Empty
 from threading import Lock
 from typing import Any
 
+from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.activity.timing_profiles import network_sensor_observation_timing
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.utils.paths import sanitize_path_component
-from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
-
-_BULK_TCP_FLOW_MIN_IP_BYTES = 10_000_000
-_BULK_TCP_FLOW_MISSED_CAP_BYTES = 65_536
 
 
 def zeek_format_observed(event: Any, format_name: str) -> bool:
@@ -103,506 +98,6 @@ def _normalize_zeek_float_precision(value: Any) -> Any:
     return value
 
 
-def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: float) -> float:
-    """Return a deterministic signed per-sensor observation variation."""
-    seed = _stable_seed(f"zeek_sensor_observation:{hostname}:{uid}:{field}")
-    # Deterministic fraction in [-magnitude, +magnitude], avoiding an exact zero.
-    centered = ((seed % 2001) - 1000) / 1000.0
-    if centered == 0:
-        centered = 0.137
-    return centered * magnitude
-
-
-def _sensor_clock_skew_us(hostname: str) -> int:
-    """Return stable per-sensor clock skew in microseconds."""
-    timing = network_sensor_observation_timing()
-    seed = _stable_seed(f"zeek_sensor_clock_skew:{hostname}")
-    width = timing.clock_skew_max_us - timing.clock_skew_min_us + 1
-    return timing.clock_skew_min_us + (seed % max(1, width))
-
-
-def _sensor_clock_drift_us(hostname: str, ts: Any) -> int:
-    """Return small time-bucketed clock drift for a sensor timestamp."""
-    if isinstance(ts, datetime):
-        epoch_seconds = int(ts.timestamp())
-    elif isinstance(ts, (int, float)):
-        if not math.isfinite(ts):
-            return 0
-        epoch_seconds = int(ts)
-    else:
-        epoch_seconds = 0
-    # Drift moves slowly, not per packet. Fifteen-minute buckets are enough to
-    # avoid a perfectly fixed offset while keeping well-synced sensors close.
-    bucket = epoch_seconds // 900
-    seed = _stable_seed(f"zeek_sensor_clock_drift:{hostname}:{bucket}")
-    return (seed % 401) - 200
-
-
-def _sensor_clock_adjustment_us(hostname: str, ts: Any) -> int:
-    """Return stable skew plus bounded drift within the configured skew window."""
-    timing = network_sensor_observation_timing()
-    skew = _sensor_clock_skew_us(hostname) + _sensor_clock_drift_us(hostname, ts)
-    return max(timing.clock_skew_min_us, min(timing.clock_skew_max_us, skew))
-
-
-def _sensor_path_delay_us(hostname: str, original_uid: Any = None) -> int:
-    """Return stable capture timestamp delay for a sensor observation."""
-    timing = network_sensor_observation_timing()
-    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}")
-    # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
-    # add a small positive delay. Keep the baseline stable by sensor, then add
-    # bounded flow-local capture texture so repeated Core/DMZ observations do
-    # not collapse into a tiny set of exact offsets.
-    width = timing.path_delay_max_us - timing.path_delay_min_us + 1
-    baseline = timing.path_delay_min_us + (seed % max(1, width))
-    if original_uid is None:
-        return baseline
-    jitter_seed = _stable_seed(f"zeek_sensor_path_delay_jitter:{hostname}:{original_uid}")
-    # Flow-local buffering and packet-broker scheduling should sometimes
-    # dominate the stable sensor path ordering. Keep each individual sensor
-    # inside the configured path-delay window, but allow same-flow cross-sensor
-    # deltas to change sign instead of always reading as a fixed tap order.
-    jitter_width = max(6_000, int(width * 0.55))
-    jitter = (jitter_seed % ((jitter_width * 2) + 1)) - jitter_width
-    return max(timing.path_delay_min_us, min(timing.path_delay_max_us, baseline + jitter))
-
-
-def _jitter_numeric_observation(
-    render_data: dict[str, Any],
-    field: str,
-    hostname: str,
-    uid: Any,
-    magnitude: float,
-    *,
-    minimum: int | float = 0,
-) -> None:
-    """Apply deterministic per-sensor jitter to numeric Zeek observation fields."""
-    value = render_data.get(field)
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return
-    if value <= 0:
-        return
-    fraction = _sensor_variation_fraction(hostname, uid, field, magnitude)
-    try:
-        varied = value * (1.0 + fraction)
-        if isinstance(value, int):
-            varied = int(round(varied))
-        render_data[field] = max(type(value)(minimum), type(value)(varied))
-    except OverflowError:
-        logger.debug(
-            "Skipping Zeek sensor jitter for out-of-range numeric field %s on %s",
-            field,
-            hostname,
-        )
-
-
-def _jitter_duration_observation(
-    render_data: dict[str, Any],
-    hostname: str,
-    uid: Any,
-    magnitude: float,
-    *,
-    max_delta_seconds: float,
-) -> None:
-    """Apply bounded duration jitter for explicitly lossy sensor observations."""
-    value = render_data.get("duration")
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return
-    if value <= 0:
-        return
-    fraction = _sensor_variation_fraction(hostname, uid, "duration", magnitude)
-    try:
-        raw_delta = value * fraction
-        delta = max(-max_delta_seconds, min(max_delta_seconds, raw_delta))
-        if abs(delta) < 0.000001:
-            delta = 0.000001 if raw_delta >= 0 else -0.000001
-        render_data["duration"] = max(0.000001, value + delta)
-    except OverflowError:
-        logger.debug(
-            "Skipping Zeek sensor duration jitter for out-of-range value on %s",
-            hostname,
-        )
-
-
-def _extend_lossless_duration_observation(
-    render_data: dict[str, Any],
-    hostname: str,
-    uid: Any,
-    *,
-    max_delta_seconds: float,
-) -> None:
-    """Apply small positive end-time texture for a lossless sensor observation."""
-    value = render_data.get("duration")
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return
-    if value <= 0:
-        return
-    seed = _stable_seed(f"zeek_sensor_lossless_duration:{hostname}:{uid}")
-    fraction = 0.00075 + ((seed % 1200) / 1_000_000)
-    try:
-        raw_delta = max(0.000001, value * fraction)
-        if raw_delta > max_delta_seconds:
-            cap_seed = _stable_seed(f"zeek_sensor_lossless_duration_cap:{hostname}:{uid}")
-            cap_fraction = 0.25 + ((cap_seed % 73_000) / 100_000)
-            delta = max_delta_seconds * cap_fraction
-        else:
-            delta = raw_delta
-        render_data["duration"] = value + delta
-    except OverflowError:
-        logger.debug(
-            "Skipping Zeek lossless sensor duration texture for out-of-range value on %s",
-            hostname,
-        )
-
-
-def _texture_lossless_tcp_packetization(
-    render_data: dict[str, Any],
-    hostname: str,
-    uid: Any,
-) -> None:
-    """Add tiny packetization/IP-byte differences for an independent TCP tap."""
-    if str(render_data.get("proto") or "").lower() != "tcp":
-        return
-    changed = False
-    for side in ("orig", "resp"):
-        packets = render_data.get(f"{side}_pkts")
-        payload = render_data.get(f"{side}_bytes")
-        ip_bytes = render_data.get(f"{side}_ip_bytes")
-        if not all(isinstance(value, int) for value in (packets, payload, ip_bytes)):
-            continue
-        if packets <= 0 or payload < 0 or ip_bytes < 0:
-            continue
-        if packets > 10**18 or payload > 10**18 or ip_bytes > 10**18:
-            continue
-        seed = _stable_seed(f"zeek_sensor_lossless_packets:{hostname}:{uid}:{side}")
-        if seed % 3 == 0:
-            continue
-        extra_packets = 1 + (seed % 2)
-        render_data[f"{side}_pkts"] = packets + extra_packets
-        render_data[f"{side}_ip_bytes"] = ip_bytes + (extra_packets * 40) + (seed % 97)
-        changed = True
-    if changed:
-        return
-    for side in ("orig", "resp"):
-        packets = render_data.get(f"{side}_pkts")
-        payload = render_data.get(f"{side}_bytes")
-        ip_bytes = render_data.get(f"{side}_ip_bytes")
-        if not all(isinstance(value, int) for value in (packets, payload, ip_bytes)):
-            continue
-        if packets <= 0 or payload < 0 or ip_bytes < 0:
-            continue
-        if packets > 10**18 or payload > 10**18 or ip_bytes > 10**18:
-            continue
-        seed = _stable_seed(f"zeek_sensor_lossless_packets:fallback:{hostname}:{uid}:{side}")
-        render_data[f"{side}_pkts"] = packets + 1
-        render_data[f"{side}_ip_bytes"] = ip_bytes + 40 + (seed % 53)
-        return
-
-
-def _jitter_payload_counter_with_floor(
-    render_data: dict[str, Any],
-    field: str,
-    floor_field: str,
-    hostname: str,
-    uid: Any,
-    magnitude: float,
-) -> None:
-    """Apply per-sensor byte jitter while preserving source-owned body floors."""
-    value = render_data.get(field)
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        return
-    floor = render_data.get(floor_field)
-    minimum = floor if isinstance(floor, int) and floor >= 0 else 0
-    before = value
-    _jitter_numeric_observation(
-        render_data,
-        field,
-        hostname,
-        uid,
-        magnitude,
-        minimum=minimum,
-    )
-    after = render_data.get(field)
-    if after != before:
-        return
-    if before > 10**18 or minimum > 10**18:
-        return
-
-    seed = _stable_seed(f"zeek_sensor_payload_floor:{hostname}:{uid}:{field}")
-    upper_extra = max(8, min(512, int(round(max(before, minimum, 1) * magnitude))))
-    render_data[field] = max(minimum, before + 1 + (seed % upper_extra))
-
-
-def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
-    """Return whether a flow's byte counters should stay identical across sensors."""
-    proto = str(render_data.get("proto") or "").lower()
-    if proto == "icmp":
-        return True
-    if proto != "udp":
-        return False
-    service = str(render_data.get("service") or "").lower()
-    if service == "dns":
-        return True
-    return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
-
-
-def _uses_bounded_bulk_tcp_accounting(render_data: dict[str, Any]) -> bool:
-    """Return whether TCP sensor texture should be capped to small packet deltas."""
-    if str(render_data.get("proto") or "").lower() != "tcp":
-        return False
-    missed = render_data.get("missed_bytes") or 0
-    if not isinstance(missed, int) or isinstance(missed, bool) or missed < 0:
-        return False
-    if missed > _BULK_TCP_FLOW_MISSED_CAP_BYTES:
-        return False
-
-    total = 0
-    for field in ("orig_ip_bytes", "resp_ip_bytes", "orig_bytes", "resp_bytes"):
-        value = render_data.get(field)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            total += value
-    return total >= _BULK_TCP_FLOW_MIN_IP_BYTES
-
-
-def _extend_locked_sensor_timing_field(
-    render_data: dict[str, Any],
-    field: str,
-    hostname: str,
-    uid: Any,
-    *,
-    max_delta_seconds: float,
-) -> bool:
-    """Add tiny sensor-local timing texture while preserving packet accounting."""
-    value = render_data.get(field)
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return False
-    if value <= 0 or value > 10**18:
-        return False
-    seed = _stable_seed(f"zeek_sensor_locked_timing:{hostname}:{uid}:{field}")
-    fraction = 0.0005 + ((seed % 6500) / 1_000_000)
-    try:
-        raw_delta = value * fraction
-        if raw_delta < 0.000001:
-            raw_delta = 0.000001
-        if raw_delta > max_delta_seconds:
-            cap_fraction = 0.2 + (((seed >> 8) % 7000) / 10_000)
-            raw_delta = max_delta_seconds * cap_fraction
-        render_data[field] = value + raw_delta
-    except OverflowError:
-        logger.debug(
-            "Skipping Zeek locked packet-accounting timing texture for %s on %s",
-            field,
-            hostname,
-        )
-        return False
-    return True
-
-
-def _texture_locked_packet_accounting_observation(
-    render_data: dict[str, Any],
-    hostname: str,
-    uid: Any,
-) -> None:
-    """Vary sensor-local timing for DNS/ICMP while keeping packet sizes exact."""
-    proto = str(render_data.get("proto") or "").lower()
-    service = str(render_data.get("service") or "").lower()
-    is_dns = proto == "udp" and (
-        service == "dns" or render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
-    )
-    if is_dns:
-        response_interval = render_data.get("_min_duration")
-        if not isinstance(response_interval, (int, float)) or isinstance(response_interval, bool):
-            response_interval = render_data.get("rtt")
-        if (
-            isinstance(response_interval, (int, float))
-            and not isinstance(response_interval, bool)
-            and 0 < response_interval <= 10**18
-        ):
-            seed = _stable_seed(f"zeek_sensor_dns_response_timing:{hostname}:{uid}")
-            fraction = 0.0005 + ((seed % 6500) / 1_000_000)
-            response_delta = max(0.000001, response_interval * fraction)
-            if response_delta > 0.025:
-                cap_fraction = 0.2 + (((seed >> 8) % 7000) / 10_000)
-                response_delta = 0.025 * cap_fraction
-            for field in ("duration", "rtt"):
-                value = render_data.get(field)
-                if (
-                    isinstance(value, (int, float))
-                    and not isinstance(value, bool)
-                    and 0 < value <= 10**18
-                ):
-                    render_data[field] = value + response_delta
-            return
-    _extend_locked_sensor_timing_field(
-        render_data,
-        "duration",
-        hostname,
-        uid,
-        max_delta_seconds=0.05,
-    )
-    _extend_locked_sensor_timing_field(
-        render_data,
-        "rtt",
-        hostname,
-        uid,
-        max_delta_seconds=0.025,
-    )
-
-
-def _texture_bounded_bulk_tcp_observation(
-    render_data: dict[str, Any],
-    hostname: str,
-    uid: Any,
-) -> None:
-    """Keep bulk TCP bytes coherent while adding source-native tap texture."""
-    if not render_data.get("_lock_duration"):
-        _jitter_duration_observation(
-            render_data,
-            hostname,
-            uid,
-            0.002,
-            max_delta_seconds=2.0,
-        )
-    _texture_lossless_tcp_packetization(render_data, hostname, uid)
-    _enforce_http_body_invariants(render_data)
-    _enforce_ip_byte_invariants(render_data)
-
-
-def _apply_sensor_observation_variance(
-    render_data: dict[str, Any],
-    hostname: str,
-    original_uid: Any,
-) -> None:
-    """Make multi-sensor Zeek rows look like independent tap observations.
-
-    The canonical event still owns the true connection tuple and protocol
-    facts. This only models source-native observation differences from packet
-    loss, snaplen, tap placement, and analyzer cutoffs.
-    """
-    clone_fields = (
-        "duration",
-        "orig_bytes",
-        "resp_bytes",
-        "orig_pkts",
-        "resp_pkts",
-        "orig_ip_bytes",
-        "resp_ip_bytes",
-    )
-    original_observation = {field: render_data.get(field) for field in clone_fields}
-    # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
-    # cleanly. Keep this sparse and small so it reads as capture imperfection.
-    missed = render_data.get("missed_bytes") or 0
-    lossy_observation = isinstance(missed, int) and missed > 0
-    added_missed_bytes = False
-    if "missed_bytes" in render_data:
-        if isinstance(missed, int):
-            seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
-            if seed % 11 == 0:
-                render_data["missed_bytes"] = missed + 16 + (seed % 496)
-                added_missed_bytes = True
-                lossy_observation = True
-    if lossy_observation and _uses_bounded_bulk_tcp_accounting(render_data):
-        _texture_bounded_bulk_tcp_observation(render_data, hostname, original_uid)
-        return
-    if not lossy_observation:
-        if not render_data.get("_lock_duration"):
-            _extend_lossless_duration_observation(
-                render_data,
-                hostname,
-                original_uid,
-                max_delta_seconds=0.75,
-            )
-        _texture_lossless_tcp_packetization(render_data, hostname, original_uid)
-        _enforce_http_body_invariants(render_data)
-        _enforce_ip_byte_invariants(render_data)
-        return
-    for field in ("orig_pkts", "resp_pkts"):
-        _jitter_numeric_observation(
-            render_data,
-            field,
-            hostname,
-            original_uid,
-            0.018 if added_missed_bytes else 0.012,
-            minimum=1,
-        )
-    if not render_data.get("_lock_duration"):
-        _jitter_duration_observation(
-            render_data,
-            hostname,
-            original_uid,
-            0.002,
-            max_delta_seconds=2.0,
-        )
-    for field in ("orig_pkts", "resp_pkts"):
-        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035, minimum=1)
-    _jitter_payload_counter_with_floor(
-        render_data,
-        "orig_bytes",
-        "_http_request_body_len",
-        hostname,
-        original_uid,
-        0.012,
-    )
-    _jitter_payload_counter_with_floor(
-        render_data,
-        "resp_bytes",
-        "_http_response_body_len",
-        hostname,
-        original_uid,
-        0.012,
-    )
-    for field in ("orig_ip_bytes", "resp_ip_bytes"):
-        _jitter_numeric_observation(
-            render_data,
-            field,
-            hostname,
-            original_uid,
-            0.024,
-            minimum=0,
-        )
-    _enforce_http_body_invariants(render_data)
-    _enforce_ip_byte_invariants(render_data)
-    if all(render_data.get(field) == original_observation[field] for field in clone_fields):
-        duration = render_data.get("duration")
-        if (
-            not render_data.get("_lock_duration")
-            and isinstance(duration, (int, float))
-            and not isinstance(duration, bool)
-            and duration > 0
-        ):
-            seed = _stable_seed(f"zeek_sensor_duration_floor:{hostname}:{original_uid}")
-            direction = -1 if seed % 2 else 1
-            try:
-                delta = max(duration * 0.0075, 0.000001)
-                render_data["duration"] = max(0.000001, duration + (direction * delta))
-            except OverflowError:
-                logger.debug(
-                    "Skipping Zeek sensor duration floor for out-of-range value on %s",
-                    hostname,
-                )
-        else:
-            proto = str(render_data.get("proto") or "").lower()
-            max_header_bytes = {"udp": 68}.get(proto)
-            seed = _stable_seed(f"zeek_sensor_ip_byte_floor:{hostname}:{original_uid}")
-            sides = ("resp", "orig") if seed % 2 else ("orig", "resp")
-            for side in sides:
-                payload = render_data.get(f"{side}_bytes")
-                packets = render_data.get(f"{side}_pkts")
-                ip_bytes = render_data.get(f"{side}_ip_bytes")
-                if not all(isinstance(value, int) for value in (payload, packets, ip_bytes)):
-                    continue
-                if packets <= 0 or ip_bytes < 0:
-                    continue
-                if max_header_bytes is not None:
-                    maximum_ip_bytes = payload + (max_header_bytes * packets)
-                    if ip_bytes >= maximum_ip_bytes:
-                        continue
-                render_data[f"{side}_ip_bytes"] = ip_bytes + 1
-                break
-    _enforce_http_body_invariants(render_data)
-    _enforce_ip_byte_invariants(render_data)
-
-
 def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
     """Keep conn.log byte counters compatible with same-transaction http.log facts."""
     request_body = render_data.get("_http_request_body_len")
@@ -618,7 +113,7 @@ def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
 
 
 def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
-    """Keep Zeek IP-byte counters physically possible after observation jitter."""
+    """Keep projected Zeek IP-byte counters physically possible."""
     proto = str(render_data.get("proto") or "").lower()
     header_bytes = {"tcp": 40, "udp": 28, "icmp": 28}.get(proto, 20)
     max_header_bytes = {"udp": 68}.get(proto)
@@ -817,59 +312,156 @@ class SensorMultiplexEmitter(LogEmitter):
             return ts + timedelta(milliseconds=milliseconds)
         return float(ts) + milliseconds / 1000
 
-    @staticmethod
-    def _derive_sensor_uid(original_uid: str, sensor_hostname: str) -> str:
-        """Derive a deterministic per-sensor UID from the original UID.
+    def _sensor_metadata(self, event: Any, format_name: str) -> dict[str, Any]:
+        """Return preplanned sensor routing and observation metadata."""
 
-        All emitters processing the same event for the same sensor will derive
-        the same UID, preserving cross-log correlation (conn↔dns↔http↔ssl)
-        within a sensor. Different sensors get different UIDs.
+        observations = {
+            observation.sensor_identity: observation
+            for observation in getattr(event, "network_observations", ())
+            if format_name in observation.visible_formats
+        }
+        targets = list(observations)
+        if not targets:
+            targets = event._sensor_hostnames_by_format.get(format_name, [])
+        canonical_start = None
+        if event.network is not None and event.network.transaction is not None:
+            canonical_start = event.network.transaction.started_at
+        return {
+            "_sensor_hostnames": targets,
+            "_network_sensor_observations": observations,
+            "_network_observations_planned": getattr(
+                event,
+                "network_observations_planned",
+                False,
+            ),
+            "_nat_swaps_by_sensor": getattr(event, "_nat_swaps_by_sensor", {}),
+            "_canonical_network_start": canonical_start,
+        }
 
-        Uses HMAC-like hashing to produce a base62 UID of the same length
-        and prefix as the original.
-        """
-        import hashlib
-        import string
+    def _apply_sensor_observation(
+        self,
+        render_data: dict[str, Any],
+        observation: NetworkSensorObservation,
+        canonical_start: datetime | None,
+    ) -> None:
+        """Project a frozen observation into source-native Zeek fields."""
 
-        base62 = string.ascii_uppercase + string.ascii_lowercase + string.digits
-        prefix = original_uid[0] if original_uid else "C"
-        target_len = len(original_uid) - 1  # Exclude prefix
+        original_src_ip = render_data.get("id.orig_h") or render_data.get("_id.orig_h")
+        original_dst_ip = render_data.get("id.resp_h") or render_data.get("_id.resp_h")
+        tuple_view = observation.tuple_view
+        if "id.orig_h" in render_data:
+            render_data["id.orig_h"] = tuple_view.src_ip
+        if "id.orig_p" in render_data:
+            render_data["id.orig_p"] = tuple_view.src_port
+        if "id.resp_h" in render_data:
+            render_data["id.resp_h"] = tuple_view.dst_ip
+        if "id.resp_p" in render_data:
+            render_data["id.resp_p"] = tuple_view.dst_port
+        for field, value in {
+            "src_ip": tuple_view.src_ip,
+            "src_port": tuple_view.src_port,
+            "dst_ip": tuple_view.dst_ip,
+            "dst_port": tuple_view.dst_port,
+            "protocol": tuple_view.protocol,
+        }.items():
+            if field in render_data:
+                render_data[field] = value
+        if "local_orig" in render_data:
+            render_data["local_orig"] = observation.local_orig
+        if "local_resp" in render_data:
+            render_data["local_resp"] = observation.local_resp
+        if "tx_hosts" in render_data:
+            render_data["tx_hosts"] = _swap_host_list_value(
+                render_data.get("tx_hosts"),
+                original_src_ip,
+                tuple_view.src_ip,
+            )
+            render_data["tx_hosts"] = _swap_host_list_value(
+                render_data.get("tx_hosts"),
+                original_dst_ip,
+                tuple_view.dst_ip,
+            )
+        if "rx_hosts" in render_data:
+            render_data["rx_hosts"] = _swap_host_list_value(
+                render_data.get("rx_hosts"),
+                original_src_ip,
+                tuple_view.src_ip,
+            )
+            render_data["rx_hosts"] = _swap_host_list_value(
+                render_data.get("rx_hosts"),
+                original_dst_ip,
+                tuple_view.dst_ip,
+            )
 
-        from evidenceforge.utils.ids import _has_synthetic_marker
+        timestamp_field = "ts" if "ts" in render_data else "timestamp"
+        ts = render_data.get(timestamp_field)
+        if canonical_start is not None and isinstance(ts, datetime):
+            render_data[timestamp_field] = observation.observed_start_time + (ts - canonical_start)
+        elif canonical_start is not None and isinstance(ts, (int, float)):
+            render_data[timestamp_field] = (
+                observation.observed_start_time.timestamp()
+                + float(ts)
+                - canonical_start.timestamp()
+            )
 
-        for counter in range(16):
-            suffix = "" if counter == 0 else f":{counter}"
-            h = hashlib.sha256(f"{original_uid}:{sensor_hostname}{suffix}".encode()).digest()
-            chars = []
-            for byte in h[:target_len]:
-                chars.append(base62[byte % 62])
-            derived_uid = prefix + "".join(chars)
-            if not _has_synthetic_marker(derived_uid):
-                return derived_uid
-        return derived_uid
+        if self.format_def.name == "zeek_conn":
+            ledger = observation.traffic
+            render_data.update(
+                {
+                    "duration": observation.observed_duration,
+                    "orig_bytes": ledger.orig.payload_bytes,
+                    "resp_bytes": ledger.resp.payload_bytes,
+                    "orig_pkts": ledger.orig.packets,
+                    "resp_pkts": ledger.resp.packets,
+                    "orig_ip_bytes": ledger.orig.ip_bytes,
+                    "resp_ip_bytes": ledger.resp.ip_bytes,
+                    "missed_bytes": ledger.missed_bytes,
+                }
+            )
 
-    @classmethod
-    def _derive_sensor_file_id(cls, original_id: str, sensor_hostname: str) -> str:
-        """Derive a deterministic per-sensor Zeek FUID-style identifier."""
-        if not original_id:
-            return original_id
-        return cls._derive_sensor_uid(original_id, sensor_hostname)
+        original_uid = render_data.get("uid")
+        if isinstance(original_uid, str):
+            render_data["uid"] = observation.connection_id(original_uid)
+        for uid_list_field in ("uids", "conn_uids"):
+            uid_values = render_data.get(uid_list_field)
+            if isinstance(uid_values, list):
+                render_data[uid_list_field] = [
+                    observation.connection_id(uid) if isinstance(uid, str) else uid
+                    for uid in uid_values
+                ]
+        for fuid_field in ("id", "fuid"):
+            original_fuid = render_data.get(fuid_field)
+            if isinstance(original_fuid, str):
+                render_data[fuid_field] = observation.file_id(original_fuid)
+        for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
+            fuid_values = render_data.get(fuid_list_field)
+            if isinstance(fuid_values, list):
+                render_data[fuid_list_field] = [
+                    observation.file_id(fuid) if isinstance(fuid, str) else fuid
+                    for fuid in fuid_values
+                ]
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Render and route to sensor writers.
 
-        When multiple sensors observe the same connection, each sensor gets a
-        deterministic unique Zeek UID derived from hash(original_uid, sensor).
-        All emitters for the same event+sensor produce the same derived UID,
-        preserving cross-log correlation within each sensor.
+        Sensor-local tuple, timing, traffic, and identifiers are consumed from
+        frozen observation plans. The emitter performs no sensor synthesis.
         Skips events where _render_event returns None (e.g., SnortEmitter
         filters out non-IDS connection events).
         """
         sensor_hostnames = event_data.pop("_sensor_hostnames", None)
-        nat_swaps = event_data.pop("_nat_swaps_by_sensor", None)
-        targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
+        observations = event_data.pop("_network_sensor_observations", {})
+        observations_planned = event_data.pop("_network_observations_planned", False)
+        canonical_start = event_data.pop("_canonical_network_start", None)
+        compatibility_nat_swaps = event_data.pop("_nat_swaps_by_sensor", None)
+        event_data.pop("_allow_sensor_observation_variance", None)
+        targets = (
+            sensor_hostnames if observations_planned else sensor_hostnames or self._sensor_hostnames
+        )
 
         if not targets:
+            if observations_planned:
+                return
             if not self._direct_file_path:
                 return
             _enforce_http_body_invariants(event_data)
@@ -879,139 +471,60 @@ class SensorMultiplexEmitter(LogEmitter):
                 return
             self.emit_to_sensors(rendered, sensor_hostnames)
         else:
-            # Multiple sensors: each gets a deterministic unique UID
-            # and potentially NAT-swapped IPs
-            original_uid = event_data.get("uid")
-            if not original_uid:
-                for uid_list_field in ("conn_uids", "uids"):
-                    uid_values = event_data.get(uid_list_field)
-                    if isinstance(uid_values, list):
-                        original_uid = next(
-                            (
-                                uid
-                                for uid in uid_values
-                                if isinstance(uid, str) and uid.startswith("C")
-                            ),
-                            None,
-                        )
-                    if original_uid:
-                        break
-            for i, hostname in enumerate(targets):
-                # Always copy before per-sensor timing and identifier derivation.
+            for hostname in targets:
                 render_data = dict(event_data)
-                # Apply NAT IP swaps for post-NAT sensors
-                if nat_swaps and hostname in nat_swaps:
-                    if render_data is event_data:
-                        render_data = dict(event_data)
-                    swaps = nat_swaps[hostname]
-                    if "src_ip" in swaps:
-                        render_data["id.orig_h"] = swaps["src_ip"]
-                    if "src_port" in swaps:
-                        render_data["id.orig_p"] = swaps["src_port"]
-                    if "dst_ip" in swaps:
-                        render_data["id.resp_h"] = swaps["dst_ip"]
-                    if "dst_port" in swaps:
-                        render_data["id.resp_p"] = swaps["dst_port"]
-                    if "local_orig" in swaps and "local_orig" in render_data:
-                        render_data["local_orig"] = swaps["local_orig"]
-                    if "local_resp" in swaps and "local_resp" in render_data:
-                        render_data["local_resp"] = swaps["local_resp"]
-                    if "src_ip" in swaps and (
-                        "tx_hosts" in render_data or "rx_hosts" in render_data
-                    ):
-                        original_src_ip = event_data.get("id.orig_h") or event_data.get(
-                            "_id.orig_h"
+                observation = observations.get(hostname)
+                if observation is not None:
+                    self._apply_sensor_observation(
+                        render_data,
+                        observation,
+                        canonical_start,
+                    )
+                elif compatibility_nat_swaps and hostname in compatibility_nat_swaps:
+                    swaps = compatibility_nat_swaps[hostname]
+                    original_src_ip = render_data.get(
+                        "id.orig_h",
+                        render_data.get("_id.orig_h"),
+                    )
+                    original_dst_ip = render_data.get(
+                        "id.resp_h",
+                        render_data.get("_id.resp_h"),
+                    )
+                    for field, rendered_field in {
+                        "src_ip": "id.orig_h",
+                        "src_port": "id.orig_p",
+                        "dst_ip": "id.resp_h",
+                        "dst_port": "id.resp_p",
+                        "local_orig": "local_orig",
+                        "local_resp": "local_resp",
+                    }.items():
+                        if field in swaps and (
+                            not field.startswith("local_") or rendered_field in render_data
+                        ):
+                            internal_field = f"_{rendered_field}"
+                            target_field = (
+                                internal_field if internal_field in render_data else rendered_field
+                            )
+                            render_data[target_field] = swaps[field]
+                    for hosts_field in ("tx_hosts", "rx_hosts"):
+                        if hosts_field not in render_data:
+                            continue
+                        render_data[hosts_field] = _swap_host_list_value(
+                            render_data.get(hosts_field),
+                            original_src_ip,
+                            swaps.get("src_ip"),
                         )
-                        if "tx_hosts" in render_data:
-                            render_data["tx_hosts"] = _swap_host_list_value(
-                                render_data.get("tx_hosts"),
-                                original_src_ip,
-                                swaps["src_ip"],
-                            )
-                        if "rx_hosts" in render_data:
-                            render_data["rx_hosts"] = _swap_host_list_value(
-                                render_data.get("rx_hosts"),
-                                original_src_ip,
-                                swaps["src_ip"],
-                            )
-                    if "dst_ip" in swaps and (
-                        "tx_hosts" in render_data or "rx_hosts" in render_data
-                    ):
-                        original_dst_ip = event_data.get("id.resp_h") or event_data.get(
-                            "_id.resp_h"
+                        render_data[hosts_field] = _swap_host_list_value(
+                            render_data.get(hosts_field),
+                            original_dst_ip,
+                            swaps.get("dst_ip"),
                         )
-                        if "tx_hosts" in render_data:
-                            render_data["tx_hosts"] = _swap_host_list_value(
-                                render_data.get("tx_hosts"),
-                                original_dst_ip,
-                                swaps["dst_ip"],
-                            )
-                        if "rx_hosts" in render_data:
-                            render_data["rx_hosts"] = _swap_host_list_value(
-                                render_data.get("rx_hosts"),
-                                original_dst_ip,
-                                swaps["dst_ip"],
-                            )
-                # Each sensor has independent clock skew/drift plus stable
-                # capture timing. Apply it to every sensor in a multi-sensor
-                # observation so cross-sensor deltas are sensor/path-shaped
-                # rather than per-record random.
-                ts = render_data.get("ts")
-                if len(targets) > 1 and ts is not None:
-                    sensor_delay_us = _sensor_clock_adjustment_us(
-                        hostname,
-                        ts,
-                    ) + _sensor_path_delay_us(hostname, original_uid)
-                    if isinstance(ts, datetime):
-                        render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
-                    elif isinstance(ts, (int, float)):
-                        render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                if i > 0 and render_data.get("_allow_sensor_observation_variance"):
-                    if _locks_sensor_packet_accounting(render_data):
-                        _texture_locked_packet_accounting_observation(
-                            render_data,
-                            hostname,
-                            original_uid,
-                        )
-                    else:
-                        _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)
-                if original_uid:
-                    # Derive a deterministic UID for this sensor
-                    render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
-                for uid_list_field in ("uids", "conn_uids"):
-                    uid_values = render_data.get(uid_list_field)
-                    if not isinstance(uid_values, list):
-                        continue
-                    render_data[uid_list_field] = [
-                        self._derive_sensor_uid(uid, hostname)
-                        if isinstance(uid, str) and uid.startswith("C")
-                        else uid
-                        for uid in uid_values
-                    ]
-                for fuid_field in ("id", "fuid"):
-                    original_fuid = render_data.get(fuid_field)
-                    if isinstance(original_fuid, str) and original_fuid.startswith("F"):
-                        render_data[fuid_field] = self._derive_sensor_file_id(
-                            original_fuid, hostname
-                        )
-                for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
-                    fuid_values = render_data.get(fuid_list_field)
-                    if isinstance(fuid_values, list):
-                        render_data[fuid_list_field] = [
-                            self._derive_sensor_file_id(fuid, hostname)
-                            if isinstance(fuid, str) and fuid.startswith("F")
-                            else fuid
-                            for fuid in fuid_values
-                        ]
                 rendered = self._render_event(render_data)
                 if rendered is None:
                     return
                 self._get_writer(hostname).write(rendered)
-            # Restore original UID so downstream code isn't affected
-            if original_uid:
-                event_data["uid"] = original_uid
 
     def _render_zeek_json(self, event_data: dict[str, Any]) -> str:
         """Common Zeek NDJSON rendering: timestamp conversion, dotted fields, compact JSON.

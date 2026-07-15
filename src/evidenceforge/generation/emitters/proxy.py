@@ -104,7 +104,16 @@ def _proxy_action(px: Any, *, setup: bool = False) -> str:
 
 
 def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | datetime]:
-    """Derive CONNECT setup timing and byte fields distinct from inspected requests."""
+    """Return action-planned CONNECT setup fields, with raw-event compatibility."""
+
+    transaction = getattr(px, "transaction", None)
+    if transaction is not None and transaction.tunnel_request_at is not None:
+        return {
+            "timestamp": transaction.tunnel_request_at,
+            "sc_bytes": transaction.tunnel_setup_sc_bytes,
+            "cs_bytes": transaction.tunnel_setup_cs_bytes,
+            "time_taken": transaction.tunnel_setup_time_taken_ms,
+        }
     seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
     rng = random.Random(seed)
     host_len = len(str(px.host or ""))
@@ -305,6 +314,7 @@ class ProxyEmitter(HostMultiplexEmitter):
         """
         px = event.proxy
         net = event.network
+        request_time = px.transaction.request_at if px.transaction is not None else event.timestamp
 
         # For HTTPS: emit CONNECT only if no active tunnel exists
         if _is_https_request(px, net) and px.method != "CONNECT":
@@ -313,12 +323,12 @@ class ProxyEmitter(HostMultiplexEmitter):
             last_activity = self._active_tunnels.get(tunnel_key)
             needs_connect = True
             if last_activity is not None:
-                elapsed = (event.timestamp - last_activity).total_seconds()
+                elapsed = (request_time - last_activity).total_seconds()
                 if 0 <= elapsed < _CONNECT_TUNNEL_TIMEOUT_S:
                     needs_connect = False
 
             if needs_connect:
-                setup = _connect_setup_fields(px, event.timestamp)
+                setup = _connect_setup_fields(px, request_time)
                 connect_data = {
                     "timestamp": setup["timestamp"],
                     "client_ip": px.client_ip,
@@ -343,11 +353,11 @@ class ProxyEmitter(HostMultiplexEmitter):
                 self._dispatch(connect_data)
 
             # Update tunnel last-activity timestamp
-            self._active_tunnels[tunnel_key] = event.timestamp
+            self._active_tunnels[tunnel_key] = request_time
 
         # Emit the actual request
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": request_time,
             "client_ip": px.client_ip,
             "username": px.username,
             "method": px.method,

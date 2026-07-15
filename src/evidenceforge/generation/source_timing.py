@@ -55,6 +55,57 @@ class SourceTimingPlanner:
         self._ensure_plan(event)
         return event
 
+    def admission_time(self, event: SecurityEvent, format_name: str) -> datetime:
+        """Return the finalized source-visible timestamp used for window admission."""
+
+        if format_name == "proxy_access" and event.proxy is not None:
+            transaction = event.proxy.transaction
+            if transaction is not None:
+                return transaction.request_at
+        if format_name == "zeek_http" and event.http is not None:
+            request_time = event.http.canonical_request_time
+            if request_time is not None:
+                observation = next(
+                    (
+                        candidate
+                        for candidate in event.network_observations
+                        if format_name in candidate.visible_formats
+                    ),
+                    None,
+                )
+                if observation is not None:
+                    return observation.observed_start_time + (request_time - event.timestamp)
+                return request_time
+        if event.network_observations:
+            observed = [
+                observation.observed_start_time
+                for observation in event.network_observations
+                if format_name in observation.visible_formats
+            ]
+            if observed:
+                return min(observed)
+        if format_name == "ecar" and event.network is not None:
+            return self.source_time(
+                event,
+                "source.ecar_flow",
+                seed_parts=(
+                    "dispatcher-admission",
+                    event.network.zeek_uid,
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                ),
+                within=(
+                    event.network.source_visible_start_time,
+                    event.network.source_visible_close_time,
+                )
+                if event.network.source_visible_start_time is not None
+                and event.network.source_visible_close_time is not None
+                else None,
+            )
+        return event.timestamp
+
     def source_time(
         self,
         event: SecurityEvent,
@@ -87,6 +138,59 @@ class SourceTimingPlanner:
             preferred_time,
             not_before=not_before,
             not_after=not_after,
+            within=within,
+        )
+        plan.source_times[cache_key] = constrained_time
+        return constrained_time
+
+    def lifecycle_child_source_time(
+        self,
+        event: SecurityEvent,
+        source_key: str,
+        *,
+        host_key: str,
+        seed_parts: tuple[Any, ...] = (),
+        within: tuple[datetime, datetime] | None = None,
+    ) -> datetime | None:
+        """Return a coherent host-local timestamp for one nested action child.
+
+        Independent source-latency samples can invert sibling transports that are
+        phases of one higher-level action (for example proxy ingress followed by
+        proxy-origin egress). Nested children on the same host therefore share a
+        small, deterministic observation offset from each child's canonical start.
+        The offset stays source-owned and preserves the action bundle's phase gaps.
+        """
+
+        lifecycle = event.lifecycle
+        if lifecycle is None or lifecycle.parent_group_id is None:
+            return None
+        network = event.network
+        if network is None:
+            return None
+
+        parent_group_id = lifecycle.parent_group_id
+        anchor = (
+            network.transaction.started_at
+            if network.transaction is not None
+            else network.source_visible_start_time or event.timestamp
+        )
+        effective_seed = seed_parts or self._event_seed_parts(event)
+        cache_seed = ("lifecycle-child", parent_group_id, host_key, *effective_seed)
+        cache_key = self._cache_key(source_key, cache_seed)
+        plan = self._ensure_plan(event)
+        cached = plan.source_times.get(cache_key)
+        if cached is not None:
+            return cached
+
+        group_seed = _stable_seed(
+            f"lifecycle-child-source-time:{source_key}:{parent_group_id}:{host_key}"
+        )
+        observation_offset = timedelta(microseconds=250 + (group_seed % 751))
+        preferred_time = anchor + observation_offset
+        constrained_time = self._apply_constraints(
+            preferred_time,
+            not_before=None,
+            not_after=None,
             within=within,
         )
         plan.source_times[cache_key] = constrained_time

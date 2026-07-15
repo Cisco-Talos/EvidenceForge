@@ -219,7 +219,6 @@ class EcarEmitter(HostMultiplexEmitter):
     _sort_flat_file = True
     _sort_key = staticmethod(_ecar_sort_key)
     _defer_sorted_flush_until_close = True
-    _output_end_time: datetime | None = None
     _stale_process_reference_grace_ms = 5 * 60 * 1000
     _post_termination_dependent_grace_ms = 30 * 1000
     _pre_process_flow_identity_repair_grace_ms = 30 * 1000
@@ -231,6 +230,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     _supported_types: set[str] = {
         "logon",
+        "machine_logon",
         "logoff",
         "failed_logon",
         "process_create",
@@ -270,6 +270,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Dispatch to per-type render method."""
         renderer = {
             "logon": self._render_logon,
+            "machine_logon": self._render_logon,
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
@@ -888,6 +889,23 @@ class EcarEmitter(HostMultiplexEmitter):
         """
 
         interval_start, not_after = self._flow_interval(event, seed_parts)
+        lifecycle = event.lifecycle
+        if (
+            lifecycle is not None
+            and lifecycle.parent_group_id is not None
+            and lifecycle.parent_group_id.startswith("proxy-transaction-")
+        ):
+            host_key = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+            flow_time = _SOURCE_TIMING.lifecycle_child_source_time(
+                event,
+                "source.ecar_flow",
+                host_key=host_key,
+                seed_parts=seed_parts,
+                within=(interval_start, not_after) if not_after is not None else None,
+            )
+            if flow_time is not None:
+                process_identity_safe = not_before is None or not_before <= flow_time
+                return flow_time, process_identity_safe
         if drop_late_process_identity and not_before is not None:
             flow_time = _SOURCE_TIMING.source_time(
                 event,
@@ -2880,28 +2898,6 @@ class EcarEmitter(HostMultiplexEmitter):
             deduped.append(line)
         return deduped
 
-    @classmethod
-    def _filter_after_output_window(
-        cls,
-        lines: list[str],
-        output_end_time: datetime | None,
-    ) -> list[str]:
-        """Drop renderer-shifted rows that land outside the scenario collection window."""
-        if output_end_time is None:
-            return lines
-        output_end_ms = int(output_end_time.timestamp() * 1000)
-        filtered: list[str] = []
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                filtered.append(line)
-                continue
-            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
-            if timestamp_ms <= 0 or timestamp_ms < output_end_ms:
-                filtered.append(line)
-        return filtered
-
     def flush(self, force: bool = False) -> None:
         """Flush per-host eCAR records after final lifecycle normalization."""
         if force:
@@ -2933,10 +2929,6 @@ class EcarEmitter(HostMultiplexEmitter):
                         writer.buffer
                     )
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
-                    writer.buffer = self._filter_after_output_window(
-                        writer.buffer,
-                        self._output_end_time,
-                    )
                     writer.buffer = self._normalize_flow_process_actor_visibility(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
                     writer.buffer = self._strip_internal_fields(writer.buffer)

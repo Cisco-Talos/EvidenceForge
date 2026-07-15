@@ -37,12 +37,45 @@ class TimingWindow:
 
 @dataclass(frozen=True, slots=True)
 class NetworkSensorObservationTiming:
-    """Per-sensor observation timing bounds for well-synced network sensors."""
+    """Per-sensor clock, route, jitter, and capture-loss bounds."""
 
-    clock_skew_min_us: int
-    clock_skew_max_us: int
-    path_delay_min_us: int
-    path_delay_max_us: int
+    profile_name: str
+    clock_offset_min_us: int
+    clock_offset_max_us: int
+    clock_drift_min_ppm: int
+    clock_drift_max_ppm: int
+    route_delay_min_us: int
+    route_delay_max_us: int
+    event_jitter_min_us: int
+    event_jitter_max_us: int
+    capture_loss_probability: float
+    capture_loss_min_fraction: float
+    capture_loss_max_fraction: float
+    capture_loss_max_missed_bytes: int
+
+    @property
+    def clock_skew_min_us(self) -> int:
+        """Compatibility alias for the former clock-skew field."""
+
+        return self.clock_offset_min_us
+
+    @property
+    def clock_skew_max_us(self) -> int:
+        """Compatibility alias for the former clock-skew field."""
+
+        return self.clock_offset_max_us
+
+    @property
+    def path_delay_min_us(self) -> int:
+        """Compatibility alias for the former path-delay field."""
+
+        return self.route_delay_min_us
+
+    @property
+    def path_delay_max_us(self) -> int:
+        """Compatibility alias for the former path-delay field."""
+
+        return self.route_delay_max_us
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +86,15 @@ class EndpointClockTiming:
     host_offset_max_ms: int
     host_drift_min_ppm: int
     host_drift_max_ppm: int
+
+
+@dataclass(frozen=True, slots=True)
+class FirewallObservationTiming:
+    """Source-native connection-table timers for one firewall sensor."""
+
+    policy_name: str
+    tcp_embryonic_timeout_seconds: int
+    tcp_idle_timeout_seconds: int
 
 
 def load_timing_profiles() -> dict[str, Any]:
@@ -98,6 +140,22 @@ def _safe_int_range(
     if max_value < min_value:
         return fallback_min, fallback_max
     return min_value, max_value
+
+
+def _safe_float(
+    value: Any,
+    fallback: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Convert input to float and clamp it to a safe range."""
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(minimum, min(parsed, maximum))
 
 
 def get_timing_window(
@@ -160,38 +218,97 @@ def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) ->
     return base_delta + timedelta(microseconds=rng.randint(37, 997))
 
 
-def network_sensor_observation_timing() -> NetworkSensorObservationTiming:
-    """Return safe timing bounds for a well-synced Zeek/network sensor fleet."""
+def network_sensor_observation_timing(
+    profile_name: str | None = None,
+) -> NetworkSensorObservationTiming:
+    """Return safe timing and capture bounds for one network sensor profile."""
     data = load_timing_profiles().get("network_sensor_observation", {})
     if not isinstance(data, dict):
         data = {}
     profiles = data.get("profiles", {})
     if not isinstance(profiles, dict):
         profiles = {}
-    default_profile = data.get("default_profile", "well_synced")
-    profile = profiles.get(default_profile, {})
+    default_profile = str(data.get("default_profile", "well_synced") or "well_synced")
+    selected_profile = str(profile_name or default_profile)
+    profile = profiles.get(selected_profile, {})
+    if not isinstance(profile, dict):
+        selected_profile = default_profile
+        profile = profiles.get(default_profile, {})
     if not isinstance(profile, dict):
         profile = {}
 
     skew_min, skew_max = _safe_int_range(
-        profile.get("clock_skew_us"),
+        profile.get("clock_offset_us", profile.get("clock_skew_us")),
         fallback_min=-18_000,
         fallback_max=22_000,
         minimum=-_MAX_SENSOR_TIMING_US,
         maximum=_MAX_SENSOR_TIMING_US,
     )
+    drift_min, drift_max = _safe_int_range(
+        profile.get("clock_drift_ppm"),
+        fallback_min=0,
+        fallback_max=0,
+        minimum=-500,
+        maximum=500,
+    )
     delay_min, delay_max = _safe_int_range(
-        profile.get("path_delay_us"),
+        profile.get("route_delay_us", profile.get("path_delay_us")),
         fallback_min=1_200,
         fallback_max=58_000,
         minimum=0,
         maximum=_MAX_SENSOR_TIMING_US,
     )
+    jitter_min, jitter_max = _safe_int_range(
+        profile.get("event_jitter_us"),
+        fallback_min=-997,
+        fallback_max=997,
+        minimum=-_MAX_SENSOR_TIMING_US,
+        maximum=_MAX_SENSOR_TIMING_US,
+    )
+    capture_loss = profile.get("capture_loss", {})
+    if not isinstance(capture_loss, dict):
+        capture_loss = {}
+    loss_probability = _safe_float(
+        capture_loss.get("probability", 0.0),
+        0.0,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    loss_min_fraction = _safe_float(
+        capture_loss.get("min_fraction", 0.0),
+        0.0,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    loss_max_fraction = _safe_float(
+        capture_loss.get("max_fraction", 0.0),
+        0.0,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    if loss_max_fraction < loss_min_fraction:
+        loss_min_fraction = 0.0
+        loss_max_fraction = 0.0
+    loss_max_missed_bytes = _safe_int(
+        capture_loss.get("max_missed_bytes", 0),
+        0,
+        minimum=0,
+        maximum=1_000_000_000,
+    )
     return NetworkSensorObservationTiming(
-        clock_skew_min_us=skew_min,
-        clock_skew_max_us=skew_max,
-        path_delay_min_us=delay_min,
-        path_delay_max_us=delay_max,
+        profile_name=selected_profile,
+        clock_offset_min_us=skew_min,
+        clock_offset_max_us=skew_max,
+        clock_drift_min_ppm=drift_min,
+        clock_drift_max_ppm=drift_max,
+        route_delay_min_us=delay_min,
+        route_delay_max_us=delay_max,
+        event_jitter_min_us=jitter_min,
+        event_jitter_max_us=jitter_max,
+        capture_loss_probability=loss_probability,
+        capture_loss_min_fraction=loss_min_fraction,
+        capture_loss_max_fraction=loss_max_fraction,
+        capture_loss_max_missed_bytes=loss_max_missed_bytes,
     )
 
 
@@ -232,6 +349,43 @@ def endpoint_clock_timing(profile_name: str, os_category: str) -> EndpointClockT
         host_offset_max_ms=offset_max,
         host_drift_min_ppm=drift_min,
         host_drift_max_ppm=drift_max,
+    )
+
+
+def firewall_observation_timing(sensor_identity: str = "") -> FirewallObservationTiming:
+    """Return the configured firewall timer policy for one sensor."""
+
+    data = load_timing_profiles().get("firewall_observation", {})
+    if not isinstance(data, dict):
+        data = {}
+    policies = data.get("policies", {})
+    if not isinstance(policies, dict):
+        policies = {}
+    sensor_policies = data.get("sensor_policies", {})
+    if not isinstance(sensor_policies, dict):
+        sensor_policies = {}
+    default_policy = str(data.get("default_policy", "asa_default") or "asa_default")
+    policy_name = str(sensor_policies.get(sensor_identity, default_policy) or default_policy)
+    policy = policies.get(policy_name, {})
+    if not isinstance(policy, dict):
+        policy_name = default_policy
+        policy = policies.get(default_policy, {})
+    if not isinstance(policy, dict):
+        policy = {}
+    return FirewallObservationTiming(
+        policy_name=policy_name,
+        tcp_embryonic_timeout_seconds=_safe_int(
+            policy.get("tcp_embryonic_timeout_seconds", 30),
+            30,
+            minimum=1,
+            maximum=3600,
+        ),
+        tcp_idle_timeout_seconds=_safe_int(
+            policy.get("tcp_idle_timeout_seconds", 3600),
+            3600,
+            minimum=1,
+            maximum=604_800,
+        ),
     )
 
 

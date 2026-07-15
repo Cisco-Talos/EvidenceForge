@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from threading import RLock
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
     ActiveSession,
@@ -1238,18 +1239,12 @@ class StateManager:
             if self.state.current_time is None:
                 raise StateError("Cannot open connection: current_time not set")
 
-            # Check for counter exhaustion
-            if self._connection_id_counter > 999999999:
-                raise StateError("Connection ID counter exhausted")
-
-            # Generate connection ID
-            conn_id = f"conn-{self._connection_id_counter}"
-            self._connection_id_counter += 1
+            conn_id, zeek_uid = self.reserve_connection_identity()
 
             # Create connection with Zeek UID for cross-log correlation
             connection = OpenConnection(
                 conn_id=conn_id,
-                zeek_uid=generate_zeek_uid("C"),
+                zeek_uid=zeek_uid,
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
@@ -1271,6 +1266,21 @@ class StateManager:
                 f"Opened connection {conn_id}: {src_ip}:{src_port} -> {dst_ip}:{dst_port} ({protocol})"
             )
             return conn_id
+
+    def reserve_connection_identity(self) -> tuple[str, str]:
+        """Reserve deterministic connection and Zeek identities without opening state.
+
+        Application transactions on a reused transport still occupy one logical
+        connection-request identity in the deterministic stream, but they reuse the
+        parent's rendered tuple and UID instead of creating a shadow OpenConnection.
+        """
+
+        with self._lock:
+            if self._connection_id_counter > 999999999:
+                raise StateError("Connection ID counter exhausted")
+            conn_id = f"conn-{self._connection_id_counter}"
+            self._connection_id_counter += 1
+            return conn_id, generate_zeek_uid("C")
 
     def get_zeek_uid(self, conn_id: str) -> str:
         """Get the Zeek UID for a connection.
@@ -1333,6 +1343,30 @@ class StateManager:
                 conn.bytes_received = bytes_received
                 return True
             return False
+
+    def update_connection_transaction(
+        self,
+        conn_id: str,
+        transaction: NetworkTransactionPlan,
+    ) -> bool:
+        """Persist finalized canonical connection truth in runtime state."""
+
+        with self._lock:
+            conn = self.state.open_connections.get(conn_id)
+            if conn is None:
+                return False
+            conn.start_time = ensure_utc(transaction.started_at)
+            conn.close_time = (
+                ensure_utc(transaction.closed_at) if transaction.closed_at is not None else None
+            )
+            conn.conn_state = transaction.conn_state
+            conn.state = "closed" if transaction.closed_at is not None else transaction.conn_state
+            conn.history = transaction.history
+            conn.duration = transaction.duration
+            conn.traffic_ledger = transaction.traffic
+            conn.bytes_sent = transaction.traffic.orig.payload_bytes
+            conn.bytes_received = transaction.traffic.resp.payload_bytes
+            return True
 
     def close_connection(self, conn_id: str) -> bool:
         """Close an open connection.
@@ -1571,13 +1605,53 @@ class StateManager:
             elif event.event_type == "process_terminate" and event.process and event.src_host:
                 self.end_process(event.src_host.hostname, event.process.pid)
             elif event.event_type == "connection" and event.network:
+                event.network.validate_finalized_transaction()
                 if event.network.conn_id:
                     conn = self.state.open_connections.get(event.network.conn_id)
                     if conn is not None:
-                        if event.network.orig_bytes is not None:
-                            conn.bytes_sent = event.network.orig_bytes
-                        if event.network.resp_bytes is not None:
-                            conn.bytes_received = event.network.resp_bytes
+                        transaction = event.network.transaction
+                        if transaction is not None:
+                            if event.network.application_layer_only:
+                                conn.traffic_ledger = conn.traffic_ledger.accumulate(
+                                    transaction.traffic
+                                )
+                            else:
+                                conn.traffic_ledger = transaction.traffic
+                            conn.bytes_sent = transaction.traffic.orig.payload_bytes
+                            conn.bytes_received = transaction.traffic.resp.payload_bytes
+                            if event.network.application_layer_only:
+                                conn.bytes_sent = conn.traffic_ledger.orig.payload_bytes
+                                conn.bytes_received = conn.traffic_ledger.resp.payload_bytes
+                                if transaction.closed_at is not None and (
+                                    conn.close_time is None
+                                    or ensure_utc(transaction.closed_at) > conn.close_time
+                                ):
+                                    conn.close_time = ensure_utc(transaction.closed_at)
+                                if conn.close_time is not None:
+                                    conn.duration = max(
+                                        0.0,
+                                        (conn.close_time - conn.start_time).total_seconds(),
+                                    )
+                            else:
+                                conn.history = transaction.history
+                                conn.duration = transaction.duration
+                                conn.start_time = ensure_utc(transaction.started_at)
+                                conn.close_time = (
+                                    ensure_utc(transaction.closed_at)
+                                    if transaction.closed_at is not None
+                                    else None
+                                )
+                                conn.conn_state = transaction.conn_state
+                                conn.state = (
+                                    "closed"
+                                    if transaction.closed_at is not None
+                                    else transaction.conn_state
+                                )
+                        else:
+                            if event.network.orig_bytes is not None:
+                                conn.bytes_sent = event.network.orig_bytes
+                            if event.network.resp_bytes is not None:
+                                conn.bytes_received = event.network.resp_bytes
                         conn.initiating_pid = event.network.initiating_pid
                         if event.src_host is not None:
                             conn.source_system = event.src_host.hostname
@@ -1586,10 +1660,10 @@ class StateManager:
                             conn.hostname = event.http.host
                         if event.ssl is not None and event.ssl.server_name:
                             conn.hostname = event.ssl.server_name
-                        if event.network.duration is not None:
+                        if transaction is None and event.network.duration is not None:
                             conn.close_time = event.timestamp + timedelta(
                                 seconds=event.network.duration
                             )
                             conn.state = "closed"
-                        elif event.network.conn_state:
+                        elif transaction is None and event.network.conn_state:
                             conn.state = event.network.conn_state

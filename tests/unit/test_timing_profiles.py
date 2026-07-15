@@ -202,7 +202,10 @@ def test_timing_profiles_load_default_relationship():
     assert sensor_timing.clock_skew_min_us == -18000
     assert sensor_timing.clock_skew_max_us == 22000
     assert sensor_timing.path_delay_min_us == 1200
-    assert sensor_timing.path_delay_max_us == 58000
+    assert sensor_timing.path_delay_max_us == 18000
+    assert sensor_timing.clock_drift_min_ppm == -2
+    assert sensor_timing.event_jitter_max_us == 750
+    assert sensor_timing.capture_loss_probability == 0.0
 
     endpoint_timing = endpoint_clock_timing("enterprise_standard", "windows")
     assert endpoint_timing.host_offset_min_ms == -1250

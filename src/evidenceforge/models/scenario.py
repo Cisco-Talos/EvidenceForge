@@ -1919,6 +1919,12 @@ class NetworkSensor(BaseModel):
     monitoring_segments: list[str]
     direction: str = Field(default="bidirectional", pattern="^(inbound|outbound|bidirectional)$")
     placement: str = Field(default="span", pattern="^(span|tap)$")
+    capture_profile: str = Field(
+        default="",
+        description=(
+            "Optional network observation profile. Blank uses the configured default profile."
+        ),
+    )
     log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
     interfaces: dict[str, str] = Field(default_factory=dict)
     policy: list[FirewallRule] = Field(default_factory=list)
@@ -1943,6 +1949,28 @@ class NetworkSensor(BaseModel):
     )
     nat_rules: list[NatRule] = Field(default_factory=list)
     description: str = ""
+
+    @field_validator("capture_profile")
+    @classmethod
+    def validate_capture_profile(cls, value: str) -> str:
+        """Accept blank defaults and reject unknown observation profiles."""
+
+        profile_name = value.strip()
+        if not profile_name:
+            return ""
+        from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
+
+        network_observation = load_timing_profiles().get("network_sensor_observation", {})
+        profiles = (
+            network_observation.get("profiles", {}) if isinstance(network_observation, dict) else {}
+        )
+        if not isinstance(profiles, dict) or profile_name not in profiles:
+            available = sorted(profiles) if isinstance(profiles, dict) else []
+            raise ValueError(
+                f"Unknown network sensor capture_profile {profile_name!r}. "
+                f"Available profiles: {available}"
+            )
+        return profile_name
 
 
 class NetworkConfig(BaseModel):

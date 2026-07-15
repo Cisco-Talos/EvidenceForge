@@ -35,6 +35,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.events.observation import (
     ObservationDecision,
     ObservationPolicy,
@@ -120,20 +121,26 @@ class EventDispatcher:
         emitters: dict[str, LogEmitter],
         visibility_engine: NetworkVisibilityEngine | None = None,
         output_start_time: datetime | None = None,
+        output_end_time: datetime | None = None,
         observation_policy: ObservationPolicy | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.emitters = emitters
         self.visibility_engine = visibility_engine
         self.output_start_time = output_start_time
+        self.output_end_time = output_end_time
         self.observation_policy = observation_policy or ObservationPolicy("complete")
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
+        self._network_identifiers_by_format: dict[tuple[str, str], str] = {}
         self.storyline_cluster_id: str | None = None
         from evidenceforge.generation.source_timing import SourceTimingPlanner
 
         self.source_timing_planner = SourceTimingPlanner(
             clock_profile_name=self.observation_policy.profile_name
         )
+        from evidenceforge.generation.network_observation import NetworkObservationPlanner
+
+        self.network_observation_planner = NetworkObservationPlanner(visibility_engine)
 
     @property
     def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
@@ -146,6 +153,15 @@ class EventDispatcher:
             }
             for cluster_id, source_summaries in sorted(self._source_evidence_status.items())
         }
+
+    def network_identifier_for_format(
+        self,
+        canonical_uid: str,
+        format_name: str,
+    ) -> str | None:
+        """Return a planned sensor-local UID, blank if suppressed, or None if unplanned."""
+
+        return self._network_identifiers_by_format.get((canonical_uid, format_name))
 
     def record_filtered_network_observation(self) -> None:
         """Record that a storyline network event was filtered before emitter dispatch.
@@ -179,6 +195,8 @@ class EventDispatcher:
         """
         if self.storyline_cluster_id and event.storyline_cluster_id is None:
             event.storyline_cluster_id = self.storyline_cluster_id
+        if event.network is not None:
+            event.network.validate_finalized_transaction()
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
@@ -195,6 +213,15 @@ class EventDispatcher:
             if decision.status != "dropped"
         }
         event._observed_formats = observed_formats
+        if event.network is not None:
+            planned_observations = self.network_observation_planner.plan(
+                event,
+                observed_formats,
+            )
+            event.network_observations = planned_observations
+            event.network_observations_planned = bool(planned_observations)
+            event.network_observations = self._admit_network_sensor_observations(event)
+            self._initialize_network_identifiers(event, matching_emitters)
         for format_name, emitter in matching_emitters:
             decision = decisions[format_name]
             if decision.status == "dropped":
@@ -207,6 +234,10 @@ class EventDispatcher:
                 status = "delayed"
             event_to_emit._observed_formats = observed_formats
             event_to_emit = self.source_timing_planner.plan_event(event_to_emit)
+            if not self._admit_source_event(event_to_emit, format_name):
+                self._record_observation(event, format_name, "out_of_window")
+                continue
+            self._record_admitted_network_identifier(event_to_emit, format_name)
             if (
                 event_to_emit.event_type != "process_terminate"
                 and event_to_emit.process is not None
@@ -222,6 +253,108 @@ class EventDispatcher:
                 emitter.emit_raw(event_to_emit.raw.fields)
             else:
                 emitter.emit(event_to_emit)
+
+    def _initialize_network_identifiers(
+        self,
+        event: SecurityEvent,
+        matching_emitters: list[tuple[str, LogEmitter]],
+    ) -> None:
+        """Mark planned network formats suppressed until source admission succeeds."""
+
+        network = event.network
+        if network is None or not event.network_observations_planned:
+            return
+        for format_name, _emitter in matching_emitters:
+            if format_name not in _NETWORK_FORMATS:
+                continue
+            self._network_identifiers_by_format[(network.zeek_uid, format_name)] = ""
+
+    def _record_admitted_network_identifier(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+    ) -> None:
+        """Publish the observation-owned identifier after final source admission."""
+
+        network = event.network
+        if network is None or format_name not in _NETWORK_FORMATS:
+            return
+        identifier = next(
+            (
+                observation.connection_uid
+                for observation in event.network_observations
+                if format_name in observation.visible_formats
+            ),
+            None,
+        )
+        if identifier is not None:
+            self._network_identifiers_by_format[(network.zeek_uid, format_name)] = identifier
+
+    def _admit_network_sensor_observations(
+        self,
+        event: SecurityEvent,
+    ) -> tuple[NetworkSensorObservation, ...]:
+        """Apply half-open end admission independently to sensor observations."""
+
+        if self.output_end_time is None or event.lifecycle is None:
+            return event.network_observations
+        if event.lifecycle.phase == "closure":
+            return event.network_observations
+        return tuple(
+            observation
+            for observation in event.network_observations
+            if self._is_before(observation.observed_start_time, self.output_end_time)
+        )
+
+    def _admit_source_event(self, event: SecurityEvent, format_name: str) -> bool:
+        """Return whether final source-visible timing admits this rendered event."""
+
+        if (
+            event.network_observations_planned
+            and format_name in _NETWORK_FORMATS
+            and not any(
+                format_name in observation.visible_formats
+                for observation in event.network_observations
+            )
+        ):
+            return False
+        visible_time = self.source_timing_planner.admission_time(event, format_name)
+        lifecycle = event.lifecycle
+        if lifecycle is None:
+            return self.output_end_time is None or self._is_before(
+                visible_time,
+                self.output_end_time,
+            )
+
+        source_start = visible_time + (lifecycle.canonical_start - event.timestamp)
+        if self.output_end_time is not None and not self._is_before(
+            source_start,
+            self.output_end_time,
+        ):
+            return False
+        if lifecycle.phase == "closure":
+            return True
+        if self.output_start_time is not None and self._is_before(
+            visible_time,
+            self.output_start_time,
+        ):
+            return False
+        return self.output_end_time is None or self._is_before(
+            visible_time,
+            self.output_end_time,
+        )
+
+    @staticmethod
+    def _is_before(timestamp: datetime, gate: datetime) -> bool:
+        """Compare timestamps after normalizing timezone awareness."""
+
+        ts = timestamp
+        normalized_gate = gate
+        if ts.tzinfo is not None and normalized_gate.tzinfo is None:
+            ts = ts.replace(tzinfo=None)
+        elif ts.tzinfo is None and normalized_gate.tzinfo is not None:
+            normalized_gate = normalized_gate.replace(tzinfo=None)
+        return ts < normalized_gate
 
     def _enforce_source_observation_contracts(
         self,
@@ -304,6 +437,11 @@ class EventDispatcher:
         target_emitter must match a key in self.emitters dict.
         """
         if self._is_suppressed(entry.timestamp):
+            return
+        if self.output_end_time is not None and not self._is_before(
+            entry.timestamp,
+            self.output_end_time,
+        ):
             return
         emitter = self.emitters.get(entry.target_emitter)
         if emitter is None:

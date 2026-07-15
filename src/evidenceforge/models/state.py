@@ -33,6 +33,8 @@ runtime state tracking.
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from evidenceforge.events.network import NetworkTrafficLedger
+
 
 @dataclass
 class ActiveSession:
@@ -150,6 +152,10 @@ class OpenConnection:
     close_time: datetime | None = None
     bytes_sent: int = 0
     bytes_received: int = 0
+    traffic_ledger: NetworkTrafficLedger = field(default_factory=NetworkTrafficLedger)
+    conn_state: str = ""
+    history: str = ""
+    duration: float | None = None
 
 
 @dataclass

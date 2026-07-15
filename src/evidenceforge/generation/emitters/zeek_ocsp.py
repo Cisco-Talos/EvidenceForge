@@ -62,14 +62,13 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
             "nextUpdate": ocsp.next_update,
             "revoketime": ocsp.revoketime,
             "revokereason": ocsp.revokereason,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(
-                self.format_def.name if self.format_def else "zeek_ocsp", []
+            **self._sensor_metadata(
+                event,
+                self.format_def.name if self.format_def else "zeek_ocsp",
             ),
         }
         if event.network is not None and event.network.zeek_uid:
             event_data["conn_uids"] = [event.network.zeek_uid]
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

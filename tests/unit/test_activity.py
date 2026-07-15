@@ -569,7 +569,7 @@ class TestNetworkConnectionActionBundle:
         assert first.stable_id.startswith("network-connection-")
 
     def test_network_connection_bundle_delegates_to_adapter(self):
-        """The bundle should preserve the current generator adapter contract."""
+        """The bundle should execute through the action-owned transaction planner."""
         request = NetworkConnectionRequest(
             src_ip="10.0.0.10",
             dst_ip="203.0.113.10",
@@ -579,12 +579,15 @@ class TestNetworkConnectionActionBundle:
             service="http",
         )
         executor = Mock()
-        executor._execute_network_connection_bundle.return_value = "Cabc123"
-
-        uid = NetworkConnectionActionBundle(executor, request).execute()
+        with patch(
+            "evidenceforge.generation.actions.network_transaction_planner."
+            "NetworkTransactionPlanner.execute",
+            return_value="Cabc123",
+        ) as execute:
+            uid = NetworkConnectionActionBundle(executor, request).execute()
 
         assert uid == "Cabc123"
-        executor._execute_network_connection_bundle.assert_called_once_with(request)
+        execute.assert_called_once_with(request)
 
 
 class TestNetworkValidation:
@@ -3584,6 +3587,11 @@ class TestActivityGenerator:
         machine_logon = next(
             event for event in security_events if event.event_type == "machine_logon"
         )
+        machine_logoff = next(event for event in security_events if event.event_type == "logoff")
+        assert machine_logon.edr.object_id == machine_logoff.edr.object_id
+        assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
+        assert machine_logon.lifecycle.phase == "start"
+        assert machine_logoff.lifecycle.phase == "closure"
         kerberos_connection = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
@@ -8277,6 +8285,14 @@ class TestActivityGenerator:
 
         event = captured[-1]
         connection = state_manager.get_connection(event.network.conn_id)
+        assert event.network.transaction is not None
+        assert event.network.transaction.started_at == event.timestamp
+        assert event.network.transaction.hostname
+        assert event.network.transaction.outcome == "success"
+        assert event.network.transaction.phase_times[0] == (
+            "transport_start",
+            event.timestamp,
+        )
         assert event.network.source_visible_start_time == event.timestamp
         assert event.network.source_visible_close_time == event.timestamp + timedelta(seconds=0.04)
         assert connection is not None
