@@ -1865,12 +1865,7 @@ class StorylineMixin:
             key = (storyline_event.actor, storyline_event.system)
             for spec_index, spec in enumerate(storyline_event.events):
                 spec_id = f"{storyline_event.id}:{spec_index}"
-                is_durable_logon = spec.type == "logon" and getattr(
-                    spec,
-                    "logon_type",
-                    3,
-                ) in {2, 10, 11}
-                if spec.type in {"ssh_session", "rdp_session"} or is_durable_logon:
+                if spec.type in {"ssh_session", "rdp_session", "logon"}:
                     pending.setdefault(key, []).append(spec_id)
                 elif spec.type == "logoff" and pending.get(key):
                     start_id = pending[key].pop()

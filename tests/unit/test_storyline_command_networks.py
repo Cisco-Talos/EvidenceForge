@@ -298,7 +298,7 @@ class TestStorylineCommandNetworks:
         ) == datetime(2024, 3, 18, 17, 57, 0, tzinfo=UTC)
 
     def test_explicit_logoff_pair_is_not_stolen_by_later_shadow_session(self):
-        """Runtime session churn cannot replace the statically paired durable session."""
+        """Runtime session churn cannot replace an explicit successful logon pairing."""
         state = StateManager()
         start = datetime(2024, 3, 18, 14, 0, 0, tzinfo=UTC)
         actor = User(username="root", full_name="Root", email="root@example.local")
@@ -314,11 +314,11 @@ class TestStorylineCommandNetworks:
         engine.scenario = SimpleNamespace(
             storyline=[
                 SimpleNamespace(
-                    id="durable-ssh",
+                    id="explicit-logon",
                     actor="root",
                     system=system.hostname,
                     time="+1m",
-                    events=[SimpleNamespace(type="ssh_session")],
+                    events=[SimpleNamespace(type="logon", logon_type=3)],
                 ),
                 SimpleNamespace(
                     id="explicit-close",
@@ -335,9 +335,9 @@ class TestStorylineCommandNetworks:
             logon_type=10,
             source_ip="10.10.3.10",
             start_time=start + timedelta(minutes=1),
-            session_kind="ssh",
+            session_kind="network",
         )
-        engine._current_storyline_spec_id = "durable-ssh:0"
+        engine._current_storyline_spec_id = "explicit-logon:0"
         engine._record_storyline_logon(actor, system, durable_id)
         shadow_id = state.create_session(
             username=actor.username,
