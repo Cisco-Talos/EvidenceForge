@@ -76,6 +76,8 @@ def ecar_flow_identity_key(direction: str, hostname: str) -> str:
 
 _WINDOWS_WFP_RENDER_KEY = "windows.wfp_connection"
 _REMOTE_TRANSPORT_KEY = tuple[str, str, str, str, int, str, int, str]
+_TRANSACTION_TRANSPORT_KEY = tuple[str, str, str, int, str, int, str]
+_SSH_TRANSPORT_KEY = tuple[str, str, int, str, int, str]
 
 
 class SourceTimingPlanner:
@@ -87,6 +89,11 @@ class SourceTimingPlanner:
         self._latest_session_dependent_times: dict[tuple[str, str], datetime] = {}
         self._admitted_ecar_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
         self._admitted_windows_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
+        self._admitted_ecar_transport_transactions: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
+        self._admitted_windows_transport_transactions: dict[
+            _TRANSACTION_TRANSPORT_KEY, datetime
+        ] = {}
+        self._admitted_ecar_ssh_transports: dict[_SSH_TRANSPORT_KEY, datetime] = {}
 
     def plan_event(
         self,
@@ -122,8 +129,75 @@ class SourceTimingPlanner:
     ) -> None:
         """Publish an admitted transport anchor for later authentication siblings."""
 
-        lifecycle = event.lifecycle
         network = event.network
+        lifecycle = event.lifecycle
+        if (
+            format_name == "ecar"
+            and event.event_type == "connection"
+            and network is not None
+            and network.transaction is not None
+            and event.dst_host is not None
+        ):
+            timestamp = self._finalized_time(
+                event,
+                ecar_flow_render_key("inbound", event.dst_host.hostname),
+            )
+            if timestamp is not None:
+                self._admitted_ecar_transport_transactions[
+                    self._transaction_transport_key(
+                        network.transaction.stable_id,
+                        event.dst_host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
+        if (
+            format_name in {"windows_security", "windows_event_security"}
+            and event.event_type == "wfp_connection"
+            and network is not None
+            and lifecycle is not None
+        ):
+            host = event.src_host or event.dst_host
+            timestamp = self._finalized_time(event, _WINDOWS_WFP_RENDER_KEY)
+            if host is not None and timestamp is not None:
+                self._admitted_windows_transport_transactions[
+                    self._transaction_transport_key(
+                        lifecycle.group_id,
+                        host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
+        if (
+            format_name == "ecar"
+            and event.event_type == "connection"
+            and network is not None
+            and network.protocol.lower() == "tcp"
+            and network.dst_port == 22
+            and event.dst_host is not None
+        ):
+            timestamp = self._finalized_time(
+                event,
+                ecar_flow_render_key("inbound", event.dst_host.hostname),
+            )
+            if timestamp is not None:
+                self._admitted_ecar_ssh_transports[
+                    self._ssh_transport_key(
+                        event.dst_host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
+
         if lifecycle is None or network is None or lifecycle.parent_group_id is None:
             return
         if not lifecycle.parent_group_id.startswith("windows-remote-auth-"):
@@ -222,6 +296,7 @@ class SourceTimingPlanner:
         anchor = self._remote_auth_transport_anchor(
             event,
             self._admitted_ecar_remote_transports,
+            self._admitted_ecar_transport_transactions,
         )
         if anchor is not None:
             timestamp = anchor + sample_timing_delta(
@@ -233,6 +308,23 @@ class SourceTimingPlanner:
                     lifecycle,
                 ),
             )
+        elif event.event_type == "ssh_session":
+            ssh_anchor = self._ssh_transport_anchor(event)
+            if ssh_anchor is not None:
+                timestamp = max(
+                    timestamp,
+                    ssh_anchor
+                    + sample_timing_delta(
+                        "source.ecar_ssh_session_after_accept",
+                        seed_parts=(
+                            "flow_order",
+                            getattr(host, "hostname", ""),
+                            getattr(event.auth, "source_ip", ""),
+                            getattr(event.auth, "source_port", ""),
+                            canonical_timestamp,
+                        ),
+                    ),
+                )
         plan.finalized_times[ecar_session_render_key(lifecycle)] = timestamp
 
     def _plan_windows_remote_auth_time(self, event: SecurityEvent) -> SecurityEvent:
@@ -264,6 +356,7 @@ class SourceTimingPlanner:
         anchor = self._remote_auth_transport_anchor(
             event,
             self._admitted_windows_remote_transports,
+            self._admitted_windows_transport_transactions,
         )
         if anchor is None:
             return event
@@ -279,19 +372,33 @@ class SourceTimingPlanner:
         self._ensure_plan(event).finalized_times["windows.remote_authentication"] = timestamp
         return replace(event, timestamp=timestamp)
 
-    @staticmethod
     def _remote_auth_transport_anchor(
+        self,
         event: SecurityEvent,
         registry: dict[_REMOTE_TRANSPORT_KEY, datetime],
+        transaction_registry: dict[_TRANSACTION_TRANSPORT_KEY, datetime],
     ) -> datetime | None:
         remote_auth = event.remote_auth
         if remote_auth is None or remote_auth.primary_transport is None:
             return None
         transport = remote_auth.primary_transport
         tuple_view = transport.tuple
-        return registry.get(
+        action_anchor = registry.get(
             SourceTimingPlanner._remote_transport_key(
                 remote_auth.stable_id,
+                transport.transaction_id,
+                remote_auth.target_hostname,
+                tuple_view.src_ip,
+                tuple_view.src_port,
+                tuple_view.dst_ip,
+                tuple_view.dst_port,
+                tuple_view.protocol,
+            )
+        )
+        if action_anchor is not None:
+            return action_anchor
+        return transaction_registry.get(
+            self._transaction_transport_key(
                 transport.transaction_id,
                 remote_auth.target_hostname,
                 tuple_view.src_ip,
@@ -318,6 +425,66 @@ class SourceTimingPlanner:
         return (
             action_group_id,
             transaction_id,
+            target_hostname,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol.lower(),
+        )
+
+    @staticmethod
+    def _transaction_transport_key(
+        transaction_id: str,
+        target_hostname: str,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> _TRANSACTION_TRANSPORT_KEY:
+        """Return an exact source-view key independent of the parent bundle."""
+
+        return (
+            transaction_id,
+            target_hostname,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol.lower(),
+        )
+
+    def _ssh_transport_anchor(self, event: SecurityEvent) -> datetime | None:
+        """Return the admitted exact-tuple SSH FLOW time for a session event."""
+
+        auth = event.auth
+        host = event.dst_host or event.src_host
+        if auth is None or host is None or not auth.source_ip or auth.source_port <= 0:
+            return None
+        return self._admitted_ecar_ssh_transports.get(
+            self._ssh_transport_key(
+                host.hostname,
+                auth.source_ip,
+                auth.source_port,
+                host.ip,
+                22,
+                "tcp",
+            )
+        )
+
+    @staticmethod
+    def _ssh_transport_key(
+        target_hostname: str,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> _SSH_TRANSPORT_KEY:
+        """Return the exact target-view key for one admitted SSH transport."""
+
+        return (
             target_hostname,
             src_ip,
             src_port,

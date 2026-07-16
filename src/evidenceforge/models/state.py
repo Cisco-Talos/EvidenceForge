@@ -179,6 +179,7 @@ class OpenConnection:
     bytes_sent: int = 0
     bytes_received: int = 0
     traffic_ledger: NetworkTrafficLedger = field(default_factory=NetworkTrafficLedger)
+    transaction_id: str = ""
     conn_state: str = ""
     history: str = ""
     duration: float | None = None

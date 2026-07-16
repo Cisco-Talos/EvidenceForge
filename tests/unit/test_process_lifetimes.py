@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
@@ -228,6 +229,27 @@ def test_baseline_session_activity_stops_at_network_close() -> None:
         network_close_time=close,
         system="SRV-LIN-01",
         logon_id="0x1234",
+    )
+
+    assert _session_active_at(session, close - timedelta(milliseconds=1), start, None)
+    assert not _session_active_at(session, close, start, None)
+    assert not _session_active_at(session, close + timedelta(seconds=1), start, None)
+
+
+def test_baseline_session_activity_stops_at_authoritative_end_plan() -> None:
+    """Storyline session deadlines must bound baseline dependents before dispatch."""
+    start = datetime(2024, 3, 18, 20, 20, 0, tzinfo=UTC)
+    close = start + timedelta(minutes=7)
+    session = SimpleNamespace(
+        start_time=start,
+        network_close_time=None,
+        system="WS-01",
+        logon_id="0x1234",
+        end_plan=SessionEndPlan(
+            canonical_end=close,
+            authority="explicit_storyline",
+            storyline_event_id="evt-logoff",
+        ),
     )
 
     assert _session_active_at(session, close - timedelta(milliseconds=1), start, None)

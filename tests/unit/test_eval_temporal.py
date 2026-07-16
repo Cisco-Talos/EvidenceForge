@@ -119,6 +119,74 @@ class TestUsernameExtraction:
         assert _extract_username(r) is None
 
 
+class TestRemoteAuthenticationOrderingProbe:
+    """Rendered eCAR remote-authentication transaction ordering probes."""
+
+    @staticmethod
+    def _fields(object_name: str, *, src_port: int = 55222) -> dict:
+        return {
+            "object": object_name,
+            "action": "CONNECT" if object_name == "FLOW" else "LOGIN",
+            "direction": "INBOUND" if object_name == "FLOW" else "",
+            "logon_type": "3" if object_name == "USER_SESSION" else "",
+            "hostname": "FILE-SRV-01",
+            "src_ip": "10.0.1.10",
+            "src_port": str(src_port),
+            "dst_ip": "10.0.2.20",
+            "dst_port": "445",
+            "protocol": "tcp",
+        }
+
+    def test_scores_exact_flow_before_login(self):
+        flow = _record("ecar", self._fields("FLOW"), ts=T0)
+        login = _record(
+            "ecar",
+            self._fields("USER_SESSION"),
+            ts=T0 + timedelta(milliseconds=25),
+        )
+
+        assert CausalityScorer._score_ecar_remote_auth_ordering([flow, login])[:2] == (1, 1)
+
+    def test_reports_exact_flow_login_inversion(self):
+        flow = _record(
+            "ecar",
+            self._fields("FLOW"),
+            ts=T0 + timedelta(milliseconds=25),
+        )
+        login = _record("ecar", self._fields("USER_SESSION"), ts=T0)
+
+        total, correct, failures = CausalityScorer._score_ecar_remote_auth_ordering([login, flow])
+
+        assert (total, correct) == (1, 0)
+        assert failures
+
+    def test_skips_missing_or_wrong_tuple_companion(self):
+        flow = _record("ecar", self._fields("FLOW", src_port=55223), ts=T0)
+        login = _record(
+            "ecar",
+            self._fields("USER_SESSION"),
+            ts=T0 + timedelta(milliseconds=25),
+        )
+
+        assert CausalityScorer._score_ecar_remote_auth_ordering([flow, login])[:2] == (0, 0)
+
+    def test_distant_reused_tuple_does_not_mask_nearby_inversion(self):
+        old_flow = _record("ecar", self._fields("FLOW"), ts=T0 - timedelta(minutes=10))
+        inverted_flow = _record(
+            "ecar",
+            self._fields("FLOW"),
+            ts=T0 + timedelta(milliseconds=25),
+        )
+        login = _record("ecar", self._fields("USER_SESSION"), ts=T0)
+
+        total, correct, failures = CausalityScorer._score_ecar_remote_auth_ordering(
+            [old_flow, login, inverted_flow]
+        )
+
+        assert (total, correct) == (1, 0)
+        assert failures
+
+
 class TestHumanBurstiness:
     def test_bursty_events(self):
         """Events with varied inter-event gaps should score well."""

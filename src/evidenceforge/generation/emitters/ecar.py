@@ -116,6 +116,23 @@ def _ecar_flow_endpoint_properties(
     return properties
 
 
+def _ecar_remote_auth_transport_properties(event: SecurityEvent) -> dict[str, Any]:
+    """Return the exact primary transport view for a remote authentication."""
+
+    remote_auth = event.remote_auth
+    transport = remote_auth.primary_transport if remote_auth is not None else None
+    if transport is None:
+        return {}
+    tuple_view = transport.tuple
+    return {
+        "src_ip": tuple_view.src_ip,
+        "src_port": tuple_view.src_port,
+        "dst_ip": tuple_view.dst_ip,
+        "dst_port": tuple_view.dst_port,
+        "protocol": tuple_view.protocol,
+    }
+
+
 def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
     """Return an OS-native session label for non-Windows eCAR sessions."""
     if event.event_type == "ssh_session":
@@ -402,6 +419,7 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         if event_data["src_ip"] != "-" and event.auth.source_port:
             event_data["src_port"] = event.auth.source_port
+        event_data.update(_ecar_remote_auth_transport_properties(event))
         if getattr(host, "os_category", "") == "windows":
             event_data["logon_type"] = event.auth.logon_type
         else:
@@ -456,6 +474,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["sub_status"] = event.auth.failure_substatus
         else:
             event_data["session_type"] = _ecar_non_windows_session_type(event)
+        event_data.update(_ecar_remote_auth_transport_properties(event))
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 

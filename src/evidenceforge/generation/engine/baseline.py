@@ -814,6 +814,16 @@ def _session_activity_deadline(
     if logoff_time is not None:
         deadline = min(deadline, logoff_time)
 
+    end_plan = getattr(session, "end_plan", None)
+    if end_plan is not None:
+        canonical_end = end_plan.canonical_end
+        canonical_end = (
+            canonical_end.replace(tzinfo=UTC)
+            if canonical_end.tzinfo is None
+            else canonical_end.astimezone(UTC)
+        )
+        deadline = min(deadline, canonical_end)
+
     network_close_time = getattr(session, "network_close_time", None)
     if network_close_time is not None:
         network_close_time = (
@@ -6088,6 +6098,7 @@ class BaselineMixin:
         self,
         target_system: System,
         rng: random.Random,
+        at_time: datetime | None = None,
     ) -> tuple[User, System] | None:
         """Pick a baseline SSH user and source host that agree with each other."""
         roster = self._get_baseline_ssh_users(target_system)
@@ -6095,8 +6106,18 @@ class BaselineMixin:
             return None
         for user in rng.sample(roster, k=len(roster)):
             source_system = self._baseline_ssh_source_system_for_user(user, target_system, rng)
-            if source_system is not None:
-                return user, source_system
+            if source_system is None:
+                continue
+            if (
+                at_time is not None
+                and self.state_manager.authoritative_session_end_blocks_rebootstrap(
+                    user.username,
+                    source_system.hostname,
+                    at_time,
+                )
+            ):
+                continue
+            return user, source_system
         return None
 
     def _linux_remote_admin_hour_probability(self, system: Any) -> float:
@@ -6318,6 +6339,21 @@ class BaselineMixin:
             logon_kwargs["source_port"] = source_port
         if not emit_network_evidence:
             logon_kwargs["emit_network_evidence"] = False
+            transaction_matcher = getattr(
+                self.activity_generator,
+                "_last_effective_connection_transaction_id",
+                None,
+            )
+            if transaction_matcher is not None and source_port is not None:
+                transaction_id = transaction_matcher(
+                    src_ip=source_ip,
+                    src_port=source_port,
+                    dst_ip=file_server.ip,
+                    dst_port=445,
+                    proto="tcp",
+                )
+                if isinstance(transaction_id, str) and transaction_id:
+                    logon_kwargs["remote_authentication_transport_id"] = transaction_id
 
         logon_id = self.activity_generator.generate_logon(
             **logon_kwargs,
@@ -8138,12 +8174,12 @@ class BaselineMixin:
 
                     num_ssh = self._linux_remote_admin_session_count(rng, system)
                     for _ in range(num_ssh):
-                        ssh_identity = self._pick_baseline_ssh_identity(system, rng)
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
                         if ssh_identity is None:
                             continue
                         ssh_user, source_system = ssh_identity
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
                         hour_end = current_hour + timedelta(hours=1)
                         self.state_manager.set_current_time(ts)
                         self.world_planner.bootstrap_user_session(
@@ -8732,7 +8768,7 @@ class BaselineMixin:
                             facility=10,
                         )
                 elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
-                    ssh_identity = self._pick_baseline_ssh_identity(system, rng)
+                    ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
                     if ssh_identity is None:
                         continue
                     ssh_user_model, src_sys_obj = ssh_identity

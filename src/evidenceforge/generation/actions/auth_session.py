@@ -52,6 +52,7 @@ class LogonRequest:
     lifecycle_group_id: str = ""
     session_end_plan: SessionEndPlan | None = None
     remote_authentication_plan: RemoteAuthenticationPlan | None = None
+    remote_authentication_transport_id: str = ""
     source: str = "activity_generator"
 
     @property
@@ -72,6 +73,7 @@ class LogonRequest:
             f"{self.logon_id or ''}:{source_host}:{self.source}"
             f":{self.lifecycle_group_id}:{end_time}"
             f":{self.remote_authentication_plan.stable_id if self.remote_authentication_plan else ''}"
+            f":{self.remote_authentication_transport_id}"
         )
         return f"logon-{seed:016x}"
 

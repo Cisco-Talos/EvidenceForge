@@ -1643,6 +1643,16 @@ class CausalityScorer(DimensionScorer):
             total_pairs += rule_total
             correct_pairs += rule_correct
 
+        remote_total, remote_correct, remote_failures = self._score_ecar_remote_auth_ordering(
+            records.get("ecar", [])
+        )
+        total_pairs += remote_total
+        correct_pairs += remote_correct
+        for failure in remote_failures:
+            if len(failures) >= 10:
+                break
+            failures.append(failure)
+
         score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
         return SubScore(
             name="Causal Ordering",
@@ -1651,6 +1661,89 @@ class CausalityScorer(DimensionScorer):
             score=score,
             details=f"{correct_pairs}/{total_pairs} causal pairs correctly ordered",
             sample_failures=failures,
+        )
+
+    @classmethod
+    def _score_ecar_remote_auth_ordering(
+        cls,
+        records: list[ParsedRecord],
+    ) -> tuple[int, int, list[str]]:
+        """Score exact-tuple remote logins after the closest visible inbound FLOW."""
+
+        flows: dict[tuple[str, ...], list[ParsedRecord]] = defaultdict(list)
+        for record in records:
+            fields = record.fields
+            if (
+                record.timestamp is None
+                or fields.get("object") != "FLOW"
+                or fields.get("action") != "CONNECT"
+                or str(fields.get("direction") or "").upper() != "INBOUND"
+            ):
+                continue
+            key = cls._ecar_remote_auth_transport_key(fields)
+            if key is not None:
+                flows[key].append(record)
+
+        total = 0
+        correct = 0
+        failures: list[str] = []
+        for record in records:
+            fields = record.fields
+            if (
+                record.timestamp is None
+                or fields.get("object") != "USER_SESSION"
+                or fields.get("action") != "LOGIN"
+                or str(fields.get("logon_type") or "") not in {"3", "10"}
+            ):
+                continue
+            key = cls._ecar_remote_auth_transport_key(fields)
+            matching_flows = flows.get(key, []) if key is not None else []
+            if not matching_flows:
+                continue
+            login_time = _normalize_ts(record.timestamp)
+            bounded_flows = [
+                flow
+                for flow in matching_flows
+                if flow.timestamp is not None
+                and abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()) <= 5.0
+            ]
+            if not bounded_flows:
+                continue
+            nearest_flow = min(
+                bounded_flows,
+                key=lambda flow: abs((_normalize_ts(flow.timestamp) - login_time).total_seconds()),
+            )
+            total += 1
+            if _normalize_ts(nearest_flow.timestamp) < login_time:
+                correct += 1
+            elif len(failures) < 10:
+                failures.append(
+                    "Rule 'eCAR remote FLOW before login': USER_SESSION at line "
+                    f"{record.line_number} precedes its exact inbound FLOW"
+                )
+        return total, correct, failures
+
+    @staticmethod
+    def _ecar_remote_auth_transport_key(fields: dict[str, Any]) -> tuple[str, ...] | None:
+        """Return an exact host-local tuple correlation key."""
+
+        required = (
+            "hostname",
+            "src_ip",
+            "src_port",
+            "dst_ip",
+            "dst_port",
+            "protocol",
+        )
+        if any(fields.get(name) in {None, "", "-"} for name in required):
+            return None
+        return (
+            str(fields["hostname"]).lower(),
+            str(fields["src_ip"]).removeprefix("::ffff:").lower(),
+            str(fields["src_port"]),
+            str(fields["dst_ip"]).removeprefix("::ffff:").lower(),
+            str(fields["dst_port"]),
+            str(fields["protocol"]).lower(),
         )
 
     # --- Sub-score 2: Event Presence ---

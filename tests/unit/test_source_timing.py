@@ -958,6 +958,54 @@ def test_remote_auth_ecar_login_follows_admitted_exact_transport() -> None:
     assert timedelta(milliseconds=8) <= login_time - flow_time <= timedelta(milliseconds=140)
 
 
+def test_ssh_ecar_login_follows_admitted_exact_transport() -> None:
+    """SSH remains ordered by its admitted target FLOW after source jitter."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    target = _linux_host_context()
+    network = NetworkContext(
+        src_ip="10.0.0.20",
+        src_port=53124,
+        dst_ip=target.ip,
+        dst_port=22,
+        protocol="tcp",
+        service="ssh",
+        zeek_uid="CsshSourceTiming",
+        duration=30.0,
+        conn_state="SF",
+        history="ShADadFf",
+    )
+    flow_event = SecurityEvent(
+        timestamp=start,
+        event_type="connection",
+        dst_host=target,
+        network=network,
+    )
+    login_event = SecurityEvent(
+        timestamp=start + timedelta(milliseconds=100),
+        event_type="ssh_session",
+        dst_host=target,
+        auth=AuthContext(
+            username="alice",
+            source_ip=network.src_ip,
+            source_port=network.src_port,
+            logon_id="0x12345",
+            logon_type=10,
+        ),
+    )
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+
+    flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", target.hostname)
+    ]
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert login_time > flow_time
+
+
 def test_remote_auth_failed_ecar_login_follows_transport_without_session() -> None:
     """Failed authentication should order after FLOW without durable session identity."""
 
@@ -1083,6 +1131,56 @@ def test_remote_auth_windows_logon_follows_admitted_target_wfp() -> None:
         <= timedelta(milliseconds=140)
     )
     assert planned_login.source_timing.canonical_timestamp == login_event.timestamp
+
+
+def test_remote_auth_timing_reuses_transaction_without_parent_action_metadata() -> None:
+    """An already-emitted transport remains exact-correlatable by transaction and tuple."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    flow_event.lifecycle = replace(flow_event.lifecycle, parent_group_id=None)
+    target = flow_event.dst_host
+    assert target is not None
+    transaction_id = flow_event.network.transaction.stable_id
+    wfp_event = SecurityEvent(
+        timestamp=flow_event.timestamp,
+        event_type="wfp_connection",
+        src_host=target,
+        network=NetworkContext(
+            src_ip=flow_event.network.src_ip,
+            src_port=flow_event.network.src_port,
+            dst_ip=flow_event.network.dst_ip,
+            dst_port=flow_event.network.dst_port,
+            protocol="tcp",
+            initiating_pid=4,
+        ),
+        lifecycle=ActionLifecycleContext(
+            group_id=transaction_id,
+            canonical_start=flow_event.timestamp,
+            phase="dependent",
+        ),
+    )
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+    ecar_flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", target.hostname)
+    ]
+    ecar_login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert (
+        timedelta(milliseconds=8) <= ecar_login_time - ecar_flow_time <= timedelta(milliseconds=140)
+    )
+
+    planner.plan_event(wfp_event, "windows_event_security")
+    planner.record_admitted_source_event(wfp_event, "windows_event_security")
+    planned_login = planner.plan_event(login_event, "windows_event_security")
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    assert (
+        timedelta(milliseconds=8)
+        <= planned_login.timestamp - wfp_time
+        <= timedelta(milliseconds=140)
+    )
 
 
 def test_sysmon_process_access_timestamp_follows_process_create(tmp_path: Path) -> None:

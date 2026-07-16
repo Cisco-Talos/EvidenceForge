@@ -137,6 +137,40 @@ class WindowsRemoteAuthenticationPlanner:
         )
         return self._plan(request, transports=(transport,))
 
+    def from_existing_transaction(
+        self,
+        request: WindowsRemoteAuthenticationRequest,
+        transaction_id: str,
+    ) -> RemoteAuthenticationPlan | None:
+        """Bind authentication to one explicitly identified exact-tuple transaction."""
+
+        candidates = [
+            connection
+            for connection in self._executor.state_manager.list_open_connections()
+            if connection.transaction_id == transaction_id
+            and connection.src_ip == request.source_ip
+            and connection.src_port == request.source_port
+            and connection.dst_ip == request.target_system.ip
+            and connection.dst_port == request.destination_port
+            and connection.protocol.lower() == "tcp"
+        ]
+        if len(candidates) != 1:
+            return None
+        connection = candidates[0]
+        return self.from_existing_transport(
+            request,
+            transaction_id=transaction_id,
+            tuple_view=NetworkTuple(
+                src_ip=connection.src_ip,
+                src_port=connection.src_port,
+                dst_ip=connection.dst_ip,
+                dst_port=connection.dst_port,
+                protocol=connection.protocol,
+            ),
+            started_at=connection.start_time,
+            closed_at=connection.close_time,
+        )
+
     @staticmethod
     def _plan(
         request: WindowsRemoteAuthenticationRequest,

@@ -444,6 +444,35 @@ class StateManager:
                     sessions[session.logon_id] = session
             return list(sessions.values())
 
+    def authoritative_session_end_blocks_rebootstrap(
+        self,
+        username: str,
+        system: str,
+        at_time: datetime,
+    ) -> bool:
+        """Return whether an explicit end leaves no session able to own later activity."""
+
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            sessions: dict[str, ActiveSession] = {
+                session.logon_id: session
+                for session in self.state.active_sessions.values()
+                if session.username == username and session.system == system
+            }
+            for session, _end_time in self._ended_sessions.values():
+                if session.username == username and session.system == system:
+                    sessions[session.logon_id] = session
+
+            has_expired_authoritative_plan = any(
+                session.end_plan is not None
+                and session.end_plan.is_authoritative
+                and ensure_utc(session.end_plan.canonical_end) <= cutoff
+                for session in sessions.values()
+            )
+            if not has_expired_authoritative_plan:
+                return False
+            return not any(_session_valid_at(session, cutoff) for session in sessions.values())
+
     def get_sessions_on_system(self, system: str) -> list[ActiveSession]:
         """Get all active sessions on a system.
 
@@ -455,6 +484,28 @@ class StateManager:
         """
         with self._lock:
             return [s for s in self.state.active_sessions.values() if s.system == system]
+
+    def get_sessions_on_system_at(
+        self,
+        system: str,
+        at_time: datetime,
+    ) -> list[ActiveSession]:
+        """Get sessions that may own activity on a system at a specific time."""
+
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            sessions: dict[str, ActiveSession] = {}
+            for session in self.state.active_sessions.values():
+                if session.system == system and _session_valid_at(session, cutoff):
+                    sessions[session.logon_id] = session
+            for session, end_time in self._ended_sessions.values():
+                if (
+                    session.system == system
+                    and _session_valid_at(session, cutoff)
+                    and cutoff < end_time
+                ):
+                    sessions[session.logon_id] = session
+            return list(sessions.values())
 
     def register_session(
         self,
@@ -2088,6 +2139,7 @@ class StateManager:
                     if conn is not None:
                         transaction = event.network.transaction
                         if transaction is not None:
+                            conn.transaction_id = transaction.stable_id
                             if event.network.application_layer_only:
                                 conn.traffic_ledger = conn.traffic_ledger.accumulate(
                                     transaction.traffic

@@ -3010,6 +3010,99 @@ class TestActivityGenerator:
         assert session is not None
         assert session.parent_lifecycle_group_id == logon_event.remote_auth.stable_id
 
+    def test_remote_logon_reuses_existing_exact_transport_without_duplicate_flow(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Compatibility SMB paths bind the prior transaction into remote-auth timing."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.0.50"
+        source_port = 52595
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip=source_ip,
+            src_port=source_port,
+            dst_ip=test_system.ip,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            time=timestamp,
+            duration=5.0,
+            conn_state="SF",
+        )
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        transaction_id = network_event.network.transaction.stable_id
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=source_port,
+            emit_network_evidence=False,
+            remote_authentication_transport_id=transaction_id,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        assert logon_event.remote_auth is not None
+        assert logon_event.remote_auth.primary_transport is not None
+        assert logon_event.remote_auth.primary_transport.transaction_id == transaction_id
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert len(network_events) == 1
+
+    def test_remote_logon_rejects_wrong_explicit_transport_transaction(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A reused tuple cannot bind authentication without its exact transaction ID."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.0.50"
+        source_port = 52595
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip=source_ip,
+            src_port=source_port,
+            dst_ip=test_system.ip,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            time=timestamp,
+            duration=5.0,
+            conn_state="SF",
+        )
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=source_port,
+            emit_network_evidence=False,
+            remote_authentication_transport_id="network-connection-wrong",
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        assert logon_event.remote_auth is not None
+        assert logon_event.remote_auth.primary_transport is None
+
     def test_internal_remote_successful_logon_emits_matching_network_evidence(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -6779,6 +6872,14 @@ class TestActivityGenerator:
         assert target_wfp.network.dst_ip == dc_system.ip
         assert target_wfp.network.initiating_pid == lsass_pid
         assert target_wfp.process.image.endswith("lsass.exe")
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        )
+        assert target_wfp.lifecycle is not None
+        assert target_wfp.lifecycle.parent_group_id is None
+        assert target_wfp.lifecycle.group_id == connection_event.network.transaction.stable_id
 
     def test_failed_inbound_windows_probe_does_not_emit_target_wfp(
         self, activity_gen, test_system, state_manager, mock_emitters

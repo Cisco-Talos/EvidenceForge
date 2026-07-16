@@ -4231,6 +4231,7 @@ class ActivityGenerator:
         self._last_connection_effective_dst_ip = ""
         self._last_connection_effective_tuple: tuple[str, int, str, int, str] | None = None
         self._last_connection_effective_time: datetime | None = None
+        self._last_connection_effective_transaction_id = ""
 
     def _process_termination_recorded(
         self,
@@ -5388,6 +5389,27 @@ class ActivityGenerator:
         ):
             return last_src_port
         return None
+
+    def _last_effective_connection_transaction_id(
+        self,
+        *,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        proto: str = "tcp",
+    ) -> str:
+        """Return the transaction identity for the exact last emitted transport."""
+
+        if self._last_connection_effective_tuple != (
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            proto,
+        ):
+            return ""
+        return self._last_connection_effective_transaction_id
 
     @staticmethod
     def _kerberos_port_key(source_ip: str, dc_hostname: str) -> tuple[str, str]:
@@ -7425,7 +7447,10 @@ class ActivityGenerator:
         known_users = getattr(self, "_users_by_username", {})
         sessions = [
             session
-            for session in self.state_manager.get_sessions_on_system(source_system.hostname)
+            for session in self.state_manager.get_sessions_on_system_at(
+                source_system.hostname,
+                time,
+            )
             if session.username in known_users
             and session.username not in _SYSTEM_ACCOUNTS
             and not session.username.endswith("$")
@@ -8984,6 +9009,7 @@ class ActivityGenerator:
         lifecycle_group_id: str = "",
         session_end_plan: SessionEndPlan | None = None,
         remote_authentication_plan: RemoteAuthenticationPlan | None = None,
+        remote_authentication_transport_id: str = "",
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -9017,6 +9043,7 @@ class ActivityGenerator:
             lifecycle_group_id=lifecycle_group_id,
             session_end_plan=session_end_plan,
             remote_authentication_plan=remote_authentication_plan,
+            remote_authentication_transport_id=remote_authentication_transport_id,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -9034,6 +9061,7 @@ class ActivityGenerator:
         logon_id = request.logon_id
         lifecycle_group_id = request.lifecycle_group_id or request.stable_id
         remote_authentication_plan = request.remote_authentication_plan
+        remote_authentication_transport_id = request.remote_authentication_transport_id
 
         self.state_manager.set_current_time(time)
         os_cat = _get_os_category(system.os)
@@ -9349,11 +9377,20 @@ class ActivityGenerator:
                 emit_transport=emit_network_evidence,
             )
             planner = WindowsRemoteAuthenticationPlanner(self)
-            remote_authentication_plan = (
-                WindowsRemoteAuthenticationActionBundle(self, remote_request).execute()
-                if emit_network_evidence
-                else planner.without_transport(remote_request)
-            )
+            if emit_network_evidence:
+                remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
+                    self,
+                    remote_request,
+                ).execute()
+            else:
+                remote_authentication_plan = (
+                    planner.from_existing_transaction(
+                        remote_request,
+                        remote_authentication_transport_id,
+                    )
+                    if remote_authentication_transport_id
+                    else None
+                ) or planner.without_transport(remote_request)
             event.remote_auth = remote_authentication_plan
         if remote_authentication_plan is not None:
             self.state_manager.update_session_metadata(
@@ -21621,7 +21658,7 @@ class ActivityGenerator:
                     phase="dependent",
                     parent_group_id=parent_action_group_id,
                 )
-                if transport_transaction_id and parent_action_group_id
+                if transport_transaction_id
                 else None
             ),
         )
@@ -23497,20 +23534,6 @@ class ActivityGenerator:
             source_port = _ephemeral_port(rng, "windows")
             source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
             workstation_name = source_system.hostname if source_system else "-"
-            self.generate_connection(
-                src_ip=source_ip,
-                dst_ip=system.ip,
-                time=time - timedelta(milliseconds=rng.randint(150, 900)),
-                dst_port=445,
-                proto="tcp",
-                service="smb",
-                duration=rng.uniform(0.2, 4.0),
-                orig_bytes=rng.randint(250, 2600),
-                resp_bytes=rng.randint(350, 4200),
-                src_port=source_port,
-                conn_state="SF",
-                source_system=source_system,
-            )
         logon_id = self.state_manager.allocate_logon_id(system.hostname, time)
         session_obj_id = stable_uuid(
             "anonymous-network-session",
@@ -23519,6 +23542,30 @@ class ActivityGenerator:
             source_ip,
             source_port,
             time.isoformat(),
+        )
+        remote_authentication_plan = None
+        if source_ip != "-":
+            remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
+                self,
+                WindowsRemoteAuthenticationRequest(
+                    target_system=system,
+                    time=time,
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    logon_type=3,
+                    auth_protocol="NTLM",
+                    outcome="success",
+                    destination_port=445,
+                    source_system=source_system,
+                    session_object_id=session_obj_id,
+                    logon_id=logon_id,
+                    source="anonymous_logon",
+                ),
+            ).execute()
+        primary_transport = (
+            remote_authentication_plan.primary_transport
+            if remote_authentication_plan is not None
+            else None
         )
         event = SecurityEvent(
             timestamp=time,
@@ -23542,6 +23589,18 @@ class ActivityGenerator:
                 workstation_name=workstation_name,
             ),
             edr=EdrContext(object_id=session_obj_id),
+            remote_auth=remote_authentication_plan,
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=remote_authentication_plan.stable_id,
+                    canonical_start=(
+                        primary_transport.started_at if primary_transport is not None else time
+                    ),
+                    phase="start",
+                )
+                if remote_authentication_plan is not None
+                else None
+            ),
         )
         self.dispatcher.dispatch(event)
         logoff_delay = rng.uniform(1.0, 30.0)
@@ -23561,6 +23620,17 @@ class ActivityGenerator:
                     workstation_name=workstation_name,
                 ),
                 edr=EdrContext(object_id=session_obj_id),
+                lifecycle=(
+                    ActionLifecycleContext(
+                        group_id=remote_authentication_plan.stable_id,
+                        canonical_start=(
+                            primary_transport.started_at if primary_transport is not None else time
+                        ),
+                        phase="closure",
+                    )
+                    if remote_authentication_plan is not None
+                    else None
+                ),
             )
         )
 

@@ -35,6 +35,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.authentication import (
+    RemoteAuthenticationPlan,
+    RemoteAuthenticationTransportPlan,
+)
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -48,6 +52,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.events.network import NetworkTuple
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
@@ -175,6 +180,90 @@ def test_ecar_format_uses_explicit_identity_schema_version() -> None:
         "target_image_path",
         "target_principal",
     } <= field_names
+
+
+def test_remote_auth_login_and_flow_render_exact_tuple_without_internal_id(emitter, ts) -> None:
+    """Remote eCAR siblings expose the tuple without leaking canonical planner IDs."""
+
+    emitter.emit_event = Mock()
+    host = HostContext(
+        hostname="FILE-SRV-01",
+        fqdn="FILE-SRV-01.example.local",
+        ip="10.0.2.20",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+    )
+    network = NetworkContext(
+        src_ip="10.0.1.10",
+        src_port=55222,
+        dst_ip=host.ip,
+        dst_port=445,
+        protocol="tcp",
+        service="smb",
+        duration=4.0,
+        source_visible_start_time=ts,
+        source_visible_close_time=ts + timedelta(seconds=4),
+        conn_state="SF",
+        history="ShADadFf",
+    )
+    network.finalize_transaction("network-remote-auth-test")
+    transport = RemoteAuthenticationTransportPlan(
+        role="target_service",
+        transaction_id="network-remote-auth-test",
+        tuple=NetworkTuple(
+            src_ip=network.src_ip,
+            src_port=network.src_port,
+            dst_ip=network.dst_ip,
+            dst_port=network.dst_port,
+            protocol=network.protocol,
+        ),
+        started_at=ts,
+        closed_at=ts + timedelta(seconds=4),
+        primary=True,
+    )
+    remote_auth = RemoteAuthenticationPlan(
+        stable_id="windows-remote-auth-test",
+        source_hostname="WS-01",
+        target_hostname=host.hostname,
+        logon_type=3,
+        auth_protocol="NTLM",
+        outcome="success",
+        canonical_auth_time=ts + timedelta(milliseconds=500),
+        transports=(transport,),
+        session_object_id="session-test",
+        logon_id="0x123",
+    )
+    flow_event = SecurityEvent(
+        timestamp=ts,
+        event_type="connection",
+        dst_host=host,
+        network=network,
+    )
+    login_event = SecurityEvent(
+        timestamp=remote_auth.canonical_auth_time,
+        event_type="logon",
+        dst_host=host,
+        auth=AuthContext(
+            username="alice",
+            logon_id="0x123",
+            logon_type=3,
+            source_ip=network.src_ip,
+            source_port=network.src_port,
+        ),
+        edr=EdrContext(object_id="session-test"),
+        remote_auth=remote_auth,
+    )
+
+    emitter._render_connection(flow_event)
+    flow = emitter.emit_event.call_args.args[0]
+    emitter._render_logon(login_event)
+    login = emitter.emit_event.call_args.args[0]
+
+    for field in ("src_ip", "src_port", "dst_ip", "dst_port", "protocol"):
+        assert login[field] == flow[field]
+    assert "network_transaction_id" not in flow
+    assert "network_transaction_id" not in login
 
 
 def test_distinct_canonical_occurrences_cannot_reuse_ecar_record_ids(emitter, ts) -> None:
