@@ -329,6 +329,7 @@ def pick_proxy_uri(
     domain_tags: list[str],
     source_os: str | None = None,
     source_system_type: str | None = None,
+    allow_canonical_protocol_templates: bool = True,
 ) -> tuple[str, str, str, str | None, str]:
     """Pick URI path, content type, HTTP method, optional UA override, and referrer policy.
 
@@ -344,6 +345,10 @@ def pick_proxy_uri(
         source_system_type: Source host type such as "workstation", "server",
             or "domain_controller". Exact templates can restrict themselves
             to compatible source types.
+        allow_canonical_protocol_templates: Whether entries that require an
+            action-owned protocol plan may be selected. Generation callers
+            pass false when synthesizing generic HTTP activity; direct lookup
+            retains the metadata-oriented compatibility behavior.
 
     Returns:
         (path, content_type, method, user_agent_override, referrer_policy) tuple.
@@ -357,6 +362,9 @@ def pick_proxy_uri(
     entry = domains.get(hostname)
     if not _entry_matches_source(hostname, entry, source_os, source_system_type):
         entry = None
+    if entry is not None and entry.get("canonical_plan_required"):
+        if not allow_canonical_protocol_templates:
+            entry = None
 
     # 2. Tag-based fallback
     tags = data.get("tags", {})

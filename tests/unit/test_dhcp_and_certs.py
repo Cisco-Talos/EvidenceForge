@@ -249,8 +249,8 @@ class TestTlsIssuers:
             != "revoked"
         )
 
-    def test_successful_http_tls_passes_ocsp_revocation_suppression(self, monkeypatch):
-        """TLS events with clean HTTP success should request non-revoked OCSP status."""
+    def test_successful_http_tls_finalizes_certificate_before_ocsp_child(self, monkeypatch):
+        """TLS planning should finish before any action-owned OCSP child is emitted."""
 
         class ZeroRandom(random.Random):
             def random(self) -> float:
@@ -258,26 +258,10 @@ class TestTlsIssuers:
 
         import evidenceforge.generation.activity.generator as generator_module
 
-        captured: dict[str, bool] = {}
-
-        def fake_ocsp_status(
-            cert_name: str,
-            serial_number: str,
-            *,
-            suppress_revoked: bool = False,
-        ) -> str:
-            captured["suppress_revoked"] = suppress_revoked
-            return "good"
-
         state_manager = StateManager()
         generator = ActivityGenerator(state_manager, {})
-        generator._emit_ocsp_http_response = lambda *args, **kwargs: captured.setdefault(
-            "emitted",
-            True,
-        )
         monkeypatch.setattr(generator_module, "_TLS_VERSION_VALUES", ("TLSv12",))
         monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (1,))
-        monkeypatch.setattr(generator_module, "_ocsp_status_for_certificate", fake_ocsp_status)
 
         event = SecurityEvent(
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
@@ -308,7 +292,9 @@ class TestTlsIssuers:
             rng=ZeroRandom(),
         )
 
-        assert captured == {"suppress_revoked": True, "emitted": True}
+        assert event.tls_presentation is not None
+        assert event.tls_presentation.leaf.subject_name == "CN=edge42.example.net"
+        assert event.ocsp_transaction is None
 
     def test_ocsp_request_path_uses_long_encoded_der_shape(self):
         """OCSP-over-HTTP GET paths should not look like short synthetic tokens."""
@@ -336,8 +322,14 @@ class TestTlsIssuers:
 
         assert path == same_path
         assert path != different_path
-        assert path.startswith(("/MFE", "/MFU", "/MFI"))
-        assert len(path) >= 73
+        import base64
+        from urllib.parse import unquote
+
+        from cryptography.x509.ocsp import load_der_ocsp_request
+
+        request = load_der_ocsp_request(base64.b64decode(unquote(path.lstrip("/"))))
+        assert request.serial_number == int("ABCDEF0123456789", 16)
+        assert request.hash_algorithm.name == "sha1"
         assert not re.fullmatch(r"/[0-9a-f]{12}", path)
 
     def test_ocsp_request_path_ignores_non_finite_bound_overrides(self, tmp_path, monkeypatch):
@@ -1495,7 +1487,6 @@ class TestTlsIssuers:
         state_manager = StateManager()
         state_manager.set_current_time(datetime(2024, 10, 14, 12, 0, tzinfo=UTC))
         generator = ActivityGenerator(state_manager, {})
-        generator._emit_ocsp_http_response = lambda *args, **kwargs: None
         event = None
 
         for seed in range(1, 100):

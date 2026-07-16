@@ -82,6 +82,10 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
+from evidenceforge.events.cryptography import (
+    OcspTransactionPlan,
+    TlsCertificatePresentationPlan,
+)
 from evidenceforge.events.dispatcher import EventDispatcher, expand_formats
 from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
 from evidenceforge.generation.actions import (
@@ -142,6 +146,9 @@ from evidenceforge.generation.actions import (
     NmapCommandProbeRequest,
     NtlmValidationActionBundle,
     NtlmValidationRequest,
+    OcspTransactionActionBundle,
+    OcspTransactionPlanner,
+    OcspTransactionRequest,
     PasswordChangeActionBundle,
     PasswordChangeRequest,
     PasswordResetActionBundle,
@@ -173,6 +180,7 @@ from evidenceforge.generation.actions import (
     file_transfer_hashes,
     http_response_parent_duration_floor,
 )
+from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
@@ -203,6 +211,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     special_privileges_config,
 )
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
+from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -3797,38 +3806,11 @@ def _is_ip_literal(value: str) -> bool:
 
 
 def _tls_certificate_serial(seed: str) -> str:
-    """Return a stable certificate serial with CA-realistic length variation."""
-    from evidenceforge.config.schemas import TLS_SERIAL_LENGTH_MAX_WEIGHT
-    from evidenceforge.generation.activity.tls_realism import serial_number_config
+    """Compatibility wrapper for registry-owned certificate serial derivation."""
 
-    configured_lengths = serial_number_config().get("byte_lengths", [])
-    weighted_lengths: dict[int, int] = {}
-    for entry in configured_lengths:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            byte_length = int(entry.get("bytes", 0))
-            weight = int(entry.get("weight", 0))
-        except (OverflowError, TypeError, ValueError):
-            continue
-        if 1 <= byte_length <= 20 and 0 < weight <= TLS_SERIAL_LENGTH_MAX_WEIGHT:
-            weighted_lengths[byte_length] = min(
-                weighted_lengths.get(byte_length, 0) + weight,
-                TLS_SERIAL_LENGTH_MAX_WEIGHT,
-            )
+    from evidenceforge.generation.cryptographic_material import certificate_serial_number
 
-    if weighted_lengths:
-        lengths = list(weighted_lengths)
-        weights = list(weighted_lengths.values())
-    else:
-        lengths = [8, 9, 10, 12, 16, 18, 20]
-        weights = [8, 6, 6, 14, 40, 12, 14]
-
-    length_rng = random.Random(_stable_seed(f"tls_serial_length:{seed}"))
-    byte_length = length_rng.choices(lengths, weights=weights, k=1)[0]
-    value_rng = random.Random(_stable_seed(f"tls_serial_value:{seed}:{byte_length}"))
-    value = value_rng.getrandbits(byte_length * 8) or 1
-    return f"{value:0{byte_length * 2}X}"
+    return certificate_serial_number(seed)
 
 
 def _raw_ip_tls_issuer(cert_name: str) -> dict[str, Any]:
@@ -4193,6 +4175,12 @@ class ActivityGenerator:
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
         self._tls_seen_client_server_pairs: set[tuple[str, str, int, str]] = set()
+        self._cryptographic_material_registry = CryptographicMaterialRegistry()
+        self._tls_certificate_planner = TlsCertificatePlanner(self._cryptographic_material_registry)
+        self._ocsp_transaction_planner = OcspTransactionPlanner(
+            self._cryptographic_material_registry,
+            self._tls_certificate_planner,
+        )
         self._tls_cert_validity: dict[str, tuple[int, int]] = {}
         self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
@@ -6781,6 +6769,7 @@ class ActivityGenerator:
                 domain_tags,
                 source_os=source_os,
                 source_system_type=getattr(source_system, "type", None),
+                allow_canonical_protocol_templates=False,
             )
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             url = f"{scheme}://{proxy_hostname}{path}"
@@ -8348,182 +8337,67 @@ class ActivityGenerator:
         if tls_version == "TLSv13":
             return
 
-        import hashlib
-
-        from evidenceforge.events.contexts import X509Context
-
         if resumed:
             return
-        cert_fuid = generate_stable_zeek_uid(
-            "F",
-            f"cert_fuid:{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}",
-        )
-        # Support validity_days_min/max ranges; fall back to scalar validity_days
-        _vd_fallback = issuer_cfg.get("validity_days", 397)
-        _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
-        _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
-        validity = self._tls_cert_validity.get(cert_name)
-        if validity is None:
-            not_before_max = issuer_cfg.get("not_before_max_days", 300)
-            validity = _certificate_validity_window(
-                event.timestamp,
-                cert_rng,
-                validity_days_min=int(_vd_min),
-                validity_days_max=int(_vd_max),
-                not_before_max_days=int(not_before_max),
-            )
-        validity = _bound_certificate_validity_to_issuer_window(
-            validity,
-            str(issuer_cfg["name"]),
-            event.timestamp,
-        )
-        self._tls_cert_validity[cert_name] = validity
         if internal_cert_name:
             short_name = internal_cert_name.split(".", 1)[0]
             san_dns_list = list(dict.fromkeys([internal_cert_name, short_name]))
         else:
             san_dns_list = _tls_san_dns_names(cert_name)
-        serial_seed = "|".join(
-            [
-                "tls_cert_serial",
-                cert_name,
-                issuer_cfg["name"],
-                key_type,
-                str(key_length),
-                str(validity[0]),
-                str(validity[1]),
-            ]
-        )
-        serial_number = _tls_certificate_serial(serial_seed)
-        cert_hash = hashlib.sha1(
-            "|".join(
-                [
-                    "cert",
-                    cert_name,
-                    serial_number,
-                    issuer_cfg["name"],
-                    key_type,
-                    str(key_length),
-                    str(validity[0]),
-                    str(validity[1]),
-                ]
-            ).encode(),
-            usedforsecurity=False,
-        ).hexdigest()
-        event.x509 = X509Context(
-            fuid=cert_fuid,
-            fingerprint=cert_hash,
-            certificate_version=3,
-            certificate_serial=serial_number,
-            certificate_subject=f"CN={cert_name}",
-            certificate_issuer=issuer_cfg["name"],
-            certificate_not_valid_before=validity[0],
-            certificate_not_valid_after=validity[1],
-            certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-            certificate_sig_alg=_tls_signature_algorithm_for_issuer(
-                issuer_cfg["name"],
-                fallback_key_type=key_type,
-                fallback_key_length=key_length,
-            ),
-            certificate_key_type=key_type,
-            certificate_key_length=key_length,
-            certificate_exponent="65537" if not is_ecdsa else "",
-            san_dns=san_dns_list,
-            basic_constraints_ca=False,
-            host_cert=True,
-            client_cert=False,
-        )
-        event.x509_chain = self._build_tls_certificate_chain(
-            leaf=event.x509,
+        event.tls_presentation = self._tls_certificate_planner.plan(
+            backend_identity=cert_name.rstrip(".").lower(),
             cert_name=cert_name,
-            issuer_name=issuer_cfg["name"],
+            issuer_config=issuer_cfg,
             event_time=event.timestamp,
-            connection_uid=net.zeek_uid,
-            rng=rng,
+            connection_identity=net.zeek_uid,
+            key_type=key_type,
+            key_size=key_length,
+            san_dns=tuple(san_dns_list),
         )
+        event.x509_chain = self._tls_certificate_planner.x509_contexts(event.tls_presentation)
+        self._tls_certificate_planner.validate_projection(
+            event.tls_presentation,
+            event.x509_chain,
+        )
+        event.x509 = event.x509_chain[0]
         event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
         self._ensure_tls_conn_covers_certificate_bytes(event)
 
-        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses).
-        # Zeek ocsp.log joins through a separate OCSP HTTP response file
-        # (`ocsp.id == files.fuid`), not through the encrypted TLS connection UID.
-        if rng.random() < 0.18:
-            from evidenceforge.generation.activity.tls_realism import ocsp_config
-            from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
+    def _maybe_emit_ocsp_transaction(self, event: SecurityEvent) -> OcspTransactionPlan | None:
+        """Emit one action-owned OCSP child only after its TLS parent is finalized."""
 
-            ocsp_settings = ocsp_config()
-            ocsp_bucket_seconds = int(ocsp_settings.get("cache_bucket_seconds", 4 * 60 * 60))
-            this_update_max_skew = int(ocsp_settings.get("this_update_max_skew_seconds", 3600))
-            next_update_min = int(ocsp_settings.get("next_update_min_seconds", 8 * 3600))
-            next_update_max = int(ocsp_settings.get("next_update_max_seconds", 7 * 86400))
-            event_epoch = int(event.timestamp.timestamp())
-            bucket_start = event_epoch - (event_epoch % ocsp_bucket_seconds)
-            ocsp_window_key = (
-                cert_name,
-                event.x509.certificate_serial,
-                bucket_start,
+        from evidenceforge.generation.activity.tls_realism import ocsp_config
+
+        if (
+            event.tls_presentation is None
+            or event.network is None
+            or self.dispatcher is None
+            or "zeek_ocsp" not in self.dispatcher.emitters
+        ):
+            return None
+        settings = ocsp_config()
+        probability = max(0.0, min(float(settings.get("query_probability", 0.18)), 1.0))
+        roll = random.Random(
+            _stable_seed(
+                "ocsp_query_decision:"
+                f"{event.network.zeek_uid}:{event.tls_presentation.leaf.fingerprint}:"
+                f"{event.timestamp.isoformat()}"
             )
-            ocsp_window = self._tls_ocsp_windows.get(ocsp_window_key)
-            if ocsp_window is None:
-                ocsp_rng = random.Random(
-                    _stable_seed(
-                        f"ocsp_window:{cert_name}:{event.x509.certificate_serial}:{bucket_start}"
-                    )
-                )
-                this_update = bucket_start - ocsp_rng.randint(0, max(0, this_update_max_skew))
-                next_update = (
-                    bucket_start
-                    + ocsp_bucket_seconds
-                    + ocsp_rng.randint(next_update_min, max(next_update_min, next_update_max))
-                )
-                ocsp_window = (this_update, next_update)
-                self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
-            this_update, next_update = ocsp_window
-            issuer_name_hash = hashlib.sha1(
-                event.x509.certificate_issuer.encode(),
-                usedforsecurity=False,
-            ).hexdigest()
-            issuer_key_hash = hashlib.sha1(
-                f"key_{event.x509.certificate_issuer}".encode(),
-                usedforsecurity=False,
-            ).hexdigest()
-            ocsp_id = _gen_uid("F")
-            cert_status = _ocsp_status_for_certificate(
-                cert_name,
-                event.x509.certificate_serial,
-                suppress_revoked=(
-                    event.http is not None
-                    and 200 <= int(getattr(event.http, "status_code", 0) or 0) < 400
-                ),
-            )
-            revoketime = None
-            revokereason = None
-            if cert_status == "revoked":
-                revocation_rng = random.Random(
-                    _stable_seed(f"ocsp_revocation:{cert_name}:{event.x509.certificate_serial}")
-                )
-                revoketime = float(this_update - revocation_rng.randint(86400, 90 * 86400))
-                revokereason = revocation_rng.choice(
-                    [
-                        "keyCompromise",
-                        "cessationOfOperation",
-                        "affiliationChanged",
-                        "superseded",
-                    ]
-                )
-            ocsp_ctx = OcspContext(
-                id=ocsp_id,
-                hash_algorithm="sha1",
-                issuer_name_hash=issuer_name_hash,
-                issuer_key_hash=issuer_key_hash,
-                serial_number=event.x509.certificate_serial,
-                cert_status=cert_status,
-                this_update=this_update,
-                next_update=next_update,
-                revoketime=revoketime,
-                revokereason=revokereason,
-            )
-            self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
+        ).random()
+        if roll >= probability or self.state_manager.state.current_time is None:
+            return None
+        certificate = event.tls_presentation.leaf
+        issuer = self._tls_certificate_planner.authority_material(certificate.issuer_name)
+        return OcspTransactionActionBundle(
+            executor=self,
+            planner=self._ocsp_transaction_planner,
+            request=OcspTransactionRequest(
+                tls_event=event,
+                certificate=certificate,
+                issuer=issuer,
+                cert_name=certificate.subject_name.removeprefix("CN="),
+            ),
+        ).execute()
 
     @staticmethod
     def _ensure_tls_conn_covers_certificate_bytes(event: SecurityEvent) -> bool:
@@ -8565,118 +8439,6 @@ class ActivityGenerator:
             net.duration = min_duration
             changed = True
         return changed
-
-    def _emit_ocsp_http_response(
-        self,
-        tls_event: SecurityEvent,
-        *,
-        cert_name: str,
-        ocsp: OcspContext,
-        rng: random.Random,
-    ) -> None:
-        """Emit Zeek-native OCSP HTTP/file evidence for an OCSP response."""
-        net = tls_event.network
-        if net is None:
-            return
-
-        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-        from evidenceforge.generation.activity.tls_realism import (
-            ocsp_request_path,
-            pick_ocsp_responder,
-        )
-
-        issuer_name = tls_event.x509.certificate_issuer if tls_event.x509 else ""
-        responder = pick_ocsp_responder(
-            issuer_name,
-            random.Random(_stable_seed(f"ocsp_responder:{issuer_name}:{ocsp.serial_number}")),
-        )
-        responder_ip = resolve_domain_ip(responder, src_host=net.src_ip)
-        ocsp_time = tls_event.timestamp + timedelta(
-            milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
-        )
-        ocsp_uri = ocsp_request_path(
-            responder=responder,
-            issuer_name=issuer_name,
-            cert_name=cert_name,
-            serial_number=ocsp.serial_number,
-            this_update=ocsp.this_update,
-        )
-        response_profile_key = (
-            responder,
-            ocsp_uri,
-            ocsp.serial_number,
-            ocsp.this_update,
-            ocsp.next_update,
-            ocsp.cert_status,
-        )
-        ocsp_size = self._tls_ocsp_response_sizes.get(response_profile_key)
-        if ocsp_size is None:
-            size_seed = ":".join(str(part) for part in response_profile_key)
-            ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{size_seed}")).randint(
-                900,
-                2500,
-            )
-            self._tls_ocsp_response_sizes[response_profile_key] = ocsp_size
-        source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
-        source_os = str(getattr(source_system, "os", "") or "")
-        user_agent = pick_proxy_user_agent(
-            random.Random(_stable_seed(f"ocsp_user_agent:{responder}:{net.src_ip}:{source_os}")),
-            source_system,
-            hostname=responder,
-        )
-        http_ctx = HttpContext(
-            method="GET",
-            host=responder,
-            uri=ocsp_uri,
-            version="1.1",
-            user_agent=user_agent,
-            request_body_len=0,
-            response_body_len=ocsp_size,
-            status_code=200,
-            status_msg="OK",
-            resp_mime_types=["application/ocsp-response"],
-            resp_fuids=[ocsp.id],
-            tags=["ocsp"],
-        )
-        file_ctx = FileTransferContext(
-            fuid=ocsp.id,
-            source="HTTP",
-            depth=0,
-            analyzers=[],
-            mime_type="application/ocsp-response",
-            duration=random.Random(_stable_seed(f"ocsp_file_duration:{ocsp.id}")).uniform(
-                0.001, 0.02
-            ),
-            local_orig=_is_private_ip(responder_ip),
-            is_orig=False,
-            seen_bytes=ocsp_size,
-            total_bytes=ocsp_size,
-            missing_bytes=0,
-            overflow_bytes=0,
-            timedout=False,
-        )
-        self.generate_connection(
-            src_ip=net.src_ip,
-            dst_ip=responder_ip,
-            time=ocsp_time,
-            dst_port=80,
-            proto="tcp",
-            service="http",
-            duration=random.Random(_stable_seed(f"ocsp_conn_duration:{ocsp.id}")).uniform(
-                0.02, 0.35
-            ),
-            orig_bytes=320,
-            resp_bytes=ocsp_size,
-            emit_dns=True,
-            pid=net.initiating_pid,
-            source_system=source_system,
-            conn_state="SF",
-            http=http_ctx,
-            file_transfer=file_ctx,
-            ocsp=ocsp,
-            hostname=responder,
-            proxy_bypass=True,
-        )
 
     def _pick_profiled_tls_destination(
         self,
@@ -12993,12 +12755,14 @@ class ActivityGenerator:
         ssl: SslContext | None = None,
         x509: X509Context | None = None,
         x509_chain: list[X509Context] | None = None,
+        tls_presentation: TlsCertificatePresentationPlan | None = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
         file_transfers: list[FileTransferContext] | None = None,
         pe: PeContext | None = None,
         ocsp: OcspContext | None = None,
+        ocsp_transaction: OcspTransactionPlan | None = None,
         proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
@@ -13070,12 +12834,14 @@ class ActivityGenerator:
             ssl=ssl,
             x509=x509,
             x509_chain=list(x509_chain or []),
+            tls_presentation=tls_presentation,
             ids=ids,
             http=http,
             file_transfer=file_transfer,
             file_transfers=list(file_transfers or []),
             pe=pe,
             ocsp=ocsp,
+            ocsp_transaction=ocsp_transaction,
             proxy=proxy,
             firewall=firewall,
             hostname=hostname,
@@ -13995,8 +13761,8 @@ class ActivityGenerator:
                 if tls
                 else None
             )
-            x509_chain = (
-                self._smtp_starttls_certificate_chain(
+            tls_presentation = (
+                self._smtp_starttls_certificate_presentation(
                     ssl=ssl_ctx,
                     dst_system=dst_system,
                     message_id=message_id,
@@ -14004,6 +13770,11 @@ class ActivityGenerator:
                     event_time=hop_time,
                 )
                 if ssl_ctx is not None
+                else None
+            )
+            x509_chain = (
+                self._tls_certificate_planner.x509_contexts(tls_presentation)
+                if tls_presentation is not None
                 else []
             )
             if ssl_ctx is not None and x509_chain:
@@ -14045,6 +13816,7 @@ class ActivityGenerator:
                 ssl=ssl_ctx,
                 x509=x509_chain[0] if x509_chain else None,
                 x509_chain=x509_chain,
+                tls_presentation=tls_presentation,
                 file_transfers=mime_file_transfers,
                 suppress_application_side_effects=True,
                 responding_pid=responding_pid,
@@ -14843,9 +14615,34 @@ class ActivityGenerator:
         hop_index: int,
         event_time: datetime,
     ) -> list[X509Context]:
-        """Return passive Zeek certificate evidence for visible SMTP STARTTLS handshakes."""
+        """Return compatibility X.509 projections for an SMTP TLS presentation."""
+
+        presentation = self._smtp_starttls_certificate_presentation(
+            ssl=ssl,
+            dst_system=dst_system,
+            message_id=message_id,
+            hop_index=hop_index,
+            event_time=event_time,
+        )
+        return (
+            self._tls_certificate_planner.x509_contexts(presentation)
+            if presentation is not None
+            else []
+        )
+
+    def _smtp_starttls_certificate_presentation(
+        self,
+        *,
+        ssl: SslContext,
+        dst_system: "System",
+        message_id: str,
+        hop_index: int,
+        event_time: datetime,
+    ) -> TlsCertificatePresentationPlan | None:
+        """Plan SMTP STARTTLS certificate evidence through the shared TLS owner."""
+
         if ssl.version == "TLSv13" or ssl.resumed:
-            return []
+            return None
         cert_profile = self._smtp_starttls_certificate_profile(
             ssl_server_name=ssl.server_name,
             dst_system=dst_system,
@@ -14856,87 +14653,20 @@ class ActivityGenerator:
         key_type = str(cert_profile["key_type"])
         key_length = int(cert_profile["key_length"])
         internal_cert_name = str(cert_profile["internal_cert_name"])
-        cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
-        is_ecdsa = key_type == "ecdsa"
-
-        validity = self._tls_cert_validity.get(cert_name)
-        if validity is None:
-            fallback_days = issuer_cfg.get("validity_days", 397)
-            validity = _certificate_validity_window(
-                event_time,
-                cert_rng,
-                validity_days_min=int(issuer_cfg.get("validity_days_min", fallback_days)),
-                validity_days_max=int(issuer_cfg.get("validity_days_max", fallback_days)),
-                not_before_max_days=int(issuer_cfg.get("not_before_max_days", 300)),
-            )
-        validity = _bound_certificate_validity_to_issuer_window(
-            validity,
-            str(issuer_cfg["name"]),
-            event_time,
-        )
-        self._tls_cert_validity[cert_name] = validity
-        serial_seed = "|".join(
-            [
-                "smtp_tls_cert_serial",
-                cert_name,
-                str(issuer_cfg["name"]),
-                key_type,
-                str(key_length),
-                str(validity[0]),
-                str(validity[1]),
-            ]
-        )
-        serial_number = _tls_certificate_serial(serial_seed)
-        fingerprint = hashlib.sha1(
-            "|".join(
-                [
-                    "smtp_tls_cert",
-                    cert_name,
-                    serial_number,
-                    str(issuer_cfg["name"]),
-                    key_type,
-                    str(key_length),
-                    str(validity[0]),
-                    str(validity[1]),
-                ]
-            ).encode(),
-            usedforsecurity=False,
-        ).hexdigest()
-        leaf = X509Context(
-            fuid=generate_stable_zeek_uid(
-                "F",
-                f"smtp_cert_fuid:{cert_name}:{message_id}:{hop_index}",
-            ),
-            fingerprint=fingerprint,
-            certificate_version=3,
-            certificate_serial=serial_number,
-            certificate_subject=f"CN={cert_name}",
-            certificate_issuer=str(issuer_cfg["name"]),
-            certificate_not_valid_before=validity[0],
-            certificate_not_valid_after=validity[1],
-            certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-            certificate_sig_alg=_tls_signature_algorithm_for_issuer(
-                str(issuer_cfg["name"]),
-                fallback_key_type=key_type,
-                fallback_key_length=key_length,
-            ),
-            certificate_key_type=key_type,
-            certificate_key_length=key_length,
-            certificate_exponent="65537" if not is_ecdsa else "",
-            san_dns=list(dict.fromkeys([cert_name, cert_name.split(".", 1)[0]]))
+        san_dns = (
+            tuple(dict.fromkeys([cert_name, cert_name.split(".", 1)[0]]))
             if internal_cert_name
-            else _tls_san_dns_names(cert_name),
-            basic_constraints_ca=False,
-            host_cert=True,
-            client_cert=False,
+            else tuple(_tls_san_dns_names(cert_name))
         )
-        return self._build_tls_certificate_chain(
-            leaf=leaf,
+        return self._tls_certificate_planner.plan(
+            backend_identity=cert_name.rstrip(".").lower(),
             cert_name=cert_name,
-            issuer_name=str(issuer_cfg["name"]),
+            issuer_config=issuer_cfg,
             event_time=event_time,
-            connection_uid=f"smtp-starttls:{message_id}:{hop_index}",
-            rng=cert_rng,
+            connection_identity=f"smtp-starttls:{message_id}:{hop_index}",
+            key_type=key_type,
+            key_size=key_length,
+            san_dns=san_dns,
         )
 
     def _smtp_starttls_certificate_profile(
@@ -14952,7 +14682,7 @@ class ActivityGenerator:
         server_name = ssl_server_name or self._email_server_fqdn(dst_system.hostname)
         internal_cert_name = server_name if _is_private_ip(dst_system.ip) else ""
         cert_name = server_name or internal_cert_name or dst_system.ip
-        cert_rng = random.Random(_stable_seed(f"smtp_tls_cert_profile:{cert_name}"))
+        cert_rng = random.Random(_stable_seed(f"tls_cert_profile:{cert_name}"))
         if internal_cert_name:
             issuer_cfg = _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
         elif _is_ip_literal(cert_name):

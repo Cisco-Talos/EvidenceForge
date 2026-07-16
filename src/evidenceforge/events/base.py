@@ -69,6 +69,10 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
+from evidenceforge.events.cryptography import (
+    OcspTransactionPlan,
+    TlsCertificatePresentationPlan,
+)
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkSensorObservation
@@ -126,9 +130,11 @@ class SecurityEvent:
     file_transfers: list[FileTransferContext] = field(default_factory=list)
     x509: X509Context | None = None
     x509_chain: list[X509Context] = field(default_factory=list)
+    tls_presentation: TlsCertificatePresentationPlan | None = None
     dhcp: DhcpContext | None = None
     ntp: NtpContext | None = None
     ocsp: OcspContext | None = None
+    ocsp_transaction: OcspTransactionPlan | None = None
     pe: PeContext | None = None
     proxy: ProxyContext | None = None
 
