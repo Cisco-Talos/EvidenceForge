@@ -1239,10 +1239,10 @@ class TestWindowsEventEmitter:
         assert logon["TimeCreated"] == expected_logon_time
         assert privilege["TimeCreated"] == expected_logon_time + expected_privilege_delta
 
-    def test_flush_repairs_transport_shifted_logon_before_process_create(
+    def test_flush_does_not_repair_remote_auth_transport_ordering(
         self, format_def, temp_output, monkeypatch
     ):
-        """Flush should move remote 4624 rows before repairing same-session 4688 rows."""
+        """Remote-auth ordering is finalized before Windows emitter flush."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
         logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         process_time = logon_time + timedelta(milliseconds=250)
@@ -1297,7 +1297,8 @@ class TestWindowsEventEmitter:
 
         emitter._flush_unlocked()
 
-        assert calls.index("network") < calls.index("process")
+        assert "network" not in calls
+        assert "process" in calls
         logon = next(event for event in rendered if event["EventID"] == 4624)
         process = next(event for event in rendered if event["EventID"] == 4688)
         assert process["TimeCreated"] > logon["TimeCreated"]

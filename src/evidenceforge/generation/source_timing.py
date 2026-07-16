@@ -52,6 +52,32 @@ class SourceTimingPlan:
     canonical_timestamp: datetime
     clock_profile_name: str = "complete"
     source_times: dict[str, datetime] = field(default_factory=dict)
+    finalized_times: dict[str, datetime] = field(default_factory=dict)
+    finalized_flags: dict[str, bool] = field(default_factory=dict)
+
+
+def ecar_flow_render_key(direction: str, hostname: str) -> str:
+    """Return the finalized-plan key for one host-local eCAR FLOW row."""
+
+    return f"ecar.flow.{direction.lower()}.{hostname}"
+
+
+def ecar_session_render_key(lifecycle: str) -> str:
+    """Return the finalized-plan key for one eCAR USER_SESSION row."""
+
+    return f"ecar.session.{lifecycle}"
+
+
+def ecar_flow_identity_key(direction: str, hostname: str) -> str:
+    """Return the finalized-plan key for FLOW process-attribution safety."""
+
+    return f"ecar.flow_identity_safe.{direction.lower()}.{hostname}"
+
+
+_WINDOWS_WFP_RENDER_KEY = "windows.wfp_connection"
+_REMOTE_TRANSPORT_KEY = tuple[str, str, str, str, int, str, int, str]
+_TRANSACTION_TRANSPORT_KEY = tuple[str, str, str, int, str, int, str]
+_SSH_TRANSPORT_KEY = tuple[str, str, int, str, int, str]
 
 
 class SourceTimingPlanner:
@@ -61,6 +87,13 @@ class SourceTimingPlanner:
         self.clock_profile_name = clock_profile_name or "complete"
         self._ecar_process_create_times: dict[str, datetime] = {}
         self._latest_session_dependent_times: dict[tuple[str, str], datetime] = {}
+        self._admitted_ecar_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
+        self._admitted_windows_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
+        self._admitted_ecar_transport_transactions: dict[_TRANSACTION_TRANSPORT_KEY, datetime] = {}
+        self._admitted_windows_transport_transactions: dict[
+            _TRANSACTION_TRANSPORT_KEY, datetime
+        ] = {}
+        self._admitted_ecar_ssh_transports: dict[_SSH_TRANSPORT_KEY, datetime] = {}
 
     def plan_event(
         self,
@@ -71,9 +104,727 @@ class SourceTimingPlanner:
         self._ensure_plan(event)
         if format_name in {None, "ecar"}:
             self._plan_ecar_identity_times(event)
+        if format_name == "ecar":
+            self._plan_ecar_render_times(event)
+        if format_name in {"windows_security", "windows_event_security"}:
+            event = self._plan_windows_remote_auth_time(event)
         if format_name is not None:
             event = self._plan_session_lifecycle_time(event, format_name)
         return event
+
+    def initialize_event(self, event: SecurityEvent) -> None:
+        """Retain canonical time before source observation delay is applied.
+
+        Initialization deliberately does not plan identities or render timestamps;
+        those decisions belong to the visible source path selected by the
+        dispatcher.
+        """
+
+        self._ensure_plan(event)
+
+    def record_admitted_source_event(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+    ) -> None:
+        """Publish an admitted transport anchor for later authentication siblings."""
+
+        network = event.network
+        lifecycle = event.lifecycle
+        if (
+            format_name == "ecar"
+            and event.event_type == "connection"
+            and network is not None
+            and network.transaction is not None
+            and event.dst_host is not None
+        ):
+            timestamp = self._finalized_time(
+                event,
+                ecar_flow_render_key("inbound", event.dst_host.hostname),
+            )
+            if timestamp is not None:
+                self._admitted_ecar_transport_transactions[
+                    self._transaction_transport_key(
+                        network.transaction.stable_id,
+                        event.dst_host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
+        if (
+            format_name in {"windows_security", "windows_event_security"}
+            and event.event_type == "wfp_connection"
+            and network is not None
+            and lifecycle is not None
+        ):
+            host = event.src_host or event.dst_host
+            timestamp = self._finalized_time(event, _WINDOWS_WFP_RENDER_KEY)
+            if host is not None and timestamp is not None:
+                self._admitted_windows_transport_transactions[
+                    self._transaction_transport_key(
+                        lifecycle.group_id,
+                        host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
+        if (
+            format_name == "ecar"
+            and event.event_type == "connection"
+            and network is not None
+            and network.protocol.lower() == "tcp"
+            and network.dst_port == 22
+            and event.dst_host is not None
+        ):
+            timestamp = self._finalized_time(
+                event,
+                ecar_flow_render_key("inbound", event.dst_host.hostname),
+            )
+            if timestamp is not None:
+                self._admitted_ecar_ssh_transports[
+                    self._ssh_transport_key(
+                        event.dst_host.hostname,
+                        network.src_ip,
+                        network.src_port,
+                        network.dst_ip,
+                        network.dst_port,
+                        network.protocol,
+                    )
+                ] = timestamp
+
+        if lifecycle is None or network is None or lifecycle.parent_group_id is None:
+            return
+        if not lifecycle.parent_group_id.startswith("windows-remote-auth-"):
+            return
+        target_host = event.dst_host or event.src_host
+        target_hostname = getattr(target_host, "hostname", "")
+        if not target_hostname:
+            return
+        if event.event_type == "connection" and network.transaction is not None:
+            transaction_id = network.transaction.stable_id
+            if format_name == "ecar" and event.dst_host is not None:
+                timestamp = self._finalized_time(
+                    event,
+                    ecar_flow_render_key("inbound", event.dst_host.hostname),
+                )
+                if timestamp is not None:
+                    self._admitted_ecar_remote_transports[
+                        self._remote_transport_key(
+                            lifecycle.parent_group_id,
+                            transaction_id,
+                            target_hostname,
+                            network.src_ip,
+                            network.src_port,
+                            network.dst_ip,
+                            network.dst_port,
+                            network.protocol,
+                        )
+                    ] = timestamp
+            return
+        if event.event_type != "wfp_connection" or format_name not in {
+            "windows_security",
+            "windows_event_security",
+        }:
+            return
+        host = event.src_host or event.dst_host
+        if host is None or network.dst_ip != host.ip:
+            return
+        timestamp = self._finalized_time(event, _WINDOWS_WFP_RENDER_KEY)
+        if timestamp is not None:
+            self._admitted_windows_remote_transports[
+                self._remote_transport_key(
+                    lifecycle.parent_group_id,
+                    lifecycle.group_id,
+                    host.hostname,
+                    network.src_ip,
+                    network.src_port,
+                    network.dst_ip,
+                    network.dst_port,
+                    network.protocol,
+                )
+            ] = timestamp
+
+    def _plan_ecar_render_times(self, event: SecurityEvent) -> None:
+        """Finalize eCAR FLOW and USER_SESSION times before emitter admission."""
+
+        if event.event_type == "connection" and event.network is not None:
+            self._plan_ecar_flow_times(event)
+            return
+        if event.auth is None or event.event_type not in {
+            "logon",
+            "machine_logon",
+            "ssh_session",
+            "failed_logon",
+            "logoff",
+        }:
+            return
+        lifecycle = (
+            "logout"
+            if event.event_type == "logoff"
+            else "failed_login"
+            if event.event_type == "failed_logon"
+            else "login"
+        )
+        plan = self._ensure_plan(event)
+        if lifecycle == "logout":
+            plan.finalized_times[ecar_session_render_key(lifecycle)] = event.timestamp
+            return
+        host = event.dst_host or event.src_host
+        canonical_timestamp = plan.canonical_timestamp
+        seed_parts = (
+            lifecycle,
+            getattr(host, "hostname", ""),
+            getattr(event.auth, "username", ""),
+            getattr(event.auth, "source_ip", ""),
+            getattr(event.auth, "source_port", ""),
+            getattr(event.auth, "logon_id", ""),
+            getattr(event.auth, "logon_type", ""),
+            getattr(event.edr, "object_id", ""),
+            canonical_timestamp,
+        )
+        timestamp = self.source_time(
+            event,
+            "source.ecar_session",
+            seed_parts=seed_parts,
+        )
+        anchor = self._remote_auth_transport_anchor(
+            event,
+            self._admitted_ecar_remote_transports,
+            self._admitted_ecar_transport_transactions,
+        )
+        if anchor is not None:
+            timestamp = anchor + sample_timing_delta(
+                "windows.network_logon_after_transport",
+                seed_parts=(
+                    "ecar",
+                    event.remote_auth.stable_id,
+                    event.remote_auth.primary_transport.transaction_id,
+                    lifecycle,
+                ),
+            )
+        elif event.event_type == "ssh_session":
+            ssh_anchor = self._ssh_transport_anchor(event)
+            if ssh_anchor is not None:
+                timestamp = max(
+                    timestamp,
+                    ssh_anchor
+                    + sample_timing_delta(
+                        "source.ecar_ssh_session_after_accept",
+                        seed_parts=(
+                            "flow_order",
+                            getattr(host, "hostname", ""),
+                            getattr(event.auth, "source_ip", ""),
+                            getattr(event.auth, "source_port", ""),
+                            canonical_timestamp,
+                        ),
+                    ),
+                )
+        plan.finalized_times[ecar_session_render_key(lifecycle)] = timestamp
+
+    def _plan_windows_remote_auth_time(self, event: SecurityEvent) -> SecurityEvent:
+        """Finalize source-local WFP-before-authentication ordering."""
+
+        if event.event_type == "wfp_connection" and event.network is not None:
+            host = event.src_host or event.dst_host
+            timestamp = self.source_time(
+                event,
+                "source.windows_wfp_connection",
+                seed_parts=(
+                    getattr(host, "hostname", ""),
+                    event.network.initiating_pid if event.network.initiating_pid > 0 else 4,
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
+            self._ensure_plan(event).finalized_times[_WINDOWS_WFP_RENDER_KEY] = timestamp
+            return event
+        if (
+            event.event_type not in {"logon", "machine_logon", "failed_logon"}
+            or event.remote_auth is None
+        ):
+            return event
+        anchor = self._remote_auth_transport_anchor(
+            event,
+            self._admitted_windows_remote_transports,
+            self._admitted_windows_transport_transactions,
+        )
+        if anchor is None:
+            return event
+        timestamp = anchor + sample_timing_delta(
+            "windows.network_logon_after_transport",
+            seed_parts=(
+                "windows_security",
+                event.remote_auth.stable_id,
+                event.remote_auth.primary_transport.transaction_id,
+                event.event_type,
+            ),
+        )
+        self._ensure_plan(event).finalized_times["windows.remote_authentication"] = timestamp
+        return replace(event, timestamp=timestamp)
+
+    def _remote_auth_transport_anchor(
+        self,
+        event: SecurityEvent,
+        registry: dict[_REMOTE_TRANSPORT_KEY, datetime],
+        transaction_registry: dict[_TRANSACTION_TRANSPORT_KEY, datetime],
+    ) -> datetime | None:
+        remote_auth = event.remote_auth
+        if remote_auth is None or remote_auth.primary_transport is None:
+            return None
+        transport = remote_auth.primary_transport
+        tuple_view = transport.tuple
+        action_anchor = registry.get(
+            SourceTimingPlanner._remote_transport_key(
+                remote_auth.stable_id,
+                transport.transaction_id,
+                remote_auth.target_hostname,
+                tuple_view.src_ip,
+                tuple_view.src_port,
+                tuple_view.dst_ip,
+                tuple_view.dst_port,
+                tuple_view.protocol,
+            )
+        )
+        if action_anchor is not None:
+            return action_anchor
+        return transaction_registry.get(
+            self._transaction_transport_key(
+                transport.transaction_id,
+                remote_auth.target_hostname,
+                tuple_view.src_ip,
+                tuple_view.src_port,
+                tuple_view.dst_ip,
+                tuple_view.dst_port,
+                tuple_view.protocol,
+            )
+        )
+
+    @staticmethod
+    def _remote_transport_key(
+        action_group_id: str,
+        transaction_id: str,
+        target_hostname: str,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> _REMOTE_TRANSPORT_KEY:
+        """Return the exact source-view key for one remote-auth transport."""
+
+        return (
+            action_group_id,
+            transaction_id,
+            target_hostname,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol.lower(),
+        )
+
+    @staticmethod
+    def _transaction_transport_key(
+        transaction_id: str,
+        target_hostname: str,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> _TRANSACTION_TRANSPORT_KEY:
+        """Return an exact source-view key independent of the parent bundle."""
+
+        return (
+            transaction_id,
+            target_hostname,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol.lower(),
+        )
+
+    def _ssh_transport_anchor(self, event: SecurityEvent) -> datetime | None:
+        """Return the admitted exact-tuple SSH FLOW time for a session event."""
+
+        auth = event.auth
+        host = event.dst_host or event.src_host
+        if auth is None or host is None or not auth.source_ip or auth.source_port <= 0:
+            return None
+        return self._admitted_ecar_ssh_transports.get(
+            self._ssh_transport_key(
+                host.hostname,
+                auth.source_ip,
+                auth.source_port,
+                host.ip,
+                22,
+                "tcp",
+            )
+        )
+
+    @staticmethod
+    def _ssh_transport_key(
+        target_hostname: str,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> _SSH_TRANSPORT_KEY:
+        """Return the exact target-view key for one admitted SSH transport."""
+
+        return (
+            target_hostname,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            protocol.lower(),
+        )
+
+    @staticmethod
+    def _finalized_time(event: SecurityEvent, key: str) -> datetime | None:
+        plan = event.source_timing
+        return plan.finalized_times.get(key) if plan is not None else None
+
+    def _plan_ecar_flow_times(self, event: SecurityEvent) -> None:
+        """Finalize every host-local FLOW timestamp and attribution decision."""
+
+        network = event.network
+        if network is None:
+            return
+        identity_plan = event.identity_plan
+        source_identity = (
+            identity_plan.actor
+            if identity_plan is not None and isinstance(identity_plan.actor, ProcessIdentity)
+            else None
+        )
+        target_identity = (
+            identity_plan.target
+            if identity_plan is not None and isinstance(identity_plan.target, ProcessIdentity)
+            else None
+        )
+        plan = self._ensure_plan(event)
+        paired_endpoint = event.src_host is not None and event.dst_host is not None
+        if event.src_host is not None:
+            direction = "outbound"
+            hostname = event.src_host.hostname
+            not_before = (
+                self._ecar_process_identity_not_before(event, source_identity)
+                if source_identity is not None
+                else None
+            )
+            timestamp, identity_safe = self._ecar_flow_source_time(
+                event,
+                seed_parts=(
+                    direction,
+                    hostname,
+                    network.initiating_pid,
+                    network.src_ip,
+                    network.src_port,
+                    network.dst_ip,
+                    network.dst_port,
+                    event.timestamp,
+                ),
+                not_before=not_before,
+                drop_late_process_identity=(
+                    network.protocol == "tcp" and network.dst_port in {22, 3389}
+                ),
+                paired_endpoint=paired_endpoint,
+            )
+            plan.finalized_times[ecar_flow_render_key(direction, hostname)] = timestamp
+            plan.finalized_flags[ecar_flow_identity_key(direction, hostname)] = identity_safe
+        if event.dst_host is not None:
+            direction = "inbound"
+            hostname = event.dst_host.hostname
+            not_before = (
+                self._ecar_process_identity_not_before(event, target_identity)
+                if target_identity is not None
+                else None
+            )
+            timestamp, identity_safe = self._ecar_flow_source_time(
+                event,
+                seed_parts=(
+                    direction,
+                    hostname,
+                    network.initiating_pid,
+                    network.src_ip,
+                    network.src_port,
+                    network.dst_ip,
+                    network.dst_port,
+                    event.timestamp,
+                ),
+                not_before=not_before,
+                drop_late_process_identity=(
+                    network.protocol == "tcp" and network.dst_port in {22, 3389}
+                ),
+                paired_endpoint=paired_endpoint,
+            )
+            plan.finalized_times[ecar_flow_render_key(direction, hostname)] = timestamp
+            plan.finalized_flags[ecar_flow_identity_key(direction, hostname)] = identity_safe
+
+    def _ecar_process_identity_not_before(
+        self,
+        event: SecurityEvent,
+        identity: ProcessIdentity,
+    ) -> datetime:
+        """Return the earliest FLOW time that can safely claim a process."""
+
+        if event.timestamp - identity.started_at >= timedelta(seconds=5):
+            return identity.started_at
+        create_time = self._prime_ecar_process_create_time(event, identity)
+        return create_time + _SOURCE_EPSILON
+
+    def _ecar_flow_source_time(
+        self,
+        event: SecurityEvent,
+        *,
+        seed_parts: tuple[Any, ...],
+        not_before: datetime | None,
+        drop_late_process_identity: bool,
+        paired_endpoint: bool,
+    ) -> tuple[datetime, bool]:
+        """Return a finalized FLOW time bounded by its canonical interval."""
+
+        interval_start, not_after = self._ecar_flow_interval(event, seed_parts)
+        lifecycle = event.lifecycle
+        if (
+            lifecycle is not None
+            and lifecycle.parent_group_id is not None
+            and lifecycle.parent_group_id.startswith("proxy-transaction-")
+        ):
+            host_key = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+            flow_time = self.lifecycle_child_source_time(
+                event,
+                "source.ecar_flow",
+                host_key=host_key,
+                seed_parts=seed_parts,
+                within=(interval_start, not_after) if not_after is not None else None,
+            )
+            if flow_time is not None:
+                return flow_time, not_before is None or not_before <= flow_time
+
+        if drop_late_process_identity and not_before is not None:
+            flow_time = self.source_time(
+                event,
+                "source.ecar_flow",
+                seed_parts=seed_parts,
+                within=(interval_start, not_after) if not_after is not None else None,
+            )
+            flow_time = self._paired_ecar_flow_observation_time(
+                event,
+                flow_time,
+                seed_parts=seed_parts,
+                interval_start=interval_start,
+                not_before=None,
+                not_after=not_after,
+                enabled=paired_endpoint,
+            )
+            return flow_time, not_before <= flow_time
+
+        identity_safe = not_before is None or not_after is None or not_before <= not_after
+        flow_time = self.source_time(
+            event,
+            "source.ecar_flow",
+            seed_parts=seed_parts,
+            not_before=not_before if identity_safe else None,
+            within=(interval_start, not_after) if not_after is not None else None,
+        )
+        flow_time = self._paired_ecar_flow_observation_time(
+            event,
+            flow_time,
+            seed_parts=seed_parts,
+            interval_start=interval_start,
+            not_before=not_before if identity_safe else None,
+            not_after=not_after,
+            enabled=paired_endpoint,
+        )
+        if identity_safe and not_before is not None and flow_time < not_before:
+            identity_safe = False
+        return flow_time, identity_safe
+
+    @staticmethod
+    def _paired_ecar_flow_observation_time(
+        event: SecurityEvent,
+        timestamp: datetime,
+        *,
+        seed_parts: tuple[Any, ...],
+        interval_start: datetime,
+        not_before: datetime | None,
+        not_after: datetime | None,
+        enabled: bool,
+    ) -> datetime:
+        """Add deterministic host-local texture to paired endpoint FLOWs."""
+
+        if not enabled:
+            return timestamp
+        if not_after is None:
+            return SourceTimingPlanner._unbounded_paired_ecar_flow_time(
+                event,
+                seed_parts=seed_parts,
+                not_before=not_before,
+            )
+        short_interval = not_after <= interval_start + timedelta(milliseconds=5)
+        lower_bound = not_before
+        if not short_interval and not_after > interval_start:
+            lower_bound = (
+                interval_start if lower_bound is None else max(lower_bound, interval_start)
+            )
+        min_offset_ms = SourceTimingPlanner._ecar_flow_min_endpoint_offset_ms(
+            event,
+            seed_parts,
+        )
+        if min_offset_ms > 0:
+            minimum_time = interval_start + timedelta(milliseconds=min_offset_ms)
+            if minimum_time <= not_after:
+                lower_bound = (
+                    minimum_time if lower_bound is None else max(lower_bound, minimum_time)
+                )
+
+        seed = _stable_seed(
+            "ecar_paired_flow_observation:"
+            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+        )
+        direction = str(seed_parts[0]) if seed_parts else ""
+        if short_interval and direction == "inbound":
+            minimum_jitter_ms, maximum_jitter_ms = 22, 55
+        elif short_interval and direction == "outbound":
+            minimum_jitter_ms, maximum_jitter_ms = 1, 16
+        elif direction == "inbound":
+            minimum_jitter_ms, maximum_jitter_ms = 75, 540
+        elif direction == "outbound":
+            minimum_jitter_ms, maximum_jitter_ms = 12, 220
+        else:
+            minimum_jitter_ms, maximum_jitter_ms = 12, 360
+        jitter_ms = minimum_jitter_ms + (seed % (maximum_jitter_ms - minimum_jitter_ms + 1))
+        candidate = timestamp - timedelta(milliseconds=jitter_ms)
+        if lower_bound is not None and candidate < lower_bound:
+            available_ms = int((timestamp - lower_bound).total_seconds() * 1000)
+            if available_ms <= 0:
+                return timestamp
+            if available_ms < minimum_jitter_ms:
+                if direction == "inbound" and available_ms >= 4:
+                    slice_min_ms, slice_max_ms = max(1, (available_ms * 2) // 3), available_ms
+                elif direction == "outbound" and available_ms >= 4:
+                    slice_min_ms, slice_max_ms = 1, max(1, available_ms // 3)
+                else:
+                    slice_min_ms, slice_max_ms = 1, available_ms
+                bounded_jitter_ms = slice_min_ms + (seed % (slice_max_ms - slice_min_ms + 1))
+            else:
+                bounded_jitter_ms = minimum_jitter_ms + (
+                    seed % (available_ms - minimum_jitter_ms + 1)
+                )
+            candidate = timestamp - timedelta(milliseconds=bounded_jitter_ms)
+        return min(candidate, not_after)
+
+    @staticmethod
+    def _unbounded_paired_ecar_flow_time(
+        event: SecurityEvent,
+        *,
+        seed_parts: tuple[Any, ...],
+        not_before: datetime | None,
+    ) -> datetime:
+        """Return coordinated paired FLOW timing when no close bound exists."""
+
+        network = event.network
+        if network is None:
+            return event.timestamp
+        tuple_seed = _stable_seed(
+            "ecar_paired_flow_base:"
+            + ":".join(
+                str(part)
+                for part in (
+                    network.src_ip,
+                    network.src_port,
+                    network.dst_ip,
+                    network.dst_port,
+                    network.protocol,
+                    event.timestamp.isoformat(),
+                )
+            )
+        )
+        base_delay_ms = 220 + (tuple_seed % 900)
+        direction = str(seed_parts[0]) if seed_parts else ""
+        host = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+        offset_seed = _stable_seed(
+            "ecar_paired_flow_host_offset:"
+            + ":".join(str(part) for part in (direction, host, *seed_parts))
+        )
+        if direction == "inbound":
+            offset_ms = 300 + (offset_seed % 360)
+        elif direction == "outbound":
+            offset_ms = 20 + (offset_seed % 180)
+        else:
+            offset_ms = 80 + (offset_seed % 420)
+        candidate = event.timestamp + timedelta(milliseconds=base_delay_ms + offset_ms)
+        if not_before is not None and candidate < not_before:
+            candidate = not_before + timedelta(milliseconds=6 + (offset_seed % 180))
+        return candidate
+
+    @staticmethod
+    def _ecar_flow_interval(
+        event: SecurityEvent,
+        seed_parts: tuple[Any, ...],
+    ) -> tuple[datetime, datetime | None]:
+        """Return the finalized canonical interval for an endpoint FLOW."""
+
+        network = event.network
+        if network is None:
+            return event.timestamp, None
+        start_time = network.source_visible_start_time or event.timestamp
+        if network.duration is None:
+            if network.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
+                seed = _stable_seed(
+                    "ecar_failed_flow_not_after:"
+                    + ":".join(str(part) for part in (*seed_parts, start_time.isoformat()))
+                )
+                return start_time, start_time + timedelta(milliseconds=45 + (seed % 620))
+            return start_time, None
+        close_time = network.source_visible_close_time or (
+            start_time + timedelta(seconds=max(0.0, network.duration))
+        )
+        if close_time <= start_time:
+            return start_time, close_time
+        duration_us = int((close_time - start_time).total_seconds() * 1_000_000)
+        seed = _stable_seed("ecar_flow_not_after:" + ":".join(str(part) for part in seed_parts))
+        margin_us = 1000 + (seed % 4000)
+        if duration_us <= margin_us:
+            margin_us = max(0, duration_us // 2)
+        return start_time, close_time - timedelta(microseconds=margin_us)
+
+    @staticmethod
+    def _ecar_flow_min_endpoint_offset_ms(
+        event: SecurityEvent,
+        seed_parts: tuple[Any, ...],
+    ) -> int:
+        """Return the minimum endpoint delay for very short FLOWs."""
+
+        network = event.network
+        if network is None:
+            return 0
+        applies = (
+            network.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}
+            if network.duration is None
+            else 0 <= network.duration < 0.1
+        )
+        if not applies:
+            return 0
+        seed = _stable_seed(
+            "ecar_flow_min_endpoint_offset:"
+            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
+        )
+        return 18 + (seed % 65)
 
     def _plan_session_lifecycle_time(
         self,
@@ -310,6 +1061,21 @@ class SourceTimingPlanner:
     def admission_time(self, event: SecurityEvent, format_name: str) -> datetime:
         """Return the finalized source-visible timestamp used for window admission."""
 
+        if event.source_timing is not None:
+            if format_name == "ecar":
+                ecar_times = [
+                    timestamp
+                    for key, timestamp in event.source_timing.finalized_times.items()
+                    if key.startswith("ecar.flow.") or key.startswith("ecar.session.")
+                ]
+                if ecar_times:
+                    return max(ecar_times)
+            if format_name in {"windows_security", "windows_event_security"}:
+                windows_time = event.source_timing.finalized_times.get(
+                    "windows.remote_authentication"
+                ) or event.source_timing.finalized_times.get(_WINDOWS_WFP_RENDER_KEY)
+                if windows_time is not None:
+                    return windows_time
         if format_name == "proxy_access" and event.proxy is not None:
             transaction = event.proxy.transaction
             if transaction is not None:
@@ -336,26 +1102,6 @@ class SourceTimingPlanner:
             ]
             if observed:
                 return min(observed)
-        if format_name == "ecar" and event.network is not None:
-            return self.source_time(
-                event,
-                "source.ecar_flow",
-                seed_parts=(
-                    "dispatcher-admission",
-                    event.network.zeek_uid,
-                    event.network.src_ip,
-                    event.network.src_port,
-                    event.network.dst_ip,
-                    event.network.dst_port,
-                ),
-                within=(
-                    event.network.source_visible_start_time,
-                    event.network.source_visible_close_time,
-                )
-                if event.network.source_visible_start_time is not None
-                and event.network.source_visible_close_time is not None
-                else None,
-            )
         return event.timestamp
 
     def source_time(

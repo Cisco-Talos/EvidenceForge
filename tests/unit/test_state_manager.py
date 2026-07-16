@@ -191,6 +191,75 @@ class TestStateManagerInit:
         ] == [logon_id]
         assert sm.get_sessions_for_user_at("alice", deadline) == []
 
+    def test_sessions_on_system_at_excludes_authoritatively_ended_session(self):
+        """Host-local activity selection must honor a preplanned session deadline."""
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deadline = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+        )
+        assert sm.plan_session_end(
+            logon_id,
+            SessionEndPlan(deadline, "explicit_storyline", "story-logoff"),
+        )
+
+        assert [
+            session.logon_id
+            for session in sm.get_sessions_on_system_at(
+                "WS-01",
+                deadline - timedelta(milliseconds=1),
+            )
+        ] == [logon_id]
+        assert sm.get_sessions_on_system_at("WS-01", deadline) == []
+
+    def test_authoritative_end_blocks_implicit_rebootstrap_until_new_session(self):
+        """Baseline planners must not silently recreate an explicitly ended session."""
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deadline = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+        )
+        assert sm.plan_session_end(
+            logon_id,
+            SessionEndPlan(deadline, "explicit_storyline", "story-logoff"),
+        )
+
+        assert not sm.authoritative_session_end_blocks_rebootstrap(
+            "alice",
+            "WS-01",
+            deadline - timedelta(milliseconds=1),
+        )
+        assert sm.authoritative_session_end_blocks_rebootstrap(
+            "alice",
+            "WS-01",
+            deadline,
+        )
+
+        sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=deadline + timedelta(minutes=5),
+        )
+        assert not sm.authoritative_session_end_blocks_rebootstrap(
+            "alice",
+            "WS-01",
+            deadline + timedelta(minutes=6),
+        )
+
     def test_authoritative_end_plan_cannot_be_replaced(self):
         """The first explicit storyline close remains the immutable session authority."""
         sm = StateManager()

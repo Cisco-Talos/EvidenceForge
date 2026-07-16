@@ -3960,7 +3960,7 @@ class StorylineMixin:
                             actor,
                             dst_sys,
                             source_ip,
-                            time,
+                            connection_time,
                             rng,
                             source_port=smb_source_port,
                             emit_network_evidence=smb_source_port is None,

@@ -32,7 +32,6 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
@@ -774,8 +773,8 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].source_system == "WKS-01"
 
 
-def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
-    """RDP target logon timing should not precede same-tuple eCAR FLOW visibility."""
+def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
+    """RDP canonical authentication should not absorb source-observation latency."""
     scenario = _make_scenario()
     target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
     user = scenario.environment.users[0]
@@ -789,14 +788,6 @@ def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
             source_ip="10.10.10.50",
         ),
     )
-    flow_window = get_timing_window(
-        "source.ecar_flow",
-        default_min_ms=40,
-        default_max_ms=300,
-        default_position="after",
-        default_class="source_latency",
-    )
-
     logon_time = bundle._target_logon_time(
         rng=random.Random(7),
         source_ip="10.10.10.50",
@@ -804,11 +795,12 @@ def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
         transport_start_time=base_time,
     )
 
-    assert logon_time > base_time + timedelta(milliseconds=flow_window.max_ms)
+    assert base_time + timedelta(milliseconds=900) <= logon_time
+    assert logon_time <= base_time + timedelta(milliseconds=1600)
 
 
-def test_rdp_target_logon_budgets_observation_and_cross_host_clocks() -> None:
-    """RDP authentication should follow both rendered endpoint FLOW observations."""
+def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
+    """Dispatcher source timing, not canonical RDP time, owns endpoint delay."""
 
     scenario = _make_scenario()
     source = next(system for system in scenario.environment.systems if system.hostname == "WKS-01")
@@ -834,14 +826,10 @@ def test_rdp_target_logon_budgets_observation_and_cross_host_clocks() -> None:
         source_ip=source.ip,
         src_port=52875,
         transport_start_time=base_time,
-        source_system=source,
-    )
-    required_gap_ms = bundle._endpoint_flow_visible_gap_ms(
-        source_system=source,
-        timestamp=base_time,
     )
 
-    assert logon_time > base_time + timedelta(milliseconds=required_gap_ms)
+    assert base_time + timedelta(milliseconds=900) <= logon_time
+    assert logon_time <= base_time + timedelta(milliseconds=1600)
 
 
 def test_world_planner_moves_rdp_source_after_future_workstation_session(

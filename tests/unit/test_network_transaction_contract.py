@@ -305,3 +305,62 @@ def test_process_owned_connection_is_capped_before_authoritative_session_end() -
     process = state.get_process(source.hostname, pid)
     assert process is not None
     assert process.last_activity_time < deadline
+
+
+def test_inferred_connection_pid_is_omitted_after_owning_session_end() -> None:
+    """Stale inference must not turn later traffic into a session dependent."""
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    deadline = start + timedelta(hours=1)
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    state.set_current_time(start)
+    logon_id = state.create_session(
+        username="alice",
+        system=source.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=start,
+        session_kind="interactive",
+    )
+    state.plan_session_end(
+        logon_id,
+        SessionEndPlan(deadline, "explicit_storyline", "interactive-close"),
+    )
+    pid = state.create_process(
+        source.hostname,
+        4,
+        r"C:\Windows\System32\OpenSSH\ssh.exe",
+        "ssh app@example",
+        "alice",
+        "Medium",
+        logon_id=logon_id,
+    )
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+    generator._ip_to_system = {source.ip: source}
+    generator._system_pids = {source.hostname: {"sshd": pid}}
+
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip="203.0.113.20",
+        time=deadline + timedelta(seconds=30),
+        dst_port=22,
+        proto="tcp",
+        service="ssh",
+        duration=15.0,
+        source_system=source,
+        conn_state="SF",
+    )
+
+    event = next(
+        call.args[0]
+        for call in emitter.emit.call_args_list
+        if call.args[0].event_type == "connection"
+    )
+    assert event.network.initiating_pid == -1

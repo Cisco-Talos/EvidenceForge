@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.authentication import RemoteAuthenticationPlan
 from evidenceforge.events.contexts import (
     AccountManagementContext,
     AuthContext,
@@ -97,6 +98,7 @@ class SecurityEvent:
     src_host: HostContext | None = None
     dst_host: HostContext | None = None
     auth: AuthContext | None = None
+    remote_auth: RemoteAuthenticationPlan | None = None
     process: ProcessContext | None = None
     network: NetworkContext | None = None
     dns: DnsContext | None = None

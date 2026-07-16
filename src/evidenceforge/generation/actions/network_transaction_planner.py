@@ -144,10 +144,17 @@ class NetworkTransactionPlanner:
         canonical_start = ensure_utc(start)
         deadline = ensure_utc(end_plan.canonical_end)
         if canonical_start >= deadline:
+            process = self._executor.state_manager.get_process(source_system.hostname, pid)
+            process_detail = (
+                f" image={process.image!r} logon_id={process.logon_id}"
+                if process is not None
+                else ""
+            )
             raise StateError(
                 "Process-owned network activity cannot begin at or after its authoritative "
                 f"session end: {source_system.hostname} pid={pid} "
                 f"start={canonical_start.isoformat()} end={deadline.isoformat()}"
+                f"{process_detail}"
             )
         close_gap_ms = 100 + (
             _stable_seed(
@@ -226,6 +233,7 @@ class NetworkTransactionPlanner:
 
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
+        executor._last_connection_effective_transaction_id = ""
 
         if http is not None:
             http = generator_module._normalize_http_context_for_source_native_response(http)
@@ -703,6 +711,30 @@ class NetworkTransactionPlanner:
                 pid = -1
                 resolved_process = None
                 drop_explicit_pid_without_inference = caller_supplied_pid
+            elif (
+                not caller_supplied_pid
+                and (
+                    inferred_end_plan := executor.state_manager.process_session_end_plan(
+                        resolved_source_system.hostname,
+                        pid,
+                    )
+                )
+                is not None
+                and inferred_end_plan.is_authoritative
+                and ensure_utc(time) >= ensure_utc(inferred_end_plan.canonical_end)
+            ):
+                generator_module.logger.debug(
+                    "Dropping inferred connection PID after its owning session ended: "
+                    "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
+                    resolved_source_system.hostname,
+                    pid,
+                    inferred_end_plan.canonical_end,
+                    time,
+                    dst_ip,
+                    dst_port,
+                )
+                pid = -1
+                resolved_process = None
             elif (
                 resolved_process
                 and resolved_process.start_time
@@ -2471,6 +2503,7 @@ class NetworkTransactionPlanner:
                 event.network.protocol,
             )
             executor._last_connection_effective_time = event.timestamp
+            executor._last_connection_effective_transaction_id = event.network.transaction.stable_id
         executor.dispatcher.dispatch(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:
             executor._emit_generic_ssh_preauth_failure_syslog(
@@ -2508,6 +2541,8 @@ class NetworkTransactionPlanner:
                 protocol=proto,
                 pid=pid,
                 application=wfp_application,
+                transport_transaction_id=request.stable_id,
+                parent_action_group_id=parent_action_group_id,
             )
 
         if (
@@ -2533,6 +2568,8 @@ class NetworkTransactionPlanner:
                 protocol=proto,
                 pid=inbound_pid,
                 application=inbound_application,
+                transport_transaction_id=request.stable_id,
+                parent_action_group_id=parent_action_group_id,
             )
 
         if pid > 0 and resolved_source_system is not None and process_ctx is not None:

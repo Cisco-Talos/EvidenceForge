@@ -236,16 +236,18 @@ class TestRDPBaselineNoise:
             engine._initialize()
 
             rdp_connections = []
-            original = engine.activity_generator.generate_connection
+            original = engine.dispatcher.dispatch
 
-            def tracking(*args, **kwargs):
-                if kwargs.get("dst_port") == 3389:
-                    rdp_connections.append(kwargs)
-                return original(*args, **kwargs)
+            def tracking(event):
+                if (
+                    event.event_type == "connection"
+                    and event.network is not None
+                    and event.network.dst_port == 3389
+                ):
+                    rdp_connections.append(event)
+                return original(event)
 
-            with patch.object(
-                engine.activity_generator, "generate_connection", side_effect=tracking
-            ):
+            with patch.object(engine.dispatcher, "dispatch", side_effect=tracking):
                 # Generate multiple hours for determinism
                 for h in range(4):
                     hour = datetime(2024, 1, 15, 10 + h, 0, 0, tzinfo=UTC)
@@ -253,9 +255,10 @@ class TestRDPBaselineNoise:
 
             assert len(rdp_connections) > 0, "No RDP baseline connections in 4 hours of generation"
             for conn in rdp_connections:
-                assert conn["dst_port"] == 3389
-                assert conn["proto"] == "tcp"
-                assert conn["service"] == "rdp"
+                assert conn.network is not None
+                assert conn.network.dst_port == 3389
+                assert conn.network.protocol == "tcp"
+                assert conn.network.service == "rdp"
 
     def test_no_rdp_noise_for_workstations_only(self):
         """Environment with only workstations should not get RDP admin connections."""
@@ -270,16 +273,18 @@ class TestRDPBaselineNoise:
             engine._initialize()
 
             rdp_connections = []
-            original = engine.activity_generator.generate_connection
+            original = engine.dispatcher.dispatch
 
-            def tracking(*args, **kwargs):
-                if kwargs.get("dst_port") == 3389:
-                    rdp_connections.append(kwargs)
-                return original(*args, **kwargs)
+            def tracking(event):
+                if (
+                    event.event_type == "connection"
+                    and event.network is not None
+                    and event.network.dst_port == 3389
+                ):
+                    rdp_connections.append(event)
+                return original(event)
 
-            with patch.object(
-                engine.activity_generator, "generate_connection", side_effect=tracking
-            ):
+            with patch.object(engine.dispatcher, "dispatch", side_effect=tracking):
                 hour = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
                 engine._generate_system_traffic(hour)
 
