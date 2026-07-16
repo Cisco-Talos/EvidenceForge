@@ -34,6 +34,7 @@ from threading import RLock
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
@@ -60,8 +61,17 @@ def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
     """Return whether a session can own visible activity at cutoff."""
     if ensure_utc(session.start_time) > cutoff:
         return False
+    end_plan = session.end_plan
+    if end_plan is not None and end_plan.is_authoritative:
+        return cutoff < ensure_utc(end_plan.canonical_end)
     network_close_time = session.network_close_time
-    if network_close_time is not None and cutoff >= ensure_utc(network_close_time):
+    if (
+        session.session_kind == "ssh"
+        and network_close_time is not None
+        and cutoff >= ensure_utc(network_close_time)
+    ):
+        return False
+    if end_plan is not None and cutoff >= ensure_utc(end_plan.canonical_end):
         return False
     return True
 
@@ -566,6 +576,50 @@ class StateManager:
             if parent_lifecycle_group_id is not None:
                 session.parent_lifecycle_group_id = parent_lifecycle_group_id
             return True
+
+    def plan_session_end(self, logon_id: str, plan: SessionEndPlan) -> bool:
+        """Attach an immutable canonical end plan to an active session.
+
+        An explicit storyline deadline cannot be silently replaced by another
+        event. Re-applying the same plan is idempotent.
+        """
+
+        with self._lock:
+            session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
+            if session is None:
+                return False
+            existing = session.end_plan
+            if existing is not None and existing != plan:
+                if existing.is_authoritative:
+                    raise StateError(
+                        "Cannot replace authoritative session end plan for "
+                        f"{logon_id}: {existing.canonical_end.isoformat()}"
+                    )
+            session.end_plan = plan
+            return True
+
+    def get_session_end_plan(self, logon_id: str) -> SessionEndPlan | None:
+        """Return the immutable end plan for an active or ended session."""
+
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if session is None:
+                ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                    logon_id
+                )
+                session = ended[0] if ended is not None else None
+            return session.end_plan if session is not None else None
+
+    def process_session_end_plan(self, system: str, pid: int) -> SessionEndPlan | None:
+        """Return the owning session end plan for a live process."""
+
+        with self._lock:
+            process = self.state.running_processes.get((system, pid))
+            if process is None or not process.logon_id:
+                return None
+            session = self.state.active_sessions.get(self._resolve_logon_id(process.logon_id))
+            return session.end_plan if session is not None else None
 
     def get_session_identity(self, logon_id: str) -> SessionIdentity | None:
         """Return an immutable snapshot of an active or ended session identity."""

@@ -29,6 +29,10 @@ from datetime import datetime, timedelta
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.models.exceptions import StateError
+from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
+
 if TYPE_CHECKING:
     from evidenceforge.events.base import SecurityEvent
     from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
@@ -117,6 +121,47 @@ class NetworkTransactionPlanner:
 
     def __init__(self, executor: ActivityGenerator) -> None:
         self._executor = executor
+
+    def _cap_to_owning_session(
+        self,
+        *,
+        start: datetime,
+        duration: float | None,
+        source_system: Any,
+        pid: int,
+        stable_id: str,
+    ) -> float | None:
+        """Bound process-owned transport lifetime by an authoritative session end."""
+
+        if source_system is None or pid <= 0:
+            return duration
+        end_plan = self._executor.state_manager.process_session_end_plan(
+            source_system.hostname,
+            pid,
+        )
+        if end_plan is None or not end_plan.is_authoritative:
+            return duration
+        canonical_start = ensure_utc(start)
+        deadline = ensure_utc(end_plan.canonical_end)
+        if canonical_start >= deadline:
+            raise StateError(
+                "Process-owned network activity cannot begin at or after its authoritative "
+                f"session end: {source_system.hostname} pid={pid} "
+                f"start={canonical_start.isoformat()} end={deadline.isoformat()}"
+            )
+        close_gap_ms = 100 + (
+            _stable_seed(
+                "network_before_authoritative_session_end:"
+                f"{stable_id}:{source_system.hostname}:{pid}:{deadline.isoformat()}"
+            )
+            % 1401
+        )
+        latest_duration = (
+            deadline - timedelta(milliseconds=close_gap_ms) - canonical_start
+        ).total_seconds()
+        if latest_duration <= 0:
+            latest_duration = max(0.001, (deadline - canonical_start).total_seconds() / 2)
+        return latest_duration if duration is None else min(duration, latest_duration)
 
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
@@ -1268,6 +1313,13 @@ class NetworkTransactionPlanner:
                 time,
             )
         else:
+            duration = self._cap_to_owning_session(
+                start=time,
+                duration=duration,
+                source_system=resolved_source_system,
+                pid=pid,
+                stable_id=request.stable_id,
+            )
             executor._remember_connection_tuple(
                 src_ip,
                 src_port,
@@ -2327,6 +2379,13 @@ class NetworkTransactionPlanner:
         # payload, and process-visibility adjustment has settled. Dispatch creates
         # source-local event copies with collection delay, so the immutable interval
         # must live on NetworkContext rather than be re-derived from those copies.
+        event.network.duration = self._cap_to_owning_session(
+            start=event.timestamp,
+            duration=event.network.duration,
+            source_system=resolved_source_system,
+            pid=pid,
+            stable_id=request.stable_id,
+        )
         event.network.source_visible_start_time = event.timestamp
         event.network.source_visible_close_time = (
             event.timestamp + generator_module.timedelta(seconds=max(0.0, event.network.duration))

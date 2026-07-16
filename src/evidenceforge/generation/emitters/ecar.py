@@ -461,6 +461,8 @@ class EcarEmitter(HostMultiplexEmitter):
         lifecycle: str,
     ) -> datetime:
         """Return the eCAR render timestamp for a user-session observation."""
+        if lifecycle == "logout":
+            return event.timestamp
         auth = event.auth
         edr = event.edr
         canonical_timestamp = (
@@ -468,12 +470,9 @@ class EcarEmitter(HostMultiplexEmitter):
             if event.source_timing is not None
             else event.timestamp
         )
-        source_key = (
-            "source.ecar_session_logout" if lifecycle == "logout" else "source.ecar_session"
-        )
         timestamp = _SOURCE_TIMING.source_time(
             event,
-            source_key,
+            "source.ecar_session",
             seed_parts=(
                 lifecycle,
                 self._host_name(host),

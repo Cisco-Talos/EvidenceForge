@@ -22,7 +22,9 @@ from evidenceforge.generation.activity.timing_profiles import (
     sample_timing_delta,
 )
 from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
     from evidenceforge.events.base import SecurityEvent
@@ -35,6 +37,12 @@ _PROCESS_CREATE_SOURCE_KEYS = {
     "source.ecar_process_create",
 }
 _PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create"}
+_SESSION_CLOSURE_SOURCE_KEYS = {
+    "ecar": "source.ecar_session_logout",
+    "windows_security": "source.windows_security_session_logout",
+    "windows_event_security": "source.windows_security_session_logout",
+    "syslog": "source.syslog_session_logout",
+}
 
 
 @dataclass(slots=True)
@@ -52,6 +60,7 @@ class SourceTimingPlanner:
     def __init__(self, clock_profile_name: str = "complete") -> None:
         self.clock_profile_name = clock_profile_name or "complete"
         self._ecar_process_create_times: dict[str, datetime] = {}
+        self._latest_session_dependent_times: dict[tuple[str, str], datetime] = {}
 
     def plan_event(
         self,
@@ -62,7 +71,143 @@ class SourceTimingPlanner:
         self._ensure_plan(event)
         if format_name in {None, "ecar"}:
             self._plan_ecar_identity_times(event)
+        if format_name is not None:
+            event = self._plan_session_lifecycle_time(event, format_name)
         return event
+
+    def _plan_session_lifecycle_time(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+    ) -> SecurityEvent:
+        """Order same-source process termination and session closure observations."""
+
+        lifecycle = event.lifecycle
+        if lifecycle is None:
+            return event
+        if event.event_type == "process_terminate" and lifecycle.parent_group_id:
+            source_time = self._process_termination_source_time(event, format_name)
+            key = (format_name, lifecycle.parent_group_id)
+            previous = self._latest_session_dependent_times.get(key)
+            if previous is None or source_time > previous:
+                self._latest_session_dependent_times[key] = source_time
+            return event
+        if event.event_type != "logoff" or format_name not in _SESSION_CLOSURE_SOURCE_KEYS:
+            return event
+        return replace(
+            event,
+            timestamp=self.session_closure_source_time(event, format_name),
+        )
+
+    def _process_termination_source_time(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+    ) -> datetime:
+        """Return the timestamp a source will render for a process termination."""
+
+        process = event.process
+        host = event.src_host
+        if process is None or host is None:
+            return event.timestamp
+        start_time = process.start_time or event.timestamp
+        if format_name in {"windows_security", "windows_event_security"}:
+            return self.source_time(
+                event,
+                "source.windows_security_process_terminate",
+                seed_parts=(host.hostname, process.pid, start_time, event.timestamp),
+                not_before=event.timestamp,
+            )
+        if format_name == "ecar":
+            identity = (
+                event.identity_plan.subject
+                if event.identity_plan is not None
+                and isinstance(event.identity_plan.subject, ProcessIdentity)
+                else None
+            )
+            process_start = identity.started_at if identity is not None else start_time
+            create_time = (
+                self._prime_ecar_process_create_time(event, identity)
+                if identity is not None
+                else process_start
+            )
+            canonical_lifetime = max(
+                timedelta(milliseconds=100),
+                event.timestamp - process_start,
+            )
+            return self.source_time(
+                event,
+                "source.ecar_process_terminate",
+                seed_parts=(host.hostname, process.pid, process_start, event.timestamp),
+                not_before=max(event.timestamp, create_time + canonical_lifetime),
+            )
+        return event.timestamp
+
+    def session_closure_source_time(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+    ) -> datetime:
+        """Return the bounded source-native closure time for one session group."""
+
+        lifecycle = event.lifecycle
+        source_key = _SESSION_CLOSURE_SOURCE_KEYS.get(format_name)
+        if lifecycle is None or source_key is None:
+            return event.timestamp
+        plan = self._ensure_plan(event)
+        canonical_end = ensure_utc(plan.canonical_timestamp)
+        seed_parts = (
+            "session-closure",
+            format_name,
+            lifecycle.group_id,
+            getattr(event.auth, "logon_id", ""),
+            canonical_end,
+        )
+        cache_key = self._cache_key(source_key, seed_parts)
+        preferred = plan.source_times.get(cache_key)
+        if preferred is None:
+            preferred = canonical_end
+        latest = self._latest_session_dependent_times.get((format_name, lifecycle.group_id))
+        earliest = canonical_end
+        if latest is not None:
+            earliest = latest + sample_timing_delta(
+                "windows.logoff_after_rendered_dependents",
+                seed_parts=(format_name, lifecycle.group_id, latest),
+            )
+        tail_seconds = 4 if format_name == "syslog" else 15
+        latest_allowed = canonical_end + timedelta(seconds=tail_seconds)
+        if earliest > latest_allowed:
+            raise StateError(
+                "Source-visible session dependents exceed the closure tail bound: "
+                f"format={format_name} group={lifecycle.group_id} "
+                f"dependent={earliest.isoformat()} end={canonical_end.isoformat()}"
+            )
+        closure_time = min(max(preferred, earliest), latest_allowed)
+        plan.source_times[cache_key] = closure_time
+        return closure_time
+
+    def record_session_closure_source_time(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+        timestamp: datetime,
+    ) -> None:
+        """Record a bundle-planned closure time for a source before dispatch."""
+
+        lifecycle = event.lifecycle
+        source_key = _SESSION_CLOSURE_SOURCE_KEYS.get(format_name)
+        if lifecycle is None or source_key is None:
+            return
+        plan = self._ensure_plan(event)
+        canonical_end = ensure_utc(plan.canonical_timestamp)
+        seed_parts = (
+            "session-closure",
+            format_name,
+            lifecycle.group_id,
+            getattr(event.auth, "logon_id", ""),
+            canonical_end,
+        )
+        plan.source_times[self._cache_key(source_key, seed_parts)] = ensure_utc(timestamp)
 
     def _plan_ecar_identity_times(self, event: SecurityEvent) -> None:
         """Prime stable process-create anchors for eCAR lifecycle consumers.

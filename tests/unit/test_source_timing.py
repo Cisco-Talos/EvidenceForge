@@ -161,6 +161,58 @@ def test_source_time_is_deterministic() -> None:
     assert first == second
 
 
+def test_session_closure_follows_same_source_process_termination_with_bounded_tail() -> None:
+    """Source timing—not canonical time—orders closure after rendered dependents."""
+    planner = SourceTimingPlanner()
+    canonical_end = _base_time() + timedelta(hours=1)
+    host = _host_context()
+    process_start = canonical_end - timedelta(minutes=10)
+    process_event = SecurityEvent(
+        timestamp=canonical_end - timedelta(milliseconds=200),
+        event_type="process_terminate",
+        src_host=host,
+        process=ProcessContext(
+            pid=4242,
+            parent_pid=4,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="",
+            username=r"CORP\alice",
+            logon_id="0x12345",
+            start_time=process_start,
+        ),
+        lifecycle=ActionLifecycleContext(
+            group_id="process-group",
+            canonical_start=process_start,
+            phase="closure",
+            parent_group_id="session-group",
+        ),
+    )
+    planner.plan_event(process_event, "windows_event_security")
+    logoff_event = SecurityEvent(
+        timestamp=canonical_end,
+        event_type="logoff",
+        dst_host=host,
+        auth=AuthContext(username=r"CORP\alice", logon_id="0x12345", logon_type=10),
+        lifecycle=ActionLifecycleContext(
+            group_id="session-group",
+            canonical_start=canonical_end - timedelta(hours=1),
+            phase="closure",
+        ),
+    )
+
+    planned = planner.plan_event(logoff_event, "windows_event_security")
+    process_source_time = planner.source_time(
+        process_event,
+        "source.windows_security_process_terminate",
+        seed_parts=(host.hostname, 4242, process_start, process_event.timestamp),
+        not_before=process_event.timestamp,
+    )
+
+    assert planned.source_timing.canonical_timestamp == canonical_end
+    assert planned.timestamp > process_source_time
+    assert planned.timestamp <= canonical_end + timedelta(seconds=15)
+
+
 def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(
     tmp_path: Path,
 ) -> None:

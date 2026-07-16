@@ -2309,7 +2309,6 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_spooled_process_dependents_after_create_unlocked()
             self._shift_spooled_special_privileges_after_logons_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
-            self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
             events = self._iter_spooled_events_unlocked()
         else:
@@ -2320,7 +2319,6 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_process_dependents_after_create()
             self._shift_special_privileges_after_logons()
             self._shift_process_terminations_after_dependents()
-            self._shift_logoffs_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
 
             def _sort_key(event: dict) -> Any:

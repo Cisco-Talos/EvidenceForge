@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
@@ -82,6 +83,7 @@ class ProcessTerminationRequest:
     process_name: str
     logon_id: str
     from_storyline: bool = False
+    session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -92,6 +94,7 @@ class ProcessTerminationRequest:
             "action_bundle:process_termination:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.pid}:{self.process_name}:{self.logon_id}:{self.from_storyline}:"
+            f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.source}"
         )
         return f"process-termination-{seed:016x}"

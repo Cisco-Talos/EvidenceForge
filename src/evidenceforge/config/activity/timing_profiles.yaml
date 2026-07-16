@@ -176,6 +176,16 @@ relationships:
     position: after
     min_ms: 1800
     max_ms: 2800
+  source.windows_security_session_logout:
+    class: teardown
+    position: after
+    min_ms: 125
+    max_ms: 750
+  source.syslog_session_logout:
+    class: teardown
+    position: after
+    min_ms: 120
+    max_ms: 2500
   source.ecar_ssh_session_after_accept:
     class: source_latency
     position: after
