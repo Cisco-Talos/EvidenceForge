@@ -169,6 +169,11 @@ from evidenceforge.generation.actions.windows_remote_admin import (
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
 )
+from evidenceforge.generation.actions.windows_remote_authentication import (
+    WindowsRemoteAuthenticationActionBundle,
+    WindowsRemoteAuthenticationPlanner,
+    WindowsRemoteAuthenticationRequest,
+)
 
 __all__ = [
     "AccountChangedActionBundle",
@@ -277,6 +282,9 @@ __all__ = [
     "ExplicitCredentialUseRequest",
     "WindowsServiceInstallActionBundle",
     "WindowsServiceInstallRequest",
+    "WindowsRemoteAuthenticationActionBundle",
+    "WindowsRemoteAuthenticationPlanner",
+    "WindowsRemoteAuthenticationRequest",
     "WorkstationLockActionBundle",
     "WorkstationLockRequest",
     "WorkstationUnlockActionBundle",

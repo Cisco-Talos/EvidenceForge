@@ -55,6 +55,7 @@ import yaml
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
 )
+from evidenceforge.events.authentication import RemoteAuthenticationPlan
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -160,6 +161,9 @@ from evidenceforge.generation.actions import (
     ServiceLogonRequest,
     SshSessionActionBundle,
     SshSessionRequest,
+    WindowsRemoteAuthenticationActionBundle,
+    WindowsRemoteAuthenticationPlanner,
+    WindowsRemoteAuthenticationRequest,
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
     WorkstationLockActionBundle,
@@ -8979,6 +8983,7 @@ class ActivityGenerator:
         logon_id: str | None = None,
         lifecycle_group_id: str = "",
         session_end_plan: SessionEndPlan | None = None,
+        remote_authentication_plan: RemoteAuthenticationPlan | None = None,
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -9011,6 +9016,7 @@ class ActivityGenerator:
             logon_id=logon_id,
             lifecycle_group_id=lifecycle_group_id,
             session_end_plan=session_end_plan,
+            remote_authentication_plan=remote_authentication_plan,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -9027,6 +9033,7 @@ class ActivityGenerator:
         emit_network_evidence = request.emit_network_evidence
         logon_id = request.logon_id
         lifecycle_group_id = request.lifecycle_group_id or request.stable_id
+        remote_authentication_plan = request.remote_authentication_plan
 
         self.state_manager.set_current_time(time)
         os_cat = _get_os_category(system.os)
@@ -9318,7 +9325,41 @@ class ActivityGenerator:
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
             edr=EdrContext(object_id=session_obj_id, actor_id=session_actor_id),
+            remote_auth=remote_authentication_plan,
         )
+
+        is_windows_remote_auth = (
+            os_cat == "windows"
+            and logon_type in {3, 10}
+            and auth_source_ip not in {"", "-", system.ip}
+        )
+        if is_windows_remote_auth and remote_authentication_plan is None:
+            remote_request = WindowsRemoteAuthenticationRequest(
+                target_system=system,
+                time=time,
+                source_ip=auth_source_ip,
+                source_port=source_port or 0,
+                logon_type=logon_type,
+                auth_protocol=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
+                outcome="success",
+                destination_port=3389 if logon_type == 10 else 445,
+                source_system=source_system or self._ip_to_system.get(auth_source_ip),
+                session_object_id=session_obj_id,
+                logon_id=logon_id,
+                emit_transport=emit_network_evidence,
+            )
+            planner = WindowsRemoteAuthenticationPlanner(self)
+            remote_authentication_plan = (
+                WindowsRemoteAuthenticationActionBundle(self, remote_request).execute()
+                if emit_network_evidence
+                else planner.without_transport(remote_request)
+            )
+            event.remote_auth = remote_authentication_plan
+        if remote_authentication_plan is not None:
+            self.state_manager.update_session_metadata(
+                logon_id,
+                parent_lifecycle_group_id=remote_authentication_plan.stable_id,
+            )
 
         # Attach SyslogContext for Linux SSH sessions only (not network/interactive)
         session_for_syslog = self.state_manager.get_session(logon_id) if logon_id else None
@@ -9381,16 +9422,6 @@ class ActivityGenerator:
             and source_ip != "-"
         ):
             self._emit_dc_ntlm_for_logon(user, system, time, source_ip)
-
-        if emit_network_evidence:
-            self._maybe_emit_remote_logon_network_connection(
-                system=system,
-                time=time,
-                logon_type=logon_type,
-                source_ip=source_ip,
-                source_port=source_port or 0,
-                auth_package=auth_package_name,
-            )
 
         if os_cat == "windows" and logon_type == 3 and auth_source_ip not in {"", "-", system.ip}:
             ready_time = ensure_utc(time) + sample_timing_delta(
@@ -9516,6 +9547,7 @@ class ActivityGenerator:
                 source_ip="-",
             ),
         )
+
         self._linux_local_logon_syslog_sessions.add(logon_id)
 
     def _emit_dc_ntlm_for_logon(
@@ -9820,6 +9852,42 @@ class ActivityGenerator:
             ),
         )
 
+        is_windows_remote_auth = (
+            _get_os_category(system.os) == "windows"
+            and logon_type == 3
+            and auth_source_ip not in {"", "-", system.ip}
+        )
+        if is_windows_remote_auth:
+            emit_probability = float(failed_profile.get("emit_network_probability", 0.0))
+            emit_transport = emit_probability > 0 and rng.random() <= emit_probability
+            remote_request = WindowsRemoteAuthenticationRequest(
+                target_system=system,
+                time=time,
+                source_ip=auth_source_ip,
+                source_port=int(failed_profile["source_port"]),
+                logon_type=logon_type,
+                auth_protocol=str(failed_profile["auth_package"]),
+                outcome="failure",
+                destination_port=int(failed_profile.get("network_port", 445)),
+                source_system=self._ip_to_system.get(auth_source_ip),
+                emit_transport=emit_transport,
+            )
+            remote_planner = WindowsRemoteAuthenticationPlanner(self)
+            remote_authentication_plan = (
+                WindowsRemoteAuthenticationActionBundle(self, remote_request).execute()
+                if emit_transport
+                else remote_planner.without_transport(remote_request)
+            )
+            event.remote_auth = remote_authentication_plan
+            primary_transport = remote_authentication_plan.primary_transport
+            event.lifecycle = ActionLifecycleContext(
+                group_id=remote_authentication_plan.stable_id,
+                canonical_start=(
+                    primary_transport.started_at if primary_transport is not None else time
+                ),
+                phase="dependent",
+            )
+
         # Attach SyslogContext for Linux local auth failures. Remote SSH failures
         # emit a tuple-scoped sshd lifecycle below so "Connection from" can
         # precede authentication results and share the transport responder PID.
@@ -9908,15 +9976,6 @@ class ActivityGenerator:
                     status="0x18",  # KDC_ERR_PREAUTH_FAILED
                     emit_connection=True,
                 )
-
-        self._maybe_emit_failed_logon_network_connection(
-            system=system,
-            time=time,
-            logon_type=logon_type,
-            source_ip=source_ip,
-            profile=failed_profile,
-            rng=rng,
-        )
 
         logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
 
@@ -10196,41 +10255,6 @@ class ActivityGenerator:
                 facility=10,
                 severity=severity,
             )
-
-    def _maybe_emit_failed_logon_network_connection(
-        self,
-        system: System,
-        time: datetime,
-        logon_type: int,
-        source_ip: str,
-        profile: dict[str, Any],
-        rng: random.Random,
-    ) -> None:
-        """Emit visible network evidence for remote failed-auth attempts when appropriate."""
-        if logon_type != 3 or not source_ip or source_ip == "-":
-            return
-        if _get_os_category(system.os) != "windows":
-            return
-        probability = float(profile.get("emit_network_probability", 0.0))
-        if probability <= 0 or rng.random() > probability:
-            return
-        dst_port = int(profile.get("network_port", 445))
-        service = "smb" if dst_port == 445 else "rdp" if dst_port == 3389 else None
-        self.generate_connection(
-            src_ip=source_ip,
-            dst_ip=system.ip,
-            time=time - timedelta(milliseconds=rng.randint(20, 250)),
-            dst_port=dst_port,
-            proto="tcp",
-            service=service,
-            duration=rng.uniform(0.02, 1.5),
-            orig_bytes=rng.randint(120, 900),
-            resp_bytes=rng.randint(0, 500),
-            src_port=int(
-                profile.get("source_port") or _ephemeral_port(rng, self._os_for_ip(source_ip))
-            ),
-            conn_state=rng.choices(["SF", "RSTR"], weights=[70, 30], k=1)[0],
-        )
 
     def _is_known_failed_logon_account(self, username: str, actor: User) -> bool:
         """Return whether a failed-logon target is a known account in this scenario."""
@@ -20734,6 +20758,33 @@ class ActivityGenerator:
             time=tgs_time,
             source_port=source_port,
         )
+        target_system = self._ip_to_system.get(dc_ip)
+        if target_system is None:
+            target_system = System(
+                hostname=dc_hostname,
+                ip=dc_ip,
+                os="Windows Server 2022",
+                type="domain_controller",
+            )
+        remote_request = WindowsRemoteAuthenticationRequest(
+            target_system=target_system,
+            time=time,
+            source_ip=source_ip,
+            source_port=source_port,
+            logon_type=3,
+            auth_protocol="Kerberos",
+            outcome="success",
+            destination_port=88,
+            source_system=self._ip_to_system.get(source_ip),
+            session_object_id=session_obj_id,
+            logon_id=logon_id,
+            transport_role="kerberos_validation",
+            source="machine_account_logon",
+        )
+        remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
+            self,
+            remote_request,
+        ).execute()
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
@@ -20755,8 +20806,9 @@ class ActivityGenerator:
                 subject_logon_id="0x3e7",
             ),
             edr=EdrContext(object_id=session_obj_id),
+            remote_auth=remote_authentication_plan,
             lifecycle=ActionLifecycleContext(
-                group_id=request.stable_id,
+                group_id=remote_authentication_plan.stable_id,
                 canonical_start=time,
                 phase="start",
             ),
@@ -20777,26 +20829,12 @@ class ActivityGenerator:
             ),
             edr=EdrContext(object_id=session_obj_id),
             lifecycle=ActionLifecycleContext(
-                group_id=request.stable_id,
+                group_id=remote_authentication_plan.stable_id,
                 canonical_start=time,
                 phase="closure",
             ),
         )
         self.dispatcher.dispatch(logoff_event)
-
-        # Also generate the Kerberos network connection to DC
-        self.generate_connection(
-            src_ip=source_ip,
-            dst_ip=dc_ip,
-            time=time,
-            dst_port=88,
-            proto="tcp",
-            service="kerberos",
-            duration=rng.uniform(0.001, 0.03),
-            orig_bytes=rng.randint(200, 1000),
-            resp_bytes=rng.randint(200, 1500),
-            src_port=source_port,
-        )
 
     def generate_kerberos_tgt(
         self,
@@ -21513,6 +21551,8 @@ class ActivityGenerator:
         protocol: str,
         pid: int = 4,
         application: str | None = None,
+        transport_transaction_id: str = "",
+        parent_action_group_id: str | None = None,
     ) -> None:
         """Generate WFP connection permitted event (5156) on Windows host.
 
@@ -21574,6 +21614,16 @@ class ActivityGenerator:
                 initiating_pid=pid,
             ),
             process=process,
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport_transaction_id,
+                    canonical_start=time,
+                    phase="dependent",
+                    parent_group_id=parent_action_group_id,
+                )
+                if transport_transaction_id and parent_action_group_id
+                else None
+            ),
         )
         self.dispatcher.dispatch(event)
 
@@ -24576,42 +24626,6 @@ class ActivityGenerator:
         if not isinstance(privileges, list) or not privileges:
             privileges = ["SeChangeNotifyPrivilege"]
         return "\n\t\t\t".join(str(privilege) for privilege in privileges)
-
-    def _maybe_emit_remote_logon_network_connection(
-        self,
-        system: System,
-        time: datetime,
-        logon_type: int,
-        source_ip: str | None,
-        source_port: int,
-        auth_package: str,
-    ) -> None:
-        """Emit established network evidence for remote Windows logons when needed."""
-        if logon_type not in (3, 10):
-            return
-        if not source_ip or source_ip == "-" or source_port <= 0:
-            return
-        source_ip = source_ip.removeprefix("::ffff:")
-        if source_ip == system.ip:
-            return
-        if _get_os_category(system.os) != "windows":
-            return
-        rng = _get_rng()
-        dst_port = 3389 if logon_type == 10 else 445
-        service = "rdp" if dst_port == 3389 else "smb"
-        self.generate_connection(
-            src_ip=source_ip,
-            dst_ip=system.ip,
-            time=time - timedelta(milliseconds=rng.randint(150, 900)),
-            dst_port=dst_port,
-            proto="tcp",
-            service=service,
-            duration=rng.uniform(1.5, 45.0) if auth_package != "NTLM" else rng.uniform(0.4, 8.0),
-            orig_bytes=rng.randint(700, 6500),
-            resp_bytes=rng.randint(900, 12000),
-            src_port=source_port,
-            conn_state="SF",
-        )
 
     def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
         """Get a seeded system process PID by role name."""

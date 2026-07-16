@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from evidenceforge.events.authentication import RemoteAuthenticationPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System, User
@@ -50,6 +51,7 @@ class LogonRequest:
     logon_id: str | None = None
     lifecycle_group_id: str = ""
     session_end_plan: SessionEndPlan | None = None
+    remote_authentication_plan: RemoteAuthenticationPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -69,6 +71,7 @@ class LogonRequest:
             f"{self.emit_transport_syslog}:{self.emit_network_evidence}:"
             f"{self.logon_id or ''}:{source_host}:{self.source}"
             f":{self.lifecycle_group_id}:{end_time}"
+            f":{self.remote_authentication_plan.stable_id if self.remote_authentication_plan else ''}"
         )
         return f"logon-{seed:016x}"
 

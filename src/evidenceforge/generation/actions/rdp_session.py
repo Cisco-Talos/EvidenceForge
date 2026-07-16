@@ -30,7 +30,6 @@ activity generator as the runtime adapter for shared state and dispatch.
 
 from __future__ import annotations
 
-import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -38,13 +37,18 @@ from typing import Any, Protocol
 
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.generation.actions.base import (
-    ActionAnchor,
-    endpoint_clock_difference,
-    source_observation_delay_difference,
+from evidenceforge.events.network import NetworkTuple
+from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.network_connection import (
+    NetworkConnectionActionBundle,
+    NetworkConnectionRequest,
+)
+from evidenceforge.generation.actions.windows_remote_authentication import (
+    WindowsRemoteAuthenticationPlanner,
+    WindowsRemoteAuthenticationRequest,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
-from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
@@ -232,7 +236,27 @@ class RdpSessionActionBundle:
                 self._executor._os_for_ip(source_ip),
             )
 
-        uid = self._executor.generate_connection(
+        logon_time = self._target_logon_time(
+            rng=rng,
+            source_ip=source_ip,
+            src_port=src_port,
+            transport_start_time=self._request.time,
+        )
+        remote_request = WindowsRemoteAuthenticationRequest(
+            target_system=self._request.target_system,
+            time=logon_time,
+            source_ip=source_ip,
+            source_port=src_port,
+            logon_type=10,
+            auth_protocol="Negotiate",
+            outcome="success",
+            destination_port=3389,
+            source_system=source_system,
+            logon_id=self._request.logon_id,
+            transport_role="rdp",
+            source="rdp_session",
+        )
+        network_request = NetworkConnectionRequest(
             src_ip=source_ip,
             dst_ip=self._request.target_system.ip,
             time=self._request.time,
@@ -247,7 +271,12 @@ class RdpSessionActionBundle:
             source_system=source_system,
             pid=source_pid,
             conn_state="SF",
+            parent_action_group_id=remote_request.stable_id,
+            preserve_start_time=True,
+            source="rdp_session",
         )
+        transaction_id = network_request.stable_id
+        uid = NetworkConnectionActionBundle(self._executor, network_request).execute()
         network_start_time, network_close_time = self._transport_interval(
             uid,
             fallback_start=self._request.time,
@@ -259,12 +288,20 @@ class RdpSessionActionBundle:
             network_close_time=network_close_time,
         )
 
-        logon_time = self._target_logon_time(
-            rng=rng,
-            source_ip=source_ip,
-            src_port=src_port,
-            transport_start_time=network_start_time,
-            source_system=source_system,
+        remote_authentication_plan = WindowsRemoteAuthenticationPlanner(
+            self._executor
+        ).from_existing_transport(
+            remote_request,
+            transaction_id=transaction_id,
+            tuple_view=NetworkTuple(
+                src_ip=source_ip,
+                src_port=src_port,
+                dst_ip=self._request.target_system.ip,
+                dst_port=3389,
+                protocol="tcp",
+            ),
+            started_at=network_start_time,
+            closed_at=network_close_time,
         )
         logon_id = self._request.logon_id
         if logon_id:
@@ -297,6 +334,7 @@ class RdpSessionActionBundle:
             logon_id=logon_id or None,
             lifecycle_group_id=self._request.stable_id,
             session_end_plan=self._request.session_end_plan,
+            remote_authentication_plan=remote_authentication_plan,
         )
         self._rendered_logon_id = rendered_logon_id
         self._executor.state_manager.update_session_metadata(
@@ -444,9 +482,8 @@ class RdpSessionActionBundle:
         source_ip: str,
         src_port: int,
         transport_start_time: datetime | None = None,
-        source_system: System | None = None,
     ) -> datetime:
-        """Resolve target 4624 timing after source-visible network evidence."""
+        """Resolve canonical target authentication after the RDP transport starts."""
 
         observed_connection_time = transport_start_time
         if observed_connection_time is None:
@@ -476,52 +513,13 @@ class RdpSessionActionBundle:
         graph.constrain_after(
             "target_logon",
             "transport_observed",
-            min_gap=timedelta(
-                milliseconds=self._endpoint_flow_visible_gap_ms(
-                    source_system=source_system,
-                    timestamp=observed_connection_time,
-                )
-                + 25
-            ),
+            min_gap=timedelta(milliseconds=900),
         )
         return graph.resolved_time("target_logon")
-
-    def _endpoint_flow_visible_gap_ms(
-        self,
-        *,
-        source_system: System | None = None,
-        timestamp: datetime | None = None,
-    ) -> int:
-        """Return the latest expected same-tuple endpoint FLOW observation delay."""
-        flow_window = get_timing_window(
-            "source.ecar_flow",
-            default_min_ms=40,
-            default_max_ms=300,
-            default_position="after",
-            default_class="source_latency",
-        )
-        observation_delay = source_observation_delay_difference(
-            self._executor,
-            earlier_source="ecar",
-            later_source="windows_security",
-        )
-        clock_delay = timedelta(0)
-        if source_system is not None and timestamp is not None:
-            clock_delay = endpoint_clock_difference(
-                self._executor,
-                earlier_host=source_system.hostname,
-                earlier_os="windows",
-                later_host=self._request.target_system.hostname,
-                later_os="windows",
-                timestamp=timestamp,
-            )
-        return flow_window.max_ms + math.ceil(
-            (observation_delay + clock_delay).total_seconds() * 1000
-        )
 
     def _target_logon_gap_after_transport(self, rng: random.Random) -> int:
         """Choose an RDP target logon gap after endpoint transport visibility."""
         return max(
             rng.randint(900, 1600),
-            self._endpoint_flow_visible_gap_ms() + rng.randint(75, 260),
+            900,
         )

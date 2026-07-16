@@ -2999,6 +2999,16 @@ class TestActivityGenerator:
         assert network_event.network.src_port == 52595
         assert network_event.network.dst_ip == test_system.ip
         assert network_event.network.conn_state == "SF"
+        assert logon_event.remote_auth is not None
+        assert logon_event.remote_auth.primary_transport is not None
+        assert (
+            logon_event.remote_auth.primary_transport.transaction_id
+            == network_event.network.transaction.stable_id
+        )
+        assert network_event.lifecycle.parent_group_id == logon_event.remote_auth.stable_id
+        session = state_manager.get_session(logon_event.auth.logon_id)
+        assert session is not None
+        assert session.parent_lifecycle_group_id == logon_event.remote_auth.stable_id
 
     def test_internal_remote_successful_logon_emits_matching_network_evidence(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3588,6 +3598,10 @@ class TestActivityGenerator:
             event for event in security_events if event.event_type == "machine_logon"
         )
         machine_logoff = next(event for event in security_events if event.event_type == "logoff")
+        assert machine_logon.remote_auth is not None
+        assert machine_logon.remote_auth.outcome == "success"
+        assert machine_logon.remote_auth.primary_transport is not None
+        assert machine_logon.remote_auth.primary_transport.role == "kerberos_validation"
         assert machine_logon.edr.object_id == machine_logoff.edr.object_id
         assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
         assert machine_logon.lifecycle.phase == "start"
@@ -3598,6 +3612,10 @@ class TestActivityGenerator:
             if call.args[0].event_type == "connection"
         )
         assert machine_logon.auth.source_port == kerberos_connection.network.src_port
+        assert (
+            machine_logon.remote_auth.primary_transport.transaction_id
+            == kerberos_connection.network.transaction.stable_id
+        )
         assert all(
             event.kerberos.source_port == machine_logon.auth.source_port
             for event in kerberos_events

@@ -2508,6 +2508,8 @@ class NetworkTransactionPlanner:
                 protocol=proto,
                 pid=pid,
                 application=wfp_application,
+                transport_transaction_id=request.stable_id,
+                parent_action_group_id=parent_action_group_id,
             )
 
         if (
@@ -2533,6 +2535,8 @@ class NetworkTransactionPlanner:
                 protocol=proto,
                 pid=inbound_pid,
                 application=inbound_application,
+                transport_transaction_id=request.stable_id,
+                parent_action_group_id=parent_action_group_id,
             )
 
         if pid > 0 and resolved_source_system is not None and process_ctx is not None:
