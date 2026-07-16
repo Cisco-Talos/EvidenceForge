@@ -344,6 +344,14 @@ class PlausibilityScorer(DimensionScorer):
         if len(failures) < 10:
             failures.extend(email_failures[: 10 - len(failures)])
 
+        crypto_matched, crypto_agreeing, crypto_failures = (
+            _score_cryptographic_protocol_consistency(records)
+        )
+        total_matched += crypto_matched
+        total_agreeing += crypto_agreeing
+        if len(failures) < 10:
+            failures.extend(crypto_failures[: 10 - len(failures)])
+
         score = (100.0 * total_agreeing / total_matched) if total_matched > 0 else 100.0
         return SubScore(
             name="Cross-Source Field Agreement",
@@ -715,6 +723,141 @@ def _score_email_evidence_consistency(
                 agreeing += 1
             elif len(failures) < 10:
                 failures.append(f"email artifact subject disagrees for msg_id {msg_id}")
+
+    return matched, agreeing, failures
+
+
+def _score_cryptographic_protocol_consistency(
+    records: dict[str, list[ParsedRecord]],
+) -> tuple[int, int, list[str]]:
+    """Probe rendered DKIM, OCSP, and TLS-chain payload contracts."""
+
+    import base64
+    import binascii
+    from urllib.parse import unquote
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.ocsp import load_der_ocsp_request
+
+    matched = 0
+    agreeing = 0
+    failures: list[str] = []
+
+    for record in records.get("zeek_dns", []):
+        query = str(record.fields.get("query", "")).lower()
+        if "._domainkey." not in query:
+            continue
+        answers = record.fields.get("answers") or []
+        answers = answers if isinstance(answers, list) else [answers]
+        for answer in answers:
+            value = str(answer)
+            public_value = next(
+                (
+                    segment.split("=", 1)[1].strip()
+                    for segment in value.split(";")
+                    if segment.strip().lower().startswith("p=")
+                ),
+                "",
+            )
+            matched += 1
+            try:
+                padded = public_value + "=" * ((4 - len(public_value) % 4) % 4)
+                public_key = serialization.load_der_public_key(
+                    base64.b64decode(padded, validate=True)
+                )
+                valid = (
+                    isinstance(public_key, rsa.RSAPublicKey)
+                    and public_key.key_size >= 2048
+                    and public_key.public_numbers().e == 65537
+                )
+            except (ValueError, TypeError, binascii.Error):
+                valid = False
+            if valid:
+                agreeing += 1
+            elif len(failures) < 10:
+                failures.append(f"DKIM TXT key for {query} is not valid RSA SPKI")
+
+    ocsp_by_id = {
+        str(record.fields.get("id")): record
+        for record in records.get("zeek_ocsp", [])
+        if record.fields.get("id")
+    }
+    for record in records.get("zeek_http", []):
+        mime_types = record.fields.get("resp_mime_types") or []
+        if "application/ocsp-response" not in mime_types:
+            continue
+        fuids = record.fields.get("resp_fuids") or []
+        if not isinstance(fuids, list):
+            fuids = [fuids]
+        response = next((ocsp_by_id.get(str(fuid)) for fuid in fuids if fuid), None)
+        matched += 1
+        try:
+            encoded = unquote(str(record.fields.get("uri", "")).lstrip("/"))
+            request = load_der_ocsp_request(base64.b64decode(encoded, validate=True))
+            response_fields = response.fields if response is not None else {}
+            hash_algorithm = response_fields.get(
+                "hash_algorithm", response_fields.get("hashAlgorithm")
+            )
+            issuer_name_hash = response_fields.get(
+                "issuer_name_hash", response_fields.get("issuerNameHash")
+            )
+            issuer_key_hash = response_fields.get(
+                "issuer_key_hash", response_fields.get("issuerKeyHash")
+            )
+            serial_number = response_fields.get(
+                "serial_number", response_fields.get("serialNumber", "0")
+            )
+            valid = (
+                response is not None
+                and request.hash_algorithm.name == hash_algorithm
+                and request.issuer_name_hash.hex() == issuer_name_hash
+                and request.issuer_key_hash.hex() == issuer_key_hash
+                and request.serial_number == int(str(serial_number), 16)
+            )
+        except (ValueError, TypeError, binascii.Error):
+            valid = False
+        if valid:
+            agreeing += 1
+        elif len(failures) < 10:
+            failures.append("OCSP HTTP request does not match its ocsp.log response identity")
+
+    x509_by_id = {
+        str(record.fields.get("id")): record.fields
+        for record in records.get("zeek_x509", [])
+        if record.fields.get("id")
+    }
+    presentations: dict[tuple[str, str], tuple[str, ...]] = {}
+    for record in records.get("zeek_ssl", []):
+        fuids = record.fields.get("cert_chain_fuids") or []
+        if not isinstance(fuids, list) or not fuids:
+            continue
+        # A partial input sample cannot establish chain composition. This is
+        # common when evaluating a filtered source slice, so only score fully
+        # observable presentations rather than treating missing x509 rows as
+        # malformed cryptographic material.
+        if any(str(fuid) not in x509_by_id for fuid in fuids):
+            continue
+        chain = tuple(str(x509_by_id.get(str(fuid), {}).get("fingerprint", "")) for fuid in fuids)
+        if any(not fingerprint for fingerprint in chain):
+            continue
+        leaf_fingerprint = chain[0]
+        key = (str(record.fields.get("server_name", "")), leaf_fingerprint)
+        matched += 1
+        root_transmitted = any(
+            x509_by_id.get(str(fuid), {}).get("basic_constraints.ca") is True
+            and x509_by_id.get(str(fuid), {}).get("certificate.subject")
+            == x509_by_id.get(str(fuid), {}).get("certificate.issuer")
+            for fuid in fuids[1:]
+        )
+        previous = presentations.setdefault(key, chain)
+        valid = bool(leaf_fingerprint) and not root_transmitted and previous == chain
+        if valid:
+            agreeing += 1
+        elif len(failures) < 10:
+            failures.append(
+                "TLS chain presentation is unstable or includes a self-signed trust anchor"
+            )
 
     return matched, agreeing, failures
 
