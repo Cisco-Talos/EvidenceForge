@@ -635,9 +635,49 @@ class TlsOcspRequestPathConfig(BaseModel, extra="forbid"):
         return self
 
 
+class TlsOcspStatusProfile(BaseModel, extra="forbid"):
+    """Explicit certificate-pattern status policy for generated OCSP responses."""
+
+    name: str
+    certificate_patterns: list[str]
+    status_weights: dict[Literal["good", "unknown", "revoked"], int]
+    revocation_reasons: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def name_non_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("OCSP status profile names must not be empty")
+        return v
+
+    @field_validator("certificate_patterns")
+    @classmethod
+    def certificate_patterns_non_empty(cls, v: list[str]) -> list[str]:
+        if not v or any(not pattern for pattern in v):
+            raise ValueError("OCSP status profiles require certificate_patterns")
+        return v
+
+    @field_validator("status_weights")
+    @classmethod
+    def status_weights_valid(cls, v: dict[str, int]) -> dict[str, int]:
+        if set(v) != {"good", "unknown", "revoked"}:
+            raise ValueError("status_weights must contain good, unknown, and revoked")
+        if any(weight < 0 for weight in v.values()) or sum(v.values()) <= 0:
+            raise ValueError("status_weights must be non-negative with a positive total")
+        return v
+
+    @model_validator(mode="after")
+    def revoked_profiles_have_reasons(self) -> Self:
+        if self.status_weights.get("revoked", 0) > 0 and not self.revocation_reasons:
+            raise ValueError("OCSP profiles that permit revoked status require reasons")
+        return self
+
+
 class TlsOcspConfig(BaseModel, extra="forbid"):
     """OCSP behavior settings in tls_realism.yaml."""
 
+    query_probability: float = 0.18
+    request_hash_algorithm: Literal["sha1", "sha256"] = "sha1"
     cache_bucket_seconds: int
     this_update_max_skew_seconds: int
     next_update_min_seconds: int
@@ -646,6 +686,14 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     responders: list[TlsOcspResponder] = Field(default_factory=list)
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
     suppress_revoked_suffixes: list[str] = Field(default_factory=list)
+    certificate_status_profiles: list[TlsOcspStatusProfile] = Field(default_factory=list)
+
+    @field_validator("query_probability")
+    @classmethod
+    def query_probability_valid(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("query_probability must be between 0 and 1")
+        return v
 
     @field_validator(
         "cache_bucket_seconds",
@@ -785,6 +833,7 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
 
     include_intermediate_probability: float
     include_second_intermediate_probability: float
+    present_trust_anchor: bool = False
     intermediate_validity_days_min: int
     intermediate_validity_days_max: int
     intermediate_not_before_max_days: int

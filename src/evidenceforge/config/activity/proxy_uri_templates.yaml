@@ -102,8 +102,12 @@ domains:
     content_type: "application/pkix-crl"
     methods: ["GET"]
 
+  # OCSP entries remain available as classification and source-native metadata.
+  # Generic HTTP synthesis excludes entries marked canonical_plan_required;
+  # only the OCSP action bundle supplies their standards-valid request path.
   ocsp.digicert.com:
     domain_class: ocsp
+    canonical_plan_required: true
     user_agent: "Microsoft-CryptoAPI/10.0"
     os: windows
     referrer_policy: none
@@ -134,6 +138,7 @@ domains:
 
   ocsp.pki.goog:
     domain_class: ocsp
+    canonical_plan_required: true
     referrer_policy: none
     paths:
       - "/gts1c3"
@@ -154,6 +159,7 @@ domains:
 
   ocsp.globalsign.com:
     domain_class: ocsp
+    canonical_plan_required: true
     referrer_policy: none
     paths:
       - "/gsorganizationvalsha2g2"
@@ -164,6 +170,7 @@ domains:
 
   ocsp.sectigo.com:
     domain_class: ocsp
+    canonical_plan_required: true
     referrer_policy: none
     paths:
       - "/"
@@ -174,6 +181,7 @@ domains:
 
   ocsp.int-x3.letsencrypt.org:
     domain_class: ocsp
+    canonical_plan_required: true
     referrer_policy: none
     paths:
       - "/"
@@ -182,6 +190,7 @@ domains:
 
   r3.o.lencr.org:
     domain_class: ocsp
+    canonical_plan_required: true
     referrer_policy: none
     paths:
       - "/"
