@@ -1194,7 +1194,46 @@ class DnsQueryEventSpec(_EventSpecBase):
 
         if self.rcode == "NOERROR" and self.answer is None:
             raise ValueError("answer is required when rcode is NOERROR")
+        if (
+            self.rcode == "NOERROR"
+            and self.qtype == "TXT"
+            and "._domainkey." in self.query.rstrip(".").lower()
+        ):
+            self._validate_dkim_answers()
         return self
+
+    def _validate_dkim_answers(self) -> None:
+        """Reject typed DKIM TXT answers whose p= value is not a parseable RSA key."""
+
+        import base64
+        import binascii
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        answers = self.answer if isinstance(self.answer, list) else [self.answer]
+        for answer in answers:
+            value = str(answer or "")
+            tags = {}
+            for segment in value.split(";"):
+                key, separator, tag_value = segment.strip().partition("=")
+                if separator:
+                    tags[key.lower()] = tag_value.strip()
+            public_key_value = tags.get("p", "")
+            if tags.get("v", "").upper() != "DKIM1" or not public_key_value:
+                raise ValueError(
+                    "DKIM TXT answers must contain 'v=DKIM1' and a non-empty Base64 p= key"
+                )
+            try:
+                padded = public_key_value + "=" * ((4 - len(public_key_value) % 4) % 4)
+                der = base64.b64decode(padded, validate=True)
+                public_key = serialization.load_der_public_key(der)
+            except (ValueError, TypeError, binascii.Error) as exc:
+                raise ValueError(
+                    "DKIM TXT p= must be Base64 DER for a parseable RSA public key"
+                ) from exc
+            if not isinstance(public_key, rsa.RSAPublicKey):
+                raise ValueError("DKIM TXT p= must identify an RSA public key")
 
 
 class WebScanEventSpec(_PeriodicEventBase):

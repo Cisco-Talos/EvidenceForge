@@ -112,6 +112,11 @@ from evidenceforge.generation.actions.network_connection import (
 from evidenceforge.generation.actions.network_transaction_planner import (
     NetworkTransactionPlanner,
 )
+from evidenceforge.generation.actions.ocsp_transaction import (
+    OcspTransactionActionBundle,
+    OcspTransactionPlanner,
+    OcspTransactionRequest,
+)
 from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
@@ -251,6 +256,9 @@ __all__ = [
     "NmapCommandProbeRequest",
     "NtlmValidationActionBundle",
     "NtlmValidationRequest",
+    "OcspTransactionActionBundle",
+    "OcspTransactionPlanner",
+    "OcspTransactionRequest",
     "PasswordChangeActionBundle",
     "PasswordChangeRequest",
     "PasswordResetActionBundle",

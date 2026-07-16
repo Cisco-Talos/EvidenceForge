@@ -65,8 +65,10 @@ class _NetworkOccurrenceDraft:
     file_transfers: list[Any] = field(default_factory=list)
     x509: Any = None
     x509_chain: list[Any] = field(default_factory=list)
+    tls_presentation: Any = None
     ntp: Any = None
     ocsp: Any = None
+    ocsp_transaction: Any = None
     pe: Any = None
     proxy: Any = None
     firewall: Any = None
@@ -99,8 +101,10 @@ class _NetworkOccurrenceDraft:
             file_transfers=self.file_transfers,
             x509=self.x509,
             x509_chain=self.x509_chain,
+            tls_presentation=self.tls_presentation,
             ntp=self.ntp,
             ocsp=self.ocsp,
+            ocsp_transaction=self.ocsp_transaction,
             pe=self.pe,
             proxy=self.proxy,
             firewall=self.firewall,
@@ -516,6 +520,7 @@ class NetworkTransactionPlanner:
                 http=http,
                 file_transfer=file_transfer,
                 ocsp=ocsp,
+                ocsp_transaction=request.ocsp_transaction,
                 proxy=proxy,
                 firewall=firewall,
                 hostname=hostname,
@@ -1589,6 +1594,19 @@ class NetworkTransactionPlanner:
             event.x509 = x509
         if x509_chain:
             event.x509_chain = list(x509_chain)
+        if request.tls_presentation is not None:
+            event.tls_presentation = request.tls_presentation
+            if not event.x509_chain:
+                event.x509_chain = executor._tls_certificate_planner.x509_contexts(
+                    request.tls_presentation
+                )
+            executor._tls_certificate_planner.validate_projection(
+                request.tls_presentation,
+                event.x509_chain,
+            )
+            event.x509 = event.x509_chain[0]
+            if event.ssl is not None:
+                event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
         if http is not None:
             event.http = http
         if file_transfer is not None:
@@ -1599,6 +1617,8 @@ class NetworkTransactionPlanner:
             event.pe = pe
         if ocsp is not None:
             event.ocsp = ocsp
+        if request.ocsp_transaction is not None:
+            event.ocsp_transaction = request.ocsp_transaction
         if proxy is not None:
             event.proxy = proxy
         if firewall is not None:
@@ -1797,6 +1817,7 @@ class NetworkTransactionPlanner:
                         domain_tags,
                         source_os=_src_os,
                         source_system_type=getattr(source_system, "type", None),
+                        allow_canonical_protocol_templates=False,
                     )
                     url = f"https://{proxy_hostname}{path}"
                     from evidenceforge.generation.activity.referrer import pick_referrer
@@ -1824,6 +1845,7 @@ class NetworkTransactionPlanner:
                         domain_tags,
                         source_os=_src_os,
                         source_system_type=getattr(source_system, "type", None),
+                        allow_canonical_protocol_templates=False,
                     )
                     url = f"http://{proxy_hostname}{path}"
                     from evidenceforge.generation.activity.referrer import pick_referrer
@@ -2039,6 +2061,7 @@ class NetworkTransactionPlanner:
                 web_domain_tags,
                 source_os=_src_os_http,
                 source_system_type=getattr(source_system, "type", None),
+                allow_canonical_protocol_templates=False,
             )
             ua = executor._proxy_user_agent_for_context(
                 rng,
@@ -2505,6 +2528,7 @@ class NetworkTransactionPlanner:
             executor._last_connection_effective_time = event.timestamp
             executor._last_connection_effective_transaction_id = event.network.transaction.stable_id
         executor.dispatcher.dispatch(event)
+        executor._maybe_emit_ocsp_transaction(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:
             executor._emit_generic_ssh_preauth_failure_syslog(
                 target_system=target_system,

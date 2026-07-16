@@ -42,6 +42,10 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
+from evidenceforge.events.cryptography import (
+    OcspTransactionPlan,
+    TlsCertificatePresentationPlan,
+)
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
@@ -95,12 +99,14 @@ class NetworkConnectionRequest:
     ssl: SslContext | None = None
     x509: X509Context | None = None
     x509_chain: list[X509Context] = field(default_factory=list)
+    tls_presentation: TlsCertificatePresentationPlan | None = None
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
     file_transfers: list[FileTransferContext] = field(default_factory=list)
     pe: PeContext | None = None
     ocsp: OcspContext | None = None
+    ocsp_transaction: OcspTransactionPlan | None = None
     proxy: ProxyContext | None = None
     firewall: FirewallContext | None = None
     hostname: str | None = None

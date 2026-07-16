@@ -35,7 +35,6 @@ from evidenceforge.events.contexts import (
     HostContext,
     HttpContext,
     NetworkContext,
-    OcspContext,
     ProxyContext,
     X509Context,
 )
@@ -2532,14 +2531,13 @@ class TestSslContextPopulation:
 
         assert delayed_ecar_time == ecar_login_time
 
-    def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen):
+    def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen, monkeypatch):
+        import evidenceforge.generation.activity.generator as generator_module
+        from evidenceforge.generation.actions.ocsp_transaction import OcspTransactionRequest
+
+        monkeypatch.setattr(generator_module, "_TLS_VERSION_VALUES", ("TLSv12",))
+        monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (1,))
         gen, _events = activity_gen
-        calls = []
-
-        def capture_connection(**kwargs):
-            calls.append(kwargs)
-
-        gen.generate_connection = capture_connection
         tls_event = SecurityEvent(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
@@ -2560,38 +2558,25 @@ class TestSslContextPopulation:
                 certificate_issuer="CN=DigiCert TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             ),
         )
-        ocsp_a = OcspContext(
-            id="FocspA",
-            serial_number="789E942DD4A61EF31D",
-            cert_status="good",
-            this_update=1710762449.0,
-            next_update=1711055820.0,
-        )
-        ocsp_b = OcspContext(
-            id="FocspB",
-            serial_number="789E942DD4A61EF31D",
-            cert_status="good",
-            this_update=1710762449.0,
-            next_update=1711055820.0,
-        )
-
-        gen._emit_ocsp_http_response(
+        gen._attach_ssl_context(
             tls_event,
-            cert_name="example.com",
-            ocsp=ocsp_a,
+            hostname="example.com",
+            dns=None,
+            dst_ip="93.184.216.34",
             rng=random.Random(1),
+            allow_failure=False,
         )
-        gen._emit_ocsp_http_response(
-            tls_event,
-            cert_name="example.com",
-            ocsp=ocsp_b,
-            rng=random.Random(2),
-        )
+        assert tls_event.tls_presentation is not None
+        certificate = tls_event.tls_presentation.leaf
+        issuer = gen._tls_certificate_planner.authority_material(certificate.issuer_name)
+        request = OcspTransactionRequest(tls_event, certificate, issuer, "example.com")
 
-        assert len(calls) == 2
-        assert calls[0]["http"].response_body_len == calls[1]["http"].response_body_len
-        assert calls[0]["file_transfer"].total_bytes == calls[1]["file_transfer"].total_bytes
-        assert calls[0]["http"].tags == calls[1]["http"].tags == ["ocsp"]
+        first = gen._ocsp_transaction_planner.plan(request)
+        second = gen._ocsp_transaction_planner.plan(request)
+
+        assert first.response_size == second.response_size
+        assert first.file_id == second.file_id
+        assert first.request_der == second.request_der
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen
@@ -3168,6 +3153,7 @@ class TestSslContextPopulation:
     def test_ocsp_status_and_update_window_are_cached_per_certificate(self, activity_gen):
         """OCSP responses should not expire at observation time or flip status per serial."""
         gen, events = activity_gen
+        gen.dispatcher.emitters["zeek_ocsp"] = MagicMock()
 
         for offset in range(100):
             gen.generate_connection(
@@ -3214,6 +3200,7 @@ class TestSslContextPopulation:
     def test_linux_proxy_originated_ocsp_uses_linux_agent(self, activity_gen):
         """Proxy-side OCSP fetches should not inherit Windows CryptoAPI identity."""
         gen, events = activity_gen
+        gen.dispatcher.emitters["zeek_ocsp"] = MagicMock()
         proxy = System(
             hostname="PROXY-01",
             ip="10.10.3.20",

@@ -41,6 +41,7 @@ from evidenceforge.events.contexts import (
     PeContext,
     ProxyContext,
 )
+from evidenceforge.events.cryptography import OcspTransactionPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
@@ -98,6 +99,7 @@ class ProxyTransactionRequest:
     preserve_explicit_proxy_dst_ip: bool
     caller_provided_conn_state: bool
     ad_domain: str
+    ocsp_transaction: OcspTransactionPlan | None = None
     parent_action_group_id: str | None = None
     source: str = "activity_generator"
 
@@ -243,6 +245,7 @@ class ProxyTransactionExecutor(Protocol):
         file_transfer: FileTransferContext | None = None,
         pe: PeContext | None = None,
         ocsp: OcspContext | None = None,
+        ocsp_transaction: OcspTransactionPlan | None = None,
         proxy: ProxyContext | None = None,
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
@@ -528,6 +531,7 @@ class ProxyTransactionActionBundle:
             file_transfer=egress_file_transfer,
             pe=egress_pe,
             ocsp=request.ocsp,
+            ocsp_transaction=request.ocsp_transaction,
             firewall=request.firewall,
             hostname=proxy_context.host,
             proxy_bypass=True,
