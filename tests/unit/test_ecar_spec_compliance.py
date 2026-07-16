@@ -52,6 +52,7 @@ from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 
 
@@ -64,6 +65,20 @@ def emitter(tmp_path):
     format_def.output.footer_template = None
     format_def.output.encoding = "utf-8"
     e = EcarEmitter(format_def, tmp_path, threaded=False)
+    planner = SourceTimingPlanner()
+    for method_name in (
+        "_render_connection",
+        "_render_logon",
+        "_render_logoff",
+        "_render_failed_logon",
+    ):
+        renderer = getattr(e, method_name)
+
+        def planned_renderer(event, renderer=renderer):
+            planner.plan_event(event, "ecar")
+            return renderer(event)
+
+        setattr(e, method_name, planned_renderer)
     return e
 
 

@@ -31,8 +31,13 @@ from evidenceforge.events.contexts import HostContext, NetworkContext
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
-from evidenceforge.generation.source_timing import SourceTimingPlanner
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    ecar_flow_identity_key,
+    ecar_flow_render_key,
+    ecar_session_render_key,
+)
+from evidenceforge.utils.rng import stable_uuid
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -461,31 +466,13 @@ class EcarEmitter(HostMultiplexEmitter):
         lifecycle: str,
     ) -> datetime:
         """Return the eCAR render timestamp for a user-session observation."""
-        if lifecycle == "logout":
+        plan = event.source_timing
+        if plan is None:
             return event.timestamp
-        auth = event.auth
-        edr = event.edr
-        canonical_timestamp = (
-            event.source_timing.canonical_timestamp
-            if event.source_timing is not None
-            else event.timestamp
+        return plan.finalized_times.get(
+            ecar_session_render_key(lifecycle),
+            event.timestamp,
         )
-        timestamp = _SOURCE_TIMING.source_time(
-            event,
-            "source.ecar_session",
-            seed_parts=(
-                lifecycle,
-                self._host_name(host),
-                getattr(auth, "username", ""),
-                getattr(auth, "source_ip", ""),
-                getattr(auth, "source_port", ""),
-                getattr(auth, "logon_id", ""),
-                getattr(auth, "logon_type", ""),
-                getattr(edr, "object_id", ""),
-                canonical_timestamp,
-            ),
-        )
-        return timestamp
 
     def _render_process_create(self, event: SecurityEvent) -> None:
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
@@ -763,203 +750,24 @@ class EcarEmitter(HostMultiplexEmitter):
         drop_late_process_identity: bool = False,
         paired_endpoint: bool = False,
     ) -> tuple[datetime, bool]:
-        """Return a FLOW timestamp bounded by the canonical connection interval.
+        """Return the dispatcher-finalized FLOW time and identity decision."""
 
-        If a very short connection cannot also satisfy source-visible process-create
-        ordering, omit the process identity from that FLOW row instead of moving the
-        endpoint observation after the network close.
-        """
-
-        interval_start, not_after = self._flow_interval(event, seed_parts)
-        lifecycle = event.lifecycle
-        if (
-            lifecycle is not None
-            and lifecycle.parent_group_id is not None
-            and lifecycle.parent_group_id.startswith("proxy-transaction-")
-        ):
-            host_key = str(seed_parts[1]) if len(seed_parts) > 1 else ""
-            flow_time = _SOURCE_TIMING.lifecycle_child_source_time(
-                event,
-                "source.ecar_flow",
-                host_key=host_key,
-                seed_parts=seed_parts,
-                within=(interval_start, not_after) if not_after is not None else None,
-            )
-            if flow_time is not None:
-                process_identity_safe = not_before is None or not_before <= flow_time
-                return flow_time, process_identity_safe
-        if drop_late_process_identity and not_before is not None:
-            flow_time = _SOURCE_TIMING.source_time(
-                event,
-                "source.ecar_flow",
-                seed_parts=seed_parts,
-                within=(interval_start, not_after) if not_after is not None else None,
-            )
-            flow_time = self._paired_flow_observation_time(
-                event,
-                flow_time,
-                seed_parts=seed_parts,
-                interval_start=interval_start,
-                not_before=None,
-                not_after=not_after,
-                enabled=paired_endpoint,
-            )
-            if not_before > flow_time:
-                return flow_time, False
-            return flow_time, True
-
-        process_identity_safe = not_before is None or not_after is None or not_before <= not_after
-        flow_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.ecar_flow",
-            seed_parts=seed_parts,
-            not_before=not_before if process_identity_safe else None,
-            within=(interval_start, not_after) if not_after is not None else None,
-        )
-        flow_time = self._paired_flow_observation_time(
-            event,
-            flow_time,
-            seed_parts=seed_parts,
-            interval_start=interval_start,
-            not_before=not_before if process_identity_safe else None,
-            not_after=not_after,
-            enabled=paired_endpoint,
-        )
-        if process_identity_safe and not_before is not None and flow_time < not_before:
-            process_identity_safe = False
-        return (
-            flow_time,
-            process_identity_safe,
-        )
-
-    @staticmethod
-    def _paired_flow_observation_time(
-        event: SecurityEvent,
-        timestamp: datetime,
-        *,
-        seed_parts: tuple[Any, ...],
-        interval_start: datetime,
-        not_before: datetime | None,
-        not_after: datetime | None,
-        enabled: bool,
-    ) -> datetime:
-        """Add host-local texture to paired endpoint FLOW observations."""
-        if not enabled:
-            return timestamp
-        if not_after is None:
-            return EcarEmitter._unbounded_paired_flow_observation_time(
-                event,
-                seed_parts=seed_parts,
-                not_before=not_before,
-            )
-
-        short_interval = not_after <= interval_start + timedelta(milliseconds=5)
-        lower_bound = not_before
-        if not short_interval and not_after > interval_start:
-            lower_bound = (
-                interval_start if lower_bound is None else max(lower_bound, interval_start)
-            )
-        min_offset_ms = EcarEmitter._flow_min_endpoint_offset_ms(event, seed_parts)
-        if min_offset_ms > 0:
-            min_observation_time = interval_start + timedelta(milliseconds=min_offset_ms)
-            if min_observation_time <= not_after:
-                lower_bound = (
-                    min_observation_time
-                    if lower_bound is None
-                    else max(lower_bound, min_observation_time)
-                )
-
-        seed = _stable_seed(
-            "ecar_paired_flow_observation:"
-            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
-        )
+        del drop_late_process_identity, paired_endpoint
         direction = str(seed_parts[0]) if seed_parts else ""
-        if short_interval and direction == "inbound":
-            min_jitter_ms = 22
-            max_jitter_ms = 55
-        elif short_interval and direction == "outbound":
-            min_jitter_ms = 1
-            max_jitter_ms = 16
-        elif direction == "inbound":
-            min_jitter_ms = 75
-            max_jitter_ms = 540
-        elif direction == "outbound":
-            min_jitter_ms = 12
-            max_jitter_ms = 220
-        else:
-            min_jitter_ms = 12
-            max_jitter_ms = 360
-
-        jitter_ms = min_jitter_ms + (seed % (max_jitter_ms - min_jitter_ms + 1))
-        candidate = timestamp - timedelta(milliseconds=jitter_ms)
-        if lower_bound is not None and candidate < lower_bound:
-            available_ms = int((timestamp - lower_bound).total_seconds() * 1000)
-            if available_ms <= 0:
-                return timestamp
-            if available_ms < min_jitter_ms:
-                if direction == "inbound" and available_ms >= 4:
-                    slice_min_ms = max(1, (available_ms * 2) // 3)
-                    slice_max_ms = available_ms
-                elif direction == "outbound" and available_ms >= 4:
-                    slice_min_ms = 1
-                    slice_max_ms = max(1, available_ms // 3)
-                else:
-                    slice_min_ms = 1
-                    slice_max_ms = available_ms
-                bounded_jitter_ms = slice_min_ms + (seed % (slice_max_ms - slice_min_ms + 1))
-            else:
-                bounded_jitter_ms = min_jitter_ms + (seed % (available_ms - min_jitter_ms + 1))
-            candidate = timestamp - timedelta(milliseconds=bounded_jitter_ms)
-        if not_after is not None and candidate > not_after:
-            return not_after
-        return candidate
-
-    @staticmethod
-    def _unbounded_paired_flow_observation_time(
-        event: SecurityEvent,
-        *,
-        seed_parts: tuple[Any, ...],
-        not_before: datetime | None,
-    ) -> datetime:
-        """Return coordinated host-local timing for paired FLOWs with no close bound."""
-        net = event.network
-        if net is None:
-            return event.timestamp
-
-        tuple_seed = _stable_seed(
-            "ecar_paired_flow_base:"
-            + ":".join(
-                str(part)
-                for part in (
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    net.protocol,
-                    event.timestamp.isoformat(),
-                )
-            )
+        hostname = str(seed_parts[1]) if len(seed_parts) > 1 else ""
+        plan = event.source_timing
+        if plan is None:
+            timestamp = event.network.source_visible_start_time or event.timestamp
+            return timestamp, not_before is None or not_before <= timestamp
+        timestamp = plan.finalized_times.get(
+            ecar_flow_render_key(direction, hostname),
+            event.network.source_visible_start_time or event.timestamp,
         )
-        base_delay_ms = 220 + (tuple_seed % 900)
-
-        direction = str(seed_parts[0]) if seed_parts else ""
-        host = str(seed_parts[1]) if len(seed_parts) > 1 else ""
-        offset_seed = _stable_seed(
-            "ecar_paired_flow_host_offset:"
-            + ":".join(str(part) for part in (direction, host, *seed_parts))
+        identity_safe = plan.finalized_flags.get(
+            ecar_flow_identity_key(direction, hostname),
+            not_before is None or not_before <= timestamp,
         )
-        if direction == "inbound":
-            offset_ms = 300 + (offset_seed % 360)
-        elif direction == "outbound":
-            offset_ms = 20 + (offset_seed % 180)
-        else:
-            offset_ms = 80 + (offset_seed % 420)
-
-        candidate = event.timestamp + timedelta(milliseconds=base_delay_ms + offset_ms)
-        if not_before is not None and candidate < not_before:
-            gap_ms = 6 + (offset_seed % 180)
-            candidate = not_before + timedelta(milliseconds=gap_ms)
-        return candidate
+        return timestamp, identity_safe
 
     @staticmethod
     def _flow_identity_deadline(event: SecurityEvent) -> datetime:
@@ -973,56 +781,6 @@ class EcarEmitter(HostMultiplexEmitter):
             default_class="source_latency",
         )
         return event.timestamp + timedelta(milliseconds=window.max_ms + 1)
-
-    @staticmethod
-    def _flow_interval(
-        event: SecurityEvent,
-        seed_parts: tuple[Any, ...],
-    ) -> tuple[datetime, datetime | None]:
-        """Return the finalized canonical interval for an endpoint FLOW observation."""
-
-        net = event.network
-        if net is None:
-            return event.timestamp, None
-        start_time = net.source_visible_start_time or event.timestamp
-        if net.duration is None:
-            if net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
-                seed = _stable_seed(
-                    "ecar_failed_flow_not_after:"
-                    + ":".join(str(part) for part in (*seed_parts, start_time.isoformat()))
-                )
-                return start_time, start_time + timedelta(milliseconds=45 + (seed % 620))
-            return start_time, None
-        close_time = net.source_visible_close_time or (
-            start_time + timedelta(seconds=max(0.0, net.duration))
-        )
-        if close_time <= start_time:
-            return start_time, close_time
-        duration_us = int((close_time - start_time).total_seconds() * 1_000_000)
-        seed = _stable_seed("ecar_flow_not_after:" + ":".join(str(part) for part in seed_parts))
-        margin_us = 1000 + (seed % 4000)
-        if duration_us <= margin_us:
-            margin_us = max(0, duration_us // 2)
-        return start_time, close_time - timedelta(microseconds=margin_us)
-
-    @staticmethod
-    def _flow_min_endpoint_offset_ms(event: SecurityEvent, seed_parts: tuple[Any, ...]) -> int:
-        """Return minimum FLOW observation separation from the network timestamp."""
-        net = event.network
-        if net is None:
-            return 0
-        applies = False
-        if net.duration is None:
-            applies = net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}
-        else:
-            applies = 0 <= net.duration < 0.1
-        if not applies:
-            return 0
-        seed = _stable_seed(
-            "ecar_flow_min_endpoint_offset:"
-            + ":".join(str(part) for part in (*seed_parts, event.timestamp.isoformat()))
-        )
-        return 18 + (seed % 65)
 
     @staticmethod
     def _flow_connection_failed(net: NetworkContext | None) -> bool:

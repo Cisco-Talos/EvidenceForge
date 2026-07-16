@@ -5,9 +5,14 @@
 
 import json
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from evidenceforge.events.authentication import (
+    RemoteAuthenticationPlan,
+    RemoteAuthenticationTransportPlan,
+)
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -20,6 +25,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.events.network import NetworkTuple
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -27,7 +33,11 @@ from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
-from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanner,
+    ecar_flow_render_key,
+    ecar_session_render_key,
+)
 
 
 def _base_time() -> datetime:
@@ -827,6 +837,252 @@ def test_ecar_logoff_does_not_render_orphaned_self_sourced_port(tmp_path: Path) 
     assert row["action"] == "LOGOUT"
     assert "src_ip" not in row["properties"]
     assert "src_port" not in row["properties"]
+
+
+def _remote_auth_timing_events(
+    *,
+    outcome: str = "success",
+) -> tuple[SecurityEvent, SecurityEvent]:
+    """Return one correlated target transport and Windows authentication event."""
+
+    start = _base_time()
+    auth_time = start + timedelta(milliseconds=350)
+    source = _host_context()
+    target = HostContext(
+        hostname="FILE-SRV-01",
+        ip="10.0.0.40",
+        fqdn="FILE-SRV-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="server",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    transaction_id = "network-connection-remote-auth"
+    action_id = "windows-remote-auth-test"
+    network = NetworkContext(
+        src_ip=source.ip,
+        src_port=53123,
+        dst_ip=target.ip,
+        dst_port=445,
+        protocol="tcp",
+        service="smb",
+        zeek_uid="CremoteAuthTiming",
+        conn_id="conn-remote-auth",
+        duration=4.0,
+        source_visible_start_time=start,
+        source_visible_close_time=start + timedelta(seconds=4),
+        orig_bytes=1200,
+        resp_bytes=2400,
+        orig_pkts=4,
+        resp_pkts=5,
+        orig_ip_bytes=1360,
+        resp_ip_bytes=2600,
+        conn_state="SF",
+        history="ShADadFf",
+        local_orig=True,
+        local_resp=True,
+    )
+    network.finalize_transaction(transaction_id)
+    transport = RemoteAuthenticationTransportPlan(
+        role="target_service",
+        transaction_id=transaction_id,
+        tuple=NetworkTuple(
+            src_ip=source.ip,
+            src_port=53123,
+            dst_ip=target.ip,
+            dst_port=445,
+            protocol="tcp",
+        ),
+        started_at=start,
+        closed_at=start + timedelta(seconds=4),
+        primary=True,
+    )
+    remote_auth = RemoteAuthenticationPlan(
+        stable_id=action_id,
+        source_hostname=source.hostname,
+        target_hostname=target.hostname,
+        logon_type=3,
+        auth_protocol="NTLM",
+        outcome=outcome,
+        canonical_auth_time=auth_time,
+        transports=(transport,),
+        session_object_id="session-remote-auth" if outcome == "success" else "",
+        logon_id="0x12345" if outcome == "success" else "",
+    )
+    flow_event = SecurityEvent(
+        timestamp=start,
+        event_type="connection",
+        src_host=source,
+        dst_host=target,
+        network=network,
+        lifecycle=ActionLifecycleContext(
+            group_id=transaction_id,
+            canonical_start=start,
+            phase="start",
+            parent_group_id=action_id,
+        ),
+    )
+    auth_event = SecurityEvent(
+        timestamp=auth_time,
+        event_type="logon" if outcome == "success" else "failed_logon",
+        src_host=source,
+        dst_host=target,
+        auth=AuthContext(
+            username="alice",
+            logon_id="0x12345" if outcome == "success" else "",
+            logon_type=3,
+            result=outcome,
+            source_ip=source.ip,
+            source_port=53123,
+        ),
+        remote_auth=remote_auth,
+    )
+    return flow_event, auth_event
+
+
+def test_remote_auth_ecar_login_follows_admitted_exact_transport() -> None:
+    """Dispatcher timing should place eCAR authentication after its exact FLOW."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+
+    flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", "FILE-SRV-01")
+    ]
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert timedelta(milliseconds=8) <= login_time - flow_time <= timedelta(milliseconds=140)
+
+
+def test_remote_auth_failed_ecar_login_follows_transport_without_session() -> None:
+    """Failed authentication should order after FLOW without durable session identity."""
+
+    planner = SourceTimingPlanner()
+    flow_event, failed_event = _remote_auth_timing_events(outcome="failure")
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(failed_event, "ecar")
+
+    flow_time = flow_event.source_timing.finalized_times[
+        ecar_flow_render_key("inbound", "FILE-SRV-01")
+    ]
+    failure_time = failed_event.source_timing.finalized_times[
+        ecar_session_render_key("failed_login")
+    ]
+    assert timedelta(milliseconds=8) <= failure_time - flow_time <= timedelta(milliseconds=140)
+    assert failed_event.remote_auth.session_object_id == ""
+    assert failed_event.remote_auth.logon_id == ""
+
+
+def test_remote_auth_timing_does_not_correlate_wrong_transaction() -> None:
+    """A different transaction in the same action cannot anchor authentication."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    flow_event.network.transaction = replace(
+        flow_event.network.transaction,
+        stable_id="network-connection-unrelated",
+    )
+    flow_event.lifecycle = replace(
+        flow_event.lifecycle,
+        group_id="network-connection-unrelated",
+    )
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+
+    preferred = planner.source_time(
+        login_event,
+        "source.ecar_session",
+        seed_parts=(
+            "login",
+            "FILE-SRV-01",
+            "alice",
+            "10.0.0.20",
+            53123,
+            "0x12345",
+            3,
+            "",
+            login_event.source_timing.canonical_timestamp,
+        ),
+    )
+    assert login_event.source_timing.finalized_times[ecar_session_render_key("login")] == preferred
+
+
+def test_remote_auth_timing_does_not_correlate_wrong_exact_tuple() -> None:
+    """A reused transaction label with a different tuple cannot anchor authentication."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    flow_event.network.src_port += 1
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+
+    preferred = planner.source_time(
+        login_event,
+        "source.ecar_session",
+        seed_parts=(
+            "login",
+            "FILE-SRV-01",
+            "alice",
+            "10.0.0.20",
+            53123,
+            "0x12345",
+            3,
+            "",
+            login_event.source_timing.canonical_timestamp,
+        ),
+    )
+    assert login_event.source_timing.finalized_times[ecar_session_render_key("login")] == preferred
+
+
+def test_remote_auth_windows_logon_follows_admitted_target_wfp() -> None:
+    """Visible target 5156 should precede the correlated Windows authentication row."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    target = flow_event.dst_host
+    assert target is not None
+    transaction_id = flow_event.network.transaction.stable_id
+    wfp_event = SecurityEvent(
+        timestamp=flow_event.timestamp,
+        event_type="wfp_connection",
+        src_host=target,
+        network=NetworkContext(
+            src_ip=flow_event.network.src_ip,
+            src_port=flow_event.network.src_port,
+            dst_ip=flow_event.network.dst_ip,
+            dst_port=flow_event.network.dst_port,
+            protocol="tcp",
+            initiating_pid=4,
+        ),
+        lifecycle=ActionLifecycleContext(
+            group_id=transaction_id,
+            canonical_start=flow_event.timestamp,
+            phase="dependent",
+            parent_group_id=login_event.remote_auth.stable_id,
+        ),
+    )
+
+    planned_wfp = planner.plan_event(wfp_event, "windows_event_security")
+    planner.record_admitted_source_event(planned_wfp, "windows_event_security")
+    planned_login = planner.plan_event(login_event, "windows_event_security")
+
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    assert (
+        timedelta(milliseconds=8)
+        <= planned_login.timestamp - wfp_time
+        <= timedelta(milliseconds=140)
+    )
+    assert planned_login.source_timing.canonical_timestamp == login_event.timestamp
 
 
 def test_sysmon_process_access_timestamp_follows_process_create(tmp_path: Path) -> None:

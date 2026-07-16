@@ -2517,6 +2517,7 @@ class TestSslContextPopulation:
         assert ecar_login_time > accepted_event.timestamp
         assert ecar_login_time > pam_event.timestamp
         assert ecar_login_time > pam_event.timestamp + timedelta(milliseconds=250)
+        gen.dispatcher.source_timing_planner.plan_event(ssh_event, format_name="ecar")
         delayed_for_observation_profile = replace(
             ssh_event,
             timestamp=ssh_event.timestamp + timedelta(milliseconds=750),

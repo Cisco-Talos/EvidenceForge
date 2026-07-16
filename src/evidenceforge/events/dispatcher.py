@@ -216,6 +216,7 @@ class EventDispatcher:
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
             return
+        self.source_timing_planner.initialize_event(event)
         matching_emitters = self._get_matching_emitters(event)
         decisions = {
             format_name: self.observation_policy.decide(format_name, event)
@@ -255,6 +256,10 @@ class EventDispatcher:
             if not self._admit_source_event(event_to_emit, format_name):
                 self._record_observation(event, format_name, "out_of_window")
                 continue
+            self.source_timing_planner.record_admitted_source_event(
+                event_to_emit,
+                format_name,
+            )
             self._record_admitted_network_identifier(event_to_emit, format_name)
             if (
                 event_to_emit.event_type != "process_terminate"
