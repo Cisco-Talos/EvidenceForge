@@ -1100,6 +1100,53 @@ class TestChainDepthLimit:
             f"(seeded system tree + up to 3 auto-created levels)"
         )
 
+    def test_stale_cached_anchor_is_repaired_at_depth_limit(
+        self,
+        state_manager,
+        mock_emitters,
+        win_system,
+        user,
+        monkeypatch,
+    ):
+        """A stale cached system PID must not escape the recursive depth fallback."""
+        from evidenceforge.generation.activity import spawn_rules
+
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        stale_services_pid = pids["services"]
+        assert state_manager.end_process(win_system.hostname, stale_services_pid)
+
+        reverse = {
+            "child.exe": ["parent-0.exe"],
+            "parent-0.exe": ["parent-1.exe"],
+            "parent-1.exe": ["parent-2.exe"],
+            "parent-2.exe": ["parent-3.exe"],
+            "parent-3.exe": ["parent-4.exe"],
+        }
+        monkeypatch.setattr(spawn_rules, "get_reverse_index_windows", lambda: reverse)
+        monkeypatch.setattr(
+            spawn_rules,
+            "get_parent_config",
+            lambda _os, executable: {
+                "command_templates": [executable],
+                "spawn_delay": [0.1, 0.1],
+                "lifetime": "short",
+            },
+        )
+
+        parent_pid = ag._ensure_parent_chain(
+            system=win_system,
+            user=user,
+            time=datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_id="",
+            child_exe="child.exe",
+            os_cat="windows",
+        )
+
+        parent = state_manager.get_process(win_system.hostname, parent_pid)
+        assert parent is not None
+        assert parent.parent_pid != stale_services_pid
+        assert state_manager.get_process(win_system.hostname, parent.parent_pid) is not None
+
 
 class TestDualSessionParentSelection:
     """When a user has both interactive and network sessions, parent selection

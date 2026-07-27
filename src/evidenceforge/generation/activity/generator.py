@@ -26135,29 +26135,23 @@ class ActivityGenerator:
 
         # Safety limit
         if depth > 3:
-            if os_cat == "windows":
-                session_explorer = self._ensure_session_explorer_pid(
-                    system, user, time=time, logon_id=logon_id
-                )
-                if session_explorer is not None:
-                    return session_explorer
-                return sys_pids.get("services", sys_pids.get("wininit", 4))
-            return (
-                sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
+            return self._live_parent_chain_anchor(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=logon_id,
+                os_cat=os_cat,
             )
 
         # Pick a parent for child_exe from the rules
         possible_parents = reverse.get(child_exe, [])
         if not possible_parents:
-            if os_cat == "windows":
-                session_explorer = self._ensure_session_explorer_pid(
-                    system, user, time=time, logon_id=logon_id
-                )
-                if session_explorer is not None:
-                    return session_explorer
-                return sys_pids.get("services", sys_pids.get("wininit", 4))
-            return (
-                sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
+            return self._live_parent_chain_anchor(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=logon_id,
+                os_cat=os_cat,
             )
 
         # Auto-created parent chains should not fabricate a fresh parent with
@@ -26258,6 +26252,19 @@ class ActivityGenerator:
         if session is not None and parent_time <= session.start_time:
             parent_time = session.start_time + timedelta(milliseconds=10 * (4 - depth))
 
+        if not self._is_valid_process_parent_at(
+            system=system,
+            parent_pid=grandparent_pid,
+            time=parent_time,
+        ):
+            grandparent_pid = self._live_parent_chain_anchor(
+                system=system,
+                user=user,
+                time=parent_time,
+                logon_id=logon_id,
+                os_cat=os_cat,
+            )
+
         # Create the parent process
         self.state_manager.set_current_time(parent_time)
         parent_pid = self.state_manager.create_process(
@@ -26331,6 +26338,43 @@ class ActivityGenerator:
         # Record in user process history
         self._record_user_process(system, user, parent_pid, image)
         return parent_pid
+
+    def _live_parent_chain_anchor(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        os_cat: str,
+    ) -> int:
+        """Return a verified live process anchor for recursive parent-chain repair."""
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        if os_cat == "windows":
+            session_explorer = self._ensure_session_explorer_pid(
+                system,
+                user,
+                time=time,
+                logon_id=logon_id,
+            )
+            if session_explorer is not None and self._is_valid_process_parent_at(
+                system=system,
+                parent_pid=session_explorer,
+                time=time,
+            ):
+                return session_explorer
+            return self._windows_system_parent_fallback(system, time)
+
+        for role in ("bash", "sshd"):
+            candidate = sys_pids.get(role)
+            if candidate and self._linux_parent_usable_for_child_at(
+                system=system,
+                parent_pid=candidate,
+                time=time,
+                logon_id=logon_id,
+            ):
+                return candidate
+        return self._linux_system_parent_fallback(system, time)
 
     def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
         """Record a user process in history for future parent selection."""
