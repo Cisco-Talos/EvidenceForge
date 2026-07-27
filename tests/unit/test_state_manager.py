@@ -1439,6 +1439,87 @@ class TestConnectionManagement:
         result = sm.close_connection("conn-999")
         assert result is False
 
+    def test_connection_tuple_lookup_uses_exact_tuple_index(self):
+        """Tuple lookup must not scan every retained connection."""
+
+        class NoValuesDict(dict):
+            def values(self):
+                raise AssertionError("connection tuple lookup performed a full-table scan")
+
+        sm = StateManager()
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(now)
+        sm.open_connection("10.0.0.10", 50000, "10.0.0.1", 53, "udp")
+        sm.open_connection("::ffff:10.0.0.20", 50001, "10.0.0.2", 443, "tcp")
+        sm.state.open_connections = NoValuesDict(sm.state.open_connections)
+
+        assert sm.connection_tuple_recently_used(
+            "10.0.0.20",
+            50001,
+            "::ffff:10.0.0.2",
+            443,
+            "tcp",
+            now,
+            reuse_window=86_400,
+        )
+        assert not sm.connection_tuple_recently_used(
+            "10.0.0.99",
+            59999,
+            "10.0.0.2",
+            443,
+            "tcp",
+            now,
+            reuse_window=86_400,
+        )
+
+    def test_close_connection_removes_tuple_index_entry(self):
+        """Closing a connection should remove its tuple lookup entry."""
+        sm = StateManager()
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(now)
+        conn_id = sm.open_connection("10.0.0.10", 50000, "10.0.0.1", 53, "udp")
+
+        assert sm.close_connection(conn_id)
+        assert not sm.connection_tuple_recently_used(
+            "10.0.0.10",
+            50000,
+            "10.0.0.1",
+            53,
+            "udp",
+            now,
+            reuse_window=86_400,
+        )
+        assert sm._connection_ids_by_tuple == {}
+
+    def test_sweep_removes_connections_closed_by_cutoff(self):
+        """Past close times should be evicted even when state remains established."""
+        sm = StateManager()
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(now)
+        past_id = sm.open_connection(
+            "10.0.0.10",
+            50000,
+            "10.0.0.1",
+            53,
+            "udp",
+            close_time=now + timedelta(minutes=5),
+        )
+        future_id = sm.open_connection(
+            "10.0.0.10",
+            50001,
+            "10.0.0.2",
+            443,
+            "tcp",
+            close_time=now + timedelta(hours=2),
+        )
+
+        removed = sm.sweep_closed_connections(now + timedelta(hours=1))
+
+        assert removed == 1
+        assert sm.get_connection(past_id) is None
+        assert sm.get_connection(future_id) is not None
+        assert all(past_id not in conn_ids for conn_ids in sm._connection_ids_by_tuple.values())
+
     def test_list_open_connections(self):
         """Test listing all open connections."""
         sm = StateManager()

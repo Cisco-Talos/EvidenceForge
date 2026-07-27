@@ -125,6 +125,7 @@ class StateManager:
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
+        self._connection_ids_by_tuple: dict[tuple[str, int, str, int, str], set[str]] = {}
         self._thread_id_counters: dict[str, int] = {}
         self._thread_id_rngs: dict[str, random.Random] = {}
         self._windows_session_id_counters: dict[str, int] = {}
@@ -1723,6 +1724,53 @@ class StateManager:
     # Connection Management
     # ========================================
 
+    @staticmethod
+    def _connection_tuple_key(
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> tuple[str, int, str, int, str]:
+        """Return the normalized key used to index an exact network tuple."""
+        return (
+            src_ip.removeprefix("::ffff:"),
+            src_port,
+            dst_ip.removeprefix("::ffff:"),
+            dst_port,
+            protocol,
+        )
+
+    def _index_connection(self, connection: OpenConnection) -> None:
+        """Add a connection to the exact-tuple lookup index."""
+        key = self._connection_tuple_key(
+            connection.src_ip,
+            connection.src_port,
+            connection.dst_ip,
+            connection.dst_port,
+            connection.protocol,
+        )
+        self._connection_ids_by_tuple.setdefault(key, set()).add(connection.conn_id)
+
+    def _remove_connection(self, conn_id: str) -> bool:
+        """Remove a connection and its exact-tuple index entry."""
+        connection = self.state.open_connections.pop(conn_id, None)
+        if connection is None:
+            return False
+        key = self._connection_tuple_key(
+            connection.src_ip,
+            connection.src_port,
+            connection.dst_ip,
+            connection.dst_port,
+            connection.protocol,
+        )
+        indexed_ids = self._connection_ids_by_tuple.get(key)
+        if indexed_ids is not None:
+            indexed_ids.discard(conn_id)
+            if not indexed_ids:
+                del self._connection_ids_by_tuple[key]
+        return True
+
     def open_connection(
         self,
         src_ip: str,
@@ -1778,6 +1826,7 @@ class StateManager:
             )
 
             self.state.open_connections[conn_id] = connection
+            self._index_connection(connection)
             logger.debug(
                 f"Opened connection {conn_id}: {src_ip}:{src_port} -> {dst_ip}:{dst_port} ({protocol})"
             )
@@ -1884,6 +1933,52 @@ class StateManager:
             conn.bytes_received = transaction.traffic.resp.payload_bytes
             return True
 
+    def connection_tuple_recently_used(
+        self,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+        time: datetime,
+        *,
+        reuse_window: float,
+    ) -> bool:
+        """Return whether indexed live state contains a recent exact tuple.
+
+        Lookup cost depends on the number of connections sharing the requested
+        tuple, rather than the total number of retained connections.
+        """
+        with self._lock:
+            key = self._connection_tuple_key(src_ip, src_port, dst_ip, dst_port, protocol)
+            conn_ids = self._connection_ids_by_tuple.get(key)
+            if not conn_ids:
+                return False
+
+            timestamp = ensure_utc(time).timestamp()
+            stale_ids: list[str] = []
+            for conn_id in conn_ids:
+                connection = self.state.open_connections.get(conn_id)
+                if connection is None:
+                    stale_ids.append(conn_id)
+                    continue
+                if connection.state in self._TERMINAL_CONN_STATES:
+                    continue
+                observed_times = [ensure_utc(connection.start_time)]
+                if connection.close_time is not None:
+                    observed_times.append(ensure_utc(connection.close_time))
+                if any(
+                    abs(timestamp - observed.timestamp()) <= reuse_window
+                    for observed in observed_times
+                ):
+                    return True
+
+            for conn_id in stale_ids:
+                conn_ids.discard(conn_id)
+            if not conn_ids:
+                del self._connection_ids_by_tuple[key]
+            return False
+
     def close_connection(self, conn_id: str) -> bool:
         """Close an open connection.
 
@@ -1894,8 +1989,7 @@ class StateManager:
             True if connection was found and removed, False if not found
         """
         with self._lock:
-            if conn_id in self.state.open_connections:
-                del self.state.open_connections[conn_id]
+            if self._remove_connection(conn_id):
                 logger.debug(f"Closed connection {conn_id}")
                 return True
             return False
@@ -1911,20 +2005,42 @@ class StateManager:
 
     _TERMINAL_CONN_STATES = frozenset({"closed", "S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR"})
 
-    def sweep_closed_connections(self) -> int:
+    def sweep_closed_connections(self, cutoff: datetime | None = None) -> int:
         """Evict completed/failed connections to bound memory growth.
 
-        Call between generation phases (e.g., between hourly passes).
-        Returns the number of connections evicted.
+        Call between generation phases (e.g., between hourly passes). Connections
+        with a known close time are retained until that simulated time has passed,
+        even when generation order reserves future activity early.
+
+        Args:
+            cutoff: Simulated time through which completed connections can be removed.
+                Defaults to the state manager's current time.
+
+        Returns:
+            Number of connections evicted.
         """
         with self._lock:
+            effective_cutoff = (
+                ensure_utc(cutoff)
+                if cutoff is not None
+                else (
+                    ensure_utc(self.state.current_time)
+                    if self.state.current_time is not None
+                    else None
+                )
+            )
             to_remove = [
                 cid
                 for cid, conn in self.state.open_connections.items()
                 if conn.state in self._TERMINAL_CONN_STATES
+                or (
+                    effective_cutoff is not None
+                    and conn.close_time is not None
+                    and ensure_utc(conn.close_time) <= effective_cutoff
+                )
             ]
             for cid in to_remove:
-                del self.state.open_connections[cid]
+                self._remove_connection(cid)
             return len(to_remove)
 
     # ========================================

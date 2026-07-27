@@ -4139,6 +4139,8 @@ class ActivityGenerator:
 
         # IP→System lookup for HostContext resolution on connection events
         self._ip_to_system: dict[str, Any] = {}
+        self._systems_by_hostname: dict[str, Any] = {}
+        self._systems_by_hostname_signature: tuple[int, int, str] | None = None
 
         # Process tree tracking: recent user processes per (hostname, username)
         # Used by _select_parent_pid() for realistic parent-child relationships
@@ -4615,25 +4617,23 @@ class ActivityGenerator:
         wanted = hostname.lower().rstrip(".")
         if not wanted:
             return None
-        systems = []
-        seen_hosts: set[str] = set()
-        for system in getattr(self, "_ip_to_system", {}).values():
-            system_host_key = str(getattr(system, "hostname", "") or "")
-            if system_host_key in seen_hosts:
-                continue
-            seen_hosts.add(system_host_key)
-            systems.append(system)
-        for system in systems:
-            system_host = str(getattr(system, "hostname", "") or "").lower().rstrip(".")
-            ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
-            system_fqdn = (
-                f"{system_host}.{ad_domain}"
-                if system_host and ad_domain and "." not in system_host
-                else system_host
-            )
-            if wanted in {system_host, system_fqdn}:
-                return system
-        return None
+
+        systems_by_ip = getattr(self, "_ip_to_system", {})
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+        signature = (id(systems_by_ip), len(systems_by_ip), ad_domain)
+        if signature != self._systems_by_hostname_signature:
+            systems_by_hostname: dict[str, Any] = {}
+            for system in systems_by_ip.values():
+                system_host = str(getattr(system, "hostname", "") or "").lower().rstrip(".")
+                if not system_host:
+                    continue
+                systems_by_hostname.setdefault(system_host, system)
+                if ad_domain and "." not in system_host:
+                    systems_by_hostname.setdefault(f"{system_host}.{ad_domain}", system)
+            self._systems_by_hostname = systems_by_hostname
+            self._systems_by_hostname_signature = signature
+
+        return self._systems_by_hostname.get(wanted)
 
     def _dns_canonical_internal_hostname(self, hostname: str | None) -> str | None:
         """Return the scenario FQDN for known internal hostnames."""
@@ -5304,28 +5304,15 @@ class ActivityGenerator:
             if seen_at is not None and abs(ts_epoch - seen_at) <= reuse_window:
                 return True
 
-        wanted_src = src_ip.removeprefix("::ffff:")
-        wanted_dst = dst_ip.removeprefix("::ffff:")
-        terminal_states = getattr(self.state_manager, "_TERMINAL_CONN_STATES", frozenset())
-        for connection in self.state_manager.state.open_connections.values():
-            if connection.state in terminal_states:
-                continue
-            if (
-                connection.src_ip.removeprefix("::ffff:") != wanted_src
-                or connection.src_port != src_port
-                or connection.dst_ip.removeprefix("::ffff:") != wanted_dst
-                or connection.dst_port != dst_port
-                or connection.protocol != proto
-            ):
-                continue
-            observed_times = [ensure_utc(connection.start_time)]
-            if connection.close_time is not None:
-                observed_times.append(ensure_utc(connection.close_time))
-            if any(
-                abs(ts_epoch - observed.timestamp()) <= reuse_window for observed in observed_times
-            ):
-                return True
-        return False
+        return self.state_manager.connection_tuple_recently_used(
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            proto,
+            time,
+            reuse_window=reuse_window,
+        )
 
     def _allocate_ephemeral_port(
         self,

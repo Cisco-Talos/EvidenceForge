@@ -3635,7 +3635,7 @@ class BaselineMixin:
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
-                self.state_manager.sweep_closed_connections()
+                self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -3667,7 +3667,7 @@ class BaselineMixin:
 
             self._generate_hour(current_hour, enabled_users)
             # Evict completed/failed connections to bound memory during long runs
-            self.state_manager.sweep_closed_connections()
+            self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")

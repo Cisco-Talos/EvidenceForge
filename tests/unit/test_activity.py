@@ -7193,6 +7193,30 @@ class TestActivityGenerator:
             check_time,
         )
 
+    def test_system_hostname_lookup_cache_refreshes_when_system_map_changes(self, activity_gen):
+        """Hostname lookup should stay indexed while tracking engine/test map updates."""
+        first = System(
+            hostname="APP-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="server",
+        )
+        second = System(
+            hostname="DB-01",
+            ip="10.0.0.11",
+            os="Windows Server 2022",
+            type="server",
+        )
+        activity_gen._ad_domain = "example.test"
+        activity_gen._ip_to_system = {first.ip: first}
+
+        assert activity_gen._system_for_hostname("app-01") is first
+        assert activity_gen._system_for_hostname("APP-01.EXAMPLE.TEST.") is first
+
+        activity_gen._ip_to_system[second.ip] = second
+
+        assert activity_gen._system_for_hostname("db-01.example.test") is second
+
     def test_recent_connection_tuple_cache_ignores_stale_heap_entries(self, activity_gen):
         """Old heap records must not delete newer reservations for the same tuple."""
         first_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
