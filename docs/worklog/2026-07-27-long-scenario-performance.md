@@ -146,3 +146,69 @@ passes and 28 expected skips in 405.41 seconds. The 45-day connection-state test
 ran as part of the default selection because its 0.49-second standalone runtime
 does not justify a `slow` marker. Ruff checks, format checks, and
 `git diff --check` also passed.
+
+## Emitter barrier and storage benchmark
+
+A temporary, uncommitted benchmark harness compared the same deterministic
+48-hour scenario across local and OneDrive-backed output with one-hour and
+six-hour baseline emitter barriers. It recorded queue depth, queue-put latency,
+barrier time, dispatch time, writer flush count/time, final writer close/sort
+time, output size, and SHA-256 hashes for every generated file.
+
+| Storage | Barrier | Elapsed | Barrier time | Max queue | Flushes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Local `/tmp` | 1 hour | 374.1s | 25.0s | 1,827 | 880 |
+| Local `/tmp` | 6 hours | 351.4s | 7.7s | 6,376 | 177 |
+| OneDrive | 1 hour | 369.9s | 26.3s | 1,827 | 880 |
+| OneDrive | 6 hours | 350.2s | 5.9s | 5,492 | 177 |
+
+Six-hour barriers improved elapsed time by 6.1% locally and 5.3% on OneDrive.
+All four runs produced the same 24 output paths, identical SHA-256 hashes, and
+210,556,708 total bytes. Queue occupancy remained well below the 50,000-event
+capacity. Across each run, only zero to five queue puts exceeded 10ms and no
+queue-full/backpressure warning occurred.
+
+OneDrive did not impose a measurable penalty in this controlled 201MB test.
+Hourly writer flush time was 8.0s locally and 8.2s on OneDrive; final writer
+close/global-sort time was 1.9-2.0s in both locations. The existing per-emitter
+background threads therefore kept up comfortably, and the data does not support
+adding a second write-thread stage.
+
+Six-hour cadence caused substantially larger sorted flush batches: summed
+emitter-thread flush time rose from about 8s to 84-95s, even though those threads
+overlapped generation enough to reduce wall time. A more targeted follow-up is
+preferable to simply changing cadence: remove the current sequential timeout
+handshake from `barrier_flush()`. Each emitter worker waits for
+`Queue.get(timeout=0.1)` to expire before observing `_flush_barrier`, and the
+engine invokes seven emitter barriers sequentially. The measured roughly
+0.5-second hourly barrier cost closely matches that design. A queue sentinel or
+direct drain/flush acknowledgement could retain hourly ordering and small
+buffers while avoiding most of the polling delay.
+
+## FIFO emitter barrier implementation
+
+The timeout handshake was replaced with a FIFO flush request placed on each
+emitter's existing event queue. The worker processes every preceding event,
+performs its existing emitter-specific barrier action, and acknowledges the
+request before generation continues. This preserves the hourly boundary and
+per-emitter ordering without waiting for an idle `Queue.get(timeout=0.1)` call.
+Windows Security retains its barrier-specific SQLite spool behavior.
+
+Verification results:
+
+- 184 focused emitter tests passed, including a new regression proving that the
+  queued barrier executes on the emitter worker and leaves no unfinished queue
+  tasks.
+- A two-hour, nine-system all-format SOF-ELK matrix produced 47 byte-identical
+  files before and after the change.
+- The one-hour slice of the supplied scenario produced the same 24 files and
+  2,939,175 bytes. Aggregate barrier time fell from 0.899s to 0.029s.
+- The 48-hour supplied-scenario comparison produced the same 24 files and
+  210,556,708 bytes. Runtime fell from 374.1s to 347.9s (7.0%), while aggregate
+  barrier time fell from 25.0s to 2.1s.
+- The release gate `uv run pytest --no-cov --include-slow` passed with 4,981
+  tests and 28 expected skips in 295.29 seconds. Repository-wide Ruff lint and
+  format checks also passed.
+
+The retained 2.1 seconds is useful work: draining queued events and flushing
+writer buffers. The eliminated 22.9 seconds was polling/handshake latency.

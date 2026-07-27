@@ -1876,15 +1876,17 @@ class SysmonEventEmitter(LogEmitter):
         while not self._stop_event.is_set():
             try:
                 event_data = self._event_queue.get(timeout=0.1)
-                with self._file_lock:
-                    self._event_dicts.append(event_data)
-                    if not self.threaded and len(self._event_dicts) >= self.buffer_size:
-                        self._flush_unlocked()
-                self._event_queue.task_done()
+                try:
+                    if self._handle_flush_request(event_data):
+                        continue
+                    with self._file_lock:
+                        self._event_dicts.append(event_data)
+                        if not self.threaded and len(self._event_dicts) >= self.buffer_size:
+                            self._flush_unlocked()
+                finally:
+                    self._event_queue.task_done()
             except Empty:
-                if self._flush_barrier.is_set():
-                    self.flush()
-                    self._flush_barrier.clear()
+                continue
         self.flush()
 
     def _flush_unlocked(self) -> None:

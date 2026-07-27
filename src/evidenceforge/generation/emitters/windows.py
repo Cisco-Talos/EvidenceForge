@@ -1699,18 +1699,24 @@ class WindowsEventEmitter(LogEmitter):
         while not self._stop_event.is_set():
             try:
                 event_data = self._event_queue.get(timeout=0.1)
-                with self._file_lock:
-                    self._event_dicts.append(event_data)
-                    if len(self._event_dicts) >= self.buffer_size:
-                        self._spool_event_dicts_unlocked()
-                self._event_queue.task_done()
-            except Empty:
-                if self._flush_barrier.is_set():
+                try:
+                    if self._handle_flush_request(event_data):
+                        continue
                     with self._file_lock:
-                        self._spool_event_dicts_unlocked()
-                    self._flush_barrier.clear()
+                        self._event_dicts.append(event_data)
+                        if len(self._event_dicts) >= self.buffer_size:
+                            self._spool_event_dicts_unlocked()
+                finally:
+                    self._event_queue.task_done()
+            except Empty:
+                continue
 
         win_logger.debug(f"Emitter thread stopped for {self.format_def.name}")
+
+    def _flush_at_barrier(self) -> None:
+        """Spool deferred events at the same boundary as the former barrier."""
+        with self._file_lock:
+            self._spool_event_dicts_unlocked()
 
     def _event_sort_key(self, event: dict[str, Any]) -> str:
         """Return a stable sortable timestamp key for deferred Windows events."""
