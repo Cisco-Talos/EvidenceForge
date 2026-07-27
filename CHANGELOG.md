@@ -54,6 +54,9 @@ performance without changing deterministic output.
 - Replaced emitter barrier polling with FIFO flush acknowledgements, reducing a
   representative 48-hour workload by 7% while preserving byte-identical output
   (`b348fc8f`).
+- Repaired stale recursive process-parent fallbacks so long-running scenarios
+  choose a verified live process anchor instead of failing during later RDP
+  client creation (`13146e9e`).
 
 **Assessment records and maintenance**
 
