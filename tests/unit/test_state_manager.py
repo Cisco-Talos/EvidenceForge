@@ -33,6 +33,7 @@ from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation import state_manager as state_manager_module
+from evidenceforge.generation.indexes import TemporalAllocationIndex
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -137,7 +138,9 @@ class TestStateManagerInit:
         later_time = start + timedelta(minutes=20)
         sm._linux_logind_session_initials["linux01"] = 100
         sm._linux_logind_session_used_ids["linux01"] = {180}
-        sm._linux_logind_session_allocations["linux01"] = [(earlier_time, 180)]
+        allocations = TemporalAllocationIndex()
+        allocations.add(earlier_time, 180)
+        sm._linux_logind_session_allocations["linux01"] = allocations
 
         later_id = sm.next_linux_logind_session_id("linux01", rng, later_time)
 
@@ -508,6 +511,46 @@ class TestStateManagerInit:
         assert len({sudo_pid, ecar_pid, sshd_pid}) == 3
         assert max(sudo_pid, ecar_pid, sshd_pid) - min(sudo_pid, ecar_pid, sshd_pid) < 15_000
 
+    def test_linux_pid_collision_work_is_bounded(self, monkeypatch):
+        """A growing allocation history must not cause a growing hash retry chain."""
+        real_stable_seed = state_manager_module._stable_seed
+        stable_seed_calls = 0
+
+        def counted_stable_seed(value: str) -> int:
+            nonlocal stable_seed_calls
+            stable_seed_calls += 1
+            return real_stable_seed(value)
+
+        monkeypatch.setattr(state_manager_module, "_stable_seed", counted_stable_seed)
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        allocation_count = 5_000
+
+        for _ in range(allocation_count):
+            sm.allocate_transient_linux_pid("linux01", event_time)
+
+        assert stable_seed_calls < allocation_count * 3
+
+    def test_linux_pid_allocation_is_repeatable_after_bounded_collision_repair(self):
+        """Equivalent runs should allocate identical PIDs, including out-of-order events."""
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        offsets = (
+            timedelta(seconds=0),
+            timedelta(minutes=20),
+            timedelta(minutes=5),
+            timedelta(minutes=5, seconds=3),
+            timedelta(hours=8),
+        )
+
+        def allocate_sequence() -> list[int]:
+            sm = StateManager()
+            sm.register_boot_time("linux01", boot_time)
+            return [
+                sm.allocate_transient_linux_pid("linux01", boot_time + offset) for offset in offsets
+            ]
+
+        assert allocate_sequence() == allocate_sequence()
+
     def test_linux_transient_pid_rejects_non_linux_hosts_before_allocator_init(self):
         """Transient Linux PIDs should not initialize a Windows host namespace."""
         sm = StateManager()
@@ -554,6 +597,47 @@ class TestStateManagerInit:
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
+
+    def test_historical_session_queries_do_not_scan_global_state(self):
+        """User/system history lookups must use secondary indexes."""
+
+        class NoIterationDict(dict):
+            def values(self):
+                raise AssertionError("global values() scan is forbidden")
+
+            def items(self):
+                raise AssertionError("global items() scan is forbidden")
+
+            def __iter__(self):
+                raise AssertionError("global key iteration is forbidden")
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        target_logon_id = ""
+        for index in range(2_000):
+            username = "target" if index == 1_337 else f"user-{index % 41}"
+            system = "target-host" if index == 1_337 else f"host-{index % 29}"
+            logon_id = sm.create_session(
+                username=username,
+                system=system,
+                logon_type=3,
+                source_ip="10.0.0.1",
+                start_time=start + timedelta(seconds=index),
+            )
+            assert sm.end_session(logon_id, start + timedelta(hours=2))
+            if index == 1_337:
+                target_logon_id = logon_id
+
+        sm._active_sessions._items = NoIterationDict(sm._active_sessions._items)
+        sm._ended_sessions._items = NoIterationDict(sm._ended_sessions._items)
+        cutoff = start + timedelta(minutes=30)
+
+        assert [session.logon_id for session in sm.get_sessions_for_user_at("target", cutoff)] == [
+            target_logon_id
+        ]
+        assert [
+            session.logon_id for session in sm.get_sessions_on_system_at("target-host", cutoff)
+        ] == [target_logon_id]
 
     def test_create_session(self):
         """Test creating a new session."""
@@ -1451,7 +1535,7 @@ class TestConnectionManagement:
         sm.set_current_time(now)
         sm.open_connection("10.0.0.10", 50000, "10.0.0.1", 53, "udp")
         sm.open_connection("::ffff:10.0.0.20", 50001, "10.0.0.2", 443, "tcp")
-        sm.state.open_connections = NoValuesDict(sm.state.open_connections)
+        sm._open_connections._items = NoValuesDict(sm._open_connections._items)
 
         assert sm.connection_tuple_recently_used(
             "10.0.0.20",
@@ -1489,7 +1573,13 @@ class TestConnectionManagement:
             now,
             reuse_window=86_400,
         )
-        assert sm._connection_ids_by_tuple == {}
+        assert (
+            sm._open_connections.find_keys(
+                "exact_tuple",
+                ("10.0.0.10", 50000, "10.0.0.1", 53, "udp"),
+            )
+            == ()
+        )
 
     def test_sweep_removes_connections_closed_by_cutoff(self):
         """Past close times should be evicted even when state remains established."""
@@ -1518,7 +1608,7 @@ class TestConnectionManagement:
         assert removed == 1
         assert sm.get_connection(past_id) is None
         assert sm.get_connection(future_id) is not None
-        assert all(past_id not in conn_ids for conn_ids in sm._connection_ids_by_tuple.values())
+        assert past_id not in sm._open_connections
 
     def test_list_open_connections(self):
         """Test listing all open connections."""

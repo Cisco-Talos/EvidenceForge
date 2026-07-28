@@ -435,14 +435,7 @@ class RdpSessionActionBundle:
 
         if not uid:
             return fallback_start, fallback_close
-        connection = next(
-            (
-                conn
-                for conn in self._executor.state_manager.list_open_connections()
-                if conn.zeek_uid == uid
-            ),
-            None,
-        )
+        connection = self._executor.state_manager.get_connection_by_zeek_uid(uid)
         if connection is None or connection.close_time is None:
             return fallback_start, fallback_close
         return connection.start_time, connection.close_time

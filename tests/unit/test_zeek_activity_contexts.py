@@ -127,7 +127,9 @@ def test_closed_connections_do_not_force_tuple_recent_scan_matches():
         53,
         "udp",
     )
-    gen.state_manager.state.open_connections[conn_id].state = "closed"
+    connection = gen.state_manager.state.open_connections[conn_id]
+    connection.state = "closed"
+    gen.state_manager._refresh_connection_lifecycle(connection)
 
     assert not gen._connection_tuple_recently_used(
         "10.0.0.10",

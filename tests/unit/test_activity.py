@@ -7254,7 +7254,6 @@ class TestActivityGenerator:
         )
 
         assert len(activity_gen._recent_connection_tuples) == 1
-        assert len(activity_gen._recent_connection_tuple_heap) == 1
 
     def test_recent_connection_tuple_cache_prunes_directly_seeded_entries(self, activity_gen):
         """Compatibility fixture seeds should still follow event-time pruning."""
@@ -7266,7 +7265,6 @@ class TestActivityGenerator:
         activity_gen._prune_recent_connection_tuples(current_time.timestamp())
 
         assert activity_gen._recent_connection_tuples == {}
-        assert activity_gen._recent_connection_tuple_heap == []
 
     def test_generate_connection_does_not_infer_dns_for_non_resolver_port_53(
         self, activity_gen, test_system, state_manager, mock_emitters

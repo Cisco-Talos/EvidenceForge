@@ -29,7 +29,6 @@ coordinates them across multiple log formats for consistency.
 
 import base64
 import hashlib
-import heapq
 import io
 import ipaddress
 import itertools
@@ -214,6 +213,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
+from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
@@ -4159,8 +4159,9 @@ class ActivityGenerator:
         self._http_persistent_connections: dict[
             tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
-        self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
-        self._recent_connection_tuple_heap: list[tuple[float, tuple[str, int, str, int, str]]] = []
+        self._recent_connection_tuples: ExpiringIndex[tuple[str, int, str, int, str], float] = (
+            ExpiringIndex(deadline=lambda seen_at: seen_at)
+        )
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
@@ -4169,7 +4170,9 @@ class ActivityGenerator:
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
-        self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
+        self._dns_cache: ExpiringIndex[tuple[str, str, str, str], tuple[float, float]] = (
+            ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
+        )
         self._dns_observation_cache: dict[tuple[str, str, str, str], list[tuple[float, float]]] = {}
         self._dns_resolver_rrset_cache: dict[
             tuple[str, str, str, tuple[str, ...]], tuple[float, float]
@@ -4199,9 +4202,9 @@ class ActivityGenerator:
         self._linux_local_logind_session_ids: dict[str, int] = {}
         self._ssh_session_ready_times: dict[str, datetime] = {}
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
-        self._foreground_process_finalizers: dict[
+        self._foreground_process_finalizers: ExpiringIndex[
             tuple[str, int], tuple[System, str, str, str, datetime]
-        ] = {}
+        ] = ExpiringIndex(deadline=lambda finalizer: finalizer[4].timestamp())
         self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
         self._last_one_shot_cli_launch_by_exe: dict[tuple[str, str, str, str], datetime] = {}
         self._last_one_shot_cli_launch_by_command: dict[
@@ -4334,9 +4337,10 @@ class ActivityGenerator:
             process_name,
             logon_id,
             termination_time,
-        ) in sorted(self._foreground_process_finalizers.items(), key=lambda item: item[1][4]):
-            if termination_time > window_end:
-                continue
+        ) in self._foreground_process_finalizers.expire_before(
+            window_end.timestamp(),
+            inclusive=True,
+        ):
             running = self.state_manager.get_process(system.hostname, key[1])
             if running is None:
                 continue
@@ -5232,7 +5236,6 @@ class ActivityGenerator:
             if previous_seen_at == seen_at:
                 continue
             self._recent_connection_tuples[key] = seen_at
-            heapq.heappush(self._recent_connection_tuple_heap, (seen_at, key))
 
     def _prune_recent_connection_tuples(
         self,
@@ -5241,27 +5244,8 @@ class ActivityGenerator:
         reuse_window: float = _RECENT_CONNECTION_REUSE_WINDOW_SECONDS,
     ) -> None:
         """Remove tuple reservations older than the event-time reuse window."""
-        if self._recent_connection_tuples and not self._recent_connection_tuple_heap:
-            self._recent_connection_tuple_heap = [
-                (seen_at, key) for key, seen_at in self._recent_connection_tuples.items()
-            ]
-            heapq.heapify(self._recent_connection_tuple_heap)
         cutoff = ts_epoch - reuse_window
-        while self._recent_connection_tuple_heap:
-            seen_at, key = self._recent_connection_tuple_heap[0]
-            if seen_at >= cutoff:
-                break
-            heapq.heappop(self._recent_connection_tuple_heap)
-            if self._recent_connection_tuples.get(key) == seen_at:
-                del self._recent_connection_tuples[key]
-        if (
-            len(self._recent_connection_tuple_heap) > 100_000
-            and len(self._recent_connection_tuple_heap) > len(self._recent_connection_tuples) * 4
-        ):
-            self._recent_connection_tuple_heap = [
-                (seen_at, key) for key, seen_at in self._recent_connection_tuples.items()
-            ]
-            heapq.heapify(self._recent_connection_tuple_heap)
+        self._recent_connection_tuples.expire_before(cutoff)
 
     @staticmethod
     def _connection_tuple_key_variants(
@@ -8647,7 +8631,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
+            self._dns_cache = ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -18877,7 +18861,11 @@ class ActivityGenerator:
         # authoritative TTL, so later TCP evidence does not depend on visibly
         # expired DNS answers.
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str, str, str], tuple[float, float]] = {}
+            self._dns_cache = ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
+        elif not isinstance(self._dns_cache, ExpiringIndex):
+            existing_dns_cache = self._dns_cache
+            self._dns_cache = ExpiringIndex(deadline=lambda window: _dns_cache_window(window)[1])
+            self._dns_cache.update(existing_dns_cache)
         if not hasattr(self, "_dns_cache_last_prune"):
             self._dns_cache_last_prune = 0.0
 
@@ -18887,18 +18875,13 @@ class ActivityGenerator:
         # and enforce a hard cap under high-cardinality/adversarial inputs.
         if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
             cutoff = ts_epoch
-            self._dns_cache = {
-                key: cached_window
-                for key, cached_window in self._dns_cache.items()
-                if _dns_cache_window(cached_window)[1] >= cutoff
-            }
+            self._dns_cache.expire_before(cutoff)
             if len(self._dns_cache) > 50_000:
-                sorted_items = sorted(
-                    self._dns_cache.items(),
-                    key=lambda item: item[1],
+                self._dns_cache.trim(
+                    50_000,
+                    rank=lambda _key, cached_window: cached_window,
                     reverse=True,
                 )
-                self._dns_cache = dict(sorted_items[:50_000])
             self._dns_cache_last_prune = ts_epoch
 
         ad_domain = getattr(self, "_ad_domain", "corp.local")

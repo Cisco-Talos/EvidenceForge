@@ -80,14 +80,7 @@ class WindowsRemoteAuthenticationPlanner:
         network_request = self._network_request(request)
         transaction_id = network_request.stable_id
         uid = NetworkConnectionActionBundle(self._executor, network_request).execute()
-        connection = next(
-            (
-                candidate
-                for candidate in self._executor.state_manager.list_open_connections()
-                if candidate.zeek_uid == uid
-            ),
-            None,
-        )
+        connection = self._executor.state_manager.get_connection_by_zeek_uid(uid)
         if connection is None:
             raise ValueError(
                 "Remote-authentication transport did not persist canonical connection state"
@@ -144,19 +137,16 @@ class WindowsRemoteAuthenticationPlanner:
     ) -> RemoteAuthenticationPlan | None:
         """Bind authentication to one explicitly identified exact-tuple transaction."""
 
-        candidates = [
-            connection
-            for connection in self._executor.state_manager.list_open_connections()
-            if connection.transaction_id == transaction_id
-            and connection.src_ip == request.source_ip
-            and connection.src_port == request.source_port
-            and connection.dst_ip == request.target_system.ip
-            and connection.dst_port == request.destination_port
-            and connection.protocol.lower() == "tcp"
-        ]
-        if len(candidates) != 1:
+        connection = self._executor.state_manager.get_connection_by_transaction_id(transaction_id)
+        if (
+            connection is None
+            or connection.src_ip != request.source_ip
+            or connection.src_port != request.source_port
+            or connection.dst_ip != request.target_system.ip
+            or connection.dst_port != request.destination_port
+            or connection.protocol.lower() != "tcp"
+        ):
             return None
-        connection = candidates[0]
         return self.from_existing_transport(
             request,
             transaction_id=transaction_id,

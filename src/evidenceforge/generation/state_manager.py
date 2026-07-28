@@ -36,6 +36,12 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTransactionPlan
+from evidenceforge.generation.indexes import (
+    ExpiringIndex,
+    GroupedTemporalIndex,
+    IndexedEntityStore,
+    TemporalAllocationIndex,
+)
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
     ActiveSession,
@@ -107,6 +113,39 @@ class StateManager:
     def __init__(self) -> None:
         """Initialize StateManager with empty state."""
         self.state = GeneratorState()
+        self._active_sessions: IndexedEntityStore[str, ActiveSession] = IndexedEntityStore(
+            username=lambda session: session.username,
+            system=lambda session: session.system,
+        )
+        self.state.active_sessions = self._active_sessions
+        self._running_processes: IndexedEntityStore[tuple[str, int], RunningProcess] = (
+            IndexedEntityStore(
+                username=lambda process: process.username,
+                system=lambda process: process.system,
+            )
+        )
+        self.state.running_processes = self._running_processes
+        self._running_threads: IndexedEntityStore[tuple[str, str, int], RunningThread] = (
+            IndexedEntityStore(
+                system=lambda thread: thread.hostname,
+                process_object_id=lambda thread: thread.process_object_id,
+            )
+        )
+        self.state.running_threads = self._running_threads
+        self._open_connections: IndexedEntityStore[str, OpenConnection] = IndexedEntityStore(
+            exact_tuple=lambda connection: self._connection_tuple_key(
+                connection.src_ip,
+                connection.src_port,
+                connection.dst_ip,
+                connection.dst_port,
+                connection.protocol,
+            ),
+            zeek_uid=lambda connection: connection.zeek_uid,
+            transaction_id=lambda connection: connection.transaction_id,
+        )
+        self.state.open_connections = self._open_connections
+        self._connection_expirations: ExpiringIndex[str, bool] = ExpiringIndex()
+        self._terminal_connection_ids: dict[str, None] = {}
         self._logon_id_host_bases: dict[str, int] = {}
         self._logon_id_used_host_bases: set[int] = set()
         self._logon_id_epochs: dict[str, datetime] = {}
@@ -123,9 +162,8 @@ class StateManager:
         self._pid_bucket_offsets: dict[tuple[str, int, int], int] = {}
         self._linux_pid_block_offsets: dict[str, dict[int, int]] = {}
         self._linux_pid_used_ids: dict[str, set[int]] = {}
-        self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
+        self._linux_pid_allocations: dict[str, TemporalAllocationIndex] = {}
         self._connection_id_counter = 0
-        self._connection_ids_by_tuple: dict[tuple[str, int, str, int, str], set[str]] = {}
         self._thread_id_counters: dict[str, int] = {}
         self._thread_id_rngs: dict[str, random.Random] = {}
         self._windows_session_id_counters: dict[str, int] = {}
@@ -135,12 +173,24 @@ class StateManager:
         self._linux_logind_session_block_offsets: dict[str, dict[int, int]] = {}
         self._linux_logind_session_last_ids: dict[str, int] = {}
         self._linux_logind_session_used_ids: dict[str, set[int]] = {}
-        self._linux_logind_session_allocations: dict[str, list[tuple[datetime, int]]] = {}
+        self._linux_logind_session_allocations: dict[str, TemporalAllocationIndex] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
 
         # Entity lifecycle: per-system boot times for temporal validation
         self._system_boot_times: dict[str, datetime] = {}
-        self._ended_sessions: dict[str, tuple[ActiveSession, datetime]] = {}
+        self._ended_sessions: IndexedEntityStore[str, tuple[ActiveSession, datetime]] = (
+            IndexedEntityStore(
+                username=lambda ended: ended[0].username,
+                system=lambda ended: ended[0].system,
+            )
+        )
+        self._ended_sessions_by_username_end: GroupedTemporalIndex[str, str] = (
+            GroupedTemporalIndex()
+        )
+        self._ended_sessions_by_system_end: GroupedTemporalIndex[str, str] = GroupedTemporalIndex()
+        self._authoritative_session_ends: GroupedTemporalIndex[tuple[str, str], str] = (
+            GroupedTemporalIndex()
+        )
         self._process_object_ids: dict[tuple[str, int], str] = {}
         self._processes_by_object_id: dict[str, RunningProcess] = {}
         self._ended_threads: dict[tuple[str, str, int], RunningThread] = {}
@@ -270,8 +320,8 @@ class StateManager:
 
         used_ids = {
             session.session_id
-            for session in self.state.active_sessions.values()
-            if session.system == system and session.session_id > 0
+            for session in self._active_sessions.find("system", system)
+            if session.session_id > 0
         }
 
         if logon_type in {2, 11} and session_kind in {"interactive", "logon"}:
@@ -307,6 +357,38 @@ class StateManager:
     def _resolve_logon_id(self, logon_id: str) -> str:
         """Resolve a preplanned session LogonID to its final rendered value."""
         return self._logon_id_aliases.get(logon_id, logon_id)
+
+    def _remove_ended_session(self, logon_id: str) -> None:
+        """Remove ended-session state and its canonical temporal indexes."""
+        ended = self._ended_sessions.pop(logon_id, None)
+        if ended is None:
+            return
+        session, _end_time = ended
+        if logon_id != session.logon_id:
+            return
+        self._ended_sessions_by_username_end.remove(logon_id)
+        self._ended_sessions_by_system_end.remove(logon_id)
+
+    def _index_ended_session(
+        self,
+        logon_id: str,
+        session: ActiveSession,
+        end_time: datetime,
+    ) -> None:
+        """Index one canonical ended session by owner and visible end time."""
+        self._ended_sessions_by_username_end.add(logon_id, session.username, end_time)
+        self._ended_sessions_by_system_end.add(logon_id, session.system, end_time)
+
+    def _index_authoritative_session_end(self, session: ActiveSession) -> None:
+        """Index an authoritative end plan for constant-time rebootstrap checks."""
+        plan = session.end_plan
+        if plan is None or not plan.is_authoritative:
+            return
+        self._authoritative_session_ends.add(
+            session.logon_id,
+            (session.username, session.system),
+            ensure_utc(plan.canonical_end),
+        )
 
     def create_session(
         self,
@@ -392,7 +474,7 @@ class StateManager:
 
             self.state.active_sessions[logon_id] = session
             self._logon_id_aliases.pop(logon_id, None)
-            self._ended_sessions.pop(logon_id, None)
+            self._remove_ended_session(logon_id)
             logger.debug(f"Created session {logon_id} for {username}@{system}")
             return logon_id
 
@@ -420,7 +502,7 @@ class StateManager:
             List of active sessions for the user (may be empty)
         """
         with self._lock:
-            return [s for s in self.state.active_sessions.values() if s.username == username]
+            return self._active_sessions.find("username", username)
 
     def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[ActiveSession]:
         """Get sessions that are active for a user at a specific event time.
@@ -433,15 +515,15 @@ class StateManager:
         cutoff = ensure_utc(at_time)
         with self._lock:
             sessions: dict[str, ActiveSession] = {}
-            for session in self.state.active_sessions.values():
-                if session.username == username and _session_valid_at(session, cutoff):
+            for session in self._active_sessions.find("username", username):
+                if _session_valid_at(session, cutoff):
                     sessions[session.logon_id] = session
-            for session, end_time in self._ended_sessions.values():
-                if (
-                    session.username == username
-                    and _session_valid_at(session, cutoff)
-                    and cutoff < end_time
-                ):
+            for logon_id in self._ended_sessions_by_username_end.keys_after(username, cutoff):
+                ended = self._ended_sessions.get(logon_id)
+                if ended is None:
+                    continue
+                session, end_time = ended
+                if _session_valid_at(session, cutoff) and cutoff < end_time:
                     sessions[session.logon_id] = session
             return list(sessions.values())
 
@@ -457,18 +539,22 @@ class StateManager:
         with self._lock:
             sessions: dict[str, ActiveSession] = {
                 session.logon_id: session
-                for session in self.state.active_sessions.values()
-                if session.username == username and session.system == system
+                for session in self._active_sessions.find("username", username)
+                if session.system == system
             }
-            for session, _end_time in self._ended_sessions.values():
-                if session.username == username and session.system == system:
+            for logon_id in self._ended_sessions_by_username_end.keys_after(username, cutoff):
+                ended = self._ended_sessions.get(logon_id)
+                if ended is None:
+                    continue
+                session, _end_time = ended
+                if session.system == system:
                     sessions[session.logon_id] = session
 
-            has_expired_authoritative_plan = any(
-                session.end_plan is not None
-                and session.end_plan.is_authoritative
-                and ensure_utc(session.end_plan.canonical_end) <= cutoff
-                for session in sessions.values()
+            has_expired_authoritative_plan = bool(
+                self._authoritative_session_ends.keys_at_or_before(
+                    (username, system),
+                    cutoff,
+                )
             )
             if not has_expired_authoritative_plan:
                 return False
@@ -484,7 +570,7 @@ class StateManager:
             List of active sessions on the system (may be empty)
         """
         with self._lock:
-            return [s for s in self.state.active_sessions.values() if s.system == system]
+            return self._active_sessions.find("system", system)
 
     def get_sessions_on_system_at(
         self,
@@ -496,15 +582,15 @@ class StateManager:
         cutoff = ensure_utc(at_time)
         with self._lock:
             sessions: dict[str, ActiveSession] = {}
-            for session in self.state.active_sessions.values():
-                if session.system == system and _session_valid_at(session, cutoff):
+            for session in self._active_sessions.find("system", system):
+                if _session_valid_at(session, cutoff):
                     sessions[session.logon_id] = session
-            for session, end_time in self._ended_sessions.values():
-                if (
-                    session.system == system
-                    and _session_valid_at(session, cutoff)
-                    and cutoff < end_time
-                ):
+            for logon_id in self._ended_sessions_by_system_end.keys_after(system, cutoff):
+                ended = self._ended_sessions.get(logon_id)
+                if ended is None:
+                    continue
+                session, end_time = ended
+                if _session_valid_at(session, cutoff) and cutoff < end_time:
                     sessions[session.logon_id] = session
             return list(sessions.values())
 
@@ -577,7 +663,7 @@ class StateManager:
             )
             self.state.active_sessions[logon_id] = session
             self._logon_id_aliases.pop(logon_id, None)
-            self._ended_sessions.pop(logon_id, None)
+            self._remove_ended_session(logon_id)
             logger.debug("Registered external session %s for %s@%s", logon_id, username, system)
             return session
 
@@ -604,7 +690,10 @@ class StateManager:
             if session is None:
                 return False
             if username is not None:
+                self._authoritative_session_ends.remove(session.logon_id)
                 session.username = username
+                self._active_sessions.refresh(session.logon_id)
+                self._index_authoritative_session_end(session)
             if start_time is not None:
                 session.start_time = ensure_utc(start_time)
             if source_ip is not None:
@@ -648,6 +737,7 @@ class StateManager:
                         f"{logon_id}: {existing.canonical_end.isoformat()}"
                     )
             session.end_plan = plan
+            self._index_authoritative_session_end(session)
             return True
 
     def get_session_end_plan(self, logon_id: str) -> SessionEndPlan | None:
@@ -737,16 +827,18 @@ class StateManager:
     def reassign_session_logon_id(self, logon_id: str, event_time: datetime) -> str | None:
         """Re-key an active session after its final source-native start time is known."""
         with self._lock:
-            session = self.state.active_sessions.pop(logon_id, None)
+            session = self._active_sessions.pop(logon_id, None)
             if session is None:
                 return None
             new_logon_id = f"0x{self._allocate_logon_luid(session.system, event_time):x}"
             session.logon_id = new_logon_id
             session.start_time = ensure_utc(event_time)
-            self.state.active_sessions[new_logon_id] = session
+            self._active_sessions[new_logon_id] = session
+            self._authoritative_session_ends.remove(logon_id)
+            self._index_authoritative_session_end(session)
             self._logon_id_aliases[logon_id] = new_logon_id
-            self._ended_sessions.pop(logon_id, None)
-            self._ended_sessions.pop(new_logon_id, None)
+            self._remove_ended_session(logon_id)
+            self._remove_ended_session(new_logon_id)
             return new_logon_id
 
     def end_session(self, logon_id: str, end_time: datetime | None = None) -> bool:
@@ -761,13 +853,18 @@ class StateManager:
         """
         with self._lock:
             resolved_logon_id = self._resolve_logon_id(logon_id)
-            session = self.state.active_sessions.pop(resolved_logon_id, None)
+            session = self._active_sessions.pop(resolved_logon_id, None)
             if session is not None:
                 if end_time is None:
                     end_time = self.state.current_time
                 if end_time is not None:
                     ended = (session, ensure_utc(end_time))
                     self._ended_sessions[resolved_logon_id] = ended
+                    self._index_ended_session(
+                        resolved_logon_id,
+                        session,
+                        ensure_utc(end_time),
+                    )
                     if resolved_logon_id != logon_id:
                         self._ended_sessions[logon_id] = ended
                 logger.debug("Ended session %s", resolved_logon_id)
@@ -841,15 +938,11 @@ class StateManager:
                 )
                 candidate = initial + (elapsed_minutes * stride) + second_slot + minute_jitter
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
-                allocations = self._linux_logind_session_allocations.setdefault(system, [])
-                earlier_max = max(
-                    (
-                        session_id
-                        for allocated_time, session_id in allocations
-                        if allocated_time <= normalized_time
-                    ),
-                    default=None,
+                allocations = self._linux_logind_session_allocations.setdefault(
+                    system,
+                    TemporalAllocationIndex(),
                 )
+                earlier_max = allocations.max_value_at_or_before(normalized_time)
                 if earlier_max is not None and candidate <= earlier_max:
                     bump = 1 + (
                         _stable_seed(
@@ -859,17 +952,18 @@ class StateManager:
                     )
                     candidate = earlier_max + bump
                 salt = 0
-                while candidate in used or self._linux_logind_matches_elapsed_delta(
-                    allocations,
+                while candidate in used or allocations.matches_elapsed_delta(
                     normalized_time,
                     candidate,
+                    tolerance=0.0,
+                    integral_seconds=True,
                 ):
                     candidate += 7 + (
                         _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
                     )
                     salt += 1
                 used.add(candidate)
-                allocations.append((normalized_time, candidate))
+                allocations.add(normalized_time, candidate)
                 self._linux_logind_session_last_ids[system] = max(
                     candidate, self._linux_logind_session_last_ids.get(system, candidate)
                 )
@@ -888,19 +982,6 @@ class StateManager:
         block_width = 128
         jitter = _stable_seed(f"logind_session_block_jitter:{system}:{block}") % 16
         return (block * block_width) + jitter
-
-    @staticmethod
-    def _linux_logind_matches_elapsed_delta(
-        allocations: list[tuple[datetime, int]],
-        event_time: datetime,
-        candidate: int,
-    ) -> bool:
-        """Return True when a session ID would exactly encode elapsed seconds."""
-        for allocated_time, allocated_id in allocations:
-            elapsed_seconds = abs(int((event_time - allocated_time).total_seconds()))
-            if elapsed_seconds > 0 and abs(candidate - allocated_id) == elapsed_seconds:
-                return True
-        return False
 
     # ========================================
     # Process Management
@@ -943,20 +1024,6 @@ class StateManager:
             return 500
         return pid
 
-    @staticmethod
-    def _linux_pid_matches_elapsed_delta(
-        allocations: list[tuple[datetime, int]],
-        event_time: datetime,
-        candidate: int,
-    ) -> bool:
-        """Return True when a PID would visibly encode elapsed wall-clock seconds."""
-        for allocated_time, allocated_id in allocations:
-            elapsed_seconds = abs((event_time - allocated_time).total_seconds())
-            pid_delta = abs(candidate - allocated_id)
-            if elapsed_seconds >= 1.0 and abs(pid_delta - elapsed_seconds) <= 1.0:
-                return True
-        return False
-
     def _initialize_pid_allocator(self, system: str, os_category: str) -> None:
         """Initialize a per-system PID allocator without creating a process."""
         if system in self._pid_counters:
@@ -994,29 +1061,18 @@ class StateManager:
         pid += (slot * 2) + ordinal
         pid = self._normalize_linux_pid(pid)
 
-        running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
+        running = {process.pid for process in self._running_processes.find("system", system)}
         used = self._linux_pid_used_ids.setdefault(system, set())
-        allocations = self._linux_pid_allocations.setdefault(system, [])
-        prior_visible_pid = max(
-            (
-                allocated_pid
-                for allocated_time, allocated_pid in allocations
-                if allocated_time <= current_time
-            ),
-            default=None,
+        allocations = self._linux_pid_allocations.setdefault(
+            system,
+            TemporalAllocationIndex(),
         )
+        prior_visible_pid = allocations.max_value_at_or_before(current_time)
         if prior_visible_pid is not None and (
             minimum_pid_exclusive is None or prior_visible_pid > minimum_pid_exclusive
         ):
             minimum_pid_exclusive = prior_visible_pid
-        future_pid_exclusive = min(
-            (
-                allocated_pid
-                for allocated_time, allocated_pid in allocations
-                if allocated_time > current_time
-            ),
-            default=None,
-        )
+        future_pid_exclusive = allocations.min_value_after(current_time)
 
         def is_available(candidate: int) -> bool:
             return (
@@ -1028,7 +1084,11 @@ class StateManager:
                     or candidate > minimum_pid_exclusive
                 )
                 and (future_pid_exclusive is None or candidate < future_pid_exclusive)
-                and not self._linux_pid_matches_elapsed_delta(allocations, current_time, candidate)
+                and not allocations.matches_elapsed_delta(
+                    current_time,
+                    candidate,
+                    tolerance=1.0,
+                )
             )
 
         def bounded_candidate(salt: int) -> int | None:
@@ -1044,7 +1104,7 @@ class StateManager:
                 )
                 % span
             )
-            for offset in range(min(span, 4096)):
+            for offset in range(min(span, 64)):
                 candidate = future_pid_exclusive - 1 - ((start + offset) % span)
                 if is_available(candidate):
                     return candidate
@@ -1054,8 +1114,18 @@ class StateManager:
             bounded = bounded_candidate(0)
             if bounded is not None:
                 pid = bounded
+            elif minimum_pid_exclusive is not None and minimum_pid_exclusive < 4_194_304:
+                jump = 23 + (
+                    _stable_seed(
+                        f"linux_pid_lower_bound:{system}:{current_time.isoformat()}:"
+                        f"{minimum_pid_exclusive}"
+                    )
+                    % 47
+                )
+                pid = self._normalize_linux_pid(minimum_pid_exclusive + jump)
+
         collision_salt = 0
-        max_retries = 8_192
+        max_retries = 64
         while not is_available(pid):
             if collision_salt >= max_retries:
                 raise StateError(
@@ -1067,13 +1137,20 @@ class StateManager:
                 pid = bounded
                 if is_available(pid):
                     break
-            elif future_pid_exclusive is not None and pid >= future_pid_exclusive:
+            elif future_pid_exclusive is not None:
                 future_pid_exclusive = None
-            bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
-            pid = self._normalize_linux_pid(pid + bump)
+            lower_bound = max(pid, minimum_pid_exclusive or 499)
+            bump = 23 + (
+                _stable_seed(
+                    f"linux_pid_collision:{system}:{current_time.isoformat()}:"
+                    f"{lower_bound}:{collision_salt}"
+                )
+                % 47
+            )
+            pid = self._normalize_linux_pid(lower_bound + bump)
             collision_salt += 1
         used.add(pid)
-        allocations.append((current_time, pid))
+        allocations.add(current_time, pid)
         return pid
 
     def allocate_transient_linux_pid(
@@ -1144,7 +1221,10 @@ class StateManager:
             self._initialize_pid_allocator(system, os_category)
             if os_category == "linux":
                 self._linux_pid_used_ids.setdefault(system, set()).add(pid)
-                self._linux_pid_allocations.setdefault(system, []).append((normalized_start, pid))
+                self._linux_pid_allocations.setdefault(
+                    system,
+                    TemporalAllocationIndex(),
+                ).add(normalized_start, pid)
             object_id = stable_uuid(
                 "registered-process",
                 system,
@@ -1266,7 +1346,7 @@ class StateManager:
                 if self._pid_counters[system] > 65536:
                     self._pid_counters[system] = 4000
                     running = {
-                        p.pid for (s, _), p in self.state.running_processes.items() if s == system
+                        process.pid for process in self._running_processes.find("system", system)
                     }
                     while self._pid_counters[system] in running:
                         self._pid_counters[system] += 4
@@ -1373,8 +1453,7 @@ class StateManager:
             candidate = pid + 1 + (_stable_seed(f"linux_tid:{system}:{process_object_id}") % 1024)
             used = {
                 thread.tid
-                for thread in self.state.running_threads.values()
-                if thread.hostname == system and thread.process_object_id == process_object_id
+                for thread in self._running_threads.find("process_object_id", process_object_id)
             }
             while candidate in used:
                 candidate += 1
@@ -1388,11 +1467,7 @@ class StateManager:
             system,
             random.Random(_stable_seed(f"windows_tid_alloc:{system}")),
         )
-        used = {
-            thread.tid
-            for thread in self.state.running_threads.values()
-            if thread.hostname == system
-        }
+        used = {thread.tid for thread in self._running_threads.find("system", system)}
         candidate = counter - (counter % 4)
         while candidate in used or candidate <= 0:
             candidate += 4
@@ -1632,7 +1707,7 @@ class StateManager:
             List of running processes for the user (may be empty)
         """
         with self._lock:
-            return [p for p in self.state.running_processes.values() if p.username == username]
+            return self._running_processes.find("username", username)
 
     def get_processes_on_system(self, system: str) -> list[RunningProcess]:
         """Get all running processes on a system.
@@ -1644,7 +1719,7 @@ class StateManager:
             List of running processes on the system (may be empty)
         """
         with self._lock:
-            return [p for p in self.state.running_processes.values() if p.system == system]
+            return self._running_processes.find("system", system)
 
     def mark_story_process(self, system: str, pid: int) -> None:
         """Mark a process as created by a storyline event.
@@ -1681,9 +1756,11 @@ class StateManager:
             process = self.state.running_processes.get(key)
             if process is not None:
                 thread_keys = [
-                    thread_key
-                    for thread_key in self.state.running_threads
-                    if thread_key[0] == system and thread_key[1] == process.ecar_object_id
+                    (thread.hostname, thread.process_object_id, thread.tid)
+                    for thread in self._running_threads.find(
+                        "process_object_id",
+                        process.ecar_object_id,
+                    )
                 ]
                 for thread_key in thread_keys:
                     self.end_thread(*thread_key, end_time=end_time)
@@ -1695,9 +1772,7 @@ class StateManager:
 
     def _clear_session_process_references(self, system: str, pid: int) -> None:
         """Clear active-session pointers to a process that has ended."""
-        for session in self.state.active_sessions.values():
-            if session.system != system:
-                continue
+        for session in self._active_sessions.find("system", system):
             if session.explorer_pid == pid:
                 session.explorer_pid = None
             if session.session_user_manager_pid == pid:
@@ -1743,32 +1818,31 @@ class StateManager:
 
     def _index_connection(self, connection: OpenConnection) -> None:
         """Add a connection to the exact-tuple lookup index."""
-        key = self._connection_tuple_key(
-            connection.src_ip,
-            connection.src_port,
-            connection.dst_ip,
-            connection.dst_port,
-            connection.protocol,
-        )
-        self._connection_ids_by_tuple.setdefault(key, set()).add(connection.conn_id)
+        self._open_connections.refresh(connection.conn_id)
+        self._refresh_connection_lifecycle(connection)
+
+    def _refresh_connection_lifecycle(self, connection: OpenConnection) -> None:
+        """Refresh close-time and terminal-state indexes for a connection."""
+        if connection.close_time is None:
+            self._connection_expirations.pop(connection.conn_id, None)
+        else:
+            self._connection_expirations.set(
+                connection.conn_id,
+                True,
+                ensure_utc(connection.close_time).timestamp(),
+            )
+        if connection.state in self._TERMINAL_CONN_STATES:
+            self._terminal_connection_ids[connection.conn_id] = None
+        else:
+            self._terminal_connection_ids.pop(connection.conn_id, None)
 
     def _remove_connection(self, conn_id: str) -> bool:
         """Remove a connection and its exact-tuple index entry."""
-        connection = self.state.open_connections.pop(conn_id, None)
-        if connection is None:
+        removed = self._open_connections.pop(conn_id, None)
+        if removed is None:
             return False
-        key = self._connection_tuple_key(
-            connection.src_ip,
-            connection.src_port,
-            connection.dst_ip,
-            connection.dst_port,
-            connection.protocol,
-        )
-        indexed_ids = self._connection_ids_by_tuple.get(key)
-        if indexed_ids is not None:
-            indexed_ids.discard(conn_id)
-            if not indexed_ids:
-                del self._connection_ids_by_tuple[key]
+        self._connection_expirations.pop(conn_id, None)
+        self._terminal_connection_ids.pop(conn_id, None)
         return True
 
     def open_connection(
@@ -1875,6 +1949,21 @@ class StateManager:
         with self._lock:
             return self.state.open_connections.get(conn_id)
 
+    def get_connection_by_zeek_uid(self, zeek_uid: str) -> OpenConnection | None:
+        """Return the canonical connection with a Zeek UID."""
+        with self._lock:
+            matches = self._open_connections.find("zeek_uid", zeek_uid)
+            return matches[0] if matches else None
+
+    def get_connection_by_transaction_id(
+        self,
+        transaction_id: str,
+    ) -> OpenConnection | None:
+        """Return the unique canonical connection for a transaction ID."""
+        with self._lock:
+            matches = self._open_connections.find("transaction_id", transaction_id)
+            return matches[0] if len(matches) == 1 else None
+
     def update_connection_interval(
         self,
         conn_id: str,
@@ -1888,6 +1977,7 @@ class StateManager:
                 return False
             conn.start_time = ensure_utc(start_time)
             conn.close_time = ensure_utc(close_time) if close_time is not None else None
+            self._refresh_connection_lifecycle(conn)
             return True
 
     def update_connection_bytes(self, conn_id: str, bytes_sent: int, bytes_received: int) -> bool:
@@ -1931,6 +2021,8 @@ class StateManager:
             conn.traffic_ledger = transaction.traffic
             conn.bytes_sent = transaction.traffic.orig.payload_bytes
             conn.bytes_received = transaction.traffic.resp.payload_bytes
+            self._open_connections.refresh(conn_id)
+            self._refresh_connection_lifecycle(conn)
             return True
 
     def connection_tuple_recently_used(
@@ -1951,17 +2043,12 @@ class StateManager:
         """
         with self._lock:
             key = self._connection_tuple_key(src_ip, src_port, dst_ip, dst_port, protocol)
-            conn_ids = self._connection_ids_by_tuple.get(key)
-            if not conn_ids:
+            connections = self._open_connections.find("exact_tuple", key)
+            if not connections:
                 return False
 
             timestamp = ensure_utc(time).timestamp()
-            stale_ids: list[str] = []
-            for conn_id in conn_ids:
-                connection = self.state.open_connections.get(conn_id)
-                if connection is None:
-                    stale_ids.append(conn_id)
-                    continue
+            for connection in connections:
                 if connection.state in self._TERMINAL_CONN_STATES:
                     continue
                 observed_times = [ensure_utc(connection.start_time)]
@@ -1972,11 +2059,6 @@ class StateManager:
                     for observed in observed_times
                 ):
                     return True
-
-            for conn_id in stale_ids:
-                conn_ids.discard(conn_id)
-            if not conn_ids:
-                del self._connection_ids_by_tuple[key]
             return False
 
     def close_connection(self, conn_id: str) -> bool:
@@ -2029,16 +2111,13 @@ class StateManager:
                     else None
                 )
             )
-            to_remove = [
-                cid
-                for cid, conn in self.state.open_connections.items()
-                if conn.state in self._TERMINAL_CONN_STATES
-                or (
-                    effective_cutoff is not None
-                    and conn.close_time is not None
-                    and ensure_utc(conn.close_time) <= effective_cutoff
-                )
-            ]
+            to_remove: dict[str, None] = dict(self._terminal_connection_ids)
+            if effective_cutoff is not None:
+                for conn_id, _marker in self._connection_expirations.expire_before(
+                    effective_cutoff.timestamp(),
+                    inclusive=True,
+                ):
+                    to_remove[conn_id] = None
             for cid in to_remove:
                 self._remove_connection(cid)
             return len(to_remove)
@@ -2312,3 +2391,5 @@ class StateManager:
                             conn.state = "closed"
                         elif transaction is None and event.network.conn_state:
                             conn.state = event.network.conn_state
+                        self._open_connections.refresh(conn.conn_id)
+                        self._refresh_connection_lifecycle(conn)

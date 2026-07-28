@@ -608,14 +608,7 @@ class SshSessionActionBundle:
     ) -> None:
         """Copy canonical network ownership details back into the SSH lifecycle state."""
 
-        connection = next(
-            (
-                conn
-                for conn in self.executor.state_manager.list_open_connections()
-                if conn.zeek_uid == network_uid
-            ),
-            None,
-        )
+        connection = self.executor.state_manager.get_connection_by_zeek_uid(network_uid)
         if connection is None:
             return
         state.conn_id = connection.conn_id

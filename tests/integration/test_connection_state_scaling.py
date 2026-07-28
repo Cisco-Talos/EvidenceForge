@@ -28,7 +28,7 @@ from evidenceforge.generation.state_manager import StateManager
 
 
 def test_45_day_connection_state_remains_bounded() -> None:
-    """Completed connections and tuple indexes should not grow across 45 simulated days."""
+    """Completed connections and secondary indexes should not grow across 45 simulated days."""
     manager = StateManager()
     scenario_start = datetime(2024, 1, 1, tzinfo=UTC)
     connections_per_day = 1_000
@@ -61,4 +61,10 @@ def test_45_day_connection_state_remains_bounded() -> None:
             manager.sweep_closed_connections(day_start + timedelta(days=1)) == connections_per_day
         )
         assert manager.state.open_connections == {}
-        assert manager._connection_ids_by_tuple == {}
+        assert (
+            manager._open_connections.find_keys(
+                "exact_tuple",
+                ("192.0.2.250", 59_999, "10.10.0.53", 53, "udp"),
+            )
+            == ()
+        )
