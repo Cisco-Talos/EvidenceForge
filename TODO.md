@@ -54,9 +54,6 @@ without turning `TODO.md` back into a high-conflict work journal.
   assessment loop: dataset-wide uniform Sysmon collection/event-family shape,
   tight eCAR wrapper/child timing around DC service/task execution, residual
   service/task parentage edge cases, and regular eCAR `FLOW` actor omission.
-- [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier
-  flushes to write year-partitioned syslog files, while preserving final
-  sort/logind normalization at close.
 - [ ] **P2** Revisit proxy access log realism and parser compatibility; consider
   switching `proxy_access.log` from W3C Extended format to Apache/Nginx
   combined-style output with absolute URLs and CONNECT targets.
@@ -72,10 +69,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 Recently completed: Codex fix-family PR review/rework, full slow-suite
 regression cleanup, architecture reset validation, output-target extraction,
 source timing planner work, identity-directory and endpoint host-clock realism,
-and Host/EDR reviewer-1 fixes for journald sparsity, polkit role gating, remote
-command ownership, Windows maintenance cadence/runtime, and source-aware LSASS
-call traces. Keep further per-loop or per-PR details in worklogs or PR
-descriptions.
+long-scenario duration-stable state and syslog spooling, and Host/EDR reviewer-1
+fixes for journald sparsity, polkit role gating, remote command ownership,
+Windows maintenance cadence/runtime, and source-aware LSASS call traces. Keep
+further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
@@ -209,8 +206,8 @@ descriptions.
 - [ ] Add configurable per-host/source log deployment coverage for named host
   groups, disabled sensors, partial deployments, and collection windows.
 - [x] **P2** Profiled long-scenario generation and removed duration-growing
-  connection, session, process/thread, expiry, Linux PID, and logind state
-  paths. See
+  connection, session, process/thread, expiry, Linux PID, logind, and
+  multi-host syslog retention paths. See
   [the long-scenario performance worklog](docs/worklog/2026-07-27-long-scenario-performance.md).
 
 ---

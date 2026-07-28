@@ -63,6 +63,10 @@ to earlier development builds.
   history behind shared duration-stable indexes. Replaced the quadratic Linux
   PID collision walk with bounded deterministic allocation, reducing 8,000
   sequential allocations from 18.18 seconds to 0.105 seconds (`eafb0f05`).
+- Prevented backdated session bootstrap from resurrecting ended sessions,
+  indexed the remaining session-owned process lookups, bounded syslog retention
+  with record-preserving hourly spools, and stabilized long-run ETA display
+  over a 15-minute speed window (`bb6d6033`).
 
 **Assessment records and maintenance**
 

@@ -271,3 +271,68 @@ Verification for commit `eafb0f05`:
 - The explicit coverage gate was aborted at the maintainer's direction after
   25m23s (105 passed, 5 skipped) because instrumentation made generation-heavy
   integration tests prohibitively slow; it is not recorded as a passing gate.
+
+## Lifecycle-boundary and syslog-memory hardening
+
+The next full run reached 58% before failing to resolve a planned session. The
+failure was a lifecycle-boundary bug rather than corrupt authored data:
+`WorldPlanner` found no session at the activity time and requested a logon a few
+seconds earlier, while `ActivityGenerator` reused an ended session that was
+historically valid at the backdated logon time. The planner then correctly
+rejected that returned ID because it was no longer active at the actual activity
+time.
+
+Commit `bb6d6033` separates these two contracts explicitly:
+
+- historical session queries remain available for rendering out-of-order
+  evidence before a visible logoff;
+- active-only session queries are used when new state will be attached;
+- backdated bootstrap requests carry the later time at which reuse must remain
+  valid; and
+- direct SSH and RDP source-session bootstrap paths use the same guard.
+
+The repository-wide follow-up scan found three remaining global running-process
+enumerations in session teardown and one global active-session enumeration in
+Windows interactive-session selection. Running processes now have a LogonID
+secondary index, teardown uses a session-scoped lookup, and interactive-session
+selection uses the existing host index. No generation call sites remain that
+enumerate every active session, running process, or open connection to locate
+one owner.
+
+Syslog was the remaining duration-growing memory consumer. It must preserve a
+host-wide final sort and source-native logind, PAM, sudo, and kernel timestamp
+normalization, so ordinary writer flushing could not safely write final output
+early. Hourly barriers now spill each logical rendered record to a private,
+record-preserving JSON-lines spool. Close processes one host at a time, performs
+the same final normalization, writes the native year-partitioned output, and
+removes the private spool. JSON framing is intentionally private: it preserves
+embedded CRLF and other adversarial message content without changing final
+syslog bytes.
+
+A 200,000-row, 20-host synthetic measurement reduced pre-close maximum RSS from
+about 109.7 MB to 93.0 MB (about 15%) at that scale. More importantly, retained
+memory now scales with the largest host's finalization set rather than the
+entire multi-host syslog corpus. Barrier-spooled and fully buffered syslog output
+is byte-identical, including embedded CRLF records.
+
+The Rich generation progress display now estimates speed over a 15-minute
+window. This is display-only and prevents the ETA from disappearing when a
+long-running scenario has irregular per-hour work.
+
+Final verification:
+
+- 617 combined focused lifecycle, state, activity, and logoff tests passed.
+- 68 adversarial-payload integration tests passed.
+- The deterministic-generation integration test passed with byte-identical
+  artifacts across independent runs.
+- The default non-slow selection produced 4,985 passes and 41 expected skips;
+  its only initial failure was the sandbox denying a localhost port bind in the
+  Splunk harness, and that test passed when rerun with the required permission.
+- `uv run pytest --no-cov --include-slow` passed with 4,999 tests and 28
+  expected skips in 288.82 seconds.
+- After the final deterministic-identity compatibility review, 242 focused
+  CLI, state, world-model, and emitter tests passed.
+- Repository-wide Ruff lint, format, and diff checks passed.
+- Coverage was not rerun, following the maintainer's direction that the
+  coverage-instrumented generation suite was too slow. The default and slow
+  gates were run without coverage as required by the project release policy.
