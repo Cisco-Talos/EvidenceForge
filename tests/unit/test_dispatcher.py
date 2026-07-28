@@ -1949,6 +1949,63 @@ class TestCanHandleDefault:
         assert lines[0].startswith("<86>Oct 14 19:00:53")
         assert lines[1].startswith("<86>Oct 14 20:01:25")
 
+    def test_syslog_barrier_spooling_preserves_byte_identical_final_output(self, tmp_path):
+        """Barrier spills should bound buffers without changing normalized output bytes."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        events = [
+            {
+                "timestamp": datetime(2024, 10, 14, 20, 1, 25, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 500,
+                "facility": 10,
+                "severity": 6,
+                "message": "Removed session 170.",
+            },
+            {
+                "timestamp": datetime(2024, 10, 14, 19, 0, 53, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 500,
+                "facility": 10,
+                "severity": 6,
+                "message": "New session 176 of user jsmith.",
+            },
+            {
+                "timestamp": datetime(2024, 10, 14, 19, 30, 0, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "logger",
+                "pid": 700,
+                "facility": 10,
+                "severity": 5,
+                "message": "field=value\r\nforged-entry: status=ok",
+            },
+        ]
+        outputs = []
+        for name, use_barriers in (("buffered.log", False), ("spooled.log", True)):
+            output_path = tmp_path / name
+            emitter = SyslogEmitter(
+                load_format("syslog"),
+                output_path,
+                buffer_size=10,
+                threaded=use_barriers,
+            )
+            emitter.configure_output_target("sof-elk")
+            for event in events:
+                emitter.emit_raw(dict(event))
+                if use_barriers:
+                    emitter.barrier_flush()
+                    assert all(not writer.buffer for writer in emitter._writers.values())
+            emitter.close()
+            outputs.append(output_path.read_bytes())
+
+        assert outputs[0] == outputs[1]
+        assert b"field=value\r\nforged-entry: status=ok" in outputs[1]
+
     def test_syslog_routes_generated_output_by_event_year(self, tmp_path):
         """Directory-mode syslog output should split host logs by event year."""
         from datetime import UTC, datetime

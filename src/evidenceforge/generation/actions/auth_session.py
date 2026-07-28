@@ -49,6 +49,7 @@ class LogonRequest:
     emit_transport_syslog: bool = True
     emit_network_evidence: bool = True
     logon_id: str | None = None
+    reuse_required_at: datetime | None = None
     lifecycle_group_id: str = ""
     session_end_plan: SessionEndPlan | None = None
     remote_authentication_plan: RemoteAuthenticationPlan | None = None

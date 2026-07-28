@@ -993,6 +993,7 @@ class WorldPlanner:
             time=logon_time,
             logon_type=plan.logon_type,
             source_ip=plan.source_ip,
+            reuse_required_at=time,
             session_end_plan=session_end_plan,
         )
         session = self.state_manager.get_session(logon_id)

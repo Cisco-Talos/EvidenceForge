@@ -122,6 +122,7 @@ class StateManager:
             IndexedEntityStore(
                 username=lambda process: process.username,
                 system=lambda process: process.system,
+                logon_id=lambda process: process.logon_id,
             )
         )
         self.state.running_processes = self._running_processes
@@ -492,6 +493,25 @@ class StateManager:
                 self._resolve_logon_id(logon_id)
             )
 
+    def get_session_at(self, logon_id: str, at_time: datetime) -> ActiveSession | None:
+        """Get an active or ended session if it could own activity at an event time."""
+
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self._active_sessions.get(resolved_logon_id)
+            if session is not None:
+                return session if _session_valid_at(session, cutoff) else None
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
+            if ended is None:
+                return None
+            session, end_time = ended
+            if _session_valid_at(session, cutoff) and cutoff < end_time:
+                return session
+            return None
+
     def get_sessions_for_user(self, username: str) -> list[ActiveSession]:
         """Get all active sessions for a user.
 
@@ -505,19 +525,22 @@ class StateManager:
             return self._active_sessions.find("username", username)
 
     def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[ActiveSession]:
-        """Get sessions that are active for a user at a specific event time.
+        """Get active or ended sessions valid for a user at an event time.
 
         Generation can enqueue a long-lived session's logoff before later
         same-window activities are rendered. Those sessions are no longer in
         active state, but they are still valid for events before the visible
         logoff timestamp.
+
+        Call ``get_active_sessions_for_user_at()`` when the caller will mutate
+        the session or attach newly generated state to it.
         """
         cutoff = ensure_utc(at_time)
         with self._lock:
-            sessions: dict[str, ActiveSession] = {}
-            for session in self._active_sessions.find("username", username):
-                if _session_valid_at(session, cutoff):
-                    sessions[session.logon_id] = session
+            sessions = {
+                session.logon_id: session
+                for session in self.get_active_sessions_for_user_at(username, cutoff)
+            }
             for logon_id in self._ended_sessions_by_username_end.keys_after(username, cutoff):
                 ended = self._ended_sessions.get(logon_id)
                 if ended is None:
@@ -526,6 +549,21 @@ class StateManager:
                 if _session_valid_at(session, cutoff) and cutoff < end_time:
                     sessions[session.logon_id] = session
             return list(sessions.values())
+
+    def get_active_sessions_for_user_at(
+        self,
+        username: str,
+        at_time: datetime,
+    ) -> list[ActiveSession]:
+        """Get currently live user sessions that had started by an event time."""
+
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            return [
+                session
+                for session in self._active_sessions.find("username", username)
+                if _session_valid_at(session, cutoff)
+            ]
 
     def authoritative_session_end_blocks_rebootstrap(
         self,
@@ -577,14 +615,18 @@ class StateManager:
         system: str,
         at_time: datetime,
     ) -> list[ActiveSession]:
-        """Get sessions that may own activity on a system at a specific time."""
+        """Get active or ended sessions valid on a system at an event time.
+
+        Call ``get_active_sessions_on_system_at()`` when the caller will mutate
+        the session or attach newly generated state to it.
+        """
 
         cutoff = ensure_utc(at_time)
         with self._lock:
-            sessions: dict[str, ActiveSession] = {}
-            for session in self._active_sessions.find("system", system):
-                if _session_valid_at(session, cutoff):
-                    sessions[session.logon_id] = session
+            sessions = {
+                session.logon_id: session
+                for session in self.get_active_sessions_on_system_at(system, cutoff)
+            }
             for logon_id in self._ended_sessions_by_system_end.keys_after(system, cutoff):
                 ended = self._ended_sessions.get(logon_id)
                 if ended is None:
@@ -593,6 +635,21 @@ class StateManager:
                 if _session_valid_at(session, cutoff) and cutoff < end_time:
                     sessions[session.logon_id] = session
             return list(sessions.values())
+
+    def get_active_sessions_on_system_at(
+        self,
+        system: str,
+        at_time: datetime,
+    ) -> list[ActiveSession]:
+        """Get currently live host sessions that had started by an event time."""
+
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            return [
+                session
+                for session in self._active_sessions.find("system", system)
+                if _session_valid_at(session, cutoff)
+            ]
 
     def register_session(
         self,
@@ -1720,6 +1777,30 @@ class StateManager:
         """
         with self._lock:
             return self._running_processes.find("system", system)
+
+    def get_processes_for_session(
+        self,
+        logon_id: str,
+        system: str | None = None,
+    ) -> list[RunningProcess]:
+        """Get running processes owned by one session.
+
+        Args:
+            logon_id: Canonical or aliased LogonID to search for.
+            system: Optional hostname constraint.
+
+        Returns:
+            Running processes owned by the session.
+        """
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            logon_ids = {logon_id, resolved_logon_id}
+            processes: dict[tuple[str, int], RunningProcess] = {}
+            for candidate_logon_id in logon_ids:
+                for process in self._running_processes.find("logon_id", candidate_logon_id):
+                    if system is None or process.system == system:
+                        processes[(process.system, process.pid)] = process
+            return list(processes.values())
 
     def mark_story_process(self, system: str, pid: int) -> None:
         """Mark a process as created by a storyline event.

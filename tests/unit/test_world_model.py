@@ -391,6 +391,39 @@ def test_world_planner_reuses_durable_windows_interactive_session(
     assert "logon" not in emitted_types
 
 
+def test_world_planner_does_not_resurrect_session_ended_during_logon_backdate(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """A backdated logon must not return a historically valid but ended session."""
+    activity_time = datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC)
+    state_manager.set_current_time(activity_time - timedelta(hours=1))
+    ended_logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+    state_manager.end_session(
+        ended_logon_id,
+        activity_time - timedelta(milliseconds=250),
+    )
+
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=activity_time,
+        rng=random.Random(29),
+        session_kind="interactive",
+    )
+
+    assert result.session.logon_id != ended_logon_id
+    assert state_manager.get_session(result.session.logon_id) is result.session
+
+
 def test_world_planner_bootstraps_ssh_session(
     planner: WorldPlanner,
     state_manager: StateManager,

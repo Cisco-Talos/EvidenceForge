@@ -4980,10 +4980,12 @@ class ActivityGenerator:
 
         candidates = [
             session
-            for session in self.state_manager.list_active_sessions()
+            for session in self.state_manager.get_active_sessions_on_system_at(
+                system.hostname,
+                time,
+            )
             if (
-                session.system == system.hostname
-                and session.username not in _SYSTEM_ACCOUNTS
+                session.username not in _SYSTEM_ACCOUNTS
                 and not session.username.endswith("$")
                 and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
                 and session.session_kind not in {"network", "service"}
@@ -8739,6 +8741,7 @@ class ActivityGenerator:
         emit_transport_syslog: bool = True,
         emit_network_evidence: bool = True,
         logon_id: str | None = None,
+        reuse_required_at: datetime | None = None,
         lifecycle_group_id: str = "",
         session_end_plan: SessionEndPlan | None = None,
         remote_authentication_plan: RemoteAuthenticationPlan | None = None,
@@ -8773,6 +8776,7 @@ class ActivityGenerator:
             emit_transport_syslog=emit_transport_syslog,
             emit_network_evidence=emit_network_evidence,
             logon_id=logon_id,
+            reuse_required_at=reuse_required_at,
             lifecycle_group_id=lifecycle_group_id,
             session_end_plan=session_end_plan,
             remote_authentication_plan=remote_authentication_plan,
@@ -8852,8 +8856,17 @@ class ActivityGenerator:
                 time,
             )
             if existing_interactive is not None:
-                existing_interactive.last_activity_time = time
-                return existing_interactive.logon_id
+                reusable = (
+                    request.reuse_required_at is None
+                    or self.state_manager.get_session_at(
+                        existing_interactive.logon_id,
+                        request.reuse_required_at,
+                    )
+                    is not None
+                )
+                if reusable:
+                    existing_interactive.last_activity_time = time
+                    return existing_interactive.logon_id
         if (
             logon_id is None
             and os_cat == "linux"
@@ -8866,8 +8879,17 @@ class ActivityGenerator:
                 time,
             )
             if existing_interactive is not None:
-                existing_interactive.last_activity_time = time
-                return existing_interactive.logon_id
+                reusable = (
+                    request.reuse_required_at is None
+                    or self.state_manager.get_session_at(
+                        existing_interactive.logon_id,
+                        request.reuse_required_at,
+                    )
+                    is not None
+                )
+                if reusable:
+                    existing_interactive.last_activity_time = time
+                    return existing_interactive.logon_id
         local_logon = logon_type in (2, 5, 7, 11)
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
@@ -10137,8 +10159,10 @@ class ActivityGenerator:
             ]
             session_end_markers.extend(
                 marker
-                for proc in self.state_manager.list_running_processes()
-                if proc.system == system.hostname and proc.logon_id == logon_id
+                for proc in self.state_manager.get_processes_for_session(
+                    logon_id,
+                    system.hostname,
+                )
                 for marker in (proc.last_activity_time or proc.start_time,)
                 if marker is not None
                 and (
@@ -10166,11 +10190,10 @@ class ActivityGenerator:
                 self._linux_shell_last_session_close[(system.hostname, user.username)] = ensure_utc(
                     time
                 )
-            session_processes = [
-                proc
-                for proc in self.state_manager.list_running_processes()
-                if proc.system == session.system and proc.logon_id == logon_id
-            ]
+            session_processes = self.state_manager.get_processes_for_session(
+                logon_id,
+                session.system,
+            )
             session_process_by_pid = {proc.pid: proc for proc in session_processes}
 
             def _session_process_depth(pid: int) -> int:
@@ -10247,11 +10270,10 @@ class ActivityGenerator:
                 time = max(time, minimum_logoff_time)
 
             if authoritative_end_plan is not None:
-                remaining_processes = [
-                    proc
-                    for proc in self.state_manager.list_running_processes()
-                    if proc.system == session.system and proc.logon_id == logon_id
-                ]
+                remaining_processes = self.state_manager.get_processes_for_session(
+                    logon_id,
+                    session.system,
+                )
                 if remaining_processes:
                     raise StateError(
                         "Authoritative session closure left running processes: "
@@ -12175,6 +12197,7 @@ class ActivityGenerator:
                 source_system,
                 logon_time,
                 logon_type=2,
+                reuse_required_at=requested_time,
             )
             session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -21497,6 +21520,7 @@ class ActivityGenerator:
                     source_system,
                     logon_time,
                     logon_type=2,
+                    reuse_required_at=time,
                 )
                 source_session = self.state_manager.get_session(logon_id)
             if source_session is None:

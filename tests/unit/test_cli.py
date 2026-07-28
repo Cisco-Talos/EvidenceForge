@@ -22,9 +22,11 @@
 
 """Unit tests for CLI commands."""
 
+from io import StringIO
 from unittest.mock import Mock, patch
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from evidenceforge import __version__
@@ -34,6 +36,7 @@ from evidenceforge.cli.commands import (
     EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
     EXIT_SUCCESS,
+    _generation_progress,
     app,
 )
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
@@ -41,6 +44,13 @@ from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILEN
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
+
+
+def test_generation_progress_uses_fifteen_minute_speed_window():
+    """Long generation ETA should retain enough samples across irregular hours."""
+    progress = _generation_progress(Console(file=StringIO()))
+
+    assert progress.speed_estimate_period == 15 * 60
 
 
 def _write_included_minimal_scenario(tmp_path, *, name="include-cli-test"):

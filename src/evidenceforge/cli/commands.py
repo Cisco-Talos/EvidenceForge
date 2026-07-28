@@ -90,6 +90,21 @@ def _path_exists_or_symlink(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
+def _generation_progress(console: Console) -> Progress:
+    """Build the long-running generation progress display."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        transient=False,
+        speed_estimate_period=15 * 60,
+    )
+
+
 def _reject_generated_sidecar_symlinks(paths: list[Path]) -> None:
     """Reject generated sidecar paths that are symlinks, including dangling ones."""
     symlinks = [path for path in paths if path.is_symlink()]
@@ -448,16 +463,7 @@ def generate(
         console.print("\n[bold]Starting log generation...[/bold]")
 
         # Create progress display with Rich
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            transient=False,  # Keep progress bars visible after completion
-        ) as progress:
+        with _generation_progress(console) as progress:
             # Progress tracking state
             phase_task = progress.add_task("Initializing...", total=None)
             hour_task = None

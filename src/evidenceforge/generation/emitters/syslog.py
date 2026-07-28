@@ -27,6 +27,7 @@ All syslog message construction is done by ActivityGenerator — the emitter
 just formats the context fields into the syslog template.
 """
 
+import json
 import re
 from bisect import bisect_right
 from datetime import timedelta
@@ -365,16 +366,91 @@ class SyslogEmitter(HostMultiplexEmitter):
         """Close emitter after normalizing source-native syslog presentation state."""
         if self.threaded:
             self.stop_thread()
-        if self.output_target == OutputTarget.SOF_ELK:
-            self._normalize_sof_elk_buffers()
-            self.flush(force=True)
-            return
-        self._normalize_logind_session_ids()
-        self._backfill_missing_logind_pam_openers()
-        self._normalize_pam_uid_collisions()
-        self._normalize_sudo_session_lifecycles()
-        self._normalize_kernel_uptime_stamps()
-        self.flush(force=True)
+        self._finalize_spooled_hosts()
+
+    def flush(self, force: bool = False) -> None:
+        """Spool buffered rows at barriers while deferring final normalization.
+
+        Syslog requires a final host-wide sort because generation can render
+        events out of timestamp order. Hourly barriers still spill sorted runs
+        to disk so long scenarios do not retain every rendered row in memory.
+        ``close()`` restores those runs once for final normalization.
+        """
+        with self._writers_lock:
+            for route_key, writer in self._writers.items():
+                with writer._lock:
+                    if not writer.buffer:
+                        continue
+                    spool_path = self._spool_path(route_key, writer)
+                    spool_path.parent.mkdir(parents=True, exist_ok=True)
+                    with spool_path.open("a", encoding="utf-8") as spool:
+                        for rendered in writer.buffer:
+                            spool.write(json.dumps(rendered, ensure_ascii=False))
+                            spool.write("\n")
+                    writer.buffer.clear()
+
+    @staticmethod
+    def _spool_path(route_key: str, writer: Any) -> Path:
+        """Return the private record-preserving spool path for one writer."""
+        suffix = _stable_seed(f"syslog-spool:{route_key}") & 0xFFFFFFFF
+        return writer.output_path.with_name(f".{writer.output_path.name}.{suffix:08x}.spool")
+
+    def _finalize_spooled_hosts(self) -> None:
+        """Normalize and write one host at a time from its barrier-spooled rows."""
+        with self._writers_lock:
+            grouped: dict[str, list[tuple[str, Any]]] = {}
+            for route_key, writer in self._writers.items():
+                grouped.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
+
+            for host_key, route_writers in grouped.items():
+                rows: list[tuple[int, tuple[Any, ...], str, str]] = []
+                for route_key, writer in route_writers:
+                    year = int(syslog_route_year(route_key) or 0)
+                    spool_path = self._spool_path(route_key, writer)
+                    with writer._lock:
+                        spooled = []
+                        if spool_path.exists():
+                            with spool_path.open(encoding="utf-8") as spool:
+                                spooled = [json.loads(record) for record in spool]
+                            spool_path.unlink()
+                        lines = [*spooled, *writer.buffer]
+                        writer.buffer = []
+                    for line in lines:
+                        sort_key = (
+                            _syslog_sort_key(line)
+                            if self.output_target == OutputTarget.SOF_ELK
+                            else _rfc5424_syslog_sort_key(line)
+                        )
+                        rows.append((year, sort_key, route_key, line))
+
+                if not rows:
+                    continue
+                rows.sort(key=lambda row: (row[0], row[1]))
+                normalized = [line for _year, _sort_key, _route_key, line in rows]
+                normalized = self._normalize_logind_session_ids_for_lines(normalized, host_key)
+                if self.output_target != OutputTarget.SOF_ELK:
+                    normalized = self._backfill_missing_logind_pam_openers_for_lines(
+                        normalized,
+                        host_key,
+                    )
+                    normalized = _linux_uid_collision_repaired(normalized, host_key)
+                normalized = self._normalize_sudo_session_lifecycles_for_lines(normalized)
+                normalized = self._normalize_kernel_uptime_stamps_for_lines(normalized)
+
+                if len(normalized) != len(rows):
+                    primary_writer = route_writers[0][1]
+                    with primary_writer._lock:
+                        primary_writer.buffer = normalized
+                        primary_writer._flush_unlocked()
+                    continue
+
+                buffers_by_route: dict[str, list[str]] = {}
+                for row, line in zip(rows, normalized, strict=True):
+                    buffers_by_route.setdefault(row[2], []).append(line)
+                for route_key, writer in route_writers:
+                    with writer._lock:
+                        writer.buffer = buffers_by_route.get(route_key, [])
+                        writer._flush_unlocked()
 
     def _normalize_sof_elk_buffers(self) -> None:
         """Normalize SOF-ELK RFC3164 syslog rows with one final sort pass."""

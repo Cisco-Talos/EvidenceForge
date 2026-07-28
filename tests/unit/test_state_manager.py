@@ -167,6 +167,28 @@ class TestStateManagerInit:
         assert sm.get_sessions_for_user_at("alice", close) == []
         assert sm.get_sessions_for_user_at("alice", close + timedelta(minutes=1)) == []
 
+    def test_active_and_historical_session_queries_have_explicit_boundaries(self):
+        """Active-only lookup must exclude ended state that historical lookup can render."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event_time = start + timedelta(minutes=30)
+        end = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+        )
+        assert sm.end_session(logon_id, end)
+
+        assert sm.get_active_sessions_for_user_at("alice", event_time) == []
+        assert sm.get_active_sessions_on_system_at("WS-01", event_time) == []
+        assert [s.logon_id for s in sm.get_sessions_for_user_at("alice", event_time)] == [logon_id]
+        assert [s.logon_id for s in sm.get_sessions_on_system_at("WS-01", event_time)] == [logon_id]
+        assert sm.get_session_at(logon_id, event_time) is not None
+        assert sm.get_session_at(logon_id, end) is None
+
     def test_authoritative_end_keeps_durable_ssh_session_live_past_early_disconnect(self):
         """An early SSH transport close must not create a shadow durable session."""
         sm = StateManager()
@@ -1258,6 +1280,40 @@ class TestProcessManagement:
         ws01_procs = sm.get_processes_on_system("WS-01")
         assert len(ws01_procs) == 2
         assert all(p.system == "WS-01" for p in ws01_procs)
+
+    def test_get_processes_for_session_uses_logon_index(self, monkeypatch):
+        """Session process lookup must not enumerate the global process table."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        wanted_pid = sm.create_process(
+            "WS-01",
+            0,
+            "explorer.exe",
+            "explorer.exe",
+            "jdoe",
+            "Medium",
+            "0x111",
+        )
+        sm.create_process(
+            "WS-02",
+            0,
+            "bash",
+            "bash",
+            "asmith",
+            "Medium",
+            "0x222",
+        )
+        monkeypatch.setattr(
+            sm,
+            "list_running_processes",
+            lambda: pytest.fail("global process enumeration is not allowed"),
+        )
+
+        processes = sm.get_processes_for_session("0x111", "WS-01")
+
+        assert [process.pid for process in processes] == [wanted_pid]
+        assert sm.end_process("WS-01", wanted_pid)
+        assert sm.get_processes_for_session("0x111", "WS-01") == []
 
     def test_end_process(self):
         """Test ending a process."""
