@@ -208,9 +208,10 @@ descriptions.
   not appear to succeed unrealistically.
 - [ ] Add configurable per-host/source log deployment coverage for named host
   groups, disabled sensors, partial deployments, and collection windows.
-- [ ] **P2** Profile generation speed and efficiency without instrumentation
-  noise, then decide whether to optimize generation or adjust stale performance
-  assertions.
+- [x] **P2** Profiled long-scenario generation and removed duration-growing
+  connection, session, process/thread, expiry, Linux PID, and logind state
+  paths. See
+  [the long-scenario performance worklog](docs/worklog/2026-07-27-long-scenario-performance.md).
 
 ---
 

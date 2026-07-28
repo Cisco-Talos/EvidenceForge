@@ -10,7 +10,9 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 This minor release establishes canonical lifecycle, identity, observation, and
 cryptographic planning contracts while improving long-scenario generation
-performance without changing deterministic output.
+performance. Repeated runs of the same version remain byte-identical; the
+bounded Linux PID allocator intentionally changes PID-derived output relative
+to earlier development builds.
 
 **Canonical network, proxy, and observation contracts**
 
@@ -57,6 +59,10 @@ performance without changing deterministic output.
 - Repaired stale recursive process-parent fallbacks so long-running scenarios
   choose a verified live process anchor instead of failing during later RDP
   client creation (`13146e9e`).
+- Unified session, process, thread, connection, expiry, Linux PID, and logind
+  history behind shared duration-stable indexes. Replaced the quadratic Linux
+  PID collision walk with bounded deterministic allocation, reducing 8,000
+  sequential allocations from 18.18 seconds to 0.105 seconds (`eafb0f05`).
 
 **Assessment records and maintenance**
 

@@ -212,3 +212,62 @@ Verification results:
 
 The retained 2.1 seconds is useful work: draining queued events and flushing
 writer buffers. The eliminated 22.9 seconds was polling/handshake latency.
+
+## Unified duration-stable state indexes
+
+A later stopped 56-day run showed that duration-growing work remained outside
+the connection tuple path. Profiling and a repository-wide scan found the same
+linear-history pattern in session history, process/thread lookup, connection
+identity lookup, expiry caches, Linux logind allocation, and Linux PID
+allocation. These paths now share four index primitives:
+
+- `IndexedEntityStore` for insertion-ordered primary storage with equality
+  secondary indexes;
+- `GroupedTemporalIndex` for per-owner time-range lookups;
+- `ExpiringIndex` for deadline-driven eviction; and
+- `TemporalAllocationIndex` for chronological allocation bounds and elapsed
+  delta checks.
+
+StateManager now uses these primitives for active and ended sessions, running
+processes and threads, open connections, connection close deadlines, Linux PID
+history, and logind session history. ActivityGenerator uses the expiry index for
+recent connection tuples, DNS observations, and foreground-process finalizers.
+SSH, RDP, and Windows remote-authentication actions use direct Zeek UID and
+transaction-ID lookups instead of scanning the connection table.
+
+An equality-only ended-session index was insufficient: a 500,000-session
+history still took about 4.3ms to filter one user's expired history. Adding the
+grouped temporal bound reduced the same lookup to about 0.012ms, independent of
+whether the total history contained 10,000, 100,000, or 500,000 sessions.
+
+Linux PID allocation contained a separate quadratic retry chain. When the
+time-derived candidate fell below the latest visible PID, it repeatedly hashed
+and advanced through every intervening candidate. Before repair, 8,000
+allocations took 18.18 seconds. The allocator now jumps deterministically above
+the chronological lower bound, uses at most 64 bounded collision probes, and
+queries a prefix-max temporal summary. Results after repair:
+
+| Allocations | Elapsed | Cost per allocation |
+| ---: | ---: | ---: |
+| 1,000 | 0.0123s | 12.3µs |
+| 2,000 | 0.0250s | 12.5µs |
+| 4,000 | 0.0599s | 15.0µs |
+| 8,000 | 0.1050s | 13.1µs |
+| 16,000 | 0.2230s | 13.9µs |
+
+The PID repair intentionally changes Linux PID values relative to earlier
+versions, and those values can propagate into correlated record identities.
+Determinism within the new version is preserved: two independent eight-hour
+mixed Windows/Linux/SSH generations were byte-identical for every artifact
+except the runtime-only `generation.log`.
+
+Verification for commit `eafb0f05`:
+
+- 112 focused index, PID, and StateManager tests passed.
+- The default gate passed with 4,981 tests and 41 expected skips in 234.87s.
+- `uv run pytest --no-cov --include-slow` passed with 4,994 tests and 28
+  expected skips in 293.29s.
+- Repository-wide Ruff lint and format checks passed.
+- The explicit coverage gate was aborted at the maintainer's direction after
+  25m23s (105 passed, 5 skipped) because instrumentation made generation-heavy
+  integration tests prohibitively slow; it is not recorded as a passing gate.
