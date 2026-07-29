@@ -67,6 +67,10 @@ to earlier development builds.
   indexed the remaining session-owned process lookups, bounded syslog retention
   with record-preserving hourly spools, and stabilized long-run ETA display
   over a 15-minute speed window (`bb6d6033`).
+- Replaced the duration-growing sensor-UID correlation table with a
+  constant-size completed-connection handoff and compacted stale grouped
+  temporal-index records. Moved `COLLECTION_PROFILE.json` out of the ingestible
+  `data/` tree and into the run metadata root (`b00bdd1f`).
 
 **Assessment records and maintenance**
 

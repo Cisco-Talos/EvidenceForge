@@ -336,3 +336,52 @@ Final verification:
 - Coverage was not rerun, following the maintainer's direction that the
   coverage-instrumented generation suite was too slow. The default and slow
   gates were run without coverage as required by the project release policy.
+
+## Final network-observation retention audit
+
+The completed 56-day run peaked near 7.2 GB RSS even after connection-state and
+syslog fixes. A repository-wide retained-container audit found that
+`EventDispatcher` kept one `(canonical_uid, format)` entry for every planned
+network observation for the entire run. The table had two real consumers:
+storyline ground-truth UID projection and SMTP route reporting. Both consume
+the result immediately after one connection finishes, so retaining every prior
+connection was unnecessary.
+
+Commit `b00bdd1f` changes dispatch to return the admitted sensor-local
+identifiers for the current event. The network action bundle republishes only
+the most recently completed connection after any nested OCSP or endpoint
+effects finish. Existing callers retain the same blank/sensor-local/unplanned
+semantics, while retained state is now one UID plus one small format mapping.
+A 100,000-publication regression test verifies that only the latest two test
+format values remain.
+
+The same audit found that `GroupedTemporalIndex.remove()` and replacement
+correctly made old records inactive but left their backing tuples allocated.
+The shared index now compacts a group after at least 1,024 stale records make up
+half its history. Live historical session records remain intact because they
+are required for out-of-order lifecycle and durable identity correlation.
+
+`COLLECTION_PROFILE.json` was also moved from `data/` to the run metadata root.
+It is not log evidence, and its former location caused SOF-ELK ingestion scripts
+that reasonably ingest every file under `data/` to treat the profile as a log.
+CLI overwrite detection, staging, rollback, final listing, tests, and the
+evidence-format reference now use the root location.
+
+Verification:
+
+- 514 combined focused engine, CLI, dispatcher, observation, activity, and
+  index tests passed before the final CLI additions; the final focused set
+  passed with 170 tests.
+- A real one-hour CLI generation placed `COLLECTION_PROFILE.json` at the output
+  root and left no profile inside `data/`.
+- The supplied scenario was generated for 48 hours from exact parent commit
+  `a6e79b8c` and from the network-retention implementation. All 24 artifacts
+  and the complete directory trees were byte-identical.
+- The prior full 56-day output was no longer present at
+  `/Users/bianco/TEMP/lab-3.1`, so a separate prefix comparison against that
+  completed run was not possible.
+- The default gate passed with 4,988 tests and 41 expected skips in 240.51
+  seconds.
+- `uv run pytest --no-cov --include-slow` passed with 5,001 tests and 28
+  expected skips in 300.94 seconds.
+- Repository-wide Ruff lint, format, and diff checks passed.
