@@ -2527,7 +2527,7 @@ class NetworkTransactionPlanner:
             )
             executor._last_connection_effective_time = event.timestamp
             executor._last_connection_effective_transaction_id = event.network.transaction.stable_id
-        executor.dispatcher.dispatch(event)
+        network_identifiers_by_format = executor.dispatcher.dispatch(event) or {}
         executor._maybe_emit_ocsp_transaction(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:
             executor._emit_generic_ssh_preauth_failure_syslog(
@@ -2603,6 +2603,13 @@ class NetworkTransactionPlanner:
                 pid,
                 running.start_time if running is not None else None,
             ):
+                identifier_publisher = getattr(
+                    executor.dispatcher,
+                    "publish_network_identifiers",
+                    None,
+                )
+                if callable(identifier_publisher):
+                    identifier_publisher(uid, network_identifiers_by_format)
                 return uid
             lifetime = (
                 executor._foreground_process_lifetime_for_attribution(
@@ -2638,4 +2645,11 @@ class NetworkTransactionPlanner:
                     logon_id=running.logon_id,
                 )
 
+        identifier_publisher = getattr(
+            executor.dispatcher,
+            "publish_network_identifiers",
+            None,
+        )
+        if callable(identifier_publisher):
+            identifier_publisher(uid, network_identifiers_by_format)
         return uid

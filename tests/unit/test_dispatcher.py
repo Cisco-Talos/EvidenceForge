@@ -100,6 +100,28 @@ class TestDispatchRouting:
         sm.apply.assert_called_once_with(event)
         emitter.emit.assert_not_called()
 
+    def test_network_identifier_publication_retains_only_latest_connection(self):
+        """High-volume connection correlation must use constant-size retained state."""
+        dispatcher = EventDispatcher(
+            state_manager=MagicMock(spec=StateManager),
+            emitters={},
+        )
+
+        for sequence in range(100_000):
+            dispatcher.publish_network_identifiers(
+                f"uid-{sequence}",
+                {
+                    "zeek_conn": f"sensor-uid-{sequence}",
+                    "zeek_http": "",
+                },
+            )
+
+        assert dispatcher.network_identifier_for_format("uid-99999", "zeek_conn") == (
+            "sensor-uid-99999"
+        )
+        assert dispatcher.network_identifier_for_format("uid-99998", "zeek_conn") is None
+        assert len(dispatcher._latest_network_identifiers_by_format) == 2
+
     def test_dispatch_allocates_unique_deterministic_canonical_event_ids(self):
         """Distinct occurrences receive stable IDs before state application and rendering."""
         first_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})

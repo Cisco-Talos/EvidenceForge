@@ -132,7 +132,8 @@ class EventDispatcher:
         self.output_end_time = output_end_time
         self.observation_policy = observation_policy or ObservationPolicy("complete")
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
-        self._network_identifiers_by_format: dict[tuple[str, str], str] = {}
+        self._latest_network_uid = ""
+        self._latest_network_identifiers_by_format: dict[str, str] = {}
         self._event_sequence = 0
         self.storyline_cluster_id: str | None = None
         from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -164,9 +165,21 @@ class EventDispatcher:
         canonical_uid: str,
         format_name: str,
     ) -> str | None:
-        """Return a planned sensor-local UID, blank if suppressed, or None if unplanned."""
+        """Return the latest sensor-local UID, blank if suppressed, or None if unavailable."""
 
-        return self._network_identifiers_by_format.get((canonical_uid, format_name))
+        if canonical_uid != self._latest_network_uid:
+            return None
+        return self._latest_network_identifiers_by_format.get(format_name)
+
+    def publish_network_identifiers(
+        self,
+        canonical_uid: str,
+        identifiers_by_format: dict[str, str],
+    ) -> None:
+        """Publish one completed connection's observation identifiers for its caller."""
+
+        self._latest_network_uid = canonical_uid
+        self._latest_network_identifiers_by_format = identifiers_by_format
 
     def record_filtered_network_observation(self) -> None:
         """Record that a storyline network event was filtered before emitter dispatch.
@@ -192,12 +205,14 @@ class EventDispatcher:
             gate = gate.replace(tzinfo=None)
         return ts < gate
 
-    def dispatch(self, event: SecurityEvent) -> None:
+    def dispatch(self, event: SecurityEvent) -> dict[str, str]:
         """Route a structured event to StateManager + matching emitters.
 
         State is always updated (even during warm-up). Emission to log files
-        is suppressed for events before output_start_time.
+        is suppressed for events before output_start_time. Network events return
+        their admitted sensor-local identifiers for immediate caller correlation.
         """
+        network_identifiers_by_format: dict[str, str] = {}
         if self.storyline_cluster_id and event.storyline_cluster_id is None:
             event.storyline_cluster_id = self.storyline_cluster_id
         if event.network is not None:
@@ -215,7 +230,7 @@ class EventDispatcher:
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
-            return
+            return network_identifiers_by_format
         self.source_timing_planner.initialize_event(event)
         matching_emitters = self._get_matching_emitters(event)
         decisions = {
@@ -237,7 +252,11 @@ class EventDispatcher:
             event.network_observations = planned_observations
             event.network_observations_planned = bool(planned_observations)
             event.network_observations = self._admit_network_sensor_observations(event)
-            self._initialize_network_identifiers(event, matching_emitters)
+            self._initialize_network_identifiers(
+                event,
+                matching_emitters,
+                network_identifiers_by_format,
+            )
         for format_name, emitter in matching_emitters:
             decision = decisions[format_name]
             if decision.status == "dropped":
@@ -260,7 +279,11 @@ class EventDispatcher:
                 event_to_emit,
                 format_name,
             )
-            self._record_admitted_network_identifier(event_to_emit, format_name)
+            self._record_admitted_network_identifier(
+                event_to_emit,
+                format_name,
+                network_identifiers_by_format,
+            )
             if (
                 event_to_emit.event_type != "process_terminate"
                 and event_to_emit.process is not None
@@ -276,11 +299,13 @@ class EventDispatcher:
                 emitter.emit_raw(event_to_emit.raw.fields)
             else:
                 emitter.emit(event_to_emit)
+        return network_identifiers_by_format
 
     def _initialize_network_identifiers(
         self,
         event: SecurityEvent,
         matching_emitters: list[tuple[str, LogEmitter]],
+        identifiers_by_format: dict[str, str],
     ) -> None:
         """Mark planned network formats suppressed until source admission succeeds."""
 
@@ -290,12 +315,13 @@ class EventDispatcher:
         for format_name, _emitter in matching_emitters:
             if format_name not in _NETWORK_FORMATS:
                 continue
-            self._network_identifiers_by_format[(network.zeek_uid, format_name)] = ""
+            identifiers_by_format[format_name] = ""
 
     def _record_admitted_network_identifier(
         self,
         event: SecurityEvent,
         format_name: str,
+        identifiers_by_format: dict[str, str],
     ) -> None:
         """Publish the observation-owned identifier after final source admission."""
 
@@ -311,7 +337,7 @@ class EventDispatcher:
             None,
         )
         if identifier is not None:
-            self._network_identifiers_by_format[(network.zeek_uid, format_name)] = identifier
+            identifiers_by_format[format_name] = identifier
 
     def _admit_network_sensor_observations(
         self,

@@ -990,7 +990,12 @@ class TestGenerationEngine:
         mock_activity_instance.get_baseline_pattern.return_value = []
         mock_activity_gen.side_effect = _mock_activity_generator_factory(mock_activity_instance)
 
-        engine = GenerationEngine(minimal_scenario, tmp_path)
+        data_dir = tmp_path / "data"
+        engine = GenerationEngine(
+            minimal_scenario,
+            data_dir,
+            ground_truth_dir=tmp_path,
+        )
         engine.generate()
 
         ground_truth = tmp_path / "GROUND_TRUTH.md"
@@ -1000,6 +1005,7 @@ class TestGenerationEngine:
         assert ground_truth.exists()
         assert manifest.exists()
         assert collection_profile.exists()
+        assert not (data_dir / COLLECTION_PROFILE_FILENAME).exists()
         assert target_marker.read_text(encoding="utf-8") == "default\n"
         assert "No malicious activities" in ground_truth.read_text()
         assert "No malicious events were generated" in ground_truth.read_text()

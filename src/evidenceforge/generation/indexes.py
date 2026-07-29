@@ -271,6 +271,7 @@ class GroupedTemporalIndex(Generic[G, K]):
         """Create an empty grouped temporal index."""
         self._records: dict[G, list[tuple[datetime, int, int, K]]] = {}
         self._current: dict[K, tuple[G, datetime, int, int]] = {}
+        self._stale_counts: dict[G, int] = {}
         self._next_sequence = 0
 
     def add(self, key: K, group: G, event_time: datetime) -> None:
@@ -280,15 +281,43 @@ class GroupedTemporalIndex(Generic[G, K]):
         sequence = prior[2] if prior is not None else self._next_sequence
         if prior is None:
             self._next_sequence += 1
+        else:
+            prior_group = prior[0]
+            self._stale_counts[prior_group] = self._stale_counts.get(prior_group, 0) + 1
         record = (event_time, sequence, version, key)
         records = self._records.setdefault(group, [])
         position = bisect_right(records, (event_time, math.inf, math.inf))
         records.insert(position, record)
         self._current[key] = (group, event_time, sequence, version)
+        if prior is not None:
+            self._compact_group_if_needed(prior[0])
 
     def remove(self, key: K) -> None:
         """Make a key's existing temporal records stale."""
-        self._current.pop(key, None)
+        prior = self._current.pop(key, None)
+        if prior is None:
+            return
+        group = prior[0]
+        self._stale_counts[group] = self._stale_counts.get(group, 0) + 1
+        self._compact_group_if_needed(group)
+
+    def _compact_group_if_needed(self, group: G) -> None:
+        """Discard stale records when they materially outweigh useful history."""
+
+        stale_count = self._stale_counts.get(group, 0)
+        records = self._records.get(group, [])
+        if stale_count < 1024 or stale_count * 2 < len(records):
+            return
+        compacted = [
+            record
+            for record in records
+            if self._current.get(record[3]) == (group, record[0], record[1], record[2])
+        ]
+        if compacted:
+            self._records[group] = compacted
+        else:
+            self._records.pop(group, None)
+        self._stale_counts.pop(group, None)
 
     def keys_after(self, group: G, cutoff: datetime) -> tuple[K, ...]:
         """Return current keys strictly after a cutoff in insertion order."""

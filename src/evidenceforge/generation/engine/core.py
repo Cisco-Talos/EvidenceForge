@@ -517,7 +517,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         from evidenceforge.events.collection_profile import write_collection_profile
 
-        write_collection_profile(self.output_dir, self.scenario, self.output_target)
+        write_collection_profile(self.ground_truth_dir, self.scenario, self.output_target)
 
         logger.info("All emitters closed")
 

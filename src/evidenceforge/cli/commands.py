@@ -364,6 +364,7 @@ def generate(
     artifacts_dir = ground_truth_dir / "artifacts"
 
     from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+    from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
     from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
     from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 
@@ -403,10 +404,19 @@ def generate(
     json_path = ground_truth_dir / GROUND_TRUTH_JSON_FILENAME
     manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
     artifacts_manifest_path = ground_truth_dir / ARTIFACTS_MANIFEST_FILENAME
+    collection_profile_path = ground_truth_dir / COLLECTION_PROFILE_FILENAME
     target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
     try:
         _reject_generated_sidecar_symlinks(
-            [gt_path, json_path, manifest_path, artifacts_manifest_path, target_path, artifacts_dir]
+            [
+                gt_path,
+                json_path,
+                manifest_path,
+                artifacts_manifest_path,
+                collection_profile_path,
+                target_path,
+                artifacts_dir,
+            ]
         )
     except PermissionError as e:
         console.print(f"[bold red]Error:[/bold red] {e}", style="red")
@@ -422,6 +432,8 @@ def generate(
         existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
     if _path_exists_or_symlink(artifacts_manifest_path):
         existing.append(f"  {ARTIFACTS_MANIFEST_FILENAME} ({artifacts_manifest_path})")
+    if _path_exists_or_symlink(collection_profile_path):
+        existing.append(f"  {COLLECTION_PROFILE_FILENAME} ({collection_profile_path})")
     if _path_exists_or_symlink(target_path):
         existing.append(f"  {OUTPUT_TARGET_FILENAME} ({target_path})")
     if _path_exists_or_symlink(artifacts_dir):
@@ -529,6 +541,7 @@ def generate(
             staged_json = gen_gt_dir / GROUND_TRUTH_JSON_FILENAME
             staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
             staged_artifacts_manifest = gen_gt_dir / ARTIFACTS_MANIFEST_FILENAME
+            staged_collection_profile = gen_gt_dir / COLLECTION_PROFILE_FILENAME
             staged_target = gen_gt_dir / OUTPUT_TARGET_FILENAME
             staged_artifacts = gen_artifacts_dir
             if not gen_data_dir.exists():
@@ -563,6 +576,8 @@ def generate(
                     manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
                 if artifacts_manifest_path.exists():
                     artifacts_manifest_path.rename(rollback_dir / ARTIFACTS_MANIFEST_FILENAME)
+                if collection_profile_path.exists():
+                    collection_profile_path.rename(rollback_dir / COLLECTION_PROFILE_FILENAME)
                 if _path_exists_or_symlink(target_path):
                     target_path.rename(rollback_dir / OUTPUT_TARGET_FILENAME)
                 if artifacts_dir.exists():
@@ -576,6 +591,8 @@ def generate(
                     staged_manifest.rename(manifest_path)
                 if staged_artifacts_manifest.exists():
                     staged_artifacts_manifest.rename(artifacts_manifest_path)
+                if staged_collection_profile.exists():
+                    staged_collection_profile.rename(collection_profile_path)
                 if staged_target.exists():
                     staged_target.rename(target_path)
                 if staged_artifacts.exists():
@@ -600,6 +617,8 @@ def generate(
                         manifest_path.unlink()
                     if artifacts_manifest_path.exists():
                         artifacts_manifest_path.unlink()
+                    if collection_profile_path.exists():
+                        collection_profile_path.unlink()
                     if artifacts_dir.exists():
                         shutil.rmtree(artifacts_dir)
                     if _path_exists_or_symlink(target_path):
@@ -617,6 +636,9 @@ def generate(
                     rollback_artifacts_manifest = rollback_dir / ARTIFACTS_MANIFEST_FILENAME
                     if rollback_artifacts_manifest.exists():
                         rollback_artifacts_manifest.rename(artifacts_manifest_path)
+                    rollback_collection_profile = rollback_dir / COLLECTION_PROFILE_FILENAME
+                    if rollback_collection_profile.exists():
+                        rollback_collection_profile.rename(collection_profile_path)
                     rollback_artifacts = rollback_dir / "artifacts"
                     if rollback_artifacts.exists():
                         rollback_artifacts.rename(artifacts_dir)
@@ -645,6 +667,7 @@ def generate(
                     GROUND_TRUTH_JSON_FILENAME,
                     OBSERVATION_MANIFEST_FILENAME,
                     ARTIFACTS_MANIFEST_FILENAME,
+                    COLLECTION_PROFILE_FILENAME,
                     OUTPUT_TARGET_FILENAME,
                 }:
                     size = file.stat().st_size

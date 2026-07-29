@@ -104,6 +104,22 @@ def test_grouped_temporal_index_replacement_leaves_old_record_stale() -> None:
     assert index.keys_after("alice", start) == ()
 
 
+def test_grouped_temporal_index_compacts_large_stale_history() -> None:
+    """Repeated replacements and removals should not retain unbounded stale records."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    index: GroupedTemporalIndex[str, str] = GroupedTemporalIndex()
+
+    for offset in range(2_100):
+        index.add("session", "alice", start + timedelta(seconds=offset))
+
+    records = index._records["alice"]
+    assert len(records) < 1_100
+    assert index.keys_after("alice", start) == ("session",)
+
+    index.remove("session")
+    assert index.keys_after("alice", start) == ()
+
+
 def test_temporal_allocation_index_matches_reference_queries() -> None:
     """Temporal bounds should remain exact for out-of-order allocations."""
     start = datetime(2026, 1, 1, tzinfo=UTC)
