@@ -29,9 +29,10 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import (
@@ -315,15 +316,26 @@ def test_world_model_ssh_admin_roster_is_role_and_group_scoped(scenario: Scenari
     assert {"alice.admin", "helpdesk.user"} <= web_roster
 
 
-def test_world_planner_preallocates_sessions_before_logon_emission(
+def test_world_planner_delegates_session_allocation_to_logon_bundle(
     world_model: WorldModel,
     state_manager: StateManager,
     systems: dict[str, System],
     users: dict[str, User],
 ) -> None:
-    """Planner-owned session state should not depend on generator side effects."""
+    """World planning requests session intent without allocating shadow state."""
     activity_generator = Mock()
-    activity_generator.generate_logon.return_value = "0xdeadbeef"
+
+    def generate_logon(**kwargs):
+        return state_manager.create_session(
+            username=kwargs["user"].username,
+            system=kwargs["system"].hostname,
+            logon_type=kwargs["logon_type"],
+            source_ip=kwargs["source_ip"],
+            start_time=kwargs["time"],
+            lifecycle_group_id="bundle-owned-session",
+        )
+
+    activity_generator.generate_logon.side_effect = generate_logon
     planner = WorldPlanner(world_model, state_manager, activity_generator)
 
     result = planner.bootstrap_user_session(
@@ -335,10 +347,10 @@ def test_world_planner_preallocates_sessions_before_logon_emission(
         allow_existing=False,
     )
 
-    assert result.session.logon_id != "0xdeadbeef"
     assert state_manager.get_session(result.session.logon_id) is result.session
+    assert result.session.lifecycle_group_id == "bundle-owned-session"
     call_kwargs = activity_generator.generate_logon.call_args.kwargs
-    assert call_kwargs["logon_id"] == result.session.logon_id
+    assert "logon_id" not in call_kwargs
     assert call_kwargs["logon_type"] == 2
 
 
@@ -377,6 +389,39 @@ def test_world_planner_reuses_durable_windows_interactive_session(
         for call in mock_emitters["windows_event_security"].emit.call_args_list
     ]
     assert "logon" not in emitted_types
+
+
+def test_world_planner_does_not_resurrect_session_ended_during_logon_backdate(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """A backdated logon must not return a historically valid but ended session."""
+    activity_time = datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC)
+    state_manager.set_current_time(activity_time - timedelta(hours=1))
+    ended_logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+    state_manager.end_session(
+        ended_logon_id,
+        activity_time - timedelta(milliseconds=250),
+    )
+
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=activity_time,
+        rng=random.Random(29),
+        session_kind="interactive",
+    )
+
+    assert result.session.logon_id != ended_logon_id
+    assert state_manager.get_session(result.session.logon_id) is result.session
 
 
 def test_world_planner_bootstraps_ssh_session(
@@ -761,8 +806,8 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].source_system == "WKS-01"
 
 
-def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
-    """RDP target logon timing should not precede same-tuple eCAR FLOW visibility."""
+def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
+    """RDP canonical authentication should not absorb source-observation latency."""
     scenario = _make_scenario()
     target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
     user = scenario.environment.users[0]
@@ -776,14 +821,6 @@ def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
             source_ip="10.10.10.50",
         ),
     )
-    flow_window = get_timing_window(
-        "source.ecar_flow",
-        default_min_ms=40,
-        default_max_ms=300,
-        default_position="after",
-        default_class="source_latency",
-    )
-
     logon_time = bundle._target_logon_time(
         rng=random.Random(7),
         source_ip="10.10.10.50",
@@ -791,7 +828,41 @@ def test_rdp_target_logon_waits_for_endpoint_flow_visibility() -> None:
         transport_start_time=base_time,
     )
 
-    assert logon_time > base_time + timedelta(milliseconds=flow_window.max_ms)
+    assert base_time + timedelta(milliseconds=900) <= logon_time
+    assert logon_time <= base_time + timedelta(milliseconds=1600)
+
+
+def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
+    """Dispatcher source timing, not canonical RDP time, owns endpoint delay."""
+
+    scenario = _make_scenario()
+    source = next(system for system in scenario.environment.systems if system.hostname == "WKS-01")
+    target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
+    user = scenario.environment.users[0]
+    base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    executor = Mock()
+    executor.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
+    executor._source_timing_planner = SourceTimingPlanner("enterprise_standard")
+    bundle = RdpSessionActionBundle(
+        executor=executor,
+        request=RdpSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip=source.ip,
+            source_system=source,
+        ),
+    )
+
+    logon_time = bundle._target_logon_time(
+        rng=random.Random(7),
+        source_ip=source.ip,
+        src_port=52875,
+        transport_start_time=base_time,
+    )
+
+    assert base_time + timedelta(milliseconds=900) <= logon_time
+    assert logon_time <= base_time + timedelta(milliseconds=1600)
 
 
 def test_world_planner_moves_rdp_source_after_future_workstation_session(
@@ -1088,6 +1159,15 @@ def test_linux_local_session_shell_has_visible_terminal_parent(
     parent_proc = state_manager.get_process(system.hostname, shell_proc.parent_pid)
     assert parent_proc is not None
     assert parent_proc.image in {"/bin/login", "/usr/libexec/gnome-terminal-server"}
+    user_manager = state_manager.get_process(system.hostname, parent_proc.parent_pid)
+    session = state_manager.get_session(logon_id)
+    assert user_manager is not None
+    assert session is not None
+    assert {
+        user_manager.lifecycle_group_id,
+        parent_proc.lifecycle_group_id,
+        shell_proc.lifecycle_group_id,
+    } == {session.lifecycle_group_id}
 
 
 def test_find_user_session_handles_mixed_timezone_start_times(

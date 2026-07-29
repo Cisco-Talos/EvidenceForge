@@ -330,7 +330,7 @@ def test_linux_baseline_session_initiator_creates_pam_session_message():
         _linux_baseline_session_initiator("root", rng=random.Random(seed)) for seed in range(30)
     )
 
-    assert {service for _app_name, service, _message in samples} <= {"login", "sudo", "su"}
+    assert {service for _app_name, service, _message in samples} <= {"login", "su"}
     assert all(app_name != "CRON" for app_name, _service, _message in samples)
     assert all(service != "cron" for _app_name, service, _message in samples)
     assert all("pam_unix(" in message for _app_name, _service, message in samples)
@@ -399,16 +399,17 @@ def test_server_like_persona_sessions_use_server_admin_overlay():
     assert engine._use_server_admin_persona(other_workstation, remote_session)
 
 
-def test_server_pam_initiator_favors_sudo_over_local_login():
-    """Server baseline session noise should not overproduce LOGIN(uid=0)."""
+def test_server_pam_initiator_excludes_sudo_and_limits_local_login():
+    """Ambient logind noise must not bypass the owned sudo lifecycle."""
     samples = [
         _linux_baseline_session_initiator("admin", rng=random.Random(seed), system_type="server")
         for seed in range(120)
     ]
     services = [service for _app_name, service, _message in samples]
 
-    assert services.count("sudo") > services.count("login")
-    assert services.count("login") <= 12
+    assert "sudo" not in services
+    assert services.count("su") > services.count("login")
+    assert services.count("login") <= 20
 
 
 def test_baseline_ssh_identity_uses_role_scoped_user_and_owned_source():
@@ -707,6 +708,9 @@ class TestIdsAlertCorrelation:
         event = snort.emit.call_args[0][0]
         assert event.ids is not None
         assert event.ids.sid == 10001
+        assert event.network is not None
+        assert event.network.transaction is not None
+        event.network.validate_finalized_transaction()
 
     def test_ufw_block_packet_profile_is_valid_and_stable(self):
         """UFW blocked SYN metadata should be valid and path-stable by source."""
@@ -1998,7 +2002,9 @@ class TestAnonymousLogon:
         activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
 
         win = mock_emitters["windows_event_security"]
-        event = win.emit.call_args[0][0]
+        event = next(
+            call.args[0] for call in win.emit.call_args_list if call.args[0].event_type == "logon"
+        )
         assert event.auth.source_ip == ws.ip
         assert event.auth.source_port > 0
         assert event.auth.workstation_name == ws.hostname
@@ -2011,6 +2017,15 @@ class TestAnonymousLogon:
         assert network_event.network.src_port == event.auth.source_port
         assert network_event.network.dst_ip == dc.ip
         assert network_event.network.dst_port == 445
+        assert event.remote_auth is not None
+        assert event.remote_auth.primary_transport is not None
+        assert event.remote_auth.primary_transport.transaction_id == (
+            network_event.network.transaction.stable_id
+        )
+        assert event.lifecycle is not None
+        assert event.lifecycle.group_id == event.remote_auth.stable_id
+        assert network_event.lifecycle is not None
+        assert network_event.lifecycle.parent_group_id == event.remote_auth.stable_id
 
     def test_anonymous_logon_no_session_created(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2027,6 +2042,33 @@ class TestAnonymousLogon:
         activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
         sessions_after = len(state_manager.state.active_sessions)
         assert sessions_after == sessions_before
+
+    def test_anonymous_logon_plans_transport_without_source_host_metadata(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """An unmodeled private source still retains the remote transport contract."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        activity_gen._all_system_ips = [dc.ip, "10.0.10.77"]
+        activity_gen._ip_to_system = {dc.ip: dc}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        )
+        assert event.auth.source_ip == "10.0.10.77"
+        assert event.auth.workstation_name == "-"
+        assert event.remote_auth is not None
+        assert event.remote_auth.primary_transport is not None
+        assert event.remote_auth.primary_transport.tuple.src_ip == "10.0.10.77"
 
     def test_anonymous_logon_emits_short_lived_logoff(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2064,8 +2106,46 @@ class TestAnonymousLogon:
         assert ecar_events[0].edr.object_id
         assert ecar_events[1].edr.object_id == ecar_events[0].edr.object_id
         assert ecar_events[1].auth.logon_id == ecar_events[0].auth.logon_id
+        assert ecar_events[0].lifecycle is None
+        assert ecar_events[1].lifecycle is None
         assert timestamp < win_events[1].timestamp <= timestamp + timedelta(seconds=30)
         assert len(state_manager.state.active_sessions) == sessions_before
+
+    def test_anonymous_logoff_closes_remote_authentication_group(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Anonymous transport, login, and logoff share one action lifecycle."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        ws = System(
+            hostname="WS-01",
+            ip="10.0.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._all_system_ips = [dc.ip, ws.ip]
+        activity_gen._ip_to_system = {ws.ip: ws, dc.ip: dc}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type in {"logon", "logoff"}
+        ]
+        assert len(events) == 2
+        assert events[0].remote_auth is not None
+        assert events[0].lifecycle is not None
+        assert events[1].lifecycle is not None
+        assert events[0].lifecycle.group_id == events[0].remote_auth.stable_id
+        assert events[1].lifecycle.group_id == events[0].lifecycle.group_id
+        assert events[0].lifecycle.phase == "start"
+        assert events[1].lifecycle.phase == "closure"
 
 
 class TestNoInternalGenerateRaw:
@@ -2122,7 +2202,8 @@ class TestBaselineSshTiming:
         assert 'source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server"' in (
             source
         )
-        assert "ssh_identity = self._pick_baseline_ssh_identity(system, rng)" in source
+        assert "ssh_identity = self._pick_baseline_ssh_identity" in source
+        assert "at_time=ts" in source
         assert "ssh_user_model, src_sys_obj = ssh_identity" in source
         assert "ssh_user = ssh_user_model.username" in source
 

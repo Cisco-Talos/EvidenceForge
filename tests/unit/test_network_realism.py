@@ -198,6 +198,50 @@ class TestSslRealism:
         unique = set(samples)
         assert len(unique) >= 4  # at least 4 of 5 patterns should appear
 
+    def test_ssl_history_matches_resumption_contract(self):
+        """Resumption must not advertise full certificate/key-exchange messages."""
+        tls12_resumed = {
+            _choose_ssl_history(
+                random.Random(seed),
+                tls_version="TLSv12",
+                established=True,
+                resumed=True,
+            )
+            for seed in range(100)
+        }
+        tls12_full = {
+            _choose_ssl_history(
+                random.Random(seed),
+                tls_version="TLSv12",
+                established=True,
+                resumed=False,
+            )
+            for seed in range(100)
+        }
+        tls13_resumed = {
+            _choose_ssl_history(
+                random.Random(seed),
+                tls_version="TLSv13",
+                established=True,
+                resumed=True,
+            )
+            for seed in range(100)
+        }
+        tls13_full = {
+            _choose_ssl_history(
+                random.Random(seed),
+                tls_version="TLSv13",
+                established=True,
+                resumed=False,
+            )
+            for seed in range(100)
+        }
+
+        assert tls12_resumed == {"CSIFIFD"}
+        assert all("X" in history for history in tls12_full)
+        assert tls13_resumed == {"CSOFFD"}
+        assert all("X" in history and "Y" in history for history in tls13_full)
+
     def test_tls12_cipher_aes128_dominates(self):
         rng = random.Random(42)
         samples = [

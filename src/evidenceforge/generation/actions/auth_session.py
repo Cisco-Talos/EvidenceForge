@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from evidenceforge.events.authentication import RemoteAuthenticationPlan
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
@@ -47,6 +49,11 @@ class LogonRequest:
     emit_transport_syslog: bool = True
     emit_network_evidence: bool = True
     logon_id: str | None = None
+    reuse_required_at: datetime | None = None
+    lifecycle_group_id: str = ""
+    session_end_plan: SessionEndPlan | None = None
+    remote_authentication_plan: RemoteAuthenticationPlan | None = None
+    remote_authentication_transport_id: str = ""
     source: str = "activity_generator"
 
     @property
@@ -54,12 +61,20 @@ class LogonRequest:
         """Return a deterministic intent identifier for durable references."""
 
         source_host = self.source_system.hostname if self.source_system is not None else ""
+        end_time = (
+            self.session_end_plan.canonical_end.isoformat()
+            if self.session_end_plan is not None
+            else ""
+        )
         seed = _stable_seed(
             "action_bundle:logon:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.logon_type}:{self.source_ip or ''}:{self.source_port or ''}:"
             f"{self.emit_transport_syslog}:{self.emit_network_evidence}:"
             f"{self.logon_id or ''}:{source_host}:{self.source}"
+            f":{self.lifecycle_group_id}:{end_time}"
+            f":{self.remote_authentication_plan.stable_id if self.remote_authentication_plan else ''}"
+            f":{self.remote_authentication_transport_id}"
         )
         return f"logon-{seed:016x}"
 
@@ -74,6 +89,7 @@ class LogoffRequest:
     logon_id: str
     logon_type: int = 2
     from_storyline: bool = False
+    session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -83,7 +99,9 @@ class LogoffRequest:
         seed = _stable_seed(
             "action_bundle:logoff:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
-            f"{self.logon_id}:{self.logon_type}:{self.from_storyline}:{self.source}"
+            f"{self.logon_id}:{self.logon_type}:{self.from_storyline}:"
+            f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
+            f"{self.source}"
         )
         return f"logoff-{seed:016x}"
 

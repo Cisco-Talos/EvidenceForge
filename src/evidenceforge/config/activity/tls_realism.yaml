@@ -83,6 +83,8 @@ serial_numbers:
     - {bytes: 20, weight: 14}
 
 ocsp:
+  query_probability: 0.18
+  request_hash_algorithm: sha1
   cache_bucket_seconds: 14400
   this_update_max_skew_seconds: 3600
   next_update_min_seconds: 28800
@@ -114,6 +116,8 @@ ocsp:
     - issuer_patterns: ["*"]
       domains: ["ocsp.digicert.com", "ocsp.sectigo.com", "ocsp.globalsign.com"]
   status_weights:
+    # Deprecated compatibility input. Standards-valid response selection uses
+    # certificate_status_profiles below; this map is accepted for one release.
     good: 90
     unknown: 7
     revoked: 3
@@ -144,10 +148,16 @@ ocsp:
     - .slack.com
     - .windowsupdate.com
     - .zoom.us
+  certificate_status_profiles:
+    - name: ordinary_valid
+      certificate_patterns: ["*"]
+      status_weights: {good: 100, unknown: 0, revoked: 0}
+      revocation_reasons: []
 
 certificate_chains:
   include_intermediate_probability: 0.86
   include_second_intermediate_probability: 0.08
+  present_trust_anchor: false
   intermediate_validity_days_min: 1825
   intermediate_validity_days_max: 3650
   intermediate_not_before_max_days: 1460
@@ -476,17 +486,11 @@ destinations:
     - name: certificate_infra
       weight: 14
       domains:
-        - ocsp.digicert.com
         - crl.microsoft.com
         - ctldl.windowsupdate.com
         - crl3.digicert.com
         - crl4.digicert.com
-        - ocsp.sectigo.com
-        - ocsp.globalsign.com
-        - ocsp.pki.goog
         - crls.pki.goog
-        - ocsp.int-x3.letsencrypt.org
-        - r3.o.lencr.org
         - x1.c.lencr.org
     - name: package_update
       weight: 18

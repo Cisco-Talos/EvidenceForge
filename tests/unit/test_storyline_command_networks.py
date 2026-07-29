@@ -297,6 +297,67 @@ class TestStorylineCommandNetworks:
             datetime(2024, 3, 18, 17, 41, 0, tzinfo=UTC),
         ) == datetime(2024, 3, 18, 17, 57, 0, tzinfo=UTC)
 
+    def test_explicit_logoff_pair_is_not_stolen_by_later_shadow_session(self):
+        """Runtime session churn cannot replace an explicit successful logon pairing."""
+        state = StateManager()
+        start = datetime(2024, 3, 18, 14, 0, 0, tzinfo=UTC)
+        actor = User(username="root", full_name="Root", email="root@example.local")
+        system = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.start_time = start
+        engine.state_manager = state
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    id="explicit-logon",
+                    actor="root",
+                    system=system.hostname,
+                    time="+1m",
+                    events=[SimpleNamespace(type="logon", logon_type=3)],
+                ),
+                SimpleNamespace(
+                    id="explicit-close",
+                    actor="root",
+                    system=system.hostname,
+                    time="+60m",
+                    events=[SimpleNamespace(type="logoff")],
+                ),
+            ]
+        )
+        durable_id = state.create_session(
+            username=actor.username,
+            system=system.hostname,
+            logon_type=10,
+            source_ip="10.10.3.10",
+            start_time=start + timedelta(minutes=1),
+            session_kind="network",
+        )
+        engine._current_storyline_spec_id = "explicit-logon:0"
+        engine._record_storyline_logon(actor, system, durable_id)
+        shadow_id = state.create_session(
+            username=actor.username,
+            system=system.hostname,
+            logon_type=10,
+            source_ip="10.10.3.11",
+            start_time=start + timedelta(minutes=30),
+            session_kind="ssh",
+        )
+        engine._current_storyline_spec_id = ""
+        engine._record_storyline_logon(actor, system, shadow_id)
+        engine._current_storyline_spec_id = "explicit-close:0"
+
+        paired_id, plan = engine._session_end_plan_for_current_logoff()
+
+        assert paired_id == durable_id
+        assert plan.storyline_event_id == "explicit-close"
+        assert state.get_session_end_plan(durable_id) == plan
+        assert state.get_session_end_plan(shadow_id) is None
+
     def test_linux_shell_storyline_process_renders_explicit_shell_invocation(self):
         """Bare shell control syntax should be rendered as source-native bash -c argv."""
         command_line = _linux_shell_process_command_line(

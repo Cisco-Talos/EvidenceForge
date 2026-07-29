@@ -42,6 +42,10 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
+from evidenceforge.events.cryptography import (
+    OcspTransactionPlan,
+    TlsCertificatePresentationPlan,
+)
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
@@ -95,12 +99,14 @@ class NetworkConnectionRequest:
     ssl: SslContext | None = None
     x509: X509Context | None = None
     x509_chain: list[X509Context] = field(default_factory=list)
+    tls_presentation: TlsCertificatePresentationPlan | None = None
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
     file_transfers: list[FileTransferContext] = field(default_factory=list)
     pe: PeContext | None = None
     ocsp: OcspContext | None = None
+    ocsp_transaction: OcspTransactionPlan | None = None
     proxy: ProxyContext | None = None
     firewall: FirewallContext | None = None
     hostname: str | None = None
@@ -115,6 +121,8 @@ class NetworkConnectionRequest:
     packet_overhead_bytes: int | None = None
     responding_pid: int = -1
     ssh_attempted_username: str | None = None
+    parent_action_group_id: str | None = None
+    preserve_start_time: bool = False
     source: str = "activity_generator"
 
     @property
@@ -139,17 +147,14 @@ class NetworkConnectionRequest:
             f"{self.preserve_http_outcome}:{self.suppress_application_side_effects}:"
             f"{self.suppress_source_pid_inference}:{self.preserve_explicit_payload}:"
             f"{self.suppress_prereq_dns}:{self.packet_overhead_bytes or ''}:"
-            f"{self.responding_pid}:{self.ssh_attempted_username or ''}:{self.source}"
+            f"{self.responding_pid}:{self.ssh_attempted_username or ''}:"
+            f"{self.parent_action_group_id or ''}:{self.preserve_start_time}:{self.source}"
         )
         return f"network-connection-{seed:016x}"
 
 
 class NetworkConnectionExecutor(Protocol):
-    """Adapter protocol implemented by the current activity generator."""
-
-    def _execute_network_connection_bundle(self, request: NetworkConnectionRequest) -> str:
-        """Expand one network connection request into canonical evidence."""
-        ...
+    """Services supplied by the activity generator to network planning."""
 
 
 class NetworkConnectionActionBundle:
@@ -176,4 +181,8 @@ class NetworkConnectionActionBundle:
     def execute(self) -> str:
         """Emit network, source endpoint, proxy, DNS/TLS/HTTP, and firewall evidence."""
 
-        return self._executor._execute_network_connection_bundle(self._request)
+        from evidenceforge.generation.actions.network_transaction_planner import (
+            NetworkTransactionPlanner,
+        )
+
+        return NetworkTransactionPlanner(self._executor).execute(self._request)

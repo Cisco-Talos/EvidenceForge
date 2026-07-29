@@ -64,7 +64,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         file_transfers = list(event.file_transfers)
         if event.file_transfer is not None:
             file_transfers.insert(0, event.file_transfer)
-        sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
+        sensor_metadata = self._sensor_metadata(event, self.format_def.name)
         previous_file_ts: datetime | None = None
         for ft in file_transfers:
             min_start = _related_http_analyzer_timestamp(event)
@@ -103,10 +103,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "md5": ft.md5 or None,
                 "sha1": ft.sha1 or None,
                 "sha256": ft.sha256 or None,
-                "_sensor_hostnames": sensor_hostnames,
+                **sensor_metadata,
             }
-            if event._nat_swaps_by_sensor:
-                event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
             self.emit_event(event_data)
 
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
@@ -145,10 +143,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "md5": cert_hashes["md5"],
                 "sha1": cert_hashes["sha1"],
                 "sha256": cert_hashes["sha256"],
-                "_sensor_hostnames": sensor_hostnames,
+                **sensor_metadata,
             }
-            if event._nat_swaps_by_sensor:
-                event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
             self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

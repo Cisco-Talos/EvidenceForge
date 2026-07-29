@@ -1612,7 +1612,8 @@ class TestWeirdProtocolConstraint:
         assert event.dns.query == "WEB-EXT-01.example.org"
         assert event.dns.AA is True
 
-    def test_sensor_duration_texture_preserves_dns_rtt_floor(self, timestamp, tmp_path):
+    def test_direct_emitter_preserves_dns_rtt_duration(self, timestamp, tmp_path):
+        """Direct sensor rendering does not invent unexplained duration variance."""
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(
             format_def=fmt,
@@ -1647,8 +1648,7 @@ class TestWeirdProtocolConstraint:
             for path in tmp_path.glob("zeek-*/conn.json")
         }
         assert rows["zeek-a"]["duration"] == event.dns.rtt
-        assert rows["zeek-b"]["duration"] > event.dns.rtt
-        assert rows["zeek-b"]["duration"] - rows["zeek-a"]["duration"] <= 0.05
+        assert rows["zeek-b"]["duration"] == event.dns.rtt
 
     def test_generic_dns_service_accounting_is_clamped(
         self, activity_gen, timestamp, state_manager, mock_emitters

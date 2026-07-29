@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.authentication import RemoteAuthenticationPlan
 from evidenceforge.events.contexts import (
     AccountManagementContext,
     AuthContext,
@@ -68,6 +69,13 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
+from evidenceforge.events.cryptography import (
+    OcspTransactionPlan,
+    TlsCertificatePresentationPlan,
+)
+from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.events.network import NetworkSensorObservation
 
 if TYPE_CHECKING:
     from evidenceforge.generation.source_timing import SourceTimingPlan
@@ -94,6 +102,7 @@ class SecurityEvent:
     src_host: HostContext | None = None
     dst_host: HostContext | None = None
     auth: AuthContext | None = None
+    remote_auth: RemoteAuthenticationPlan | None = None
     process: ProcessContext | None = None
     network: NetworkContext | None = None
     dns: DnsContext | None = None
@@ -121,9 +130,11 @@ class SecurityEvent:
     file_transfers: list[FileTransferContext] = field(default_factory=list)
     x509: X509Context | None = None
     x509_chain: list[X509Context] = field(default_factory=list)
+    tls_presentation: TlsCertificatePresentationPlan | None = None
     dhcp: DhcpContext | None = None
     ntp: NtpContext | None = None
     ocsp: OcspContext | None = None
+    ocsp_transaction: OcspTransactionPlan | None = None
     pe: PeContext | None = None
     proxy: ProxyContext | None = None
 
@@ -156,6 +167,14 @@ class SecurityEvent:
     # Planned source-native observation times keyed by source family/profile.
     # SecurityEvent.timestamp remains canonical world time.
     source_timing: SourceTimingPlan | None = None
+
+    # Correlated action lifecycle and frozen network-sensor projections.
+    # EventDispatcher allocates event_id before state application and observation.
+    event_id: str = ""
+    lifecycle: ActionLifecycleContext | None = None
+    identity_plan: EventIdentityPlan | None = None
+    network_observations: tuple[NetworkSensorObservation, ...] = ()
+    network_observations_planned: bool = False
 
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format

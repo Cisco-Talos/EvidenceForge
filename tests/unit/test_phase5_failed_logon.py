@@ -487,6 +487,23 @@ class TestFailedLogonDC:
         ]
         assert network_events
         assert all(event.network.conn_state != "S0" for event in network_events)
+        failed_event = next(
+            call[0][0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call[0][0].event_type == "failed_logon"
+        )
+        assert failed_event.remote_auth is not None
+        assert failed_event.remote_auth.outcome == "failure"
+        assert failed_event.remote_auth.logon_id == ""
+        assert failed_event.remote_auth.session_object_id == ""
+        transport = failed_event.remote_auth.primary_transport
+        assert transport is not None
+        assert transport.transaction_id == network_events[0].network.transaction.stable_id
+        assert network_events[0].lifecycle.parent_group_id == failed_event.remote_auth.stable_id
+        ecar_event_types = [
+            call[0][0].event_type for call in mock_emitters["ecar"].emit.call_args_list
+        ]
+        assert ecar_event_types.index("connection") < ecar_event_types.index("failed_logon")
 
     def test_known_user_failed_logon_uses_wrong_password_substatus(
         self, state_manager, mock_emitters, timestamp

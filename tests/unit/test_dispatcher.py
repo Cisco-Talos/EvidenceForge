@@ -37,6 +37,7 @@ from evidenceforge.events import (
 )
 from evidenceforge.events.contexts import SslContext, SyslogContext, X509Context
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
+from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.observation import (
     SOURCE_FAMILIES,
     ObservationPolicy,
@@ -99,6 +100,49 @@ class TestDispatchRouting:
         sm.apply.assert_called_once_with(event)
         emitter.emit.assert_not_called()
 
+    def test_network_identifier_publication_retains_only_latest_connection(self):
+        """High-volume connection correlation must use constant-size retained state."""
+        dispatcher = EventDispatcher(
+            state_manager=MagicMock(spec=StateManager),
+            emitters={},
+        )
+
+        for sequence in range(100_000):
+            dispatcher.publish_network_identifiers(
+                f"uid-{sequence}",
+                {
+                    "zeek_conn": f"sensor-uid-{sequence}",
+                    "zeek_http": "",
+                },
+            )
+
+        assert dispatcher.network_identifier_for_format("uid-99999", "zeek_conn") == (
+            "sensor-uid-99999"
+        )
+        assert dispatcher.network_identifier_for_format("uid-99998", "zeek_conn") is None
+        assert len(dispatcher._latest_network_identifiers_by_format) == 2
+
+    def test_dispatch_allocates_unique_deterministic_canonical_event_ids(self):
+        """Distinct occurrences receive stable IDs before state application and rendering."""
+        first_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
+        first_events = [
+            SecurityEvent(timestamp=_make_ts(), event_type="failed_logon") for _ in range(2)
+        ]
+        for event in first_events:
+            first_dispatcher.dispatch(event)
+
+        second_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
+        second_events = [
+            SecurityEvent(timestamp=_make_ts(), event_type="failed_logon") for _ in range(2)
+        ]
+        for event in second_events:
+            second_dispatcher.dispatch(event)
+
+        first_ids = [event.event_id for event in first_events]
+        second_ids = [event.event_id for event in second_events]
+        assert len(set(first_ids)) == 2
+        assert first_ids == second_ids
+
     def test_dispatch_applies_storyline_cluster_provenance_only(self):
         """storyline_cluster_id marks context provenance without changing origin flag."""
         sm = MagicMock(spec=StateManager)
@@ -152,6 +196,32 @@ class TestObservationProfiles:
         """Missing profile names are still rejected during policy construction."""
         with pytest.raises(ValueError, match="Unknown observation_profile: missing_profile"):
             ObservationPolicy("missing_profile")
+
+    def test_observation_policy_exposes_cross_source_delay_budget(self, monkeypatch):
+        """Action bundles should budget the active profile's worst relative delay."""
+
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                },
+                "sources": {
+                    "ecar": {"delay_ms": {"min_ms": 10, "max_ms": 500}},
+                    "syslog": {"delay_ms": {"min_ms": 20, "max_ms": 250}},
+                },
+            },
+        )
+
+        policy = ObservationPolicy("remote_session_delay_test")
+
+        assert policy.delay_bounds("ecar") == (
+            timedelta(milliseconds=10),
+            timedelta(milliseconds=500),
+        )
+        assert policy.maximum_delay_difference("ecar", "syslog") == timedelta(milliseconds=480)
+        assert policy.maximum_delay_difference("syslog", "ecar") == timedelta(milliseconds=240)
 
     def test_source_missingness_drops_rendering_without_skipping_state(self, monkeypatch):
         """Non-complete profiles can drop source rows without corrupting canonical state."""
@@ -987,6 +1057,10 @@ class TestObservationProfiles:
                         "missingness": 0.0,
                         "delay_ms": {"min_ms": 20, "max_ms": 2000},
                     },
+                    "syslog": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
                 },
             },
         )
@@ -1016,10 +1090,63 @@ class TestObservationProfiles:
             auth=auth,
         )
 
-        for format_name in ("windows_event_security", "ecar"):
+        for format_name in ("windows_event_security", "ecar", "syslog"):
             assert (
                 policy.decide(format_name, logon).delay == policy.decide(format_name, logoff).delay
             )
+
+    def test_action_lifecycle_observation_is_coherent_across_event_types(self, monkeypatch):
+        """One source shares drop and delay decisions for a canonical action lifecycle."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.5,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
+                },
+            },
+        )
+        policy = ObservationPolicy("action_lifecycle_test")
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+        )
+        auth = AuthContext(username="WS-01$", logon_id="0x537dab7", logon_type=3)
+        group_id = "machine-account-logon-test"
+        logon = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="machine_logon",
+            dst_host=host,
+            auth=auth,
+            lifecycle=ActionLifecycleContext(
+                group_id=group_id,
+                canonical_start=_make_ts(),
+                phase="start",
+            ),
+        )
+        logoff = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=8),
+            event_type="logoff",
+            dst_host=host,
+            auth=auth,
+            lifecycle=ActionLifecycleContext(
+                group_id=group_id,
+                canonical_start=_make_ts(),
+                phase="closure",
+            ),
+        )
+
+        assert policy.decide("ecar", logon) == policy.decide("ecar", logoff)
 
     def test_network_observation_delay_is_coherent_per_uid_source(self, monkeypatch):
         """Network tuple companions should share source-local delay for one UID."""
@@ -1843,6 +1970,63 @@ class TestCanHandleDefault:
         lines = output_path.read_text(encoding="utf-8").splitlines()
         assert lines[0].startswith("<86>Oct 14 19:00:53")
         assert lines[1].startswith("<86>Oct 14 20:01:25")
+
+    def test_syslog_barrier_spooling_preserves_byte_identical_final_output(self, tmp_path):
+        """Barrier spills should bound buffers without changing normalized output bytes."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        events = [
+            {
+                "timestamp": datetime(2024, 10, 14, 20, 1, 25, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 500,
+                "facility": 10,
+                "severity": 6,
+                "message": "Removed session 170.",
+            },
+            {
+                "timestamp": datetime(2024, 10, 14, 19, 0, 53, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 500,
+                "facility": 10,
+                "severity": 6,
+                "message": "New session 176 of user jsmith.",
+            },
+            {
+                "timestamp": datetime(2024, 10, 14, 19, 30, 0, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "logger",
+                "pid": 700,
+                "facility": 10,
+                "severity": 5,
+                "message": "field=value\r\nforged-entry: status=ok",
+            },
+        ]
+        outputs = []
+        for name, use_barriers in (("buffered.log", False), ("spooled.log", True)):
+            output_path = tmp_path / name
+            emitter = SyslogEmitter(
+                load_format("syslog"),
+                output_path,
+                buffer_size=10,
+                threaded=use_barriers,
+            )
+            emitter.configure_output_target("sof-elk")
+            for event in events:
+                emitter.emit_raw(dict(event))
+                if use_barriers:
+                    emitter.barrier_flush()
+                    assert all(not writer.buffer for writer in emitter._writers.values())
+            emitter.close()
+            outputs.append(output_path.read_bytes())
+
+        assert outputs[0] == outputs[1]
+        assert b"field=value\r\nforged-entry: status=ok" in outputs[1]
 
     def test_syslog_routes_generated_output_by_event_year(self, tmp_path):
         """Directory-mode syslog output should split host logs by event year."""

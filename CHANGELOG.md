@@ -6,6 +6,80 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.13.0 (2026-07-27)
+
+This minor release establishes canonical lifecycle, identity, observation, and
+cryptographic planning contracts while improving long-scenario generation
+performance. Repeated runs of the same version remain byte-identical; the
+bounded Linux PID allocator intentionally changes PID-derived output relative
+to earlier development builds.
+
+**Canonical network, proxy, and observation contracts**
+
+- Centralized network transaction planning and added sensor observation,
+  lifecycle admission, and explicit proxy phase modeling so correlated source
+  evidence is constructed before rendering (`627602ed`, `6c5ee798`,
+  `d36e0d04`).
+- Preserved transport-before-authentication ordering, routed remote interactive
+  logons through RDP bundles, bounded endpoint flows to canonical intervals,
+  and aligned DNS process ownership and sensor timing (`4d441adc`, `f6c00225`,
+  `6bfe4dfa`, `0b8a3875`, `6053153d`).
+- Corrected TLS resumption history and connection duration, Security record-ID
+  epochs, Kerberos service identity, eCAR thread identity, process target
+  security context, and inferred Linux thread leaders (`72f9b86e`, `1650965c`,
+  `a6bc3172`, `27ccb505`, `286cf8bb`, `42373185`, `aef80375`).
+
+**Identity, session, and remote-auth lifecycle**
+
+- Added canonical process/thread identity state, centralized identity lifecycle
+  ownership, and made eCAR identity roles explicit (`2935410a`, `0c4cc579`,
+  `c43b094f`).
+- Enforced explicit session closure with authoritative lifecycle invariants and
+  final acceptance fixes (`0c5ce6a7`, `d82213ea`, `2ada0f30`).
+- Modeled ordered Linux sudo lifecycles, closed the ambient-session bypass, and
+  grouped source-local sudo observations (`016c1984`, `281d5fe5`, `14b094e1`).
+- Added canonical Windows remote-authentication planning, finalized source
+  timing before rendering, and added rendered-order probes (`d5fe4f68`,
+  `a66c363d`, `b9dfde31`).
+
+**Cryptographic protocol realism**
+
+- Added canonical cryptographic material planning, standards-valid OCSP
+  transactions, valid DKIM signing, and rendered cryptographic evidence
+  contracts (`221669ce`, `31e3ba38`, `f07e2c46`).
+
+**Long-scenario performance**
+
+- Replaced global connection-table scans with indexed tuple lookup and bounded
+  closed-connection lifecycle state, preventing progressive slowdown as
+  scenario history grows (`d1b988f4`).
+- Replaced emitter barrier polling with FIFO flush acknowledgements, reducing a
+  representative 48-hour workload by 7% while preserving byte-identical output
+  (`b348fc8f`).
+- Repaired stale recursive process-parent fallbacks so long-running scenarios
+  choose a verified live process anchor instead of failing during later RDP
+  client creation (`13146e9e`).
+- Unified session, process, thread, connection, expiry, Linux PID, and logind
+  history behind shared duration-stable indexes. Replaced the quadratic Linux
+  PID collision walk with bounded deterministic allocation, reducing 8,000
+  sequential allocations from 18.18 seconds to 0.105 seconds (`eafb0f05`).
+- Prevented backdated session bootstrap from resurrecting ended sessions,
+  indexed the remaining session-owned process lookups, bounded syslog retention
+  with record-preserving hourly spools, and stabilized long-run ETA display
+  over a 15-minute speed window (`bb6d6033`).
+- Replaced the duration-growing sensor-UID correlation table with a
+  constant-size completed-connection handoff and compacted stale grouped
+  temporal-index records. Moved `COLLECTION_PROFILE.json` out of the ingestible
+  `data/` tree and into the run metadata root (`b00bdd1f`).
+
+**Assessment records and maintenance**
+
+- Recorded expanded assessment loops 62 through 72 and their accepted
+  source-native realism outcomes (`383e410d`, `12c85d2e`).
+- Updated `actions/setup-python` from 6 to 7, pre-commit from 4.6.0 to 4.6.1,
+  Ruff through 0.15.22, and Typer from 0.26.8 to 0.27.0 (`c726ff7c`,
+  `c8a428a5`, `18b389df`, `74d6ff18`).
+
 ## v1.12.0 (2026-07-10)
 
 This minor release aligns EvidenceForge skill installation with current Claude

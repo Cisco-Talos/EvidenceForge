@@ -22,9 +22,11 @@
 
 """Unit tests for CLI commands."""
 
+from io import StringIO
 from unittest.mock import Mock, patch
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from evidenceforge import __version__
@@ -34,13 +36,22 @@ from evidenceforge.cli.commands import (
     EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
     EXIT_SUCCESS,
+    _generation_progress,
     app,
 )
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
+
+
+def test_generation_progress_uses_fifteen_minute_speed_window():
+    """Long generation ETA should retain enough samples across irregular hours."""
+    progress = _generation_progress(Console(file=StringIO()))
+
+    assert progress.speed_estimate_period == 15 * 60
 
 
 def _write_included_minimal_scenario(tmp_path, *, name="include-cli-test"):
@@ -498,6 +509,7 @@ output:
                 (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+                (sd / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "new"}')
                 (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
                     '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
                 )
@@ -586,6 +598,7 @@ output:
                 (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
                 (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+                (sd / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "new"}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -595,6 +608,7 @@ output:
         (tmp_path / "data").mkdir()
         (tmp_path / "GROUND_TRUTH.md").write_text("old")
         (tmp_path / OBSERVATION_MANIFEST_FILENAME).write_text("old manifest")
+        (tmp_path / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "old"}')
         (tmp_path / "ENVIRONMENT.md").write_text("old")
 
         result = runner.invoke(
@@ -614,6 +628,7 @@ output:
         assert (tmp_path / "GROUND_TRUTH.json").exists()
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
         assert (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text() == '{"schema_version": 1}'
+        assert (tmp_path / COLLECTION_PROFILE_FILENAME).read_text() == '{"profile": "new"}'
         assert (tmp_path / "data" / "new.xml").read_text() == "new data"
         # ENVIRONMENT.md must be preserved (not engine output)
         assert (tmp_path / "ENVIRONMENT.md").exists()

@@ -88,10 +88,8 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
             "subject": "" if protected else smtp.subject,
             "user_agent": "" if protected else smtp.user_agent,
             "fuids": [] if protected or not fuids else fuids,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            **self._sensor_metadata(event, self.format_def.name),
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

@@ -288,7 +288,7 @@ def test_syslog_sort_orders_same_second_systemd_start_before_finish():
 
 
 def test_syslog_sudo_lifecycle_normalizer_orders_same_pid_pam_session():
-    """Sudo COMMAND rows should stay between same-PID PAM open and close rows."""
+    """Sudo COMMAND rows should precede the same-PID PAM open and close rows."""
     lines = [
         "<85>1 2024-03-18T12:00:00.100000Z WEB-EXT-01 sudo 701258 - - "
         "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/id",
@@ -300,7 +300,7 @@ def test_syslog_sudo_lifecycle_normalizer_orders_same_pid_pam_session():
 
     normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
 
-    assert "session opened" in normalized[0]
-    assert "COMMAND=/usr/bin/id" in normalized[1]
+    assert "COMMAND=/usr/bin/id" in normalized[0]
+    assert "session opened" in normalized[1]
     assert "session closed" in normalized[2]
-    assert "2024-03-18T12:00:00.099000Z" in normalized[0]
+    assert "2024-03-18T12:00:00.140000Z" in normalized[1]

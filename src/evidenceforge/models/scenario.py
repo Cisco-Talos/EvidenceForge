@@ -1194,7 +1194,46 @@ class DnsQueryEventSpec(_EventSpecBase):
 
         if self.rcode == "NOERROR" and self.answer is None:
             raise ValueError("answer is required when rcode is NOERROR")
+        if (
+            self.rcode == "NOERROR"
+            and self.qtype == "TXT"
+            and "._domainkey." in self.query.rstrip(".").lower()
+        ):
+            self._validate_dkim_answers()
         return self
+
+    def _validate_dkim_answers(self) -> None:
+        """Reject typed DKIM TXT answers whose p= value is not a parseable RSA key."""
+
+        import base64
+        import binascii
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        answers = self.answer if isinstance(self.answer, list) else [self.answer]
+        for answer in answers:
+            value = str(answer or "")
+            tags = {}
+            for segment in value.split(";"):
+                key, separator, tag_value = segment.strip().partition("=")
+                if separator:
+                    tags[key.lower()] = tag_value.strip()
+            public_key_value = tags.get("p", "")
+            if tags.get("v", "").upper() != "DKIM1" or not public_key_value:
+                raise ValueError(
+                    "DKIM TXT answers must contain 'v=DKIM1' and a non-empty Base64 p= key"
+                )
+            try:
+                padded = public_key_value + "=" * ((4 - len(public_key_value) % 4) % 4)
+                der = base64.b64decode(padded, validate=True)
+                public_key = serialization.load_der_public_key(der)
+            except (ValueError, TypeError, binascii.Error) as exc:
+                raise ValueError(
+                    "DKIM TXT p= must be Base64 DER for a parseable RSA public key"
+                ) from exc
+            if not isinstance(public_key, rsa.RSAPublicKey):
+                raise ValueError("DKIM TXT p= must identify an RSA public key")
 
 
 class WebScanEventSpec(_PeriodicEventBase):
@@ -1919,6 +1958,12 @@ class NetworkSensor(BaseModel):
     monitoring_segments: list[str]
     direction: str = Field(default="bidirectional", pattern="^(inbound|outbound|bidirectional)$")
     placement: str = Field(default="span", pattern="^(span|tap)$")
+    capture_profile: str = Field(
+        default="",
+        description=(
+            "Optional network observation profile. Blank uses the configured default profile."
+        ),
+    )
     log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
     interfaces: dict[str, str] = Field(default_factory=dict)
     policy: list[FirewallRule] = Field(default_factory=list)
@@ -1943,6 +1988,28 @@ class NetworkSensor(BaseModel):
     )
     nat_rules: list[NatRule] = Field(default_factory=list)
     description: str = ""
+
+    @field_validator("capture_profile")
+    @classmethod
+    def validate_capture_profile(cls, value: str) -> str:
+        """Accept blank defaults and reject unknown observation profiles."""
+
+        profile_name = value.strip()
+        if not profile_name:
+            return ""
+        from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
+
+        network_observation = load_timing_profiles().get("network_sensor_observation", {})
+        profiles = (
+            network_observation.get("profiles", {}) if isinstance(network_observation, dict) else {}
+        )
+        if not isinstance(profiles, dict) or profile_name not in profiles:
+            available = sorted(profiles) if isinstance(profiles, dict) else []
+            raise ValueError(
+                f"Unknown network sensor capture_profile {profile_name!r}. "
+                f"Available profiles: {available}"
+            )
+        return profile_name
 
 
 class NetworkConfig(BaseModel):

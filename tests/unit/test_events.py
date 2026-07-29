@@ -286,6 +286,7 @@ class TestKerberosContext:
         ctx = KerberosContext(target_username="alice", target_domain="CORP")
         assert ctx.target_sid == ""
         assert ctx.service_name == ""
+        assert ctx.service_account_name == ""
         assert ctx.ticket_status == "0x0"
         assert ctx.pre_auth_type == 0
         assert ctx.source_port == 0
@@ -298,6 +299,7 @@ class TestKerberosContext:
             target_domain="CORP",
             target_sid="S-1-5-21-123-456-789-1001",
             service_name="krbtgt",
+            service_account_name="krbtgt",
             service_sid="S-1-5-21-123-456-789-502",
             ticket_options="0x40810010",
             encryption_type="0x12",
@@ -305,6 +307,7 @@ class TestKerberosContext:
             source_ip="::ffff:10.0.1.50",
         )
         assert ctx.service_name == "krbtgt"
+        assert ctx.service_account_name == "krbtgt"
         assert ctx.pre_auth_type == 15
 
 

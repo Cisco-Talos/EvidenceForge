@@ -58,19 +58,22 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
         """Render DnsContext + NetworkContext to Zeek dns.log NDJSON."""
         net = event.network
         dns = event.dns
-        conn_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
+        if event.network_observations_planned and net.transaction is not None:
+            conn_ts = net.transaction.started_at
+        else:
+            conn_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
         conn_lifetime = net.duration if net.duration is not None else dns.rtt
         within = None
         if conn_lifetime is not None and conn_lifetime > 0:
@@ -123,15 +126,12 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             event_data["answers"] = dns.answers
         if dns.TTLs:
             event_data["TTLs"] = dns.TTLs
-        event_data["_allow_sensor_observation_variance"] = True
-
-        # Sensor hostname routing (set by dispatcher for network visibility)
-        event_data["_sensor_hostnames"] = event._sensor_hostnames_by_format.get(
-            self.format_def.name if self.format_def else "zeek_dns", []
+        event_data.update(
+            self._sensor_metadata(
+                event,
+                self.format_def.name if self.format_def else "zeek_dns",
+            )
         )
-
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

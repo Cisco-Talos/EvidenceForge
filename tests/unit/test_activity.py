@@ -569,7 +569,7 @@ class TestNetworkConnectionActionBundle:
         assert first.stable_id.startswith("network-connection-")
 
     def test_network_connection_bundle_delegates_to_adapter(self):
-        """The bundle should preserve the current generator adapter contract."""
+        """The bundle should execute through the action-owned transaction planner."""
         request = NetworkConnectionRequest(
             src_ip="10.0.0.10",
             dst_ip="203.0.113.10",
@@ -579,12 +579,15 @@ class TestNetworkConnectionActionBundle:
             service="http",
         )
         executor = Mock()
-        executor._execute_network_connection_bundle.return_value = "Cabc123"
-
-        uid = NetworkConnectionActionBundle(executor, request).execute()
+        with patch(
+            "evidenceforge.generation.actions.network_transaction_planner."
+            "NetworkTransactionPlanner.execute",
+            return_value="Cabc123",
+        ) as execute:
+            uid = NetworkConnectionActionBundle(executor, request).execute()
 
         assert uid == "Cabc123"
-        executor._execute_network_connection_bundle.assert_called_once_with(request)
+        execute.assert_called_once_with(request)
 
 
 class TestNetworkValidation:
@@ -2148,8 +2151,54 @@ class TestActivityGenerator:
     def test_generate_logon_rdp_uses_native_4624_auth_shape(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """RDP 4624 should not render CredSSP as the authentication package."""
+        """Direct Type 10 calls should delegate transport and auth to the RDP bundle."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=10,
+            source_ip="10.0.99.50",
+            source_port=49306,
+        )
+
+        event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        rdp_connections = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3389
+        ]
+        assert len(rdp_connections) == 1
+        network_event = rdp_connections[0]
+        assert event.timestamp > network_event.timestamp
+        assert event.auth.source_port == network_event.network.src_port == 49306
+        assert event.auth.logon_id == logon_id
+        assert event.auth.logon_type == 10
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
+        assert event.auth.auth_package != "CredSSP"
+
+    def test_generate_logon_rdp_preserves_explicit_modeled_source(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Compatibility delegation should not replace an explicit storyline source."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_source = System(
+            hostname="LT-REDTEAM-01",
+            ip="10.0.0.99",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            linux_source.ip: linux_source,
+        }
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_logon(
@@ -2157,14 +2206,22 @@ class TestActivityGenerator:
             test_system,
             timestamp,
             logon_type=10,
-            source_ip="10.0.99.50",
+            source_ip=linux_source.ip,
         )
 
-        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        assert event.auth.logon_type == 10
-        assert event.auth.logon_process == "User32"
-        assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
-        assert event.auth.auth_package != "CredSSP"
+        network_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        assert network_event.network.src_ip == linux_source.ip
+        assert logon_event.auth.source_ip == linux_source.ip
+        assert logon_event.src_host.hostname == linux_source.hostname
 
     def test_generate_logon_rdp_without_remote_source_downgrades_to_interactive(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2942,6 +2999,109 @@ class TestActivityGenerator:
         assert network_event.network.src_port == 52595
         assert network_event.network.dst_ip == test_system.ip
         assert network_event.network.conn_state == "SF"
+        assert logon_event.remote_auth is not None
+        assert logon_event.remote_auth.primary_transport is not None
+        assert (
+            logon_event.remote_auth.primary_transport.transaction_id
+            == network_event.network.transaction.stable_id
+        )
+        assert network_event.lifecycle.parent_group_id == logon_event.remote_auth.stable_id
+        session = state_manager.get_session(logon_event.auth.logon_id)
+        assert session is not None
+        assert session.parent_lifecycle_group_id == logon_event.remote_auth.stable_id
+
+    def test_remote_logon_reuses_existing_exact_transport_without_duplicate_flow(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Compatibility SMB paths bind the prior transaction into remote-auth timing."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.0.50"
+        source_port = 52595
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip=source_ip,
+            src_port=source_port,
+            dst_ip=test_system.ip,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            time=timestamp,
+            duration=5.0,
+            conn_state="SF",
+        )
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        transaction_id = network_event.network.transaction.stable_id
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=source_port,
+            emit_network_evidence=False,
+            remote_authentication_transport_id=transaction_id,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        assert logon_event.remote_auth is not None
+        assert logon_event.remote_auth.primary_transport is not None
+        assert logon_event.remote_auth.primary_transport.transaction_id == transaction_id
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert len(network_events) == 1
+
+    def test_remote_logon_rejects_wrong_explicit_transport_transaction(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A reused tuple cannot bind authentication without its exact transaction ID."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.0.50"
+        source_port = 52595
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip=source_ip,
+            src_port=source_port,
+            dst_ip=test_system.ip,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            time=timestamp,
+            duration=5.0,
+            conn_state="SF",
+        )
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=source_port,
+            emit_network_evidence=False,
+            remote_authentication_transport_id="network-connection-wrong",
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        assert logon_event.remote_auth is not None
+        assert logon_event.remote_auth.primary_transport is None
 
     def test_internal_remote_successful_logon_emits_matching_network_evidence(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3530,12 +3690,25 @@ class TestActivityGenerator:
         machine_logon = next(
             event for event in security_events if event.event_type == "machine_logon"
         )
+        machine_logoff = next(event for event in security_events if event.event_type == "logoff")
+        assert machine_logon.remote_auth is not None
+        assert machine_logon.remote_auth.outcome == "success"
+        assert machine_logon.remote_auth.primary_transport is not None
+        assert machine_logon.remote_auth.primary_transport.role == "kerberos_validation"
+        assert machine_logon.edr.object_id == machine_logoff.edr.object_id
+        assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
+        assert machine_logon.lifecycle.phase == "start"
+        assert machine_logoff.lifecycle.phase == "closure"
         kerberos_connection = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
             if call.args[0].event_type == "connection"
         )
         assert machine_logon.auth.source_port == kerberos_connection.network.src_port
+        assert (
+            machine_logon.remote_auth.primary_transport.transaction_id
+            == kerberos_connection.network.transaction.stable_id
+        )
         assert all(
             event.kerberos.source_port == machine_logon.auth.source_port
             for event in kerberos_events
@@ -6699,6 +6872,14 @@ class TestActivityGenerator:
         assert target_wfp.network.dst_ip == dc_system.ip
         assert target_wfp.network.initiating_pid == lsass_pid
         assert target_wfp.process.image.endswith("lsass.exe")
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        )
+        assert target_wfp.lifecycle is not None
+        assert target_wfp.lifecycle.parent_group_id is None
+        assert target_wfp.lifecycle.group_id == connection_event.network.transaction.stable_id
 
     def test_failed_inbound_windows_probe_does_not_emit_target_wfp(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -7012,6 +7193,30 @@ class TestActivityGenerator:
             check_time,
         )
 
+    def test_system_hostname_lookup_cache_refreshes_when_system_map_changes(self, activity_gen):
+        """Hostname lookup should stay indexed while tracking engine/test map updates."""
+        first = System(
+            hostname="APP-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="server",
+        )
+        second = System(
+            hostname="DB-01",
+            ip="10.0.0.11",
+            os="Windows Server 2022",
+            type="server",
+        )
+        activity_gen._ad_domain = "example.test"
+        activity_gen._ip_to_system = {first.ip: first}
+
+        assert activity_gen._system_for_hostname("app-01") is first
+        assert activity_gen._system_for_hostname("APP-01.EXAMPLE.TEST.") is first
+
+        activity_gen._ip_to_system[second.ip] = second
+
+        assert activity_gen._system_for_hostname("db-01.example.test") is second
+
     def test_recent_connection_tuple_cache_ignores_stale_heap_entries(self, activity_gen):
         """Old heap records must not delete newer reservations for the same tuple."""
         first_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
@@ -7049,7 +7254,6 @@ class TestActivityGenerator:
         )
 
         assert len(activity_gen._recent_connection_tuples) == 1
-        assert len(activity_gen._recent_connection_tuple_heap) == 1
 
     def test_recent_connection_tuple_cache_prunes_directly_seeded_entries(self, activity_gen):
         """Compatibility fixture seeds should still follow event-time pruning."""
@@ -7061,7 +7265,6 @@ class TestActivityGenerator:
         activity_gen._prune_recent_connection_tuples(current_time.timestamp())
 
         assert activity_gen._recent_connection_tuples == {}
-        assert activity_gen._recent_connection_tuple_heap == []
 
     def test_generate_connection_does_not_infer_dns_for_non_resolver_port_53(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -8185,6 +8388,57 @@ class TestActivityGenerator:
         assert captured
         assert captured[-1].network.src_ip == "10.10.10.5"
         assert captured[-1].network.dst_ip == "10.10.20.10"
+
+    def test_generate_connection_finalizes_one_source_visible_interval(
+        self,
+        state_manager,
+    ):
+        """Canonical context and state should share the finalized transport interval."""
+        captured: list[SecurityEvent] = []
+
+        class _Dispatcher:
+            visibility_engine = None
+
+            @staticmethod
+            def dispatch(event):
+                captured.append(event)
+
+            @staticmethod
+            def record_filtered_network_observation():
+                return None
+
+        generator = ActivityGenerator(state_manager, {}, dispatcher=_Dispatcher())
+        timestamp = datetime(2024, 3, 18, 13, 20, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        generator.generate_connection(
+            src_ip="10.10.10.5",
+            dst_ip="10.10.20.53",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.04,
+            orig_bytes=72,
+            resp_bytes=128,
+            conn_state="SF",
+        )
+
+        event = captured[-1]
+        connection = state_manager.get_connection(event.network.conn_id)
+        assert event.network.transaction is not None
+        assert event.network.transaction.started_at == event.timestamp
+        assert event.network.transaction.hostname
+        assert event.network.transaction.outcome == "success"
+        assert event.network.transaction.phase_times[0] == (
+            "transport_start",
+            event.timestamp,
+        )
+        assert event.network.source_visible_start_time == event.timestamp
+        assert event.network.source_visible_close_time == event.timestamp + timedelta(seconds=0.04)
+        assert connection is not None
+        assert connection.start_time == event.network.source_visible_start_time
+        assert connection.close_time == event.network.source_visible_close_time
 
     def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters

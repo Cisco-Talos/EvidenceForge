@@ -466,6 +466,8 @@ class TestInstallSkillsCli:
 
         assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
         assert "Legacy EvidenceForge skills" in result.stdout
-        assert ".codex/skills" in result.stdout
+        # Rich may wrap the long temporary home path at the slash depending on
+        # the pytest worker suffix; normalize line wrapping before matching.
+        assert ".codex/skills" in result.stdout.replace("\n", "")
         assert "These legacy files were not modified" in result.stdout
         assert sentinel.read_text() == "preserve me"

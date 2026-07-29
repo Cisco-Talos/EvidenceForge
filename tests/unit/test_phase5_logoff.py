@@ -28,6 +28,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.state_manager import StateManager
@@ -172,6 +173,99 @@ class TestLogoffWindows:
         event = mock_emitters["ecar"].emit.call_args[0][0]
         assert event.event_type == "logoff"
         assert event.auth.username == "alice.smith"
+
+    def test_logoff_closes_all_session_processes_before_session_closure(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """The session bundle owns child-first process teardown before durable logout."""
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
+        state_manager.set_current_time(timestamp + timedelta(minutes=1))
+        child_pid = state_manager.create_process(
+            win_system.hostname,
+            0,
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+            "ssh.exe server",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        state_manager.update_process_activity_time(
+            win_system.hostname,
+            child_pid,
+            timestamp + timedelta(minutes=8),
+        )
+        mock_emitters["ecar"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            win_system,
+            timestamp + timedelta(minutes=2),
+            logon_id,
+        )
+
+        emitted = [call.args[0] for call in mock_emitters["ecar"].emit.call_args_list]
+        child_terminate = next(
+            event
+            for event in emitted
+            if event.event_type == "process_terminate" and event.process.pid == child_pid
+        )
+        logoff = next(event for event in emitted if event.event_type == "logoff")
+        visible_terminate = activity_gen.process_source_terminate_time(
+            win_system.hostname,
+            child_pid,
+        )
+        assert visible_terminate is not None
+        assert child_terminate.timestamp > timestamp + timedelta(minutes=8)
+        assert logoff.timestamp > visible_terminate
+        assert all(proc.logon_id != logon_id for proc in state_manager.list_running_processes())
+
+    def test_logoff_follows_preplanned_session_process_termination(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """A held process close remains part of its session lifecycle after state teardown."""
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
+        state_manager.set_current_time(timestamp + timedelta(minutes=1))
+        pid = state_manager.create_process(
+            win_system.hostname,
+            0,
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+            "ssh.exe server",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        state_manager.update_process_activity_time(
+            win_system.hostname,
+            pid,
+            timestamp + timedelta(minutes=12),
+        )
+        activity_gen.generate_process_termination(
+            test_user,
+            win_system,
+            timestamp + timedelta(minutes=2),
+            pid,
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+            logon_id,
+        )
+        visible_terminate = activity_gen.process_source_terminate_time(win_system.hostname, pid)
+        assert visible_terminate is not None
+        mock_emitters["ecar"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            win_system,
+            timestamp + timedelta(minutes=3),
+            logon_id,
+        )
+
+        logoff = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "logoff"
+        )
+        assert logoff.timestamp > visible_terminate
 
 
 class TestLogoffLinux:
@@ -368,10 +462,10 @@ class TestLogoffLinux:
         assert syslog_event.timestamp == close_time + expected_delta
         assert ecar_event.timestamp == close_time + expected_delta
 
-    def test_storyline_ssh_logoff_preserves_time_before_transport_close(
+    def test_storyline_ssh_logoff_waits_for_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
-        """Storyline logout should stay authored when the SSH transport is still open."""
+        """Storyline logout cannot close a durable SSH session before its transport."""
         state_manager.set_current_time(timestamp)
         logon_id = state_manager.create_session(
             username=test_user.username,
@@ -399,8 +493,69 @@ class TestLogoffLinux:
 
         syslog_event = _emitted_pam_close_event(mock_emitters)
         ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
-        assert syslog_event.timestamp == logoff_time
-        assert ecar_event.timestamp == logoff_time
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(linux_system.hostname, logon_id, close_time),
+        )
+        assert syslog_event.timestamp == close_time + expected_delta
+        assert ecar_event.timestamp == close_time + expected_delta
+
+    def test_authoritative_ssh_deadline_owns_transport_and_source_closure(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Explicit SSH closure keeps canonical and source-native deadlines distinct."""
+        deadline = timestamp + timedelta(hours=1)
+        plan = SessionEndPlan(deadline, "explicit_storyline", "ssh-explicit-close")
+        activity_gen._ip_to_system = {linux_system.ip: linux_system}
+
+        activity_gen.generate_ssh_session(
+            user=test_user,
+            target_system=linux_system,
+            time=timestamp,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_end_plan=plan,
+        )
+        session = next(
+            session
+            for session in state_manager.get_sessions_for_user(test_user.username)
+            if session.system == linux_system.hostname
+        )
+        assert session.end_plan == plan
+        assert session.network_close_time is not None
+        assert deadline - timedelta(milliseconds=1500) <= session.network_close_time
+        assert session.network_close_time <= deadline - timedelta(milliseconds=100)
+        mock_emitters["syslog"].reset_mock()
+        mock_emitters["ecar"].reset_mock()
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            deadline + timedelta(minutes=20),
+            session.logon_id,
+            logon_type=10,
+            from_storyline=True,
+            session_end_plan=plan,
+        )
+
+        pam_close = _emitted_pam_close_event(mock_emitters)
+        logind_close = next(
+            event
+            for event in _emitted_syslog_events(mock_emitters)
+            if event.syslog.message.startswith("Removed session ")
+        )
+        ecar_close = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "logoff"
+        )
+        assert state_manager.get_session_end_time(session.logon_id) == deadline
+        assert timedelta(milliseconds=120) <= pam_close.timestamp - session.network_close_time
+        assert pam_close.timestamp - session.network_close_time <= timedelta(milliseconds=2500)
+        assert pam_close.source_timing.canonical_timestamp == deadline
+        assert deadline <= ecar_close.timestamp <= deadline + timedelta(seconds=15)
+        assert pam_close.timestamp < logind_close.timestamp <= deadline + timedelta(seconds=4)
 
     def test_linux_type10_logoff_gets_pam_close_even_when_kind_was_not_preserved(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters

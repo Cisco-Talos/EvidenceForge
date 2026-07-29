@@ -33,6 +33,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkTrafficLedger,
+    NetworkTransactionOutcome,
+    NetworkTransactionPlan,
+)
+from evidenceforge.events.proxy import ProxyTransactionPlan
+
 
 @dataclass(slots=True)
 class HostContext:
@@ -84,6 +93,16 @@ class AuthContext:
 
 
 @dataclass(slots=True)
+class ProcessTargetSecurityContext:
+    """Optional alternate security context used to create a process."""
+
+    user_sid: str
+    username: str
+    domain: str
+    logon_id: str
+
+
+@dataclass(slots=True)
 class ProcessContext:
     """Process creation/termination details."""
 
@@ -102,6 +121,7 @@ class ProcessContext:
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
     current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
+    target_security_context: ProcessTargetSecurityContext | None = None
 
 
 @dataclass(slots=True)
@@ -152,6 +172,8 @@ class NetworkContext:
     zeek_uid: str = ""  # From StateManager.open_connection()
     conn_id: str = ""  # From StateManager.open_connection()
     duration: float | None = None
+    source_visible_start_time: datetime | None = None
+    source_visible_close_time: datetime | None = None
     orig_bytes: int | None = None
     resp_bytes: int | None = None
     orig_pkts: int = 0
@@ -168,6 +190,118 @@ class NetworkContext:
     responding_pid: int = -1  # Destination-side PID that accepted/owned the connection
     link_local: bool = False  # True for same-broadcast-domain traffic such as DHCP
     application_layer_only: bool = False  # Additional protocol transaction on an existing flow
+    transaction: NetworkTransactionPlan | None = None
+
+    @property
+    def traffic_ledger(self) -> NetworkTrafficLedger:
+        """Return finalized traffic truth or a compatibility projection."""
+
+        if self.transaction is not None:
+            return self.transaction.traffic
+        return self._project_traffic_ledger()
+
+    def finalize_transaction(
+        self,
+        stable_id: str,
+        *,
+        hostname: str = "",
+        outcome: NetworkTransactionOutcome = "success",
+        phase_times: tuple[tuple[str, datetime], ...] = (),
+    ) -> NetworkTransactionPlan:
+        """Freeze the final canonical transaction after all planning adjustments."""
+
+        started_at = self.source_visible_start_time
+        if started_at is None:
+            raise ValueError("Cannot finalize a network transaction without a visible start")
+        closed_at = self.source_visible_close_time
+        transaction = NetworkTransactionPlan(
+            stable_id=stable_id,
+            hostname=hostname,
+            outcome=outcome,
+            phase_times=phase_times or (("transport_start", started_at),),
+            started_at=started_at,
+            closed_at=closed_at,
+            src_ip=self.src_ip,
+            src_port=self.src_port,
+            dst_ip=self.dst_ip,
+            dst_port=self.dst_port,
+            protocol=self.protocol,
+            service=self.service,
+            zeek_uid=self.zeek_uid,
+            conn_id=self.conn_id,
+            duration=self.duration,
+            conn_state=self.conn_state,
+            history=self.history,
+            traffic=self._project_traffic_ledger(),
+            initiating_pid=self.initiating_pid,
+            responding_pid=self.responding_pid,
+        )
+        self.transaction = transaction
+        return transaction
+
+    def validate_finalized_transaction(self) -> None:
+        """Fail if compatibility fields drift from finalized canonical truth."""
+
+        transaction = self.transaction
+        if transaction is None:
+            return
+        projection = (
+            self.src_ip,
+            self.src_port,
+            self.dst_ip,
+            self.dst_port,
+            self.protocol,
+            self.service,
+            self.zeek_uid,
+            self.conn_id,
+            self.duration,
+            self.conn_state,
+            self.history,
+            self.initiating_pid,
+            self.responding_pid,
+            self.source_visible_start_time,
+            self.source_visible_close_time,
+            self._project_traffic_ledger(),
+        )
+        canonical = (
+            transaction.src_ip,
+            transaction.src_port,
+            transaction.dst_ip,
+            transaction.dst_port,
+            transaction.protocol,
+            transaction.service,
+            transaction.zeek_uid,
+            transaction.conn_id,
+            transaction.duration,
+            transaction.conn_state,
+            transaction.history,
+            transaction.initiating_pid,
+            transaction.responding_pid,
+            transaction.started_at,
+            transaction.closed_at,
+            transaction.traffic,
+        )
+        if projection != canonical:
+            raise ValueError("NetworkContext changed after canonical transaction finalization")
+
+    def _project_traffic_ledger(self) -> NetworkTrafficLedger:
+        """Build immutable accounting from legacy flat context fields."""
+
+        orig_payload = max(0, self.orig_bytes or 0)
+        resp_payload = max(0, self.resp_bytes or 0)
+        orig_packets = max(0, self.orig_pkts)
+        resp_packets = max(0, self.resp_pkts)
+        orig_ip_bytes = max(orig_payload, self.orig_ip_bytes or 0)
+        resp_ip_bytes = max(resp_payload, self.resp_ip_bytes or 0)
+        if orig_ip_bytes > 0 and orig_packets == 0:
+            orig_packets = 1
+        if resp_ip_bytes > 0 and resp_packets == 0:
+            resp_packets = 1
+        return NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(orig_payload, orig_packets, orig_ip_bytes),
+            resp=DirectionalTrafficLedger(resp_payload, resp_packets, resp_ip_bytes),
+            missed_orig_bytes=max(0, self.missed_bytes),
+        )
 
 
 @dataclass(slots=True)
@@ -197,6 +331,7 @@ class DnsContext:
     opcode: int = 0
     opcode_name: str = "query"
     Z: int = 0
+    query_process: ProcessContext | None = None
 
 
 @dataclass(slots=True)
@@ -321,7 +456,8 @@ class KerberosContext:
     target_username: str
     target_domain: str
     target_sid: str = ""
-    service_name: str = ""  # "krbtgt" for TGT, SPN for service ticket
+    service_name: str = ""  # "krbtgt" for TGT, requested SPN for service ticket
+    service_account_name: str = ""  # AD account ticketed for the requested service
     service_sid: str = ""
     ticket_options: str = ""
     ticket_status: str = "0x0"
@@ -417,6 +553,7 @@ class HttpContext:
     user_agent_known_absent: bool = False
     request_body_len: int = 0
     response_body_len: int = 0
+    canonical_request_time: datetime | None = None
     flow_request_body_len: int | None = None
     flow_response_body_len: int | None = None
     flow_transaction_count: int = 1
@@ -567,12 +704,15 @@ class ProxyContext:
     sc_bytes: int = 0  # Server→client bytes
     cs_bytes: int = 0  # Client→server bytes
     time_taken: int = 0  # Request duration in ms
+    request_body_bytes: int = 0  # HTTP entity body only, excluding headers/framing
+    response_body_bytes: int = 0  # HTTP entity body only, excluding headers/framing
     user_agent: str = ""
     content_type: str = ""
     cache_result: str = "MISS"  # HIT, MISS, REVALIDATED, NONE, DENIED
     referrer: str = ""  # HTTP Referer header
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
     proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
+    transaction: ProxyTransactionPlan | None = None
 
 
 @dataclass(slots=True)
@@ -589,6 +729,16 @@ class EdrContext:
     object_id: str = ""
     actor_id: str = ""
     tid: int = -1
+
+    def validate_identity_plan(self, plan: EventIdentityPlan) -> None:
+        """Validate populated compatibility fields against canonical identity truth."""
+
+        if plan.object_id and self.object_id and self.object_id != plan.object_id:
+            raise ValueError("EdrContext object_id contradicts the canonical identity subject")
+        if plan.actor_id and self.actor_id and self.actor_id != plan.actor_id:
+            raise ValueError("EdrContext actor_id contradicts the canonical identity actor")
+        if plan.canonical_tid >= 0 and self.tid >= 0 and self.tid != plan.canonical_tid:
+            raise ValueError("EdrContext tid contradicts the canonical identity thread")
 
 
 @dataclass(slots=True)

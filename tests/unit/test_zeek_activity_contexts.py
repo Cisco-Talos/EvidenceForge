@@ -35,11 +35,11 @@ from evidenceforge.events.contexts import (
     HostContext,
     HttpContext,
     NetworkContext,
-    OcspContext,
     ProxyContext,
     X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
@@ -127,7 +127,9 @@ def test_closed_connections_do_not_force_tuple_recent_scan_matches():
         53,
         "udp",
     )
-    gen.state_manager.state.open_connections[conn_id].state = "closed"
+    connection = gen.state_manager.state.open_connections[conn_id]
+    connection.state = "closed"
+    gen.state_manager._refresh_connection_lifecycle(connection)
 
     assert not gen._connection_tuple_recently_used(
         "10.0.0.10",
@@ -720,6 +722,55 @@ class TestSslContextPopulation:
 
         assert accepted_event.timestamp > transport_event.timestamp + timedelta(
             milliseconds=flow_window.max_ms
+        )
+
+    def test_ssh_auth_budgets_messy_collection_ecar_delay(self, activity_gen):
+        """SSH acceptance must remain after target eCAR FLOW under delayed collection."""
+
+        gen, events = activity_gen
+        gen.dispatcher.observation_policy = ObservationPolicy("messy_collection")
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51112,
+        )
+
+        transport_event = _ssh_transport_event(events)
+        accepted_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Accepted password")
+        )
+        flow_window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+        observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
+            "ecar",
+            "syslog",
+        )
+
+        assert (
+            accepted_event.timestamp
+            > transport_event.timestamp
+            + timedelta(milliseconds=flow_window.max_ms)
+            + observation_gap
         )
 
     def test_ssh_connection_syslog_precedes_responder_process_source_time(self, activity_gen):
@@ -1514,7 +1565,7 @@ class TestSslContextPopulation:
         activity_gen,
         monkeypatch,
     ):
-        """Origin egress should wait for the client-side proxy request observation window."""
+        """Origin egress should follow the canonical proxy request and DNS phases."""
         gen, events = activity_gen
         source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
         proxy = System(
@@ -1572,6 +1623,9 @@ class TestSslContextPopulation:
             hostname=None,
             force_address=False,
             bypass_cache=False,
+            source_system=None,
+            source_pid=-1,
+            source_process_image="",
         ):
             dns_requests.append(
                 {
@@ -1580,6 +1634,9 @@ class TestSslContextPopulation:
                     "hostname": hostname,
                     "force_address": force_address,
                     "bypass_cache": bypass_cache,
+                    "source_system": source_system,
+                    "source_pid": source_pid,
+                    "source_process_image": source_process_image,
                 }
             )
             return original_emit_dns_lookup(
@@ -1589,6 +1646,9 @@ class TestSslContextPopulation:
                 hostname=hostname,
                 force_address=force_address,
                 bypass_cache=bypass_cache,
+                source_system=source_system,
+                source_pid=source_pid,
+                source_process_image=source_process_image,
             )
 
         monkeypatch.setattr(gen, "_emit_dns_lookup", capture_emit_dns_lookup)
@@ -1623,34 +1683,25 @@ class TestSslContextPopulation:
             and event.network.src_ip == proxy.ip
             and event.network.dst_ip == egress_ip
         )
-        dns = next(
+        dns_events = [
             event
             for event in events
             if event.dns
             and event.network
             and event.network.src_ip == proxy.ip
             and event.dns.query == "www.google.com"
-        )
-        request_window = generator_module.get_timing_window(
-            "source.zeek_http_request",
-            default_min_ms=1,
-            default_max_ms=450,
-            default_position="after",
-            default_class="same_observation",
-        )
-        required_gap = timedelta(milliseconds=request_window.max_ms + 1)
-
-        assert client.timestamp < base_time
-        assert egress.timestamp >= base_time + required_gap
-        assert dns.timestamp < egress.timestamp
-        assert any(
-            request["src_ip"] == proxy.ip
-            and request["dst_ip"] == egress_ip
-            and request["hostname"] == "www.google.com"
-            and request["force_address"] is True
-            and request["bypass_cache"] is True
-            for request in dns_requests
-        )
+        ]
+        assert client.proxy is not None
+        transaction = client.proxy.transaction
+        assert transaction is not None
+        assert client.timestamp == transaction.client_connect_at == base_time
+        assert client.timestamp < transaction.request_at
+        assert egress.timestamp == transaction.origin_connect_at
+        assert transaction.resolver_mode == "resolver_cache_hit"
+        assert transaction.dns_query_at is None
+        assert transaction.dns_response_at is None
+        assert not dns_events
+        assert not dns_requests
 
     def test_explicit_proxy_download_keeps_file_identity_and_order(self, activity_gen):
         """Proxy client and origin legs should preserve object identity and file timing."""
@@ -2467,6 +2518,7 @@ class TestSslContextPopulation:
         assert ecar_login_time > accepted_event.timestamp
         assert ecar_login_time > pam_event.timestamp
         assert ecar_login_time > pam_event.timestamp + timedelta(milliseconds=250)
+        gen.dispatcher.source_timing_planner.plan_event(ssh_event, format_name="ecar")
         delayed_for_observation_profile = replace(
             ssh_event,
             timestamp=ssh_event.timestamp + timedelta(milliseconds=750),
@@ -2481,14 +2533,13 @@ class TestSslContextPopulation:
 
         assert delayed_ecar_time == ecar_login_time
 
-    def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen):
+    def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen, monkeypatch):
+        import evidenceforge.generation.activity.generator as generator_module
+        from evidenceforge.generation.actions.ocsp_transaction import OcspTransactionRequest
+
+        monkeypatch.setattr(generator_module, "_TLS_VERSION_VALUES", ("TLSv12",))
+        monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (1,))
         gen, _events = activity_gen
-        calls = []
-
-        def capture_connection(**kwargs):
-            calls.append(kwargs)
-
-        gen.generate_connection = capture_connection
         tls_event = SecurityEvent(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
@@ -2509,38 +2560,25 @@ class TestSslContextPopulation:
                 certificate_issuer="CN=DigiCert TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             ),
         )
-        ocsp_a = OcspContext(
-            id="FocspA",
-            serial_number="789E942DD4A61EF31D",
-            cert_status="good",
-            this_update=1710762449.0,
-            next_update=1711055820.0,
-        )
-        ocsp_b = OcspContext(
-            id="FocspB",
-            serial_number="789E942DD4A61EF31D",
-            cert_status="good",
-            this_update=1710762449.0,
-            next_update=1711055820.0,
-        )
-
-        gen._emit_ocsp_http_response(
+        gen._attach_ssl_context(
             tls_event,
-            cert_name="example.com",
-            ocsp=ocsp_a,
+            hostname="example.com",
+            dns=None,
+            dst_ip="93.184.216.34",
             rng=random.Random(1),
+            allow_failure=False,
         )
-        gen._emit_ocsp_http_response(
-            tls_event,
-            cert_name="example.com",
-            ocsp=ocsp_b,
-            rng=random.Random(2),
-        )
+        assert tls_event.tls_presentation is not None
+        certificate = tls_event.tls_presentation.leaf
+        issuer = gen._tls_certificate_planner.authority_material(certificate.issuer_name)
+        request = OcspTransactionRequest(tls_event, certificate, issuer, "example.com")
 
-        assert len(calls) == 2
-        assert calls[0]["http"].response_body_len == calls[1]["http"].response_body_len
-        assert calls[0]["file_transfer"].total_bytes == calls[1]["file_transfer"].total_bytes
-        assert calls[0]["http"].tags == calls[1]["http"].tags == ["ocsp"]
+        first = gen._ocsp_transaction_planner.plan(request)
+        second = gen._ocsp_transaction_planner.plan(request)
+
+        assert first.response_size == second.response_size
+        assert first.file_id == second.file_id
+        assert first.request_der == second.request_der
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen
@@ -3086,6 +3124,10 @@ class TestSslContextPopulation:
         for event in resumed_events:
             assert event.x509 is None
             assert event.ssl.cert_chain_fuids == []
+            if event.ssl.version == "TLSv12":
+                assert event.ssl.ssl_history == "CSIFIFD"
+            else:
+                assert event.ssl.ssl_history == "CSOFFD"
 
     def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
         """TLS resumption should require prior client/server pair state."""
@@ -3113,6 +3155,7 @@ class TestSslContextPopulation:
     def test_ocsp_status_and_update_window_are_cached_per_certificate(self, activity_gen):
         """OCSP responses should not expire at observation time or flip status per serial."""
         gen, events = activity_gen
+        gen.dispatcher.emitters["zeek_ocsp"] = MagicMock()
 
         for offset in range(100):
             gen.generate_connection(
@@ -3159,6 +3202,7 @@ class TestSslContextPopulation:
     def test_linux_proxy_originated_ocsp_uses_linux_agent(self, activity_gen):
         """Proxy-side OCSP fetches should not inherit Windows CryptoAPI identity."""
         gen, events = activity_gen
+        gen.dispatcher.emitters["zeek_ocsp"] = MagicMock()
         proxy = System(
             hostname="PROXY-01",
             ip="10.10.3.20",

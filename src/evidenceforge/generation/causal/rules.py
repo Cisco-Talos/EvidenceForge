@@ -156,6 +156,9 @@ class DnsBeforeConnection(ExpansionRule):
             "src_ip": ctx.src_ip,
             "dst_ip": ctx.dst_ip,
             "force_address": True,
+            "source_system": ctx.source_system,
+            "source_pid": ctx.source_pid or -1,
+            "source_process_image": ctx.source_image or "",
         }
         if ctx.hostname:
             kwargs["hostname"] = ctx.hostname

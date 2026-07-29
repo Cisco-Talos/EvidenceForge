@@ -1120,6 +1120,41 @@ class TestSslUidCorrelation:
         assert conn_row["duration"] > 1.2
         assert conn_row["duration"] != 1.2
 
+    def test_tls_conn_duration_texture_never_shortens_canonical_interval(self, monkeypatch):
+        """Source-native TLS texture must not close before the canonical transport."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.zeek._tls_completed_duration_floor",
+            lambda _event, _minimum, _maximum: 0.85,
+        )
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "conn.json"
+            conn_emitter = ZeekEmitter(conn_fmt, output)
+            conn_emitter.emit(
+                SecurityEvent(
+                    timestamp=base_ts,
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        service="ssl",
+                        zeek_uid="CCanonicalTLS123",
+                        conn_state="SF",
+                        duration=1.2,
+                    ),
+                )
+            )
+            conn_emitter.close()
+
+            conn_row = json.loads(output.read_text().splitlines()[0])
+
+        assert conn_row["duration"] > 1.2
+
     def test_x509_rejects_partial_handshake(self):
         """x509.log should not emit certificates for incomplete TLS handshakes."""
         fmt = load_format("zeek_x509")

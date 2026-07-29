@@ -145,7 +145,7 @@ def write_collection_profile(
     scenario: Scenario,
     output_target: OutputTarget,
 ) -> None:
-    """Write COLLECTION_PROFILE.json inside the generated data directory."""
+    """Write COLLECTION_PROFILE.json alongside the run-level metadata."""
     profile = build_collection_profile(scenario, output_target)
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_write_text(

@@ -520,8 +520,8 @@ class TestSysmonEventEmitter:
         assert "2024-01-15 15:44:49.138" not in event5
         assert '<Data Name="UtcTime">2024-01-15 16:32:44.' in event5
 
-    def test_interactive_process_create_uses_nonzero_terminal_session(self, format_def, tmp_path):
-        """Interactive user process creates should not all render TerminalSessionId 0."""
+    def test_interactive_process_without_canonical_session_uses_zero(self, format_def, tmp_path):
+        """Sysmon must not invent a terminal session when canonical state is unavailable."""
         from evidenceforge.events.base import SecurityEvent
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
@@ -560,7 +560,7 @@ class TestSysmonEventEmitter:
         content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
         match = re.search(r'<Data Name="TerminalSessionId">(\d+)</Data>', content)
         assert match is not None
-        assert int(match.group(1)) > 0
+        assert int(match.group(1)) == 0
 
     def test_process_create_prefers_canonical_auth_session_id(self, format_def, tmp_path):
         """Sysmon TerminalSessionId should reuse the StateManager-owned session ID."""
@@ -653,7 +653,7 @@ class TestSysmonEventEmitter:
                 username="jsmith",
                 logon_id=logon_id,
             ),
-            auth=AuthContext(username="jsmith", logon_id=logon_id, session_id=4, logon_type=2),
+            auth=AuthContext(username="jsmith", logon_id=logon_id, session_id=2, logon_type=2),
         )
 
         emitter.emit(parent)
@@ -663,6 +663,53 @@ class TestSysmonEventEmitter:
         content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
         session_ids = re.findall(r'<Data Name="TerminalSessionId">(\d+)</Data>', content)
         assert session_ids == ["2", "2"]
+
+    def test_canonical_session_supersedes_earlier_unknown_value(self, format_def, tmp_path):
+        """A later canonical session ID must not be masked by emitter fallback state."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        logon_id = "0xabc123"
+        for index, session_id in enumerate((0, 4)):
+            emitter.emit(
+                SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 30, index, tzinfo=UTC),
+                    event_type="process_create",
+                    src_host=host,
+                    process=ProcessContext(
+                        pid=8052 + (index * 4),
+                        parent_pid=4200,
+                        image=r"C:\Windows\System32\whoami.exe",
+                        command_line="whoami /all",
+                        username="jsmith",
+                        logon_id=logon_id,
+                    ),
+                    auth=AuthContext(
+                        username="jsmith",
+                        logon_id=logon_id,
+                        session_id=session_id,
+                        logon_type=10,
+                    ),
+                )
+            )
+        emitter.close()
+
+        content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
+        session_ids = re.findall(r'<Data Name="TerminalSessionId">(\d+)</Data>', content)
+        assert session_ids == ["0", "4"]
 
     def test_process_create_renders_current_directory_from_context(self, format_def, tmp_path):
         """Sysmon Event 1 should preserve the process working directory."""

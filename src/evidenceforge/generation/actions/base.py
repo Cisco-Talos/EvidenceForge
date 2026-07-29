@@ -30,6 +30,7 @@ observation, and durable identity constraints for the activity as a whole.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Protocol
 
 
@@ -53,3 +54,50 @@ class ActionBundle(Protocol):
     def execute(self) -> str:
         """Expand and dispatch canonical evidence for this action."""
         ...
+
+
+def source_observation_delay_difference(
+    executor: object,
+    *,
+    earlier_source: str,
+    later_source: str,
+) -> timedelta:
+    """Return a safe cross-source delay budget exposed by the active dispatcher."""
+
+    dispatcher = getattr(executor, "dispatcher", None)
+    policy = getattr(dispatcher, "observation_policy", None)
+    resolver = getattr(policy, "maximum_delay_difference", None)
+    if not callable(resolver):
+        return timedelta(0)
+    result = resolver(earlier_source, later_source)
+    return max(timedelta(0), result) if isinstance(result, timedelta) else timedelta(0)
+
+
+def endpoint_clock_difference(
+    executor: object,
+    *,
+    earlier_host: str,
+    earlier_os: str,
+    later_host: str,
+    later_os: str,
+    timestamp: datetime,
+) -> timedelta:
+    """Return positive rendered clock lead of an earlier endpoint over a later one."""
+
+    planner = getattr(executor, "_source_timing_planner", None)
+    resolver = getattr(planner, "endpoint_clock_adjustment_for_host", None)
+    if not callable(resolver):
+        return timedelta(0)
+    earlier = resolver(
+        hostname=earlier_host,
+        os_category=earlier_os,
+        timestamp=timestamp,
+    )
+    later = resolver(
+        hostname=later_host,
+        os_category=later_os,
+        timestamp=timestamp,
+    )
+    if not isinstance(earlier, timedelta) or not isinstance(later, timedelta):
+        return timedelta(0)
+    return max(timedelta(0), earlier - later)

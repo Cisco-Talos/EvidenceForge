@@ -144,6 +144,7 @@ class KerberosServiceTicketRequest:
     time: datetime
     domain: str = ""
     source_port: int | None = None
+    service_account_name: str = ""
     source: str = "activity_generator"
 
     @property
@@ -153,7 +154,8 @@ class KerberosServiceTicketRequest:
         seed = _stable_seed(
             "action_bundle:kerberos_service_ticket:"
             f"{self.username}:{self.service_name}:{self.source_ip}:{self.dc_hostname}:"
-            f"{self.time.isoformat()}:{self.domain}:{self.source_port or ''}:{self.source}"
+            f"{self.time.isoformat()}:{self.domain}:{self.source_port or ''}:"
+            f"{self.service_account_name}:{self.source}"
         )
         return f"kerberos-service-ticket-{seed:016x}"
 

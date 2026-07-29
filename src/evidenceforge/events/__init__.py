@@ -26,6 +26,10 @@ This package provides the intermediate representation layer between
 ActivityGenerator (which builds events) and emitters (which render them).
 """
 
+from evidenceforge.events.authentication import (
+    RemoteAuthenticationPlan,
+    RemoteAuthenticationTransportPlan,
+)
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
@@ -39,6 +43,7 @@ from evidenceforge.events.contexts import (
     NetworkContext,
     ProcessAccessContext,
     ProcessContext,
+    ProcessTargetSecurityContext,
     RawContext,
     RegistryContext,
     ShellContext,
@@ -48,9 +53,12 @@ from evidenceforge.events.contexts import (
 __all__ = [
     "SecurityEvent",
     "RawLogEntry",
+    "RemoteAuthenticationPlan",
+    "RemoteAuthenticationTransportPlan",
     "HostContext",
     "AuthContext",
     "ProcessContext",
+    "ProcessTargetSecurityContext",
     "ProcessAccessContext",
     "NetworkContext",
     "DnsContext",

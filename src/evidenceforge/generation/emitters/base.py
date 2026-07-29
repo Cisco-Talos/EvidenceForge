@@ -23,7 +23,6 @@
 """Base emitter class for log generation."""
 
 import logging
-import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -37,6 +36,13 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.output_targets import OutputTarget, normalize_output_target
 
 logger = logging.getLogger(__name__)
+
+
+class _FlushRequest:
+    """FIFO control message requesting an emitter-thread barrier flush."""
+
+    def __init__(self) -> None:
+        self.completed = Event()
 
 
 class LogEmitter(ABC):
@@ -91,14 +97,12 @@ class LogEmitter(ABC):
         # Threading support (Phase 2.1)
         self.threaded = threaded
         self._event_queue: Queue | None = None
-        self._flush_barrier: Event | None = None
         self._stop_event: Event | None = None
         self._thread: Thread | None = None
         self._thread_error: Exception | None = None
 
         if self.threaded:
             self._event_queue = Queue(maxsize=50000)  # Bounded queue for backpressure
-            self._flush_barrier = Event()
             self._stop_event = Event()
             self._thread = Thread(target=self._run, daemon=True, name=f"Emitter-{format_def.name}")
             self._thread.start()
@@ -170,6 +174,8 @@ class LogEmitter(ABC):
                 # Try to get event from queue with timeout
                 event_data = self._event_queue.get(timeout=0.1)
                 try:
+                    if self._handle_flush_request(event_data):
+                        continue
                     # Render and buffer the event (None means skip)
                     rendered = self._render_event(event_data)
                     if rendered is not None:
@@ -187,11 +193,7 @@ class LogEmitter(ABC):
                     self._event_queue.task_done()
 
             except Empty:
-                # No events in queue - check for flush barrier
-                if self._flush_barrier.is_set():
-                    logger.debug(f"Flushing {self.format_def.name} emitter at barrier")
-                    self.flush()
-                    self._flush_barrier.clear()
+                continue
 
         # Final flush before thread exits
         logger.debug(f"Emitter thread stopping for {self.format_def.name}, final flush")
@@ -224,23 +226,49 @@ class LogEmitter(ABC):
             logger.debug(f"Waiting for {self.format_def.name} emitter to flush at barrier")
             self._raise_if_thread_failed()
 
-            # Signal the emitter thread to flush
-            self._flush_barrier.set()
-
-            # Wait for queue to drain
-            while self._event_queue.unfinished_tasks > 0:
+            # A FIFO control message preserves the exact event boundary while
+            # waking the worker immediately instead of waiting for Queue.get()
+            # to time out before observing a separate Event.
+            request = _FlushRequest()
+            while True:
                 self._raise_if_thread_failed()
-                time.sleep(0.01)
+                try:
+                    self._event_queue.put(request, timeout=0.1)
+                    break
+                except Full:
+                    continue
 
-            # Wait for flush to complete (barrier cleared by emitter thread)
-            while self._flush_barrier.is_set():
+            while not request.completed.wait(timeout=0.1):
                 self._raise_if_thread_failed()
-                time.sleep(0.01)
+            self._raise_if_thread_failed()
 
             logger.debug(f"Barrier flush complete for {self.format_def.name}")
         else:
             # Non-threaded mode: just flush directly
             self.flush()
+
+    def _handle_flush_request(self, queue_item: Any) -> bool:
+        """Process a queued barrier request and acknowledge its completion."""
+        if not isinstance(queue_item, _FlushRequest):
+            return False
+
+        try:
+            logger.debug(f"Flushing {self.format_def.name} emitter at barrier")
+            self._flush_at_barrier()
+        except Exception as exc:  # noqa: BLE001
+            self._thread_error = exc
+            logger.exception(
+                "Unhandled exception flushing %s emitter thread; stopping thread",
+                self.format_def.name,
+            )
+            self._stop_event.set()
+        finally:
+            queue_item.completed.set()
+        return True
+
+    def _flush_at_barrier(self) -> None:
+        """Perform this emitter's existing hour-boundary flush behavior."""
+        self.flush()
 
     def stop_thread(self) -> None:
         """Gracefully shutdown emitter thread.

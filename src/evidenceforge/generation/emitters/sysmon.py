@@ -1123,26 +1123,17 @@ class SysmonEventEmitter(LogEmitter):
         return image
 
     def _terminal_session_id(self, hostname: str, auth, logon_id: str) -> int:
-        """Return a source-native TerminalSessionId for Sysmon process creates."""
+        """Return the canonical TerminalSessionId for Sysmon process creates."""
         if auth is None:
             return 0
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
         key = (hostname, logon_id or username)
-        cached_session_id = self._terminal_session_ids_by_logon.get(key)
-        if cached_session_id is not None:
-            return cached_session_id
         if auth.session_id > 0:
             self._terminal_session_ids_by_logon[key] = auth.session_id
             return auth.session_id
-        if auth.logon_type in {2, 7, 10, 11}:
-            session_id = 1 + (
-                _stable_seed(f"sysmon_terminal_session:{hostname}:{logon_id or username}") % 8
-            )
-            self._terminal_session_ids_by_logon[key] = session_id
-            return session_id
-        return 0
+        return self._terminal_session_ids_by_logon.get(key, 0)
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
@@ -1237,6 +1228,8 @@ class SysmonEventEmitter(LogEmitter):
             if access and access.target_user
             else "NT AUTHORITY\\SYSTEM"
         )
+        if access is None or access.source_thread_id < 0:
+            raise ValueError("Sysmon ProcessAccess requires a canonical source thread ID")
 
         event_data = {
             "EventID": 10,
@@ -1250,7 +1243,7 @@ class SysmonEventEmitter(LogEmitter):
             "SourceProcessGUID": source_guid,
             "SourceProcessId": proc.pid,
             "SourceImage": proc.image,
-            "SourceThreadId": access.source_thread_id if access else -1,
+            "SourceThreadId": access.source_thread_id,
             "SourceUser": user,
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,
@@ -1700,21 +1693,34 @@ class SysmonEventEmitter(LogEmitter):
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # DESIGN DECISION: svchost.exe is correct here. Windows DNS Client
-        # service (dnscache, hosted by svchost.exe -k LocalService) proxies
-        # all DnsQuery_A() / getaddrinfo() calls from applications. Real
-        # Sysmon Event 22 shows svchost.exe, not the originating process.
-        # Only tools that bypass the DNS Client (nslookup.exe, certain
-        # malware doing raw UDP to port 53) would show a different process.
-        # Use the seeded svchost PID for the DNS Client service group
-        # (svchost_local_svc = svchost.exe -k LocalService) so the PID
-        # exists in StateManager's process tree and correlates with Event 1.
-        sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
-        dns_client_pid = sys_pids.get(
-            "svchost_local_svc",
-            sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
-        )
-        process_guid = self._get_stable_process_guid(host.hostname, dns_client_pid, event.timestamp)
+        # Sysmon Event 22 attributes the query to the initiating application,
+        # while WFP/eCAR may separately identify the DNS Client service that
+        # owns UDP/53 transport. Fall back to that service only when the
+        # canonical DNS action could not safely preserve a query process.
+        query_process = dns.query_process
+        if query_process is not None:
+            dns_client_pid = query_process.pid
+            process_start_time = query_process.start_time or event.timestamp
+            process_guid = self._get_stable_process_guid(
+                host.hostname,
+                dns_client_pid,
+                process_start_time,
+            )
+            image = query_process.image
+            user = self._format_user(query_process.username, host.netbios_domain)
+        else:
+            sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+            dns_client_pid = sys_pids.get(
+                "svchost_local_svc",
+                sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
+            )
+            process_guid = self._get_stable_process_guid(
+                host.hostname,
+                dns_client_pid,
+                event.timestamp,
+            )
+            image = r"C:\Windows\System32\svchost.exe"
+            user = "NT AUTHORITY\\LOCAL SERVICE"
 
         # Map DNS rcode to Windows QueryStatus
         query_status = _DNS_STATUS_MAP.get(dns.rcode, "0")
@@ -1739,8 +1745,8 @@ class SysmonEventEmitter(LogEmitter):
             "QueryName": dns.query,
             "QueryStatus": query_status,
             "QueryResults": query_results,
-            "Image": r"C:\Windows\System32\svchost.exe",
-            "User": "NT AUTHORITY\\LOCAL SERVICE",
+            "Image": image,
+            "User": user,
         }
         self.emit_event(event_data)
 
@@ -1870,15 +1876,17 @@ class SysmonEventEmitter(LogEmitter):
         while not self._stop_event.is_set():
             try:
                 event_data = self._event_queue.get(timeout=0.1)
-                with self._file_lock:
-                    self._event_dicts.append(event_data)
-                    if not self.threaded and len(self._event_dicts) >= self.buffer_size:
-                        self._flush_unlocked()
-                self._event_queue.task_done()
+                try:
+                    if self._handle_flush_request(event_data):
+                        continue
+                    with self._file_lock:
+                        self._event_dicts.append(event_data)
+                        if not self.threaded and len(self._event_dicts) >= self.buffer_size:
+                            self._flush_unlocked()
+                finally:
+                    self._event_queue.task_done()
             except Empty:
-                if self._flush_barrier.is_set():
-                    self.flush()
-                    self._flush_barrier.clear()
+                continue
         self.flush()
 
     def _flush_unlocked(self) -> None:

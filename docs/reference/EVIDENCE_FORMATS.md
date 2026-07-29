@@ -18,13 +18,13 @@ output/
   GROUND_TRUTH.md                          # Human-readable answer key rendered from the JSON document
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   ARTIFACTS_MANIFEST.json                  # Generated artifact manifest, when artifacts exist
+  COLLECTION_PROFILE.json                 # Blind-safe collection/export semantics
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
   ENVIRONMENT.md                           # Optional student-facing environment description
   artifacts/
     email/
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
   data/                                    # Generated logs for every output target
-    COLLECTION_PROFILE.json                # Blind-safe collection/export semantics
     <hostname.domain>/                     # Per-host directories (FQDN)
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
@@ -63,7 +63,7 @@ legacy/default output.
 For practical ingestion and validation guidance by target, see
 [Output Target Ingest Guides](../output-targets/README.md).
 
-`COLLECTION_PROFILE.json` inside `data/` is a blind-safe source collection
+`COLLECTION_PROFILE.json` at the output root is a blind-safe source collection
 sidecar. It records the primary collection window, selected observation profile,
 source-family tail policies, and export ordering semantics without storyline
 identifiers, exercise labels, ground-truth events, or scenario narrative details.

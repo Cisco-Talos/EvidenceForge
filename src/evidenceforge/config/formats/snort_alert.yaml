@@ -82,4 +82,4 @@ output:
   file_extension: ".alert"
   encoding: utf-8
   template: |
-    {{ timestamp.strftime('%m/%d-%H:%M:%S.%f')[:-3] }} [**] [{{ gid | default(1) }}:{{ sid }}:{{ rev | default(1) }}] {{ message }} [**] [Classification: {{ classification }}] [Priority: {{ priority }}] {{ '{' }}{{ protocol }}{{ '}' }} {{ src_ip }}{% if src_port %}:{{ src_port }}{% endif %} -> {{ dst_ip }}{% if dst_port %}:{{ dst_port }}{% endif %}
+    {{ timestamp.strftime('%m/%d-%H:%M:%S.%f') }} [**] [{{ gid | default(1) }}:{{ sid }}:{{ rev | default(1) }}] {{ message }} [**] [Classification: {{ classification }}] [Priority: {{ priority }}] {{ '{' }}{{ protocol }}{{ '}' }} {{ src_ip }}{% if src_port %}:{{ src_port }}{% endif %} -> {{ dst_ip }}{% if dst_port %}:{{ dst_port }}{% endif %}

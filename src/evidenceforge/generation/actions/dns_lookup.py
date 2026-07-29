@@ -26,10 +26,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.utils.rng import _stable_seed
+
+if TYPE_CHECKING:
+    from evidenceforge.models.scenario import System
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,12 @@ class DnsLookupRequest:
     hostname: str | None = None
     force_address: bool = False
     bypass_cache: bool = False
+    source_system: System | None = None
+    source_pid: int = -1
+    source_process_image: str = ""
+    planned_query_time: datetime | None = None
+    planned_rtt_seconds: float | None = None
+    parent_action_group_id: str | None = None
     source: str = "activity_generator"
 
     @property
@@ -51,7 +60,11 @@ class DnsLookupRequest:
         seed = _stable_seed(
             "action_bundle:dns_lookup:"
             f"{self.src_ip}:{self.dst_ip}:{self.time.isoformat()}:"
-            f"{self.hostname or ''}:{self.force_address}:{self.bypass_cache}:{self.source}"
+            f"{self.hostname or ''}:{self.force_address}:{self.bypass_cache}:"
+            f"{self.source_system.hostname if self.source_system else ''}:"
+            f"{self.source_pid}:{self.source_process_image}:"
+            f"{self.planned_query_time.isoformat() if self.planned_query_time else ''}:"
+            f"{self.planned_rtt_seconds or ''}:{self.parent_action_group_id or ''}:{self.source}"
         )
         return f"dns-lookup-{seed:016x}"
 

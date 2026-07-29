@@ -22,12 +22,14 @@
 
 """Tests for Phase 6.2 P1 realism fixes."""
 
+import random
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator, _is_private_ip
+from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -156,6 +158,20 @@ class TestTCPOverhead:
         net = event.network
         overhead_per_pkt = (net.orig_ip_bytes - net.orig_bytes) / net.orig_pkts
         assert 40 <= overhead_per_pkt <= 64
+
+    def test_bulk_tcp_ip_bytes_fit_standard_mtu(self):
+        """Canonical packet and IP-byte accounting must fit the modeled MTU."""
+        payload_bytes = 314_783_351
+        packet_count = generator_module._tcp_payload_segment_count(payload_bytes)
+
+        for seed in range(20):
+            ip_bytes = generator_module._tcp_ip_byte_count(
+                payload_bytes,
+                packet_count,
+                random.Random(seed),
+            )
+            assert payload_bytes + packet_count * 40 <= ip_bytes
+            assert ip_bytes <= packet_count * 1500
 
     def test_udp_overhead_is_28(self, activity_gen, state_manager, mock_emitters):
         state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC))
@@ -317,6 +333,26 @@ class TestKerberosEvents:
         event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
         assert event.event_type == "kerberos_service"
         assert event.kerberos.service_name == "cifs/SRV-FILE-01"
+        assert event.kerberos.service_account_name == "SRV-FILE-01$"
+        assert event.kerberos.service_sid == activity_gen._get_sid("SRV-FILE-01$")
+
+    def test_service_ticket_preserves_explicit_user_backed_spn_account(
+        self, activity_gen, mock_emitters
+    ):
+        """User-backed SPNs should not be rewritten to computer accounts."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen.generate_kerberos_service_ticket(
+            username="alice",
+            service_name="HTTP/app-01.corp.local",
+            service_account_name="svc_web",
+            source_ip="10.10.10.50",
+            dc_hostname="DC-01",
+            time=ts,
+        )
+        event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
+        assert event.kerberos.service_name == "HTTP/app-01.corp.local"
+        assert event.kerberos.service_account_name == "svc_web"
+        assert event.kerberos.service_sid == activity_gen._get_sid("svc_web")
 
     def test_ntlm_emits_4776(self, activity_gen, mock_emitters):
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)

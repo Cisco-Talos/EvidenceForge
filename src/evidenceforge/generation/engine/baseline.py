@@ -471,14 +471,11 @@ def _linux_baseline_session_initiator(
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
     if system_type == "server":
-        if user == "root":
-            service = rng.choices(("login", "sudo", "su"), weights=(3, 70, 27), k=1)[0]
-        else:
-            service = rng.choices(("login", "sudo"), weights=(5, 95), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(10, 90), k=1)[0]
     elif user == "root":
-        service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(70, 30), k=1)[0]
     else:
-        service = rng.choices(("login", "sudo"), weights=(76, 24), k=1)[0]
+        service = rng.choices(("login", "su"), weights=(90, 10), k=1)[0]
     app_name = service
     opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
     message = (
@@ -816,6 +813,16 @@ def _session_activity_deadline(
     logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
     if logoff_time is not None:
         deadline = min(deadline, logoff_time)
+
+    end_plan = getattr(session, "end_plan", None)
+    if end_plan is not None:
+        canonical_end = end_plan.canonical_end
+        canonical_end = (
+            canonical_end.replace(tzinfo=UTC)
+            if canonical_end.tzinfo is None
+            else canonical_end.astimezone(UTC)
+        )
+        deadline = min(deadline, canonical_end)
 
     network_close_time = getattr(session, "network_close_time", None)
     if network_close_time is not None:
@@ -3628,7 +3635,7 @@ class BaselineMixin:
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
-                self.state_manager.sweep_closed_connections()
+                self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -3660,7 +3667,7 @@ class BaselineMixin:
 
             self._generate_hour(current_hour, enabled_users)
             # Evict completed/failed connections to bound memory during long runs
-            self.state_manager.sweep_closed_connections()
+            self.state_manager.sweep_closed_connections(current_hour + timedelta(hours=1))
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
@@ -6091,6 +6098,7 @@ class BaselineMixin:
         self,
         target_system: System,
         rng: random.Random,
+        at_time: datetime | None = None,
     ) -> tuple[User, System] | None:
         """Pick a baseline SSH user and source host that agree with each other."""
         roster = self._get_baseline_ssh_users(target_system)
@@ -6098,8 +6106,18 @@ class BaselineMixin:
             return None
         for user in rng.sample(roster, k=len(roster)):
             source_system = self._baseline_ssh_source_system_for_user(user, target_system, rng)
-            if source_system is not None:
-                return user, source_system
+            if source_system is None:
+                continue
+            if (
+                at_time is not None
+                and self.state_manager.authoritative_session_end_blocks_rebootstrap(
+                    user.username,
+                    source_system.hostname,
+                    at_time,
+                )
+            ):
+                continue
+            return user, source_system
         return None
 
     def _linux_remote_admin_hour_probability(self, system: Any) -> float:
@@ -6321,6 +6339,21 @@ class BaselineMixin:
             logon_kwargs["source_port"] = source_port
         if not emit_network_evidence:
             logon_kwargs["emit_network_evidence"] = False
+            transaction_matcher = getattr(
+                self.activity_generator,
+                "_last_effective_connection_transaction_id",
+                None,
+            )
+            if transaction_matcher is not None and source_port is not None:
+                transaction_id = transaction_matcher(
+                    src_ip=source_ip,
+                    src_port=source_port,
+                    dst_ip=file_server.ip,
+                    dst_port=445,
+                    proto="tcp",
+                )
+                if isinstance(transaction_id, str) and transaction_id:
+                    logon_kwargs["remote_authentication_transport_id"] = transaction_id
 
         logon_id = self.activity_generator.generate_logon(
             **logon_kwargs,
@@ -8141,12 +8174,12 @@ class BaselineMixin:
 
                     num_ssh = self._linux_remote_admin_session_count(rng, system)
                     for _ in range(num_ssh):
-                        ssh_identity = self._pick_baseline_ssh_identity(system, rng)
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
                         if ssh_identity is None:
                             continue
                         ssh_user, source_system = ssh_identity
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
                         hour_end = current_hour + timedelta(hours=1)
                         self.state_manager.set_current_time(ts)
                         self.world_planner.bootstrap_user_session(
@@ -8735,7 +8768,7 @@ class BaselineMixin:
                             facility=10,
                         )
                 elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
-                    ssh_identity = self._pick_baseline_ssh_identity(system, rng)
+                    ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
                     if ssh_identity is None:
                         continue
                     ssh_user_model, src_sys_obj = ssh_identity
@@ -9050,36 +9083,24 @@ class BaselineMixin:
                         uid = _linux_uid_for_user(sudo_user)
                         sudo_command = msg.split("COMMAND=", 1)[1].strip()
                         sudo_runtime = _linux_sudo_command_runtime(sudo_command, rng)
-                        self.activity_generator.generate_syslog_event(
+                        self.activity_generator.generate_linux_sudo_session(
                             system=system,
-                            time=ts - timedelta(milliseconds=rng.randint(80, 420)),
-                            app_name="sudo",
-                            message=(
-                                "pam_unix(sudo:session): session opened for user "
-                                f"root(uid=0) by {sudo_user}(uid={uid})"
-                            ),
+                            time=ts,
+                            command_message=msg,
+                            sudo_user=sudo_user,
+                            uid=uid,
                             pid=pid,
-                            facility=10,
-                            severity=6,
+                            runtime=sudo_runtime,
                         )
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name=app,
-                        message=msg,
-                        pid=pid,
-                        facility=facility,
-                        severity=severity,
-                    )
-                    if sudo_has_session:
+                    else:
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + sudo_runtime + timedelta(milliseconds=rng.randint(120, 950)),
-                            app_name="sudo",
-                            message="pam_unix(sudo:session): session closed for user root",
+                            time=ts,
+                            app_name=app,
+                            message=msg,
                             pid=pid,
-                            facility=10,
-                            severity=6,
+                            facility=facility,
+                            severity=severity,
                         )
                     if limit_key and ts >= self.start_time:
                         self._extra_syslog_entry_counts[limit_key] = (

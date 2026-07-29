@@ -63,11 +63,15 @@ class TestEmitSmbLogonPair:
         obj = MagicMock()
         obj.activity_generator = MagicMock()
         obj.activity_generator.generate_logon.return_value = "0x54321"
+        obj.activity_generator._last_effective_connection_transaction_id.return_value = (
+            "network-connection-000000001234abcd"
+        )
         method = BaselineMixin._emit_smb_logon_pair.__get__(obj)
 
         user = MagicMock()
         file_server = MagicMock()
         file_server.os = "Windows Server 2019"
+        file_server.ip = "10.10.10.20"
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
         rng = random.Random(42)
 
@@ -80,6 +84,13 @@ class TestEmitSmbLogonPair:
             source_port=50001,
             emit_network_evidence=False,
         )
+        obj.activity_generator._last_effective_connection_transaction_id.assert_called_once_with(
+            src_ip="10.10.10.50",
+            src_port=50001,
+            dst_ip="10.10.10.20",
+            dst_port=445,
+            proto="tcp",
+        )
 
         assert logon_id == "0x54321"
         obj.activity_generator.generate_logon.assert_called_once_with(
@@ -90,6 +101,7 @@ class TestEmitSmbLogonPair:
             source_ip="10.10.10.50",
             source_port=50001,
             emit_network_evidence=False,
+            remote_authentication_transport_id="network-connection-000000001234abcd",
         )
         obj.activity_generator.generate_logoff.assert_called_once()
 

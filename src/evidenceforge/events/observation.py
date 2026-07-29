@@ -146,6 +146,30 @@ class ObservationPolicy:
             return ObservationDecision(status="dropped")
         return ObservationDecision(status="visible")
 
+    def delay_bounds(self, source: str) -> tuple[timedelta, timedelta]:
+        """Return configured observation-delay bounds for one source family."""
+
+        settings = self._settings_for_source(source)
+        delay = settings.get("delay_ms", {})
+        if not isinstance(delay, dict):
+            return timedelta(0), timedelta(0)
+        min_ms = _safe_int(delay.get("min_ms", 0), 0, minimum=0, maximum=3_600_000)
+        max_ms = _safe_int(delay.get("max_ms", 0), 0, minimum=0, maximum=3_600_000)
+        if max_ms < min_ms:
+            return timedelta(0), timedelta(0)
+        return timedelta(milliseconds=min_ms), timedelta(milliseconds=max_ms)
+
+    def maximum_delay_difference(
+        self,
+        earlier_source: str,
+        later_source: str,
+    ) -> timedelta:
+        """Return the extra causal gap needed across two delayed source families."""
+
+        _earlier_min, earlier_max = self.delay_bounds(earlier_source)
+        later_min, _later_max = self.delay_bounds(later_source)
+        return max(timedelta(0), earlier_max - later_min)
+
     def _settings_for_source(self, source: str) -> dict[str, Any]:
         settings = self.sources.get(source, {})
         if not isinstance(settings, dict):
@@ -261,6 +285,8 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if event.lifecycle is not None:
+            return f"action-lifecycle:{event.lifecycle.group_id}"
         if source == "ecar":
             remote_session_group = self._ecar_remote_session_group_key(event)
             if remote_session_group:
@@ -343,6 +369,8 @@ class ObservationPolicy:
     @staticmethod
     def _uses_coherent_source_identity(source: str, group: str) -> bool:
         """Return whether observation delay/drop should be shared within a source group."""
+        if group.startswith("action-lifecycle:") and source in SOURCE_FAMILIES:
+            return True
         if source == "ecar" and group.startswith("remote-session:"):
             return True
         if group.startswith("process:") and source in {"windows_security", "sysmon", "ecar"}:

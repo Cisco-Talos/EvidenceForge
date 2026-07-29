@@ -101,9 +101,21 @@ from evidenceforge.generation.actions.linux_shell_command import (
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
 )
+from evidenceforge.generation.actions.linux_sudo_session import (
+    LinuxSudoSessionActionBundle,
+    LinuxSudoSessionRequest,
+)
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
+)
+from evidenceforge.generation.actions.network_transaction_planner import (
+    NetworkTransactionPlanner,
+)
+from evidenceforge.generation.actions.ocsp_transaction import (
+    OcspTransactionActionBundle,
+    OcspTransactionPlanner,
+    OcspTransactionRequest,
 )
 from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionActionBundle,
@@ -161,6 +173,11 @@ from evidenceforge.generation.actions.windows_remote_admin import (
     ExplicitCredentialUseRequest,
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
+)
+from evidenceforge.generation.actions.windows_remote_authentication import (
+    WindowsRemoteAuthenticationActionBundle,
+    WindowsRemoteAuthenticationPlanner,
+    WindowsRemoteAuthenticationRequest,
 )
 
 __all__ = [
@@ -230,12 +247,18 @@ __all__ = [
     "file_transfer_hashes",
     "LinuxShellCommandActionBundle",
     "LinuxShellCommandRequest",
+    "LinuxSudoSessionActionBundle",
+    "LinuxSudoSessionRequest",
     "NetworkConnectionActionBundle",
     "NetworkConnectionRequest",
+    "NetworkTransactionPlanner",
     "NmapCommandProbeActionBundle",
     "NmapCommandProbeRequest",
     "NtlmValidationActionBundle",
     "NtlmValidationRequest",
+    "OcspTransactionActionBundle",
+    "OcspTransactionPlanner",
+    "OcspTransactionRequest",
     "PasswordChangeActionBundle",
     "PasswordChangeRequest",
     "PasswordResetActionBundle",
@@ -267,6 +290,9 @@ __all__ = [
     "ExplicitCredentialUseRequest",
     "WindowsServiceInstallActionBundle",
     "WindowsServiceInstallRequest",
+    "WindowsRemoteAuthenticationActionBundle",
+    "WindowsRemoteAuthenticationPlanner",
+    "WindowsRemoteAuthenticationRequest",
     "WorkstationLockActionBundle",
     "WorkstationLockRequest",
     "WorkstationUnlockActionBundle",

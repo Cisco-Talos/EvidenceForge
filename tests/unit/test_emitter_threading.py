@@ -29,7 +29,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from threading import Barrier, Thread
+from threading import Barrier, Thread, current_thread
 
 import pytest
 
@@ -258,6 +258,24 @@ class TestEmitterThreadSafety:
 
             output_file = Path(tmpdir) / "windows.xml"
             assert output_file.exists()
+
+    def test_barrier_flush_runs_on_emitter_thread(self, monkeypatch):
+        """Test the FIFO barrier wakes the worker and flushes there."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fmt = load_format("zeek_conn")
+            emitter = ZeekEmitter(fmt, Path(tmpdir) / "zeek.log", threaded=True)
+            flush_threads: list[Thread] = []
+
+            def record_flush() -> None:
+                flush_threads.append(current_thread())
+
+            monkeypatch.setattr(emitter, "_flush_at_barrier", record_flush)
+            emitter.barrier_flush()
+
+            assert flush_threads == [emitter._thread]
+            assert emitter._event_queue.unfinished_tasks == 0
+
+            emitter.close()
 
     def test_no_data_loss_with_frequent_flushes(self):
         """Test no data loss with small buffer triggering frequent flushes."""

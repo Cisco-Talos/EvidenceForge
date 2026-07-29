@@ -27,6 +27,7 @@ All syslog message construction is done by ActivityGenerator — the emitter
 just formats the context fields into the syslog template.
 """
 
+import json
 import re
 from bisect import bisect_right
 from datetime import timedelta
@@ -85,14 +86,7 @@ _KERNEL_UPTIME_RE = re.compile(
     r"(?P<uptime>\d+\.\d{6})"
     r"(?P<suffix>\])"
 )
-_SSHD_PID_RFC3164_RE = re.compile(r"(?P<prefix>\bsshd\[)(?P<pid>\d+)(?P<suffix>\]:)")
-_SSHD_PID_RFC5424_RE = re.compile(
-    r"(?P<prefix>^<\d{1,3}>1\s+\S+\s+\S+\s+sshd\s+)"
-    r"(?P<pid>\d+)"
-    r"(?P<suffix>\s+-\s+-\s+)"
-)
 _MAX_LOGIND_SESSION_ID_DIGITS = 18
-_MAX_SSHD_PID_DIGITS = 18
 _PAM_OPEN_VISIBLE_WINDOW = timedelta(seconds=20)
 
 
@@ -154,16 +148,6 @@ def _linux_uid_collision_repaired(lines: list[str], host_key: str) -> list[str]:
 def _parse_logind_session_id(value: str) -> int | None:
     """Parse bounded systemd-logind session IDs without triggering huge-int failures."""
     if len(value) > _MAX_LOGIND_SESSION_ID_DIGITS:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
-def _parse_sshd_pid(value: str) -> int | None:
-    """Parse bounded sshd PID strings without triggering huge-int failures."""
-    if len(value) > _MAX_SSHD_PID_DIGITS:
         return None
     try:
         return int(value)
@@ -382,17 +366,91 @@ class SyslogEmitter(HostMultiplexEmitter):
         """Close emitter after normalizing source-native syslog presentation state."""
         if self.threaded:
             self.stop_thread()
-        if self.output_target == OutputTarget.SOF_ELK:
-            self._normalize_sof_elk_buffers()
-            self.flush(force=True)
-            return
-        self._normalize_logind_session_ids()
-        self._backfill_missing_logind_pam_openers()
-        self._normalize_pam_uid_collisions()
-        self._normalize_sudo_session_lifecycles()
-        self._normalize_kernel_uptime_stamps()
-        self._normalize_sshd_child_pids()
-        self.flush(force=True)
+        self._finalize_spooled_hosts()
+
+    def flush(self, force: bool = False) -> None:
+        """Spool buffered rows at barriers while deferring final normalization.
+
+        Syslog requires a final host-wide sort because generation can render
+        events out of timestamp order. Hourly barriers still spill sorted runs
+        to disk so long scenarios do not retain every rendered row in memory.
+        ``close()`` restores those runs once for final normalization.
+        """
+        with self._writers_lock:
+            for route_key, writer in self._writers.items():
+                with writer._lock:
+                    if not writer.buffer:
+                        continue
+                    spool_path = self._spool_path(route_key, writer)
+                    spool_path.parent.mkdir(parents=True, exist_ok=True)
+                    with spool_path.open("a", encoding="utf-8") as spool:
+                        for rendered in writer.buffer:
+                            spool.write(json.dumps(rendered, ensure_ascii=False))
+                            spool.write("\n")
+                    writer.buffer.clear()
+
+    @staticmethod
+    def _spool_path(route_key: str, writer: Any) -> Path:
+        """Return the private record-preserving spool path for one writer."""
+        suffix = _stable_seed(f"syslog-spool:{route_key}") & 0xFFFFFFFF
+        return writer.output_path.with_name(f".{writer.output_path.name}.{suffix:08x}.spool")
+
+    def _finalize_spooled_hosts(self) -> None:
+        """Normalize and write one host at a time from its barrier-spooled rows."""
+        with self._writers_lock:
+            grouped: dict[str, list[tuple[str, Any]]] = {}
+            for route_key, writer in self._writers.items():
+                grouped.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
+
+            for host_key, route_writers in grouped.items():
+                rows: list[tuple[int, tuple[Any, ...], str, str]] = []
+                for route_key, writer in route_writers:
+                    year = int(syslog_route_year(route_key) or 0)
+                    spool_path = self._spool_path(route_key, writer)
+                    with writer._lock:
+                        spooled = []
+                        if spool_path.exists():
+                            with spool_path.open(encoding="utf-8") as spool:
+                                spooled = [json.loads(record) for record in spool]
+                            spool_path.unlink()
+                        lines = [*spooled, *writer.buffer]
+                        writer.buffer = []
+                    for line in lines:
+                        sort_key = (
+                            _syslog_sort_key(line)
+                            if self.output_target == OutputTarget.SOF_ELK
+                            else _rfc5424_syslog_sort_key(line)
+                        )
+                        rows.append((year, sort_key, route_key, line))
+
+                if not rows:
+                    continue
+                rows.sort(key=lambda row: (row[0], row[1]))
+                normalized = [line for _year, _sort_key, _route_key, line in rows]
+                normalized = self._normalize_logind_session_ids_for_lines(normalized, host_key)
+                if self.output_target != OutputTarget.SOF_ELK:
+                    normalized = self._backfill_missing_logind_pam_openers_for_lines(
+                        normalized,
+                        host_key,
+                    )
+                    normalized = _linux_uid_collision_repaired(normalized, host_key)
+                normalized = self._normalize_sudo_session_lifecycles_for_lines(normalized)
+                normalized = self._normalize_kernel_uptime_stamps_for_lines(normalized)
+
+                if len(normalized) != len(rows):
+                    primary_writer = route_writers[0][1]
+                    with primary_writer._lock:
+                        primary_writer.buffer = normalized
+                        primary_writer._flush_unlocked()
+                    continue
+
+                buffers_by_route: dict[str, list[str]] = {}
+                for row, line in zip(rows, normalized, strict=True):
+                    buffers_by_route.setdefault(row[2], []).append(line)
+                for route_key, writer in route_writers:
+                    with writer._lock:
+                        writer.buffer = buffers_by_route.get(route_key, [])
+                        writer._flush_unlocked()
 
     def _normalize_sof_elk_buffers(self) -> None:
         """Normalize SOF-ELK RFC3164 syslog rows with one final sort pass."""
@@ -404,7 +462,6 @@ class SyslogEmitter(HostMultiplexEmitter):
                 normalized = self._normalize_logind_session_ids_for_lines(normalized, host_key)
                 normalized = self._normalize_sudo_session_lifecycles_for_lines(normalized)
                 normalized = self._normalize_kernel_uptime_stamps_for_lines(normalized)
-                normalized = self._normalize_sshd_child_pids_for_lines(normalized, host_key)
                 self._replace_buffers_by_sorted_rows(rows, normalized)
 
     def _sorted_lines_by_host(self) -> dict[str, list[tuple[int, tuple[Any, ...], str, str]]]:
@@ -530,66 +587,6 @@ class SyslogEmitter(HostMultiplexEmitter):
                     [line for _year, _sort_key, _route_key, line in rows]
                 )
                 self._replace_buffers_by_sorted_rows(rows, normalized)
-
-    def _normalize_sshd_child_pids(self) -> None:
-        """Keep visible sshd child PIDs monotonic in final syslog order."""
-        with self._writers_lock:
-            for host_key, rows in self._sorted_lines_by_host().items():
-                if not rows:
-                    continue
-                normalized = self._normalize_sshd_child_pids_for_lines(
-                    [line for _year, _sort_key, _route_key, line in rows],
-                    host_key,
-                )
-                self._replace_buffers_by_sorted_rows(rows, normalized)
-
-    @staticmethod
-    def _sshd_pid_match(line: str) -> re.Match[str] | None:
-        """Return the sshd PID match for RFC5424 or RFC3164 syslog."""
-        return _SSHD_PID_RFC5424_RE.search(line) or _SSHD_PID_RFC3164_RE.search(line)
-
-    @classmethod
-    def _normalize_sshd_child_pids_for_lines(cls, lines: list[str], host_key: str) -> list[str]:
-        """Return lines with per-session sshd child PIDs increasing by source time."""
-        pid_map: dict[str, int] = {}
-        latest_session_pid = 0
-        normalized: list[str] = []
-        for line in lines:
-            match = cls._sshd_pid_match(line)
-            if match is None:
-                normalized.append(line)
-                continue
-            old_pid = match.group("pid")
-            new_pid = pid_map.get(old_pid)
-            if new_pid is None:
-                parsed_old_pid = _parse_sshd_pid(old_pid)
-                if parsed_old_pid is None:
-                    normalized.append(line)
-                    continue
-                opens_visible_session = (
-                    "Connection from " in line
-                    or "Accepted " in line
-                    or "pam_unix(sshd:session): session opened" in line
-                )
-                if not opens_visible_session:
-                    new_pid = parsed_old_pid
-                    pid_map[old_pid] = new_pid
-                elif parsed_old_pid > latest_session_pid:
-                    new_pid = parsed_old_pid
-                    latest_session_pid = new_pid
-                    pid_map[old_pid] = new_pid
-                else:
-                    bump = 1 + (
-                        _stable_seed(f"syslog_sshd_pid:{host_key}:{old_pid}:{len(pid_map)}") % 17
-                    )
-                    new_pid = latest_session_pid + bump
-                    latest_session_pid = new_pid
-                    pid_map[old_pid] = new_pid
-            normalized.append(
-                f"{line[: match.start()]}{match.group('prefix')}{new_pid}{match.group('suffix')}"
-                f"{line[match.end() :]}"
-            )
-        return normalized
 
     @staticmethod
     def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:
@@ -766,7 +763,7 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _normalize_sudo_session_lifecycles_for_lines(lines: list[str]) -> list[str]:
-        """Return RFC5424 syslog lines with sudo open/command/close order repaired."""
+        """Return RFC5424 lines with sudo command/open/close order repaired."""
         parsed: dict[int, dict[str, Any]] = {}
         rows_by_pid: dict[str, dict[str, list[int]]] = {}
         for index, line in enumerate(lines):
@@ -799,47 +796,55 @@ class SyslogEmitter(HostMultiplexEmitter):
             close_indices = bucket["close"]
             for command_index in bucket["command"]:
                 command_time = parsed[command_index]["timestamp"]
-                has_open_before = any(
-                    parsed[open_index]["timestamp"] <= command_time for open_index in open_indices
+                has_open_after = any(
+                    command_time < parsed[open_index]["timestamp"] for open_index in open_indices
                 )
-                if not has_open_before:
-                    future_opens = [
+                if not has_open_after:
+                    prior_opens = [
                         open_index
                         for open_index in open_indices
-                        if command_time
-                        < parsed[open_index]["timestamp"]
-                        <= command_time + max_repair_gap
+                        if command_time - max_repair_gap
+                        <= parsed[open_index]["timestamp"]
+                        <= command_time
                     ]
-                    if future_opens:
+                    if prior_opens:
                         open_index = min(
-                            future_opens,
-                            key=lambda index: parsed[index]["timestamp"],
+                            prior_opens,
+                            key=lambda index: abs(
+                                (parsed[index]["timestamp"] - command_time).total_seconds()
+                            ),
                         )
-                        repaired_time = command_time - min_gap
+                        repaired_time = command_time + min_gap
                         parsed[open_index]["timestamp"] = repaired_time
                         normalized[open_index] = _replace_rfc5424_timestamp(
                             normalized[open_index],
                             repaired_time,
                         )
 
+                matching_open_times = [
+                    parsed[open_index]["timestamp"]
+                    for open_index in open_indices
+                    if command_time < parsed[open_index]["timestamp"]
+                ]
+                lifecycle_floor = min(matching_open_times) if matching_open_times else command_time
                 has_close_after = any(
-                    parsed[close_index]["timestamp"] >= command_time
+                    parsed[close_index]["timestamp"] > lifecycle_floor
                     for close_index in close_indices
                 )
                 if not has_close_after:
                     prior_closes = [
                         close_index
                         for close_index in close_indices
-                        if command_time - max_repair_gap
+                        if lifecycle_floor - max_repair_gap
                         <= parsed[close_index]["timestamp"]
-                        < command_time
+                        <= lifecycle_floor
                     ]
                     if prior_closes:
                         close_index = max(
                             prior_closes,
                             key=lambda index: parsed[index]["timestamp"],
                         )
-                        repaired_time = command_time + min_gap
+                        repaired_time = lifecycle_floor + min_gap
                         parsed[close_index]["timestamp"] = repaired_time
                         normalized[close_index] = _replace_rfc5424_timestamp(
                             normalized[close_index],

@@ -180,9 +180,18 @@ ecar:
       - field: pid
         present: true
 
-  - name: "PROCESS records have tid"
+  - name: "PROCESS/CREATE records have canonical primary tid"
     condition:
       object: "PROCESS"
+      action: "CREATE"
+    checks:
+      - field: tid
+        present: true
+
+  - name: "PROCESS/TERMINATE records have canonical primary tid"
+    condition:
+      object: "PROCESS"
+      action: "TERMINATE"
     checks:
       - field: tid
         present: true

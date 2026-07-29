@@ -309,6 +309,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             emitters=self.emitters,
             visibility_engine=visibility_engine,
             output_start_time=self.start_time,
+            output_end_time=self.end_time,
             observation_policy=ObservationPolicy(self.scenario.observation_profile),
         )
         self.activity_generator = ActivityGenerator(
@@ -415,10 +416,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if "windows_event_security" in self.emitters:
             self.emitters["windows_event_security"]._state_manager = self.state_manager
             self.emitters["windows_event_security"]._system_pids = self._system_pids
-        if "ecar" in self.emitters:
-            self.emitters["ecar"]._state_manager = self.state_manager
-            self.emitters["ecar"]._system_pids = self._system_pids
-
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
         if self.scenario.storyline:
@@ -520,7 +517,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         from evidenceforge.events.collection_profile import write_collection_profile
 
-        write_collection_profile(self.output_dir, self.scenario, self.output_target)
+        write_collection_profile(self.ground_truth_dir, self.scenario, self.output_target)
 
         logger.info("All emitters closed")
 

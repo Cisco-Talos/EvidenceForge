@@ -81,6 +81,44 @@ class NetworkVisibilityEngine:
         """
         return self._enabled
 
+    def get_sensor(self, hostname: str) -> NetworkSensor | None:
+        """Return the configured sensor identified by hostname or logical name."""
+
+        return next(
+            (
+                sensor
+                for sensor in self._sensors
+                if hostname in {sensor.name, sensor.hostname or sensor.name}
+            ),
+            None,
+        )
+
+    def infer_sensor_path_role(
+        self,
+        hostname: str,
+        src_ip: str,
+        dst_ip: str,
+        *,
+        link_local: bool = False,
+    ) -> str:
+        """Return the sensor's topological role for one canonical connection."""
+
+        sensor = self.get_sensor(hostname)
+        if sensor is None:
+            return "unspecified"
+        if link_local:
+            return "link_local"
+        monitored = set(sensor.monitoring_segments)
+        source_side = bool(monitored & self._resolve_ip_segments(src_ip))
+        destination_side = bool(monitored & self._resolve_ip_segments(dst_ip))
+        if source_side and destination_side:
+            return "local_segment"
+        if source_side:
+            return "source_side"
+        if destination_side:
+            return "destination_side"
+        return "transit"
+
     def _build_topology(self, config: NetworkConfig, systems: list[System]) -> None:
         """Build internal lookup structures from config.
 

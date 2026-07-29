@@ -892,6 +892,7 @@ class WindowsEventEmitter(LogEmitter):
             seed_parts=process_seed,
             not_before=process_start_time,
         )
+        target = proc.target_security_context
 
         event_data = {
             "EventID": 4688,
@@ -910,10 +911,10 @@ class WindowsEventEmitter(LogEmitter):
             "TokenElevationType": proc.token_elevation or "%%1938",
             "ProcessId": f"0x{proc.parent_pid:x}",
             "CommandLine": proc.command_line,
-            "TargetUserSid": auth.user_sid,
-            "TargetUserName": auth.username,
-            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
-            "TargetLogonId": proc.logon_id,
+            "TargetUserSid": target.user_sid if target else "S-1-0-0",
+            "TargetUserName": target.username if target else "-",
+            "TargetDomainName": target.domain if target else "-",
+            "TargetLogonId": target.logon_id if target else "0x0",
             "ParentProcessName": proc.parent_image,
             "MandatoryLabel": proc.mandatory_label or "S-1-16-8192",
         }
@@ -967,6 +968,7 @@ class WindowsEventEmitter(LogEmitter):
             seed_parts=process_seed,
             not_before=process_start_time,
         )
+        target = proc.target_security_context
 
         event_data = {
             "EventID": 4688,
@@ -985,10 +987,10 @@ class WindowsEventEmitter(LogEmitter):
             "TokenElevationType": proc.token_elevation or "%%1936",
             "ProcessId": f"0x{proc.parent_pid:x}",
             "CommandLine": proc.command_line,
-            "TargetUserSid": auth.user_sid,
-            "TargetUserName": auth.username,
-            "TargetDomainName": auth.subject_domain,
-            "TargetLogonId": proc.logon_id,
+            "TargetUserSid": target.user_sid if target else "S-1-0-0",
+            "TargetUserName": target.username if target else "-",
+            "TargetDomainName": target.domain if target else "-",
+            "TargetLogonId": target.logon_id if target else "0x0",
             "ParentProcessName": proc.parent_image,
             "MandatoryLabel": proc.mandatory_label or "S-1-16-16384",
         }
@@ -1084,7 +1086,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetUserName": krb.target_username,
             "TargetDomainName": krb.target_domain,
             "TargetSid": krb.target_sid,
-            "ServiceName": krb.service_name,
+            "ServiceName": krb.service_account_name or krb.service_name,
             "ServiceSid": krb.service_sid,
             "TicketOptions": krb.ticket_options,
             "Status": krb.ticket_status,
@@ -1116,7 +1118,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserName": krb.target_username.split("@", 1)[0],
             "TargetDomainName": krb.target_domain,
-            "ServiceName": krb.service_name,
+            "ServiceName": krb.service_account_name or krb.service_name,
             "ServiceSid": krb.service_sid,
             "TicketOptions": krb.ticket_options,
             "TicketEncryptionType": krb.encryption_type,
@@ -1142,7 +1144,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "TargetUserName": krb.target_username,
             "TargetDomainName": krb.target_domain,
-            "ServiceName": krb.service_name,
+            "ServiceName": krb.service_account_name or krb.service_name,
             "ServiceSid": krb.service_sid,
             "TicketOptions": krb.ticket_options,
             "TicketEncryptionType": krb.encryption_type,
@@ -1697,18 +1699,24 @@ class WindowsEventEmitter(LogEmitter):
         while not self._stop_event.is_set():
             try:
                 event_data = self._event_queue.get(timeout=0.1)
-                with self._file_lock:
-                    self._event_dicts.append(event_data)
-                    if len(self._event_dicts) >= self.buffer_size:
-                        self._spool_event_dicts_unlocked()
-                self._event_queue.task_done()
-            except Empty:
-                if self._flush_barrier.is_set():
+                try:
+                    if self._handle_flush_request(event_data):
+                        continue
                     with self._file_lock:
-                        self._spool_event_dicts_unlocked()
-                    self._flush_barrier.clear()
+                        self._event_dicts.append(event_data)
+                        if len(self._event_dicts) >= self.buffer_size:
+                            self._spool_event_dicts_unlocked()
+                finally:
+                    self._event_queue.task_done()
+            except Empty:
+                continue
 
         win_logger.debug(f"Emitter thread stopped for {self.format_def.name}")
+
+    def _flush_at_barrier(self) -> None:
+        """Spool deferred events at the same boundary as the former barrier."""
+        with self._file_lock:
+            self._spool_event_dicts_unlocked()
 
     def _event_sort_key(self, event: dict[str, Any]) -> str:
         """Return a stable sortable timestamp key for deferred Windows events."""
@@ -2301,24 +2309,20 @@ class WindowsEventEmitter(LogEmitter):
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
             self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
-            self._shift_spooled_network_logons_after_transport_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
             self._shift_spooled_process_dependents_after_create_unlocked()
             self._shift_spooled_special_privileges_after_logons_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
-            self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
             events = self._iter_spooled_events_unlocked()
         else:
             self._shift_kerberos_tgts_before_service_tickets()
-            self._shift_network_logons_after_transport()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
             self._shift_process_dependents_after_create()
             self._shift_special_privileges_after_logons()
             self._shift_process_terminations_after_dependents()
-            self._shift_logoffs_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
 
             def _sort_key(event: dict) -> Any:

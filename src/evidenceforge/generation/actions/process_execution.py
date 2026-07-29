@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
@@ -50,6 +51,7 @@ class ProcessExecutionRequest:
     allow_existing_browser_reuse: bool = True
     allow_browser_launch_spacing: bool = True
     concurrency_group_id: str = ""
+    lifecycle_group_id: str = ""
     source: str = "activity_generator"
 
     @property
@@ -57,13 +59,15 @@ class ProcessExecutionRequest:
         """Return a deterministic intent identifier for durable references."""
 
         concurrency_suffix = f":{self.concurrency_group_id}" if self.concurrency_group_id else ""
+        lifecycle_suffix = f":{self.lifecycle_group_id}" if self.lifecycle_group_id else ""
         seed = _stable_seed(
             "action_bundle:process_execution:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.logon_id}:{self.process_name}:{self.command_line}:"
             f"{self.parent_pid}:{self.ensure_file_event}:{self.from_storyline}:"
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
-            f"{self.allow_browser_launch_spacing}{concurrency_suffix}:{self.source}"
+            f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
+            f"{self.source}"
         )
         return f"process-execution-{seed:016x}"
 
@@ -79,6 +83,7 @@ class ProcessTerminationRequest:
     process_name: str
     logon_id: str
     from_storyline: bool = False
+    session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -89,6 +94,7 @@ class ProcessTerminationRequest:
             "action_bundle:process_termination:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.pid}:{self.process_name}:{self.logon_id}:{self.from_storyline}:"
+            f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.source}"
         )
         return f"process-termination-{seed:016x}"

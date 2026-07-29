@@ -223,13 +223,13 @@ class BashHistoryEmitter(LogEmitter):
         while not self._stop_event.is_set():
             try:
                 event_data = self._event_queue.get(timeout=0.1)
-                self._dispatch(event_data)
-                self._event_queue.task_done()
+                try:
+                    if not self._handle_flush_request(event_data):
+                        self._dispatch(event_data)
+                finally:
+                    self._event_queue.task_done()
             except Empty:
-                if self._flush_barrier.is_set():
-                    logger.debug(f"Flushing {self.format_def.name} emitter at barrier")
-                    self.flush()
-                    self._flush_barrier.clear()
+                continue
 
         logger.debug(f"Emitter thread stopping for {self.format_def.name}, final flush")
         self.flush()

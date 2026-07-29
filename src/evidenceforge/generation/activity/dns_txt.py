@@ -3,9 +3,11 @@
 
 """Stable DNS TXT answer generation for mail/authentication lookups."""
 
-import base64
 import random
 
+from evidenceforge.generation.cryptographic_material import (
+    shared_cryptographic_material_registry,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -96,10 +98,22 @@ def choose_background_dns_txt_record(rng: random.Random) -> tuple[str, str, int]
 
 
 def _stable_dkim_key(query: str) -> str:
-    """Return long base64-looking DKIM key material for a selector query."""
-    rng = random.Random(_stable_seed(f"dkim_key:{query}"))
-    raw = bytes(rng.getrandbits(8) for _ in range(162))
-    return base64.b64encode(raw).decode("ascii").rstrip("=")
+    """Return a selector-stable RSA SubjectPublicKeyInfo value."""
+
+    normalized = query.rstrip(".").lower()
+    selector, separator, domain = normalized.partition("._domainkey.")
+    if not separator or not selector or not domain:
+        raise ValueError(
+            "DKIM owner names must use <selector>._domainkey.<domain> before key planning"
+        )
+    return (
+        shared_cryptographic_material_registry()
+        .resolve_dkim_key(
+            domain,
+            selector,
+        )
+        .public_key_base64
+    )
 
 
 def _stable_verification_token(query: str) -> str:

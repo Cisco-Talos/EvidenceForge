@@ -22,6 +22,7 @@
 
 """Unit tests for StateManager."""
 
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
@@ -29,7 +30,10 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, ProcessContext
+from evidenceforge.events.identity import EventIdentityPlan
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation import state_manager as state_manager_module
+from evidenceforge.generation.indexes import TemporalAllocationIndex
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -134,7 +138,9 @@ class TestStateManagerInit:
         later_time = start + timedelta(minutes=20)
         sm._linux_logind_session_initials["linux01"] = 100
         sm._linux_logind_session_used_ids["linux01"] = {180}
-        sm._linux_logind_session_allocations["linux01"] = [(earlier_time, 180)]
+        allocations = TemporalAllocationIndex()
+        allocations.add(earlier_time, 180)
+        sm._linux_logind_session_allocations["linux01"] = allocations
 
         later_id = sm.next_linux_logind_session_id("linux01", rng, later_time)
 
@@ -160,6 +166,149 @@ class TestStateManagerInit:
         ] == [logon_id]
         assert sm.get_sessions_for_user_at("alice", close) == []
         assert sm.get_sessions_for_user_at("alice", close + timedelta(minutes=1)) == []
+
+    def test_active_and_historical_session_queries_have_explicit_boundaries(self):
+        """Active-only lookup must exclude ended state that historical lookup can render."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event_time = start + timedelta(minutes=30)
+        end = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+        )
+        assert sm.end_session(logon_id, end)
+
+        assert sm.get_active_sessions_for_user_at("alice", event_time) == []
+        assert sm.get_active_sessions_on_system_at("WS-01", event_time) == []
+        assert [s.logon_id for s in sm.get_sessions_for_user_at("alice", event_time)] == [logon_id]
+        assert [s.logon_id for s in sm.get_sessions_on_system_at("WS-01", event_time)] == [logon_id]
+        assert sm.get_session_at(logon_id, event_time) is not None
+        assert sm.get_session_at(logon_id, end) is None
+
+    def test_authoritative_end_keeps_durable_ssh_session_live_past_early_disconnect(self):
+        """An early SSH transport close must not create a shadow durable session."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        transport_close = start + timedelta(minutes=8)
+        deadline = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="ssh",
+        )
+        sm.update_session_metadata(logon_id, network_close_time=transport_close)
+        plan = SessionEndPlan(deadline, "explicit_storyline", "story-logoff")
+
+        assert sm.plan_session_end(logon_id, plan)
+        assert [
+            session.logon_id
+            for session in sm.get_sessions_for_user_at(
+                "alice",
+                transport_close + timedelta(minutes=10),
+            )
+        ] == [logon_id]
+        assert sm.get_sessions_for_user_at("alice", deadline) == []
+
+    def test_sessions_on_system_at_excludes_authoritatively_ended_session(self):
+        """Host-local activity selection must honor a preplanned session deadline."""
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deadline = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+        )
+        assert sm.plan_session_end(
+            logon_id,
+            SessionEndPlan(deadline, "explicit_storyline", "story-logoff"),
+        )
+
+        assert [
+            session.logon_id
+            for session in sm.get_sessions_on_system_at(
+                "WS-01",
+                deadline - timedelta(milliseconds=1),
+            )
+        ] == [logon_id]
+        assert sm.get_sessions_on_system_at("WS-01", deadline) == []
+
+    def test_authoritative_end_blocks_implicit_rebootstrap_until_new_session(self):
+        """Baseline planners must not silently recreate an explicitly ended session."""
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deadline = start + timedelta(hours=1)
+        logon_id = sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=start,
+        )
+        assert sm.plan_session_end(
+            logon_id,
+            SessionEndPlan(deadline, "explicit_storyline", "story-logoff"),
+        )
+
+        assert not sm.authoritative_session_end_blocks_rebootstrap(
+            "alice",
+            "WS-01",
+            deadline - timedelta(milliseconds=1),
+        )
+        assert sm.authoritative_session_end_blocks_rebootstrap(
+            "alice",
+            "WS-01",
+            deadline,
+        )
+
+        sm.create_session(
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+            start_time=deadline + timedelta(minutes=5),
+        )
+        assert not sm.authoritative_session_end_blocks_rebootstrap(
+            "alice",
+            "WS-01",
+            deadline + timedelta(minutes=6),
+        )
+
+    def test_authoritative_end_plan_cannot_be_replaced(self):
+        """The first explicit storyline close remains the immutable session authority."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = sm.create_session(
+            username="alice",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="ssh",
+        )
+        first = SessionEndPlan(start + timedelta(hours=1), "explicit_storyline", "first")
+        replacement = SessionEndPlan(
+            start + timedelta(hours=2),
+            "explicit_storyline",
+            "replacement",
+        )
+
+        assert sm.plan_session_end(logon_id, first)
+        assert sm.plan_session_end(logon_id, first)
+        with pytest.raises(StateError, match="Cannot replace authoritative"):
+            sm.plan_session_end(logon_id, replacement)
+        assert sm.get_session_end_plan(logon_id) == first
 
     def test_linux_logind_session_collision_ids_avoid_elapsed_second_deltas(self):
         """Collision bumps should not recreate an exact session-time delta."""
@@ -384,6 +533,46 @@ class TestStateManagerInit:
         assert len({sudo_pid, ecar_pid, sshd_pid}) == 3
         assert max(sudo_pid, ecar_pid, sshd_pid) - min(sudo_pid, ecar_pid, sshd_pid) < 15_000
 
+    def test_linux_pid_collision_work_is_bounded(self, monkeypatch):
+        """A growing allocation history must not cause a growing hash retry chain."""
+        real_stable_seed = state_manager_module._stable_seed
+        stable_seed_calls = 0
+
+        def counted_stable_seed(value: str) -> int:
+            nonlocal stable_seed_calls
+            stable_seed_calls += 1
+            return real_stable_seed(value)
+
+        monkeypatch.setattr(state_manager_module, "_stable_seed", counted_stable_seed)
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        allocation_count = 5_000
+
+        for _ in range(allocation_count):
+            sm.allocate_transient_linux_pid("linux01", event_time)
+
+        assert stable_seed_calls < allocation_count * 3
+
+    def test_linux_pid_allocation_is_repeatable_after_bounded_collision_repair(self):
+        """Equivalent runs should allocate identical PIDs, including out-of-order events."""
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        offsets = (
+            timedelta(seconds=0),
+            timedelta(minutes=20),
+            timedelta(minutes=5),
+            timedelta(minutes=5, seconds=3),
+            timedelta(hours=8),
+        )
+
+        def allocate_sequence() -> list[int]:
+            sm = StateManager()
+            sm.register_boot_time("linux01", boot_time)
+            return [
+                sm.allocate_transient_linux_pid("linux01", boot_time + offset) for offset in offsets
+            ]
+
+        assert allocate_sequence() == allocate_sequence()
+
     def test_linux_transient_pid_rejects_non_linux_hosts_before_allocator_init(self):
         """Transient Linux PIDs should not initialize a Windows host namespace."""
         sm = StateManager()
@@ -430,6 +619,47 @@ class TestStateManagerInit:
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
+
+    def test_historical_session_queries_do_not_scan_global_state(self):
+        """User/system history lookups must use secondary indexes."""
+
+        class NoIterationDict(dict):
+            def values(self):
+                raise AssertionError("global values() scan is forbidden")
+
+            def items(self):
+                raise AssertionError("global items() scan is forbidden")
+
+            def __iter__(self):
+                raise AssertionError("global key iteration is forbidden")
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        target_logon_id = ""
+        for index in range(2_000):
+            username = "target" if index == 1_337 else f"user-{index % 41}"
+            system = "target-host" if index == 1_337 else f"host-{index % 29}"
+            logon_id = sm.create_session(
+                username=username,
+                system=system,
+                logon_type=3,
+                source_ip="10.0.0.1",
+                start_time=start + timedelta(seconds=index),
+            )
+            assert sm.end_session(logon_id, start + timedelta(hours=2))
+            if index == 1_337:
+                target_logon_id = logon_id
+
+        sm._active_sessions._items = NoIterationDict(sm._active_sessions._items)
+        sm._ended_sessions._items = NoIterationDict(sm._ended_sessions._items)
+        cutoff = start + timedelta(minutes=30)
+
+        assert [session.logon_id for session in sm.get_sessions_for_user_at("target", cutoff)] == [
+            target_logon_id
+        ]
+        assert [
+            session.logon_id for session in sm.get_sessions_on_system_at("target-host", cutoff)
+        ] == [target_logon_id]
 
     def test_create_session(self):
         """Test creating a new session."""
@@ -803,6 +1033,149 @@ class TestSessionManagement:
         assert len(sessions) == 2
 
 
+class TestCanonicalIdentityState:
+    """Tests for host-scoped process, session, and thread identity."""
+
+    @staticmethod
+    def _create_windows_process(sm: StateManager, system: str, pid: int = 4000) -> int:
+        sm._pid_counters[system] = pid
+        sm._pid_os[system] = "windows"
+        return sm.create_process(
+            system,
+            0,
+            rf"C:\\Windows\\System32\\{system}.exe",
+            f"{system}.exe",
+            "SYSTEM",
+            "System",
+        )
+
+    def test_identical_pid_and_tid_on_different_hosts_do_not_collide(self) -> None:
+        """Host and process object scope identical host-local numeric identifiers."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        pid_a = self._create_windows_process(sm, "WS-01")
+        pid_b = self._create_windows_process(sm, "WS-02")
+        process_a = sm.get_process_identity("WS-01", pid_a)
+        process_b = sm.get_process_identity("WS-02", pid_b)
+        assert process_a is not None
+        assert process_b is not None
+        assert pid_a == pid_b
+        assert process_a.object_id != process_b.object_id
+
+        thread_a = sm.create_thread("WS-01", process_a.object_id, tid=9124)
+        thread_b = sm.create_thread("WS-02", process_b.object_id, tid=9124)
+        assert thread_a.tid == thread_b.tid
+        assert thread_a.canonical_key != thread_b.canonical_key
+        assert thread_a.object_id != thread_b.object_id
+
+    def test_same_host_pid_reuse_gets_new_process_and_thread_identity(self) -> None:
+        """A reused PID starts a new object scope even when a TID also repeats."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        first_pid = self._create_windows_process(sm, "WS-01")
+        first = sm.get_process_identity("WS-01", first_pid)
+        assert first is not None
+        first_thread = sm.create_thread("WS-01", first.object_id, tid=9912)
+        assert sm.end_process("WS-01", first_pid, start + timedelta(seconds=2))
+
+        sm.set_current_time(start + timedelta(minutes=1))
+        sm._pid_counters["WS-01"] = first_pid
+        second_pid = sm.create_process(
+            "WS-01",
+            0,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe /c whoami",
+            "analyst",
+            "Medium",
+        )
+        second = sm.get_process_identity("WS-01", second_pid)
+        assert second is not None
+        second_thread = sm.create_thread("WS-01", second.object_id, tid=9912)
+
+        assert second_pid == first_pid
+        assert second.object_id != first.object_id
+        assert second_thread.canonical_key != first_thread.canonical_key
+        assert sm.get_thread("WS-01", first.object_id, 9912) is None
+        assert sm.get_thread("WS-01", second.object_id, 9912) == second_thread
+
+    def test_primary_thread_is_deterministic_and_immutable(self) -> None:
+        """Primary-thread allocation is stable and snapshots cannot mutate runtime state."""
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        snapshots = []
+        for _ in range(2):
+            sm = StateManager()
+            sm.set_current_time(start)
+            pid = self._create_windows_process(sm, "WS-01")
+            process = sm.get_process_identity("WS-01", pid)
+            assert process is not None
+            assert process.primary_thread is not None
+            snapshots.append(process)
+
+        assert snapshots[0] == snapshots[1]
+        with pytest.raises(FrozenInstanceError):
+            snapshots[0].primary_thread.tid = 1234
+
+    def test_linux_primary_thread_is_process_leader(self) -> None:
+        """Linux process leaders use the kernel's TID-equals-PID convention."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        pid = sm.create_process("LINUX-01", 0, "/usr/bin/bash", "bash", "analyst", "Medium")
+        process = sm.get_process_identity("LINUX-01", pid)
+        assert process is not None
+        assert process.primary_thread is not None
+        assert process.primary_thread.tid == pid
+
+    @pytest.mark.parametrize(
+        ("system", "pid", "image", "os_category"),
+        [
+            ("WS-01", 4, "System", "windows"),
+            ("LINUX-01", 1, "/usr/lib/systemd/systemd", "linux"),
+        ],
+    )
+    def test_fixed_boot_process_registration_uses_canonical_identity_boundary(
+        self,
+        system: str,
+        pid: int,
+        image: str,
+        os_category: str,
+    ) -> None:
+        """Kernel-native fixed PIDs receive object, lifecycle, and primary-thread state."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        process = sm.register_process(
+            system,
+            pid,
+            0,
+            image,
+            image,
+            "SYSTEM" if os_category == "windows" else "root",
+            "System",
+            os_category=os_category,
+        )
+        identity = sm.get_process_identity(system, pid)
+
+        assert identity is not None
+        assert identity.object_id == process.ecar_object_id
+        assert identity.lifecycle_group_id == process.lifecycle_group_id
+        assert identity.primary_thread is not None
+        if os_category == "linux":
+            assert identity.primary_thread.tid == pid
+
+    def test_explicit_thread_requires_live_owning_process(self) -> None:
+        """Worker and remote threads cannot outlive or bypass their owning process."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        pid = self._create_windows_process(sm, "WS-01")
+        process = sm.get_process_identity("WS-01", pid)
+        assert process is not None
+        assert sm.end_process("WS-01", pid, start + timedelta(seconds=1))
+
+        with pytest.raises(StateError, match="owning process object is not live"):
+            sm.create_thread("WS-01", process.object_id, tid=7000, kind="remote")
+
+
 class TestProcessManagement:
     """Tests for process lifecycle."""
 
@@ -907,6 +1280,40 @@ class TestProcessManagement:
         ws01_procs = sm.get_processes_on_system("WS-01")
         assert len(ws01_procs) == 2
         assert all(p.system == "WS-01" for p in ws01_procs)
+
+    def test_get_processes_for_session_uses_logon_index(self, monkeypatch):
+        """Session process lookup must not enumerate the global process table."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        wanted_pid = sm.create_process(
+            "WS-01",
+            0,
+            "explorer.exe",
+            "explorer.exe",
+            "jdoe",
+            "Medium",
+            "0x111",
+        )
+        sm.create_process(
+            "WS-02",
+            0,
+            "bash",
+            "bash",
+            "asmith",
+            "Medium",
+            "0x222",
+        )
+        monkeypatch.setattr(
+            sm,
+            "list_running_processes",
+            lambda: pytest.fail("global process enumeration is not allowed"),
+        )
+
+        processes = sm.get_processes_for_session("0x111", "WS-01")
+
+        assert [process.pid for process in processes] == [wanted_pid]
+        assert sm.end_process("WS-01", wanted_pid)
+        assert sm.get_processes_for_session("0x111", "WS-01") == []
 
     def test_end_process(self):
         """Test ending a process."""
@@ -1059,6 +1466,28 @@ class TestProcessManagement:
         assert proc is not None
         assert proc.last_activity_time == activity_time
 
+    def test_apply_tracks_canonical_actor_activity_without_process_context(self):
+        """Canonical network actors extend lifetime without a compatibility process context."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        activity_time = start + timedelta(minutes=3)
+        sm.set_current_time(start)
+        pid = sm.create_process("WS-01", 0, "browser.exe", "browser.exe", "jdoe", "Medium")
+        actor = sm.get_process_identity("WS-01", pid)
+        assert actor is not None
+
+        sm.apply(
+            SecurityEvent(
+                timestamp=activity_time,
+                event_type="connection",
+                identity_plan=EventIdentityPlan(actor=actor),
+            )
+        )
+
+        proc = sm.get_process("WS-01", pid)
+        assert proc is not None
+        assert proc.last_activity_time == activity_time
+
     def test_list_running_processes(self):
         """Test listing all running processes."""
         sm = StateManager()
@@ -1149,6 +1578,93 @@ class TestConnectionManagement:
         sm = StateManager()
         result = sm.close_connection("conn-999")
         assert result is False
+
+    def test_connection_tuple_lookup_uses_exact_tuple_index(self):
+        """Tuple lookup must not scan every retained connection."""
+
+        class NoValuesDict(dict):
+            def values(self):
+                raise AssertionError("connection tuple lookup performed a full-table scan")
+
+        sm = StateManager()
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(now)
+        sm.open_connection("10.0.0.10", 50000, "10.0.0.1", 53, "udp")
+        sm.open_connection("::ffff:10.0.0.20", 50001, "10.0.0.2", 443, "tcp")
+        sm._open_connections._items = NoValuesDict(sm._open_connections._items)
+
+        assert sm.connection_tuple_recently_used(
+            "10.0.0.20",
+            50001,
+            "::ffff:10.0.0.2",
+            443,
+            "tcp",
+            now,
+            reuse_window=86_400,
+        )
+        assert not sm.connection_tuple_recently_used(
+            "10.0.0.99",
+            59999,
+            "10.0.0.2",
+            443,
+            "tcp",
+            now,
+            reuse_window=86_400,
+        )
+
+    def test_close_connection_removes_tuple_index_entry(self):
+        """Closing a connection should remove its tuple lookup entry."""
+        sm = StateManager()
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(now)
+        conn_id = sm.open_connection("10.0.0.10", 50000, "10.0.0.1", 53, "udp")
+
+        assert sm.close_connection(conn_id)
+        assert not sm.connection_tuple_recently_used(
+            "10.0.0.10",
+            50000,
+            "10.0.0.1",
+            53,
+            "udp",
+            now,
+            reuse_window=86_400,
+        )
+        assert (
+            sm._open_connections.find_keys(
+                "exact_tuple",
+                ("10.0.0.10", 50000, "10.0.0.1", 53, "udp"),
+            )
+            == ()
+        )
+
+    def test_sweep_removes_connections_closed_by_cutoff(self):
+        """Past close times should be evicted even when state remains established."""
+        sm = StateManager()
+        now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(now)
+        past_id = sm.open_connection(
+            "10.0.0.10",
+            50000,
+            "10.0.0.1",
+            53,
+            "udp",
+            close_time=now + timedelta(minutes=5),
+        )
+        future_id = sm.open_connection(
+            "10.0.0.10",
+            50001,
+            "10.0.0.2",
+            443,
+            "tcp",
+            close_time=now + timedelta(hours=2),
+        )
+
+        removed = sm.sweep_closed_connections(now + timedelta(hours=1))
+
+        assert removed == 1
+        assert sm.get_connection(past_id) is None
+        assert sm.get_connection(future_id) is not None
+        assert past_id not in sm._open_connections
 
     def test_list_open_connections(self):
         """Test listing all open connections."""

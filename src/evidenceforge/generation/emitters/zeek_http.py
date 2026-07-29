@@ -82,19 +82,26 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
         net = event.network
         http = event.http
         uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
-        conn_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
+        if (
+            event.network_observations_planned
+            and net.transaction is not None
+            and http.canonical_request_time is not None
+        ):
+            conn_ts = net.transaction.started_at
+        else:
+            conn_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
         within = None
         latest_ts = None
         resp_fuids, resp_mime_types = _response_file_vectors(http)
@@ -121,13 +128,20 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             net.dst_port,
             event.timestamp,
         )
-        event_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_http_request",
-            seed_parts=http_seed_parts,
-            not_before=conn_ts,
-            within=within,
-        )
+        canonical_request_time = http.canonical_request_time
+        request_not_before = max(conn_ts, canonical_request_time or conn_ts)
+        if canonical_request_time is not None:
+            event_ts = max(conn_ts, canonical_request_time)
+            if latest_ts is not None:
+                event_ts = min(event_ts, latest_ts)
+        else:
+            event_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_http_request",
+                seed_parts=http_seed_parts,
+                not_before=request_not_before,
+                within=within,
+            )
         previous_ts = self._last_http_ts_by_uid.get(uid_key)
         if previous_ts is not None and event_ts <= previous_ts:
             event_ts = previous_ts + _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP
@@ -164,10 +178,8 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             "referrer": http.referrer or None,
             "resp_fuids": resp_fuids,
             "resp_mime_types": resp_mime_types,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            **self._sensor_metadata(event, self.format_def.name),
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
