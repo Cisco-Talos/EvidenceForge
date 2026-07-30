@@ -6,6 +6,29 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.13.1 (2026-07-30)
+
+This patch release hardens agent-facing security boundaries and CI dependency
+integrity while incorporating the latest pytz and Ruff maintenance updates.
+
+**Security remediation**
+
+- Treated scenario, log, MIME, attachment, manifest, and ground-truth content as
+  untrusted evidence during agent-assisted evaluation, with installer
+  regressions preserving the boundary across Claude and ChatGPT skills
+  (`666ea961`).
+- Replaced shell-interpolated payload encoding guidance with constant encoders
+  that consume quoted here-document input, preventing payload text from being
+  reparsed as shell syntax (`666ea961`).
+- Pinned every external GitHub Action to a reviewed full commit SHA and added a
+  repository-wide regression that rejects mutable action references
+  (`666ea961`).
+
+**Dependencies and tooling**
+
+- Updated pytz to 2026.3.post1 and Ruff to 0.16.0 while explicitly preserving
+  the existing Python-only Ruff formatting scope (`9e80adee`).
+
 ## v1.13.0 (2026-07-27)
 
 This minor release establishes canonical lifecycle, identity, observation, and
