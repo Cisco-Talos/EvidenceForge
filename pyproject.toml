@@ -37,7 +37,7 @@ dependencies = [
     "typer>=0.27.0",
     "rich>=15.0.0",
     "pyyaml>=6.0",
-    "pytz>=2026.2",
+    "pytz>=2026.3.post1",
     "jinja2>=3.1.0",
     "json-logic-qubit>=0.9.1",
     "python-dotenv>=1.2.2",
@@ -60,7 +60,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-mock>=3.12.0",
     "pytest-benchmark>=4.0.0",
-    "ruff>=0.15.22",
+    "ruff>=0.16.0",
     "pre-commit>=4.6.1",
 ]
 
@@ -120,6 +120,7 @@ fail_under = 70
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = [
