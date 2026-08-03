@@ -72,6 +72,7 @@ from evidenceforge.generation.activity.http_content import (
 )
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
     MAX_HTTP_RESPONSE_BODY_LEN,
     BeaconHttpSequenceEntry,
@@ -113,6 +114,80 @@ _HTTP_USER_AGENT_OVERRIDE_PATTERNS = (
         """
     ),
 )
+
+
+def _build_ids_alert_contexts(
+    attachments: Sequence[IdsAlertAttachmentSpec],
+    *,
+    time: datetime,
+    src_ip: str,
+    dst_ip: str,
+    dst_port: int,
+    proto: str,
+    rng: random.Random,
+    source: str,
+) -> list[Any]:
+    """Resolve authored SID references into canonical IDS contexts."""
+
+    if not attachments:
+        return []
+    from evidenceforge.generation.activity.ids_signatures import signature_by_sid
+
+    contexts = []
+    for attachment in attachments:
+        signature = signature_by_sid(attachment.sid)
+        if signature is None:
+            raise ValueError(
+                f"Unknown IDS signature SID {attachment.sid}; add it to ids_signatures.yaml"
+            )
+        contexts.append(
+            IdsAlertActionBundle(
+                IdsAlertRequest(
+                    signature=signature,
+                    time=time,
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    proto=proto,
+                    rng=rng,
+                    source=source,
+                    direction=str(signature.get("direction", "")),
+                    policy=attachment.policy,
+                )
+            ).execute()
+        )
+    return contexts
+
+
+def _ids_attachment_ground_truth(
+    attachments: Sequence[IdsAlertAttachmentSpec],
+) -> list[dict[str, Any]]:
+    """Describe effective attachment policies before sensor totals are finalized."""
+    from evidenceforge.generation.activity.ids_signatures import (
+        effective_alert_policy,
+        signature_by_sid,
+    )
+
+    result = []
+    for attachment in attachments:
+        signature = signature_by_sid(attachment.sid)
+        if signature is None:
+            continue
+        policy = effective_alert_policy(signature, attachment.policy)
+        result.append(
+            {
+                "sid": attachment.sid,
+                "effective_policy": (
+                    "every" if policy is None else policy.model_dump(mode="json", exclude_none=True)
+                ),
+                "candidate": 0,
+                "emitted": 0,
+                "policy_filtered": 0,
+            }
+        )
+    return result
+
+
 _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
     r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
     re.IGNORECASE,
@@ -3901,6 +3976,16 @@ class StorylineMixin:
                 network_time=time,
                 rng=rng,
             )
+            ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=connection_time,
+                src_ip=source_ip,
+                dst_ip=effective_dst_ip,
+                dst_port=dst_port,
+                proto="tcp",
+                rng=rng,
+                source="storyline_connection",
+            )
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=effective_dst_ip,
@@ -3914,6 +3999,7 @@ class StorylineMixin:
                 emit_dns=emit_dns,
                 source_system=src_sys,
                 http=http_ctx,
+                ids_alerts=ids_alerts,
                 pid=story_pid,
                 process_image=story_image,
                 hostname=conn_hostname,
@@ -3930,6 +4016,8 @@ class StorylineMixin:
             malicious_event["dst_ip"] = logged_dst_ip
             malicious_event["dst_port"] = dst_port
             malicious_event["uid"] = _ground_truth_uid(uid, source_ip, logged_dst_ip)
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
@@ -4757,6 +4845,16 @@ class StorylineMixin:
                         src_sys,
                         tick_time,
                     )
+                tick_ids_alerts = _build_ids_alert_contexts(
+                    getattr(spec, "ids_alerts", []),
+                    time=tick_time,
+                    src_ip=beacon_src_ip,
+                    dst_ip=beacon_dst_ip,
+                    dst_port=spec.dst_port,
+                    proto=spec.protocol,
+                    rng=rng,
+                    source="storyline_beacon",
+                )
                 if spec.action == "deny":
                     proxy_chain = getattr(self.activity_generator, "_proxy_routes", {}).get(
                         beacon_src_ip
@@ -4821,6 +4919,7 @@ class StorylineMixin:
                             emit_dns=tick_emit_dns,
                             source_system=src_sys,
                             http=tick_http_ctx,
+                            ids_alerts=tick_ids_alerts,
                             proxy=proxy_ctx,
                             hostname=conn_hostname if conn_hostname is not None else spec.hostname,
                             pid=story_pid,
@@ -4841,6 +4940,7 @@ class StorylineMixin:
                             proto=spec.protocol,
                             conn_state=deny_conn_state,
                             firewall=fw_ctx,
+                            ids_alerts=tick_ids_alerts,
                             emit_dns=False,
                         )
                 else:
@@ -4859,6 +4959,7 @@ class StorylineMixin:
                         emit_dns=tick_emit_dns,
                         source_system=src_sys,
                         http=tick_http_ctx,
+                        ids_alerts=tick_ids_alerts,
                         hostname=conn_hostname,
                         pid=story_pid,
                         process_image=story_image,
@@ -4878,6 +4979,8 @@ class StorylineMixin:
             term = spec.duration or spec.end_time or f"count={spec.count}"
             malicious_event["termination"] = term
             malicious_event["attempt_count"] = attempt_count
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "dns_query":
             # QTYPE name → numeric mapping

@@ -30,8 +30,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from evidenceforge.events.contexts import DnsContext, IdsContext
+from evidenceforge.events.contexts import (
+    DnsContext,
+    IdsAlertPolicyContext,
+    IdsContext,
+    IdsDetectionFilterContext,
+    IdsEventFilterContext,
+)
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.activity.ids_signatures import effective_alert_policy
+from evidenceforge.models.ids import IdsAlertPolicyOverride, IdsAlertPolicySpec
 from evidenceforge.utils.rng import _stable_seed
 
 DnsContextFactory = Callable[..., DnsContext | None]
@@ -65,6 +73,7 @@ class IdsAlertRequest:
     dns_server_ip: str | None = None
     include_dns_payload: bool = False
     dns_context_factory: DnsContextFactory | None = None
+    policy: IdsAlertPolicyOverride | None = None
 
     @property
     def stable_id(self) -> str:
@@ -110,6 +119,7 @@ class IdsAlertActionBundle:
         """Return IDS context plus optional signature-owned DNS context."""
 
         signature = dict(self.request.signature)
+        policy = self._effective_policy(signature)
         ids = IdsContext(
             sid=int(signature["sid"]),
             rev=int(signature.get("rev", 1)),
@@ -117,6 +127,7 @@ class IdsAlertActionBundle:
             classification=str(signature.get("classification", "misc-activity")),
             priority=int(signature.get("priority", 2)),
             gid=int(signature.get("gid", 1)),
+            policy=self._policy_context(policy),
         )
         dns = None
         if (
@@ -131,6 +142,41 @@ class IdsAlertActionBundle:
                 dns_server_ip=self.request.dns_server_ip,
             )
         return IdsAlertResult(ids=ids, dns=dns)
+
+    def _effective_policy(self, signature: Mapping[str, Any]) -> IdsAlertPolicySpec | None:
+        """Resolve scenario replacement policy over the signature default."""
+
+        return effective_alert_policy(dict(signature), self.request.policy)
+
+    @staticmethod
+    def _policy_context(policy: IdsAlertPolicySpec | None) -> IdsAlertPolicyContext | None:
+        """Convert validated configuration into canonical immutable-style context."""
+
+        if policy is None:
+            return None
+        detection = policy.detection_filter
+        event_filter = policy.event_filter
+        return IdsAlertPolicyContext(
+            detection_filter=(
+                None
+                if detection is None
+                else IdsDetectionFilterContext(
+                    track=detection.track,
+                    count=detection.count,
+                    seconds=detection.seconds,
+                )
+            ),
+            event_filter=(
+                None
+                if event_filter is None
+                else IdsEventFilterContext(
+                    type=event_filter.type,
+                    track=event_filter.track,
+                    count=event_filter.count,
+                    seconds=event_filter.seconds,
+                )
+            ),
+        )
 
     def execute(self) -> IdsContext:
         """Return the canonical IDS context."""

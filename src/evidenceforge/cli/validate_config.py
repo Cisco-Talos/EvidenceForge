@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from evidenceforge.config import (
     get_activity_directory,
@@ -40,6 +41,7 @@ from evidenceforge.config import (
     get_formats_directory,
     get_personas_directory,
 )
+from evidenceforge.models.ids import IdsAlertPolicySpec
 
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
 VALID_BROWSING_INTENSITIES = frozenset({"light", "normal", "heavy"})
@@ -980,6 +982,18 @@ def validate_config() -> ValidationResult:
                     f"Signature {sid} baseline_fp_allowed must be a boolean",
                 )
             )
+        alert_policy = sig.get("alert_policy")
+        if alert_policy is not None and alert_policy != "every":
+            try:
+                IdsAlertPolicySpec.model_validate(alert_policy)
+            except ValidationError as exc:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} has invalid alert_policy: {exc.errors(include_url=False)}",
+                    )
+                )
         gid = sig.get("gid", 1)
         _validate_ids_numeric_field(
             "ids_signatures.yaml", f"Signature {sid}", sig, "sid", required=True

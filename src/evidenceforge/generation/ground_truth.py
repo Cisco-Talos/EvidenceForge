@@ -400,7 +400,7 @@ class GroundTruthGenerator:
         if event_type == "connection":
             return (
                 f"Connection to {event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
-                f"(UID: {event.get('uid', 'N/A')})"
+                f"(UID: {event.get('uid', 'N/A')}){self._format_ids_alert_totals(event)}"
             )
         if event_type == "rdp_session":
             return (
@@ -433,6 +433,7 @@ class GroundTruthGenerator:
             return (
                 f"{label} to {event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
                 f"({event.get('attempt_count', 'N/A')} attempts, {event.get('termination', 'N/A')})"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "dns_query":
             return (
@@ -531,6 +532,28 @@ class GroundTruthGenerator:
                 f"{shown} (sha256:{digest[:12]}){ids_suffix}"
             )
         return event.get("activity", "N/A")
+
+    @staticmethod
+    def _format_ids_alert_totals(event: dict) -> str:
+        """Render compact correlated IDS totals for Markdown ground truth."""
+        attachments = event.get("ids_alerts")
+        if not isinstance(attachments, list) or not attachments:
+            return ""
+        rendered = []
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            rendered.append(
+                "SID {sid} policy={policy} candidates={candidate} emitted={emitted} "
+                "filtered={filtered}".format(
+                    sid=attachment.get("sid", "N/A"),
+                    policy=attachment.get("effective_policy", attachment.get("policy", "pending")),
+                    candidate=attachment.get("candidate", 0),
+                    emitted=attachment.get("emitted", 0),
+                    filtered=attachment.get("policy_filtered", 0),
+                )
+            )
+        return f" [IDS: {'; '.join(rendered)}]" if rendered else ""
 
     def _include_source_evidence_status(self, document: GroundTruthDocument | None = None) -> bool:
         source_evidence_status = (

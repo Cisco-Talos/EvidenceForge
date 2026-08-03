@@ -39,6 +39,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/config-evaluation.md",
         "references/config-formats.md",
         "references/config-host-activity.md",
+        "references/config-ids.md",
         "references/config-personas.md",
         "references/config-validation.md",
     ),

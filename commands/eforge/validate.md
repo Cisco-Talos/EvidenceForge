@@ -22,6 +22,15 @@ Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
 
+For `connection`/`beacon` `ids_alerts`, explain schema errors precisely: SIDs
+must be unique within the event and resolve through merged
+`ids_signatures.yaml`; filter counts/windows are strict positive integers;
+unknown fields and invalid `track`/`type` values are rejected. A SID must resolve
+to one effective policy across the scenario. Protocol, destination-port, and
+direction mismatches are warnings, not errors, because custom sensor/rule
+deployments can be intentional. Suggest `policy: every` when a signature default
+should be explicitly replaced. See `references/scenario-reference.md`.
+
 Exit codes:
 - 0 = Valid (may include warnings)
 - 1 = YAML parse error or file I/O error

@@ -345,6 +345,20 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
+Typed `connection` and `beacon` events can attach multiple configured SIDs with
+`ids_alerts`. Attachments assert that a signature matches; the generator does not
+run the full Snort rule predicate. Candidates are projected through sensor
+visibility, clock, and NAT/PAT views before per-sensor `detection_filter` and
+`event_filter` state is applied. Deferred candidates use a disk-backed spool and
+are deterministically ordered, so long beacons stay memory-bounded and authored
+storyline order cannot change filtering results. Raw Snort events retain their
+existing source-local behavior.
+
+`GROUND_TRUTH.json` and `.md` record each attached SID, its effective policy, and
+candidate/emitted/policy-filtered sensor totals. Policy suppression is also
+reported as `filtered` IDS evidence in `OBSERVATION_MANIFEST.json`; collection
+drops and output-window clipping are distinct and never advance filter counters.
+
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
 2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
@@ -354,6 +368,8 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 **Known Limitations:**
 - IDS alert variety is limited to curated SID pools (not full ruleset simulation)
+- Signature attachments declare matches; they do not parse or execute Snort rules,
+  `rate_filter`, CIDR suppression, or IPS actions
 
 ---
 

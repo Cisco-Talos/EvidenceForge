@@ -314,7 +314,7 @@ def test_snort_direct_emission_preserves_canonical_timestamps(tmp_path):
         )
         emitter.emit(event)
 
-    emitter.flush()
+    emitter.close()
 
     output = (tmp_path / "snort_alert.log").read_text()
     lines = [line for line in output.strip().split("\n") if line.strip()]

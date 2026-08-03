@@ -110,6 +110,23 @@ When `eforge validate` checks a scenario:
 - `event_spacing.mode: explicit_offsets` must provide exactly one offset per child event in the parent storyline or red-herring step
 - `event_spacing.mode: interval` must include `interval`
 
+## IDS signature and attachment validation
+
+When `eforge validate-config` checks `ids_signatures.yaml`:
+
+- required signature identity/rendering fields must be present and numeric fields
+  must be positive integers;
+- `alert_policy` may be `every` or a non-empty object containing
+  `detection_filter`, `event_filter`, or both;
+- filter `track` is `by_src` or `by_dst`; event-filter `type` is `limit`,
+  `threshold`, or `both`; `count` and `seconds` are strict positive integers no
+  larger than 2,147,483,647; unknown keys are errors.
+
+When `eforge validate` checks scenario `ids_alerts`, unknown/duplicate SIDs and
+conflicting effective policies for one SID are errors. Protocol, destination
+port, and direction mismatches are advisory warnings so intentional custom rule
+deployments remain possible. See `config-ids.md` for the policy state semantics.
+
 ## Scenario Validation: traffic_rates
 
 When `eforge validate` checks a scenario with `baseline_activity.traffic_rates`:

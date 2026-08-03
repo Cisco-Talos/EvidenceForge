@@ -44,6 +44,7 @@ class GroundTruthAttributesBase(BaseModel):
     family: str | None = None
     group_name: str | None = None
     interval: str | int | float | None = None
+    ids_alerts: list[dict[str, object]] | None = None
     logon_id: str | None = None
     logon_type: int | None = None
     mail_action: str | None = None

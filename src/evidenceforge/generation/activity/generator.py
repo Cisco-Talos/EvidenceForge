@@ -12751,6 +12751,7 @@ class ActivityGenerator:
         x509_chain: list[X509Context] | None = None,
         tls_presentation: TlsCertificatePresentationPlan | None = None,
         ids: Optional["IdsContext"] = None,
+        ids_alerts: list["IdsContext"] | None = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
         file_transfers: list[FileTransferContext] | None = None,
@@ -12797,6 +12798,7 @@ class ActivityGenerator:
             src_port: Source port (auto-assigned ephemeral if None)
             emit_dns: If True, emit a DNS lookup for dst_ip before the connection
             ids: Optional IdsContext for IDS alert correlation (Snort emitter)
+            ids_alerts: Optional additional IDS contexts for multi-signature correlation
             http: Optional HttpContext override (skips auto-generation)
             preserve_dst_ip: Preserve caller-supplied dst_ip when the scenario or caller
                 intentionally pairs an authored hostname with a specific address. This keeps
@@ -12830,6 +12832,7 @@ class ActivityGenerator:
             x509_chain=list(x509_chain or []),
             tls_presentation=tls_presentation,
             ids=ids,
+            ids_alerts=list(ids_alerts or []),
             http=http,
             file_transfer=file_transfer,
             file_transfers=list(file_transfers or []),

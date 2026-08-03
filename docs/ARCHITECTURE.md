@@ -421,12 +421,20 @@ Zeek/web-access correlation. `ScheduledScanOverlapActionBundle` covers
 suspicious-but-benign scanner noise, and `NmapCommandProbeActionBundle` covers
 network probes caused by modeled nmap processes.
 
-IDS alert callers supply one data-driven signature or preset rule, and
-`IdsAlertActionBundle` builds the canonical alert context attached to network
+IDS alert callers may supply multiple data-driven signatures, and
+`IdsAlertActionBundle` builds canonical alert contexts attached to network
 evidence. The bundle owns `(gid, sid, rev)` identity,
 message/classification/priority normalization, and optional signature-owned DNS
-payload construction for DNS alerts. Snort/Suricata emitters render `IdsContext`
-only; signature choice and alert payload construction remain upstream.
+payload construction for DNS alerts. Typed `connection` and `beacon` attachments
+follow every physical canonical connection, including each existing explicit
+proxy leg. The Snort emitter first consumes frozen sensor visibility, clock, and
+NAT/PAT projections, then stores candidates in a bounded-memory SQLite spool.
+Finalization sorts by sensor-observed time and stable identity before applying
+per-sensor `(gid, sid, tracked visible IP)` detection/event filters. This avoids
+storyline insertion-order effects and keeps long beacon campaigns from retaining
+all candidates in memory. Invisible, dropped, warm-up, clipped, and nonexistent
+proxy legs never advance policy state. Raw Snort events remain an explicit
+source-local escape hatch.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
 `HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`

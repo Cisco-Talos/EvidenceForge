@@ -25,6 +25,15 @@ Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
 
+For canonical IDS attachments, compare Snort row counts with the per-SID
+candidate/emitted/policy-filtered totals in `GROUND_TRUTH.json`, not with the
+number of beacon ticks alone. Treat `OBSERVATION_MANIFEST.json` as the authority
+for intentional policy `filtered`, collection `dropped`, delayed, and
+out-of-window evidence. Verify emitted rows retain the sensor-visible timestamp,
+tuple, ephemeral source port, and NAT/PAT projection of the corresponding
+physical connection. Remember that an attachment asserts a rule match;
+EvidenceForge does not evaluate the complete Snort predicate.
+
 If they don't have generated output yet, suggest using `/eforge generate` first.
 
 For detailed field documentation and known limitations of each log format, use the `/eforge:references:evidence-formats` skill.

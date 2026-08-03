@@ -48,6 +48,8 @@ from pydantic import (
     model_validator,
 )
 
+from evidenceforge.models.ids import IdsAlertAttachmentSpec
+
 MAX_HTTP_RESPONSE_BODY_LEN = 10_000_000_000
 
 _HOSTNAME_RE = re.compile(
@@ -810,6 +812,22 @@ class ConnectionEventSpec(_EventSpecBase):
     orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
     resp_bytes: int | None = None  # Responder payload bytes (large for downloads)
     conn_state: str | None = None  # Connection outcome (default: SF for storyline)
+    ids_alerts: list[IdsAlertAttachmentSpec] = Field(
+        default_factory=list,
+        description="IDS signatures asserted on each sensor-observable canonical connection.",
+    )
+
+    @field_validator("ids_alerts")
+    @classmethod
+    def validate_unique_ids_alerts(
+        cls, v: list[IdsAlertAttachmentSpec]
+    ) -> list[IdsAlertAttachmentSpec]:
+        """Reject duplicate SID attachments on one connection."""
+
+        sids = [attachment.sid for attachment in v]
+        if len(sids) != len(set(sids)):
+            raise ValueError("connection ids_alerts must not contain duplicate SIDs")
+        return v
 
     @field_validator("hostname")
     @classmethod
@@ -1112,6 +1130,22 @@ class BeaconEventSpec(_PeriodicEventBase):
             "on the first tick; 'each_tick' emits resolver evidence for every tick."
         ),
     )
+    ids_alerts: list[IdsAlertAttachmentSpec] = Field(
+        default_factory=list,
+        description="IDS signatures asserted on each sensor-observable canonical beacon connection.",
+    )
+
+    @field_validator("ids_alerts")
+    @classmethod
+    def validate_unique_ids_alerts(
+        cls, v: list[IdsAlertAttachmentSpec]
+    ) -> list[IdsAlertAttachmentSpec]:
+        """Reject duplicate SID attachments on one beacon."""
+
+        sids = [attachment.sid for attachment in v]
+        if len(sids) != len(set(sids)):
+            raise ValueError("beacon ids_alerts must not contain duplicate SIDs")
+        return v
 
     @field_validator("hostname")
     @classmethod

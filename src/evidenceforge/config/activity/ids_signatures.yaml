@@ -61,6 +61,16 @@ signatures:
   - {sid: 2019876, rev: 2, message: "ET INFO Packed Executable Download", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
 
   # Scanning activity
+  - sid: 2002910
+    rev: 4
+    message: "ET SCAN Rapid HTTP/HTTPS Connection Attempts"
+    classification: "attempted-recon"
+    priority: 2
+    proto: tcp
+    dst_port: 80
+    direction: in
+    alert_policy:
+      event_filter: {type: both, track: by_src, count: 5, seconds: 60}
   - {sid: 2002911, rev: 7, message: "ET SCAN Potential SSH Scan", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 22, direction: in}
   - {sid: 2010937, rev: 3, message: "ET SCAN Suspicious inbound to mySQL port 3306", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 3306, direction: in, target_services: [mysql, mssql]}
   - {sid: 2010936, rev: 3, message: "ET SCAN Suspicious inbound to MSSQL port 1433", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 1433, direction: in, target_services: [mssql]}

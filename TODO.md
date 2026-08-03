@@ -220,7 +220,8 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Storyline cadence field: `human`, `automated`, or periodic interval with
   jitter.
 - [ ] Cloud/SaaS log formats: Azure AD, AWS CloudTrail, GCP audit logs, and M365.
-- [ ] `snort_alert` typed event spec for IDS signature declarations.
+- [x] Correlated multi-SID IDS attachments on typed `connection` and `beacon`
+  events, including sensor-local Snort-style alert filtering and reporting.
 - [ ] HTTP proxy server support for Squid, Blue Coat, and Zscaler.
 - [ ] Checkpointing and resume for long-running generation.
 - [ ] Additional skills: create-persona, create-log-format, create-network, and

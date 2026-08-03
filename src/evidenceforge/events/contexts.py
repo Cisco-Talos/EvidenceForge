@@ -413,6 +413,33 @@ class ImageLoadContext:
 
 
 @dataclass(slots=True)
+class IdsDetectionFilterContext:
+    """Sensor-local rate threshold applied before IDS event generation."""
+
+    track: str
+    count: int
+    seconds: int
+
+
+@dataclass(slots=True)
+class IdsEventFilterContext:
+    """Sensor-local output filter applied after IDS detection."""
+
+    type: str
+    track: str
+    count: int
+    seconds: int
+
+
+@dataclass(slots=True)
+class IdsAlertPolicyContext:
+    """Effective Snort-style filtering policy for an IDS alert."""
+
+    detection_filter: IdsDetectionFilterContext | None = None
+    event_filter: IdsEventFilterContext | None = None
+
+
+@dataclass(slots=True)
 class IdsContext:
     """IDS/IPS alert details for Snort."""
 
@@ -422,6 +449,7 @@ class IdsContext:
     priority: int = 2
     rev: int = 1
     gid: int = 1
+    policy: IdsAlertPolicyContext | None = None
 
 
 @dataclass(slots=True)

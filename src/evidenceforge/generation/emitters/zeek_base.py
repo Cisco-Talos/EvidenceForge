@@ -219,6 +219,7 @@ class SensorMultiplexEmitter(LogEmitter):
     _flat_filename: str = ""  # Used only for explicit direct-file mode.
     _supported_types: set[str] = set()
     _sort_before_flush: bool = True
+    _include_sensor_identity: bool = False
 
     def __init__(
         self,
@@ -466,6 +467,8 @@ class SensorMultiplexEmitter(LogEmitter):
                 return
             _enforce_http_body_invariants(event_data)
             _enforce_ip_byte_invariants(event_data)
+            if self._include_sensor_identity:
+                event_data["_sensor_identity"] = "__direct__"
             rendered = self._render_event(event_data)
             if rendered is None:
                 return
@@ -473,6 +476,8 @@ class SensorMultiplexEmitter(LogEmitter):
         else:
             for hostname in targets:
                 render_data = dict(event_data)
+                if self._include_sensor_identity:
+                    render_data["_sensor_identity"] = hostname
                 observation = observations.get(hostname)
                 if observation is not None:
                     self._apply_sensor_observation(
@@ -523,7 +528,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 _enforce_ip_byte_invariants(render_data)
                 rendered = self._render_event(render_data)
                 if rendered is None:
-                    return
+                    continue
                 self._get_writer(hostname).write(rendered)
 
     def _render_zeek_json(self, event_data: dict[str, Any]) -> str:

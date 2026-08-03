@@ -56,12 +56,15 @@ def _context_fingerprint(value: object) -> str:
 
     if value is None:
         return ""
+    if isinstance(value, list | tuple):
+        return ";".join(_context_fingerprint(item) for item in value)
     parts = []
     for name in (
         "query",
         "query_type",
         "signature_id",
         "signature",
+        "sid",
         "method",
         "host",
         "uri",
@@ -101,6 +104,7 @@ class NetworkConnectionRequest:
     x509_chain: list[X509Context] = field(default_factory=list)
     tls_presentation: TlsCertificatePresentationPlan | None = None
     ids: IdsContext | None = None
+    ids_alerts: list[IdsContext] = field(default_factory=list)
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
     file_transfers: list[FileTransferContext] = field(default_factory=list)
@@ -138,6 +142,7 @@ class NetworkConnectionRequest:
             f"{self.emit_dns}:{self.pid}:{source_hostname}:{self.conn_state or ''}:"
             f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ssl)}:"
             f"{_context_fingerprint(self.ids)}:"
+            f"{_context_fingerprint(self.ids_alerts)}:"
             f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
             f"{_context_fingerprint(self.file_transfers)}:"
             f"{_context_fingerprint(self.pe)}:{_context_fingerprint(self.ocsp)}:"

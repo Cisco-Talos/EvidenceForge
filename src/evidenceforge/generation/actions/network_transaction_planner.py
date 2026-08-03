@@ -59,6 +59,7 @@ class _NetworkOccurrenceDraft:
     email: Any = None
     smtp: Any = None
     ids: Any = None
+    ids_alerts: list[Any] = field(default_factory=list)
     ssl: Any = None
     http: Any = None
     file_transfer: Any = None
@@ -95,6 +96,7 @@ class _NetworkOccurrenceDraft:
             email=self.email,
             smtp=self.smtp,
             ids=self.ids,
+            ids_alerts=self.ids_alerts,
             ssl=self.ssl,
             http=self.http,
             file_transfer=self.file_transfer,
@@ -209,6 +211,7 @@ class NetworkTransactionPlanner:
         x509 = request.x509
         x509_chain = request.x509_chain
         ids = request.ids
+        ids_alerts = list(request.ids_alerts)
         http = request.http
         caller_supplied_http = http is not None
         file_transfer = request.file_transfer
@@ -517,6 +520,7 @@ class NetworkTransactionPlanner:
                 conn_state=conn_state,
                 dns=dns,
                 ids=ids,
+                ids_alerts=ids_alerts,
                 http=http,
                 file_transfer=file_transfer,
                 ocsp=ocsp,
@@ -1584,6 +1588,8 @@ class NetworkTransactionPlanner:
         # Caller-provided context overrides
         if ids is not None:
             event.ids = ids
+        if ids_alerts:
+            event.ids_alerts = list(ids_alerts)
         if email is not None:
             event.email = email
         if smtp is not None:

@@ -109,6 +109,7 @@ Also read the relevant reference doc for field schemas and conventions:
 | Evaluation rules | `references/config-evaluation.md` (read-only reference — not user-customizable) |
 | Cross-file dependencies | `references/config-dependency-graph.md` |
 | Validation checks | `references/config-validation.md` |
+| IDS signatures and alert policy | `references/config-ids.md` |
 
 ## Step 4: Interview for Completeness
 
@@ -125,6 +126,13 @@ and whether it has multiple IPs.
 duplicate names. Keep profile contents synthetic and behavior-shaped: URI shapes,
 method/status/byte ranges, User-Agent pools, and deterministic tokens are fine;
 do not encode live malware IOC paths, domains, or exact campaign payloads.
+
+**Changing IDS cadence:** Edit the project overlay at
+`.eforge/config/activity/ids_signatures.yaml`; entries merge by `sid`. Add or
+replace `alert_policy` with `detection_filter`, `event_filter`, or both, or set it
+to `every`. Do not copy the whole packaged signature unless its metadata also
+needs to change. Read `references/config-ids.md`, run `eforge validate-config`,
+and start a fresh CLI process after the edit so cached signature data is reloaded.
 
 **Adding an application:** Which OS(es)? Categories? Which personas? Image path? PE metadata? Command templates? Parent process? Children? Network traffic?
 

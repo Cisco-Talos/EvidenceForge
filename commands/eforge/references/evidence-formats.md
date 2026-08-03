@@ -340,6 +340,15 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
+Typed `connection` and `beacon` events may attach multiple configured SIDs with
+`ids_alerts`. The attachment asserts a match; EvidenceForge does not execute the
+full rule predicate. Filtering is deferred until sensor visibility, clock, and
+NAT/PAT projection are known, then tracked independently per sensor and visible
+source/destination IP. `GROUND_TRUTH.json`/`.md` expose effective policy and
+candidate/emitted/policy-filtered totals; policy suppression appears as
+`filtered` IDS evidence in `OBSERVATION_MANIFEST.json`. Raw Snort events are
+unchanged.
+
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
 2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
@@ -349,6 +358,8 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 **Known Limitations:**
 - IDS alert variety is limited to curated SID pools (not full ruleset simulation)
+- Attached alerts do not support rule parsing, `rate_filter`, CIDR suppression,
+  or IPS actions
 
 ---
 
