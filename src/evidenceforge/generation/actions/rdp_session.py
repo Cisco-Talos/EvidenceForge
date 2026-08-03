@@ -31,10 +31,11 @@ activity generator as the runtime adapter for shared state and dispatch.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
+from evidenceforge.events.contexts import IdsContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTuple
@@ -72,6 +73,7 @@ class RdpSessionRequest:
     logon_id: str = ""
     preserve_explicit_source: bool = False
     session_end_plan: SessionEndPlan | None = None
+    ids_alerts: list[IdsContext] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property
@@ -87,6 +89,7 @@ class RdpSessionRequest:
             f"{self.target_system.hostname}:{self.target_system.ip}:"
             f"{self.logon_id}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
+            f"{self.ids_alerts}:"
             f"{self.source}:{self.time.isoformat()}"
         )
         return f"rdp-session-{seed:016x}"
@@ -273,6 +276,7 @@ class RdpSessionActionBundle:
             conn_state="SF",
             parent_action_group_id=remote_request.stable_id,
             preserve_start_time=True,
+            ids_alerts=list(self._request.ids_alerts),
             source="rdp_session",
         )
         transaction_id = network_request.stable_id

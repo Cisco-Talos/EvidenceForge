@@ -263,3 +263,8 @@ support `detection_filter`, `event_filter`, or both; track is `by_src`/`by_dst`,
 and event-filter type is `limit`/`threshold`/`both`. Counts and seconds are strict
 positive integers. Run `eforge validate-config` after editing. See the installed
 `references/config-ids.md` skill reference for exact semantics.
+
+These defaults apply when an attachment omits `policy` on any supported typed
+transport owner (`connection`, `beacon`, SSH/RDP sessions, authored DHCP,
+port/web scans, and DNS query families). They do not cause unattached network
+events to alert and do not imply IDS decryption.

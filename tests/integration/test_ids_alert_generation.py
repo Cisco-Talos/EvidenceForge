@@ -54,7 +54,7 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
                         hostname="ids01",
                         monitoring_segments=["workstations"],
                         direction="bidirectional",
-                        placement="tap",
+                        placement="span",
                         log_formats=["snort_alert"],
                     )
                 ],
@@ -126,3 +126,187 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
     ids_status = storyline["source_status"]["ids"]
     assert ids_status["filtered"] == 2
     assert ids_status.get("visible", 0) + ids_status.get("delayed", 0) == 1
+
+
+def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(tmp_path) -> None:
+    systems = [
+        System(hostname="ws01", ip="10.0.0.8", os="Windows 11", type="workstation"),
+        System(
+            hostname="linux01",
+            ip="10.0.0.20",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["application_server"],
+            services=["ssh"],
+        ),
+        System(
+            hostname="rdp01",
+            ip="10.0.0.30",
+            os="Windows Server 2022",
+            type="server",
+            services=["rdp"],
+        ),
+        System(
+            hostname="dc01",
+            ip="10.0.0.65",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+            services=["dns"],
+        ),
+    ]
+    attached = [{"sid": 2002911, "policy": "every"}]
+    storyline_specs = [
+        ("ssh", "linux01", {"type": "ssh_session", "source_ip": "10.0.0.8"}),
+        ("rdp", "rdp01", {"type": "rdp_session", "source_ip": "10.0.0.8"}),
+        ("dhcp", "ws01", {"type": "dhcp_lease"}),
+        (
+            "port-scan",
+            "ws01",
+            {
+                "type": "port_scan",
+                "target_ips": ["10.0.0.20"],
+                "target_count": 1,
+                "ports": [22],
+                "scan_rate": 10,
+            },
+        ),
+        (
+            "dns",
+            "ws01",
+            {"type": "dns_query", "query": "missing.example.test", "rcode": "NXDOMAIN"},
+        ),
+        (
+            "web-scan",
+            "ws01",
+            {
+                "type": "web_scan",
+                "dst_ip": "10.0.0.20",
+                "dst_port": 80,
+                "paths": [{"uri": "/admin", "method": "GET", "status": 404}],
+                "rate": 1,
+                "count": 1,
+            },
+        ),
+        (
+            "dga",
+            "ws01",
+            {
+                "type": "dga_queries",
+                "interval": "1s",
+                "count": 2,
+                "rcode_distribution": {"NXDOMAIN": 1.0},
+            },
+        ),
+        (
+            "tunnel",
+            "ws01",
+            {
+                "type": "dns_tunnel",
+                "base_domain": "tunnel.example.test",
+                "payload": "owned transport",
+                "interval": "1s",
+                "count": 2,
+            },
+        ),
+    ]
+    storyline = []
+    for minute, (event_id, hostname, event_spec) in enumerate(storyline_specs, start=1):
+        storyline.append(
+            StorylineEvent(
+                id=event_id,
+                time=f"+{minute}m",
+                actor="alice",
+                system=hostname,
+                activity=event_id,
+                events=[{**event_spec, "ids_alerts": attached}],
+            )
+        )
+    scenario = Scenario(
+        version="1.0",
+        name="ids-transport-owners",
+        description="Canonical IDS transport-owner attachments",
+        environment=Environment(
+            description="test",
+            users=[
+                User(
+                    username="alice",
+                    full_name="Alice",
+                    email="alice@example.test",
+                    primary_system="ws01",
+                )
+            ],
+            systems=systems,
+            network=NetworkConfig(
+                segments=[
+                    NetworkSegment(
+                        name="clients",
+                        cidr="10.0.0.0/28",
+                        exposure="internal",
+                        systems=["ws01"],
+                    ),
+                    NetworkSegment(
+                        name="servers",
+                        cidr="10.0.0.16/27",
+                        exposure="internal",
+                        systems=["linux01", "rdp01"],
+                    ),
+                    NetworkSegment(
+                        name="infra",
+                        cidr="10.0.0.64/26",
+                        exposure="internal",
+                        systems=["dc01"],
+                    ),
+                ],
+                sensors=[
+                    NetworkSensor(
+                        type="ids",
+                        name="ids01",
+                        hostname="ids01",
+                        monitoring_segments=["clients", "servers", "infra"],
+                        direction="bidirectional",
+                        placement="span",
+                        log_formats=["snort_alert"],
+                    )
+                ],
+            ),
+        ),
+        time_window=TimeWindow(start=datetime(2026, 8, 3, tzinfo=UTC), duration="12m", warmup=None),
+        baseline_activity=BaselineActivity(description="minimal", intensity="low", variation="low"),
+        storyline=storyline,
+        output=OutputSpec(logs=[{"format": "snort_alert"}], destination="./output"),
+    )
+
+    GenerationEngine(scenario, tmp_path).generate()
+
+    ground_truth = json.loads((tmp_path / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
+    attached_events = {
+        event["kind"]: event["attributes"]["ids_alerts"][0]
+        for event in ground_truth["events"]
+        if event["attributes"].get("ids_alerts")
+    }
+    expected_kinds = {
+        "ssh_session",
+        "rdp_session",
+        "dhcp_lease",
+        "port_scan",
+        "dns_query",
+        "web_scan",
+        "dga_queries",
+        "dns_tunnel",
+    }
+    assert attached_events.keys() == expected_kinds
+    zero_candidate_kinds = {
+        kind for kind, totals in attached_events.items() if totals["candidate"] == 0
+    }
+    assert not zero_candidate_kinds, zero_candidate_kinds
+    assert all(totals["candidate"] == totals["emitted"] for totals in attached_events.values())
+    assert all(totals["policy_filtered"] == 0 for totals in attached_events.values())
+
+    alert_lines = [
+        line
+        for path in tmp_path.rglob("snort_alert.log")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "[1:2002911:7]" in line
+    ]
+    assert len(alert_lines) == sum(totals["emitted"] for totals in attached_events.values())

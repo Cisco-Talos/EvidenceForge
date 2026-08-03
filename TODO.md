@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
+**Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; post-1.0 quality improvements ongoing
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-05-26
 
@@ -21,7 +21,7 @@ ground truth documentation.
 **Phase 2: Scalability.** Parallel threaded emitters, 7 log formats, persona
 temporal distribution, network visibility modeling, and multi-OS support.
 
-**Phase 3: MVP Release.** Skill-based scenario/generate/validate/evaluate
+**Phase 3: Initial Product Release.** Skill-based scenario/generate/validate/evaluate
 workflow, prebuilt personas, skill installation, and scenario reference docs.
 
 **Phase 4: Data Quality Evaluation.** `eforge eval` with deterministic scoring,
@@ -40,7 +40,7 @@ assessment history belongs in worklogs and changelog entries, not this roadmap.
 
 ---
 
-## Pre-MVP Quality Roadmap
+## Quality Roadmap
 
 Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
@@ -212,7 +212,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ---
 
-## Post-MVP Enhancements
+## Future Enhancements
 
 ### Short-Term
 
@@ -220,8 +220,16 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Storyline cadence field: `human`, `automated`, or periodic interval with
   jitter.
 - [ ] Cloud/SaaS log formats: Azure AD, AWS CloudTrail, GCP audit logs, and M365.
-- [x] Correlated multi-SID IDS attachments on typed `connection` and `beacon`
-  events, including sensor-local Snort-style alert filtering and reporting.
+- [x] Correlated multi-SID IDS attachments on typed transport-owning events,
+  including connections, beacons, remote sessions, DHCP, scans, and DNS activity,
+  with sensor-local Snort-style alert filtering and reporting.
+- [ ] Extend correlated IDS attachments to typed `email_message` and `email_read`
+  events so asserted SIDs follow the real mail transports produced by modeled
+  routing and sensor placement. IDS sensors do not currently decrypt traffic;
+  before implementation, decide whether STARTTLS and implicit TLS suppress every
+  candidate or permit signatures classified as detectable from flow,
+  pre-encryption, or TLS metadata. Plaintext mail is eligible only when a
+  storyline or background path explicitly asserts a signature.
 - [ ] HTTP proxy server support for Squid, Blue Coat, and Zscaler.
 - [ ] Checkpointing and resume for long-running generation.
 - [ ] Additional skills: create-persona, create-log-format, create-network, and

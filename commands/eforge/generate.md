@@ -35,6 +35,12 @@ reduce output. Candidate spooling is disk-backed and removed on success or
 failure; a leftover EvidenceForge IDS spool indicates an interrupted process and
 may be removed once no generation process is using it.
 
+Interpret candidates by owned transport: SSH/RDP use only their session
+connection; DHCP uses only the authored transaction and does not pass assertions
+to automatic renewals; scans and DNS families fan out across authored
+probes/requests/queries. DNS-tunnel cover traffic is not attached. IDS sensors
+do not decrypt traffic, and email attachments remain unsupported.
+
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
 
 ## Command Reference

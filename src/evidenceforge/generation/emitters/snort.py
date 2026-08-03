@@ -55,7 +55,6 @@ class SnortEmitter(SensorMultiplexEmitter):
     _log_filename = "snort_alert.log"
     _flat_filename = "snort_alert.log"
     _sort_before_flush: bool = True
-    _supported_types: set[str] = {"connection"}
     _include_sensor_identity: bool = True
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -66,11 +65,11 @@ class SnortEmitter(SensorMultiplexEmitter):
         self._ids_alert_summary: dict[str, dict[int, dict[str, Any]]] = {}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        """Handle connection events that carry an IdsContext."""
+        """Handle physical canonical transports that carry an IdsContext."""
         return (
-            event.event_type in self._supported_types
+            event.network is not None
             and bool(event.all_ids_alerts())
-            and not (event.network is not None and event.network.application_layer_only)
+            and not event.network.application_layer_only
         )
 
     def emit(self, event: SecurityEvent) -> None:

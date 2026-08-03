@@ -404,11 +404,19 @@ class GroundTruthGenerator:
             )
         if event_type == "rdp_session":
             return (
-                f"RDP session to {event.get('dst_ip', 'N/A')}:3389 (UID: {event.get('uid', 'N/A')})"
+                f"RDP session to {event.get('dst_ip', 'N/A')}:3389 "
+                f"(UID: {event.get('uid', 'N/A')}){self._format_ids_alert_totals(event)}"
             )
         if event_type == "ssh_session":
             return (
-                f"SSH session to {event.get('dst_ip', 'N/A')}:22 (UID: {event.get('uid', 'N/A')})"
+                f"SSH session to {event.get('dst_ip', 'N/A')}:22 "
+                f"(UID: {event.get('uid', 'N/A')}){self._format_ids_alert_totals(event)}"
+            )
+        if event_type == "dhcp_lease":
+            return (
+                f"DHCP lease for {event.get('system', 'N/A')} "
+                f"(MAC: {event.get('mac_address', 'N/A')})"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "service_installed":
             return f"Service installed: {event.get('service_name', 'N/A')} ({event.get('service_file_name', 'N/A')})"
@@ -426,7 +434,8 @@ class GroundTruthGenerator:
         if event_type == "port_scan":
             return (
                 f"Port scan: {event.get('target_count', 'N/A')} targets, ports {event.get('ports', [])}, "
-                f"{event.get('total_connections', 'N/A')} denied connections + ASA threat detection alert (733100)"
+                f"{event.get('total_connections', 'N/A')} denied connections + ASA threat "
+                f"detection alert (733100){self._format_ids_alert_totals(event)}"
             )
         if event_type == "beacon":
             label = "Denied beacon" if event.get("action", "allow") == "deny" else "Beacon"
@@ -439,6 +448,7 @@ class GroundTruthGenerator:
             return (
                 f"DNS query: {event.get('query', 'N/A')} "
                 f"({event.get('qtype', 'A')}, {event.get('rcode', 'NOERROR')})"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "email_message":
             recipients = event.get("recipients", [])
@@ -462,6 +472,7 @@ class GroundTruthGenerator:
                 f"Web scan ({event.get('preset', 'custom')}) against "
                 f"{event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
                 f"({event.get('request_count', 'N/A')} requests)"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "credential_spray":
             result = (
@@ -479,13 +490,14 @@ class GroundTruthGenerator:
             return (
                 f"DGA queries: {event.get('total_queries', 'N/A')} total "
                 f"({event.get('nxdomain_count', 'N/A')} NXDOMAIN, TLD: {event.get('tld', '.com')}, "
-                f"sample: {sample[:3]})"
+                f"sample: {sample[:3]}){self._format_ids_alert_totals(event)}"
             )
         if event_type == "dns_tunnel":
             return (
                 f"DNS tunnel via {event.get('base_domain', 'N/A')} "
                 f"({event.get('encoding', 'hex')}, {event.get('total_queries', 'N/A')} queries, "
                 f"{event.get('bytes_exfiltrated', 0)} bytes exfiltrated)"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "explicit_credentials":
             return (

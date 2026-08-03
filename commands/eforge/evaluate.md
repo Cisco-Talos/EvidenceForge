@@ -27,12 +27,15 @@ in an EvidenceForge source checkout, retry the same command with
 
 For canonical IDS attachments, compare Snort row counts with the per-SID
 candidate/emitted/policy-filtered totals in `GROUND_TRUTH.json`, not with the
-number of beacon ticks alone. Treat `OBSERVATION_MANIFEST.json` as the authority
+number of authored event ticks or probes alone. Treat `OBSERVATION_MANIFEST.json` as the authority
 for intentional policy `filtered`, collection `dropped`, delayed, and
 out-of-window evidence. Verify emitted rows retain the sensor-visible timestamp,
 tuple, ephemeral source port, and NAT/PAT projection of the corresponding
 physical connection. Remember that an attachment asserts a rule match;
 EvidenceForge does not evaluate the complete Snort predicate.
+For DHCP, count only the authored transaction, not later automatic renewals; for
+DNS tunnel activity, exclude generated background cover queries. For web scans,
+account for automatic and authored SIDs and the authored-wins duplicate rule.
 
 If they don't have generated output yet, suggest using `/eforge generate` first.
 

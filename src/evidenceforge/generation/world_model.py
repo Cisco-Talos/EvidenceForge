@@ -28,6 +28,7 @@ from evidenceforge.utils.time import ensure_utc
 if TYPE_CHECKING:
     import random
 
+    from evidenceforge.events.contexts import IdsContext
     from evidenceforge.generation.activity.generator import ActivityGenerator
     from evidenceforge.generation.state_manager import StateManager
     from evidenceforge.models.scenario import Scenario, System, User
@@ -873,6 +874,7 @@ class WorldPlanner:
         storyline_protected: bool = False,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> SessionBootstrapResult:
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
@@ -970,6 +972,7 @@ class WorldPlanner:
                 rng,
                 required_until=required_until,
                 session_end_plan=session_end_plan,
+                ids_alerts=ids_alerts,
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
@@ -982,6 +985,7 @@ class WorldPlanner:
                 time,
                 rng,
                 session_end_plan=session_end_plan,
+                ids_alerts=ids_alerts,
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
@@ -1238,6 +1242,7 @@ class WorldPlanner:
         rng: random.Random,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> SessionBootstrapResult:
         source_os = (
             self.world_model.hosts[plan.source_system.hostname].os_category
@@ -1268,6 +1273,7 @@ class WorldPlanner:
             source_port=source_port,
             min_duration=min_duration,
             session_end_plan=session_end_plan,
+            ids_alerts=ids_alerts,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -1302,6 +1308,7 @@ class WorldPlanner:
         activity_time: datetime,
         rng: random.Random,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
         source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
@@ -1329,6 +1336,7 @@ class WorldPlanner:
             source_process_time=source_process_time if plan.source_system is not None else None,
             source_process_factory=source_process_factory,
             session_end_plan=session_end_plan,
+            ids_alerts=ids_alerts,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:

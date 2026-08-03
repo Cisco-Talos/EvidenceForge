@@ -22,7 +22,8 @@ Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
 
-For `connection`/`beacon` `ids_alerts`, explain schema errors precisely: SIDs
+For transport-owner `ids_alerts` on connections, beacons, SSH/RDP, authored
+DHCP, scans, and DNS families, explain schema errors precisely: SIDs
 must be unique within the event and resolve through merged
 `ids_signatures.yaml`; filter counts/windows are strict positive integers;
 unknown fields and invalid `track`/`type` values are rejected. A SID must resolve
@@ -30,6 +31,9 @@ to one effective policy across the scenario. Protocol, destination-port, and
 direction mismatches are warnings, not errors, because custom sensor/rule
 deployments can be intentional. Suggest `policy: every` when a signature default
 should be explicitly replaced. See `references/scenario-reference.md`.
+Reject `ids_alerts` on non-transport/composite events and on the deferred
+`email_message`/`email_read` types. Explain that ordinary tuple-bearing events
+without an IDS context do not alert.
 
 Exit codes:
 - 0 = Valid (may include warnings)

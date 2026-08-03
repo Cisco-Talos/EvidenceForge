@@ -125,7 +125,10 @@ When `eforge validate-config` checks `ids_signatures.yaml`:
 When `eforge validate` checks scenario `ids_alerts`, unknown/duplicate SIDs and
 conflicting effective policies for one SID are errors. Protocol, destination
 port, and direction mismatches are advisory warnings so intentional custom rule
-deployments remain possible. See `config-ids.md` for the policy state semantics.
+deployments remain possible. Attachments are accepted only on typed transport
+owners: connections, beacons, SSH/RDP sessions, authored DHCP transactions,
+port/web scans, and DNS query families. Email and non-transport/composite events
+reject the field. See `config-ids.md` for the policy state semantics.
 
 ## Scenario Validation: traffic_rates
 

@@ -146,8 +146,10 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with CONNECT tunnels and full URLs). Zeek includes `zeek_smtp` when a network sensor can see modeled SMTP traffic.
 
-For an authored `connection` or `beacon` that should trigger configured IDS
-signatures, use `ids_alerts` rather than a raw Snort event. Select SIDs from the
+For an authored transport-owning event (`connection`, `beacon`, `ssh_session`,
+`rdp_session`, `dhcp_lease`, `port_scan`, `dns_query`, `dga_queries`,
+`dns_tunnel`, or `web_scan`) that should trigger configured IDS signatures, use
+`ids_alerts` rather than a raw Snort event. Select SIDs from the
 merged `ids_signatures.yaml` pool. Omit `policy` to inherit the signature default,
 use `policy: every` for every visible connection, or replace the default with a
 `detection_filter`, `event_filter`, or both. Use filtering only when the intended
@@ -156,6 +158,14 @@ assert a match and do not execute the complete rule predicate. Explicit proxy
 attachments follow both real transport legs, while topology decides which IDS
 sensor sees each; denials and cache hits have no origin leg. Read
 `/eforge:references:scenario-reference` for the full policy schema.
+
+Attach only when the story explicitly asserts a signature match; a tuple alone
+never alerts, and IDS sensors do not decrypt traffic. SSH/RDP attach only to the
+session transport, authored DHCP only to that transaction (not later renewals),
+and scan/DNS families fan out to their owned probes or queries. Authored web-scan
+SIDs coexist with automatic preset alerts and win a duplicate `(gid, sid)`.
+Do not add attachments to `email_message` or `email_read`; encrypted mail
+detection surfaces are deferred.
 
 **System roles** — Assign `roles` to systems in the environment to drive both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives). Roles like `web_server`, `database`, `mail_server`, `file_server`, `domain_controller` each have specific traffic profiles. For example, a `web_server` generates outbound database queries AND receives inbound HTTPS from external clients and internal users. A `database` generates outbound replication AND receives inbound SQL queries from web/app servers.
 

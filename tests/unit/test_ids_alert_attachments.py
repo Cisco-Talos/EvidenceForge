@@ -35,14 +35,25 @@ from evidenceforge.models import (
     TimeWindow,
     User,
 )
-from evidenceforge.models.scenario import BeaconEventSpec, ConnectionEventSpec
+from evidenceforge.models.scenario import (
+    BeaconEventSpec,
+    ConnectionEventSpec,
+    DgaQueriesEventSpec,
+    DhcpLeaseEventSpec,
+    DnsQueryEventSpec,
+    DnsTunnelEventSpec,
+    PortScanEventSpec,
+    RdpSessionEventSpec,
+    SshSessionEventSpec,
+    WebScanEventSpec,
+)
 from evidenceforge.validation import ScenarioValidator
 
 T0 = datetime(2026, 8, 3, tzinfo=UTC)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _scenario(*events: ConnectionEventSpec | BeaconEventSpec) -> Scenario:
+def _scenario(*events: object) -> Scenario:
     return Scenario(
         version="1.0",
         name="ids-test",
@@ -120,6 +131,71 @@ def test_connection_and_beacon_accept_multiple_ids_alerts() -> None:
     )
     assert [item.sid for item in connection.ids_alerts] == [2028401, 2002910]
     assert [item.sid for item in beacon.ids_alerts] == [2028401, 2002910]
+
+
+def _transport_owner_specs(ids_alerts: list[dict[str, object]]) -> list[object]:
+    """Return one valid instance of every IDS-attachable typed transport owner."""
+
+    return [
+        ConnectionEventSpec(dst_ip="198.51.100.10", ids_alerts=ids_alerts),
+        BeaconEventSpec(
+            dst_ip="198.51.100.10",
+            interval="1m",
+            count=2,
+            ids_alerts=ids_alerts,
+        ),
+        SshSessionEventSpec(ids_alerts=ids_alerts),
+        RdpSessionEventSpec(ids_alerts=ids_alerts),
+        DhcpLeaseEventSpec(ids_alerts=ids_alerts),
+        PortScanEventSpec(target_ips=["198.51.100.10"], ids_alerts=ids_alerts),
+        DnsQueryEventSpec(query="missing.example.test", rcode="NXDOMAIN", ids_alerts=ids_alerts),
+        WebScanEventSpec(
+            dst_ip="198.51.100.10",
+            rate=1,
+            count=2,
+            preset="nikto",
+            ids_alerts=ids_alerts,
+        ),
+        DgaQueriesEventSpec(interval="1s", count=2, ids_alerts=ids_alerts),
+        DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            interval="1s",
+            count=2,
+            ids_alerts=ids_alerts,
+        ),
+    ]
+
+
+def test_every_transport_owner_accepts_shared_multi_sid_policy_schema() -> None:
+    attachments = [
+        {"sid": 2028401},
+        {
+            "sid": 2002910,
+            "policy": {
+                "detection_filter": {"track": "by_src", "count": 2, "seconds": 30},
+                "event_filter": {
+                    "type": "both",
+                    "track": "by_dst",
+                    "count": 3,
+                    "seconds": 60,
+                },
+            },
+        },
+    ]
+    for spec in _transport_owner_specs(attachments):
+        assert [item.sid for item in spec.ids_alerts] == [2028401, 2002910]
+
+
+def test_every_transport_owner_rejects_duplicate_sid() -> None:
+    with pytest.raises(ValidationError, match="duplicate SID"):
+        _transport_owner_specs([{"sid": 384}, {"sid": 384}])
+
+
+def test_non_transport_event_rejects_ids_alerts() -> None:
+    from evidenceforge.models.scenario import ProcessEventSpec
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ProcessEventSpec(process_name="whoami.exe", ids_alerts=[{"sid": 384}])
 
 
 @pytest.mark.parametrize("model", [ConnectionEventSpec, BeaconEventSpec])
@@ -299,6 +375,41 @@ def test_validator_warns_on_signature_port_and_direction_mismatch() -> None:
     assert any("direction" in message for message in warnings)
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        SshSessionEventSpec(source_ip="198.51.100.10", ids_alerts=[{"sid": 2028401}]),
+        RdpSessionEventSpec(source_ip="198.51.100.10", ids_alerts=[{"sid": 2028401}]),
+        DhcpLeaseEventSpec(ids_alerts=[{"sid": 2028401}]),
+        DnsQueryEventSpec(
+            query="missing.example.test",
+            rcode="NXDOMAIN",
+            ids_alerts=[{"sid": 2028401}],
+        ),
+        PortScanEventSpec(
+            target_ips=["198.51.100.10"],
+            ports=[22, 80],
+            ids_alerts=[{"sid": 2028401}],
+        ),
+        WebScanEventSpec(
+            dst_ip="198.51.100.10",
+            dst_port=80,
+            rate=1,
+            count=1,
+            preset="nikto",
+            ids_alerts=[{"sid": 2028401}],
+        ),
+    ],
+)
+def test_validator_uses_transport_owner_protocol_and_ports_for_warnings(spec: object) -> None:
+    warnings = [
+        issue.message
+        for issue in ScenarioValidator(_scenario(spec)).validate()
+        if issue.severity == "warning" and "IDS SID" in issue.message
+    ]
+    assert any("protocol" in message or "destination port" in message for message in warnings)
+
+
 def test_detection_filter_suppresses_warmup_then_stays_above_rolling_threshold() -> None:
     policy = IdsAlertPolicyContext(
         detection_filter=IdsDetectionFilterContext(track="by_src", count=2, seconds=60)
@@ -434,6 +545,54 @@ def test_snort_multiple_sids_are_independent(tmp_path) -> None:
     output = (tmp_path / "snort.log").read_text()
     assert "[1:1001:1]" in output
     assert "[1:1002:1]" in output
+
+
+def test_snort_requires_both_network_and_ids_context() -> None:
+    emitter = SnortEmitter(
+        format_def=load_format("snort_alert"),
+        output_path=Path("unused.log"),
+    )
+    tuple_only = SecurityEvent(
+        timestamp=T0,
+        event_type="dhcp_lease",
+        network=NetworkContext(
+            src_ip="10.0.0.8",
+            src_port=68,
+            dst_ip="10.0.0.1",
+            dst_port=67,
+            protocol="udp",
+        ),
+    )
+    ids_only = SecurityEvent(
+        timestamp=T0,
+        event_type="custom",
+        ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+    )
+    dhcp_alert = SecurityEvent(
+        timestamp=T0,
+        event_type="dhcp_lease",
+        network=tuple_only.network,
+        ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+    )
+    assert not emitter.can_handle(tuple_only)
+    assert not emitter.can_handle(ids_only)
+    assert emitter.can_handle(dhcp_alert)
+
+
+def test_authored_plural_ids_context_overrides_automatic_same_sid() -> None:
+    automatic = IdsContext(sid=1001, message="automatic", classification="misc-activity")
+    authored = IdsContext(
+        sid=1001,
+        message="authored",
+        classification="misc-activity",
+        policy=IdsAlertPolicyContext(
+            event_filter=IdsEventFilterContext(type="limit", track="by_src", count=1, seconds=60)
+        ),
+    )
+    event = SecurityEvent(
+        timestamp=T0, event_type="connection", ids=automatic, ids_alerts=[authored]
+    )
+    assert event.all_ids_alerts() == (authored,)
 
 
 def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
@@ -607,3 +766,6 @@ def test_ids_documentation_and_skill_reference_stay_in_parity() -> None:
         assert "ids_alerts" in content
         assert "policy" in content
         assert "does not" in content
+        assert "dhcp_lease" in content
+        assert "dns_tunnel" in content
+        assert "email" in content

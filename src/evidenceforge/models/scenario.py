@@ -752,6 +752,27 @@ class _EventSpecBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _IdsAttachableEventSpec(_EventSpecBase):
+    """Base for typed events that own one or more canonical network transports."""
+
+    ids_alerts: list[IdsAlertAttachmentSpec] = Field(
+        default_factory=list,
+        description="IDS signatures asserted on each owned sensor-observable transport.",
+    )
+
+    @field_validator("ids_alerts")
+    @classmethod
+    def validate_unique_ids_alerts(
+        cls, v: list[IdsAlertAttachmentSpec]
+    ) -> list[IdsAlertAttachmentSpec]:
+        """Reject duplicate SID attachments on one authored event."""
+
+        sids = [attachment.sid for attachment in v]
+        if len(sids) != len(set(sids)):
+            raise ValueError("ids_alerts must not contain duplicate SIDs")
+        return v
+
+
 class ProcessEventSpec(_EventSpecBase):
     """Process execution event (generates 4688, Sysmon 1, eCAR PROCESS/CREATE)."""
 
@@ -790,7 +811,7 @@ class LogoffEventSpec(_EventSpecBase):
     type: Literal["logoff"] = "logoff"
 
 
-class ConnectionEventSpec(_EventSpecBase):
+class ConnectionEventSpec(_IdsAttachableEventSpec):
     """Network connection event (generates Zeek conn, eCAR FLOW, optionally web_access/zeek_http)."""
 
     type: Literal["connection"] = "connection"
@@ -812,22 +833,6 @@ class ConnectionEventSpec(_EventSpecBase):
     orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
     resp_bytes: int | None = None  # Responder payload bytes (large for downloads)
     conn_state: str | None = None  # Connection outcome (default: SF for storyline)
-    ids_alerts: list[IdsAlertAttachmentSpec] = Field(
-        default_factory=list,
-        description="IDS signatures asserted on each sensor-observable canonical connection.",
-    )
-
-    @field_validator("ids_alerts")
-    @classmethod
-    def validate_unique_ids_alerts(
-        cls, v: list[IdsAlertAttachmentSpec]
-    ) -> list[IdsAlertAttachmentSpec]:
-        """Reject duplicate SID attachments on one connection."""
-
-        sids = [attachment.sid for attachment in v]
-        if len(sids) != len(set(sids)):
-            raise ValueError("connection ids_alerts must not contain duplicate SIDs")
-        return v
 
     @field_validator("hostname")
     @classmethod
@@ -838,14 +843,14 @@ class ConnectionEventSpec(_EventSpecBase):
         return v
 
 
-class SshSessionEventSpec(_EventSpecBase):
+class SshSessionEventSpec(_IdsAttachableEventSpec):
     """SSH session event (generates Zeek conn + syslog sshd + eCAR)."""
 
     type: Literal["ssh_session"] = "ssh_session"
     source_ip: str | None = None
 
 
-class RdpSessionEventSpec(_EventSpecBase):
+class RdpSessionEventSpec(_IdsAttachableEventSpec):
     """RDP session event (generates Zeek conn + 4624 type 10 + eCAR on target)."""
 
     type: Literal["rdp_session"] = "rdp_session"
@@ -915,7 +920,7 @@ class ProcessAccessEventSpec(_EventSpecBase):
     access_mask: str = "0x1010"
 
 
-class DhcpLeaseEventSpec(_EventSpecBase):
+class DhcpLeaseEventSpec(_IdsAttachableEventSpec):
     """DHCP lease event for rogue/new devices appearing on the network."""
 
     type: Literal["dhcp_lease"] = "dhcp_lease"
@@ -924,7 +929,7 @@ class DhcpLeaseEventSpec(_EventSpecBase):
     model_config = ConfigDict(extra="forbid")
 
 
-class PortScanEventSpec(_EventSpecBase):
+class PortScanEventSpec(_IdsAttachableEventSpec):
     """Port scan producing firewall deny records (ASA 106023).
 
     Generates many denied connection attempts from the storyline system to
@@ -1086,7 +1091,28 @@ class _PeriodicEventBase(_EventSpecBase):
         return self
 
 
-class BeaconEventSpec(_PeriodicEventBase):
+class _IdsAttachablePeriodicEventSpec(_PeriodicEventBase):
+    """Periodic typed event whose ticks own canonical network transports."""
+
+    ids_alerts: list[IdsAlertAttachmentSpec] = Field(
+        default_factory=list,
+        description="IDS signatures asserted on each owned sensor-observable transport.",
+    )
+
+    @field_validator("ids_alerts")
+    @classmethod
+    def validate_unique_ids_alerts(
+        cls, v: list[IdsAlertAttachmentSpec]
+    ) -> list[IdsAlertAttachmentSpec]:
+        """Reject duplicate SID attachments on one authored periodic event."""
+
+        sids = [attachment.sid for attachment in v]
+        if len(sids) != len(set(sids)):
+            raise ValueError("ids_alerts must not contain duplicate SIDs")
+        return v
+
+
+class BeaconEventSpec(_IdsAttachablePeriodicEventSpec):
     """Periodic beacon — repeated connections at regular intervals.
 
     Produces allowed or denied connections at configurable intervals.
@@ -1130,22 +1156,6 @@ class BeaconEventSpec(_PeriodicEventBase):
             "on the first tick; 'each_tick' emits resolver evidence for every tick."
         ),
     )
-    ids_alerts: list[IdsAlertAttachmentSpec] = Field(
-        default_factory=list,
-        description="IDS signatures asserted on each sensor-observable canonical beacon connection.",
-    )
-
-    @field_validator("ids_alerts")
-    @classmethod
-    def validate_unique_ids_alerts(
-        cls, v: list[IdsAlertAttachmentSpec]
-    ) -> list[IdsAlertAttachmentSpec]:
-        """Reject duplicate SID attachments on one beacon."""
-
-        sids = [attachment.sid for attachment in v]
-        if len(sids) != len(set(sids)):
-            raise ValueError("beacon ids_alerts must not contain duplicate SIDs")
-        return v
 
     @field_validator("hostname")
     @classmethod
@@ -1188,7 +1198,7 @@ class BeaconEventSpec(_PeriodicEventBase):
         return self
 
 
-class DnsQueryEventSpec(_EventSpecBase):
+class DnsQueryEventSpec(_IdsAttachableEventSpec):
     """Standalone DNS query event (generates Zeek dns.log, conn.log, Sysmon Event 22).
 
     Produces a single DNS query as a UDP/53 connection with DnsContext.
@@ -1270,7 +1280,7 @@ class DnsQueryEventSpec(_EventSpecBase):
                 raise ValueError("DKIM TXT p= must identify an RSA public key")
 
 
-class WebScanEventSpec(_PeriodicEventBase):
+class WebScanEventSpec(_IdsAttachablePeriodicEventSpec):
     """Web scanning attack — repeated HTTP requests from scanner presets.
 
     Generates high-volume HTTP requests to a target web server using
@@ -1358,7 +1368,7 @@ class CredentialSprayEventSpec(_PeriodicEventBase):
         return self
 
 
-class DgaQueriesEventSpec(_PeriodicEventBase):
+class DgaQueriesEventSpec(_IdsAttachablePeriodicEventSpec):
     """DGA bulk DNS queries — algorithmically generated domain lookups.
 
     Generates many DNS queries with random domain names, mostly returning
@@ -1414,7 +1424,7 @@ class DgaQueriesEventSpec(_PeriodicEventBase):
         return self
 
 
-class DnsTunnelEventSpec(_PeriodicEventBase):
+class DnsTunnelEventSpec(_IdsAttachablePeriodicEventSpec):
     """DNS tunneling — data exfiltration via encoded DNS subdomain labels.
 
     Generates DNS queries with encoded payload chunks as subdomain labels

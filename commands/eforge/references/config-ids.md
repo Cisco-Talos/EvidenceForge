@@ -53,6 +53,12 @@ Use `policy: every` on an attachment to explicitly bypass a signature default.
 EvidenceForge models alert output only: it does not parse complete Snort rules,
 apply `rate_filter`, CIDR suppressions, or IPS actions.
 
+Signature defaults are inherited by attachments on typed `connection`,
+`beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`, `port_scan`, `web_scan`,
+`dns_query`, `dga_queries`, and `dns_tunnel` events. Defaults never make an
+unattached tuple alert. The IDS model does not decrypt traffic, and mail-event
+attachments remain deferred.
+
 ## Validation
 
 `eforge validate-config` rejects empty policies, unknown keys, invalid

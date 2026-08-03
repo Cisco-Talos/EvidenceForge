@@ -345,14 +345,25 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
-Typed `connection` and `beacon` events can attach multiple configured SIDs with
-`ids_alerts`. Attachments assert that a signature matches; the generator does not
-run the full Snort rule predicate. Candidates are projected through sensor
+Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`,
+`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events can
+attach multiple configured SIDs with `ids_alerts`. Attachments assert that a
+signature matches; the generator does not run the full Snort rule predicate or
+decrypt traffic. A network tuple without an explicit or built-in IDS context
+does not alert. Candidates are projected through sensor
 visibility, clock, and NAT/PAT views before per-sensor `detection_filter` and
 `event_filter` state is applied. Deferred candidates use a disk-backed spool and
 are deterministically ordered, so long beacons stay memory-bounded and authored
 storyline order cannot change filtering results. Raw Snort events retain their
 existing source-local behavior.
+
+Each attachment follows only the physical transports owned by its authored
+event. SSH/RDP attach to their session transport, DHCP only to the explicitly
+authored transaction, scans and web scans to each probe/request, and DNS families
+to their authored queries. Automatic DHCP renewals and DNS-tunnel background
+cover queries do not inherit attachments. Authored web-scan SIDs coexist with
+automatic preset/path/rate alerts and take precedence on a duplicate `(gid, sid)`.
+Email transport attachments remain deferred.
 
 `GROUND_TRUTH.json` and `.md` record each attached SID, its effective policy, and
 candidate/emitted/policy-filtered sensor totals. Policy suppression is also

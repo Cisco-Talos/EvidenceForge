@@ -16984,6 +16984,7 @@ class ActivityGenerator:
         public_key_hash: str = "",
         emit_session_close: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
         source: str = "activity_generator",
     ) -> str:
         """Generate an SSH session through the SSH action-bundle adapter.
@@ -17018,6 +17019,7 @@ class ActivityGenerator:
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
             session_end_plan=session_end_plan,
+            ids_alerts=list(ids_alerts or []),
             source=source,
         )
         return SshSessionActionBundle(request=request, executor=self).execute()
@@ -17044,6 +17046,7 @@ class ActivityGenerator:
         public_key_hash: str = "",
         emit_session_close: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
         source: str = "activity_generator",
     ) -> tuple[str, str]:
         """Execute the canonical SSH bundle and return transport and session IDs."""
@@ -17069,6 +17072,7 @@ class ActivityGenerator:
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
             session_end_plan=session_end_plan,
+            ids_alerts=list(ids_alerts or []),
             source=source,
         )
         return SshSessionActionBundle(request=request, executor=self).execute_with_identity()
@@ -21404,6 +21408,7 @@ class ActivityGenerator:
         source_process_factory: RdpSourceProcessFactory | None = None,
         preserve_explicit_source: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
@@ -21423,6 +21428,7 @@ class ActivityGenerator:
             source_process_factory=source_process_factory,
             preserve_explicit_source=preserve_explicit_source,
             session_end_plan=session_end_plan,
+            ids_alerts=ids_alerts,
         )
         return uid
 
@@ -21440,6 +21446,7 @@ class ActivityGenerator:
         source_process_factory: RdpSourceProcessFactory | None = None,
         preserve_explicit_source: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> tuple[str, str]:
         """Execute the canonical RDP bundle and return transport and session IDs."""
 
@@ -21457,6 +21464,7 @@ class ActivityGenerator:
                 logon_id=logon_id or "",
                 preserve_explicit_source=preserve_explicit_source,
                 session_end_plan=session_end_plan,
+                ids_alerts=list(ids_alerts or []),
             ),
             source_process_factory=source_process_factory,
         )
@@ -23103,6 +23111,7 @@ class ActivityGenerator:
         msg_types: list[str] | None = None,
         domain: str | None = None,
         renewal_interval: float | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         request = DhcpLeaseRequest(
@@ -23115,6 +23124,7 @@ class ActivityGenerator:
             msg_types=msg_types,
             domain=domain,
             renewal_interval=renewal_interval,
+            ids_alerts=list(ids_alerts or []),
         )
         DhcpLeaseActionBundle(executor=self, request=request).execute()
 
@@ -23193,6 +23203,7 @@ class ActivityGenerator:
                 msg_types=msg_types,
                 duration=dhcp_duration,
             ),
+            ids_alerts=list(request.ids_alerts),
         )
         self.dispatcher.dispatch(event)
         dispatcher_emitters = getattr(self.dispatcher, "emitters", {})

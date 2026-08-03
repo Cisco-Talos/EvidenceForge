@@ -24,11 +24,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from random import Random
 from typing import Protocol
 
+from evidenceforge.events.contexts import IdsContext
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
@@ -54,6 +55,7 @@ class DhcpLeaseRequest:
     msg_types: list[str] | None = None
     domain: str | None = None
     renewal_interval: float | None = None
+    ids_alerts: list[IdsContext] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property
@@ -65,7 +67,8 @@ class DhcpLeaseRequest:
             "action_bundle:dhcp_lease:"
             f"{self.system.hostname}:{self.system.ip}:{self.time.isoformat()}:"
             f"{self.mac}:{self.server_addr}:{self.lease_time}:{self.uid}:"
-            f"{msg_types}:{self.domain or ''}:{self.renewal_interval or ''}:{self.source}"
+            f"{msg_types}:{self.domain or ''}:{self.renewal_interval or ''}:"
+            f"{self.ids_alerts}:{self.source}"
         )
         return f"dhcp-lease-{seed:016x}"
 

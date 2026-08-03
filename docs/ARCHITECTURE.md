@@ -425,9 +425,15 @@ IDS alert callers may supply multiple data-driven signatures, and
 `IdsAlertActionBundle` builds canonical alert contexts attached to network
 evidence. The bundle owns `(gid, sid, rev)` identity,
 message/classification/priority normalization, and optional signature-owned DNS
-payload construction for DNS alerts. Typed `connection` and `beacon` attachments
-follow every physical canonical connection, including each existing explicit
-proxy leg. The Snort emitter first consumes frozen sensor visibility, clock, and
+payload construction for DNS alerts. Typed transport owners (`connection`,
+`beacon`, SSH/RDP sessions, authored DHCP transactions, scans, and DNS activity)
+carry attachments only on their owned physical canonical connections. Automatic
+DHCP renewals and DNS-tunnel cover traffic do not inherit authored assertions;
+web-scan automatic alerts coexist with authored attachments, with authored
+contexts winning duplicate `(gid, sid)` identities. Explicit proxy-capable
+attachments follow each existing physical proxy leg. A network tuple alone is
+never sufficient to create an alert, and the current IDS model performs no
+decryption. The Snort emitter first consumes frozen sensor visibility, clock, and
 NAT/PAT projections, then stores candidates in a bounded-memory SQLite spool.
 Finalization sorts by sensor-observed time and stable identity before applying
 per-sensor `(gid, sid, tracked visible IP)` detection/event filters. This avoids
