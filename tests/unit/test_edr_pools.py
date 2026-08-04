@@ -557,6 +557,19 @@ class TestTemplateMaterialization:
 
         assert details == r"cmd.exe /c echo {user:1000000000}\1"
 
+    def test_runmru_command_preserves_domain_qualified_username(self):
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"runmru_commands": [r"cmd.exe /c echo {username}"]},
+        ):
+            details = materialize_edr_template(
+                "{runmru_command}",
+                random.Random(4),
+                r"RBH\Marcus.Chen",
+            )
+
+        assert details == r"cmd.exe /c echo RBH\Marcus.Chen\1"
+
     def test_materializes_host_ip_context(self):
         import random
 
