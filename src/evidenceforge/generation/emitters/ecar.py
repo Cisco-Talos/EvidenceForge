@@ -608,13 +608,19 @@ class EcarEmitter(HostMultiplexEmitter):
             module_path = event.image_load.image_loaded
         elif event.file is not None:
             module_path = event.file.path
+        if isinstance(process_identity, ProcessIdentity):
+            principal = process_identity.principal
+        elif proc is not None:
+            principal = proc.username
+        else:
+            principal = event.auth.username if event.auth else ""
         event_data = {
             "timestamp": self._after_process_create_timestamp(event, process_identity),
             "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
             "pid": proc.pid if proc else (event.file.pid if event.file else -1),
-            "principal": event.auth.username if event.auth else "",
+            "principal": principal,
             "file_path": module_path,
             "_host_fqdn": self._host_fqdn(host),
         }

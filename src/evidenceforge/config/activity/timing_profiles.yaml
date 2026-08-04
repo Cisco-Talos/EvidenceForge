@@ -338,22 +338,22 @@ network_sensor_observation:
   profiles:
     distributed_taps:
       clock_offset_us:
-        min: -18000
-        max: 22000
+        min: -35000
+        max: 35000
       clock_drift_ppm:
-        min: -2
-        max: 2
+        min: -1
+        max: 1
       route_delay_us:
-        min: 1200
-        max: 18000
+        min: 500
+        max: 25000
       event_jitter_us:
-        min: -750
-        max: 750
+        min: -90000
+        max: 90000
       capture_loss:
-        probability: 0.0
-        min_fraction: 0.0
-        max_fraction: 0.0
-        max_missed_bytes: 0
+        probability: 0.12
+        min_fraction: 0.0005
+        max_fraction: 0.012
+        max_missed_bytes: 32768
     well_synced:
       clock_offset_us:
         min: -4000

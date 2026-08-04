@@ -22,6 +22,7 @@ from evidenceforge.generation.actions.ids_alert import IdsAlertActionBundle, Ids
 from evidenceforge.generation.activity.ids_signatures import (
     reset_ids_signatures_cache,
     signature_by_sid,
+    signature_matches_inspection_visibility,
 )
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.ids_filtering import IdsAlertCandidate, IdsAlertFilterEngine
@@ -51,6 +52,16 @@ from evidenceforge.validation import ScenarioValidator
 
 T0 = datetime(2026, 8, 3, tzinfo=UTC)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_payload_signature_requires_cleartext_or_explicit_decryption() -> None:
+    """Opaque TLS cannot produce content-signature evidence."""
+
+    signature = {"inspection": "payload_cleartext"}
+
+    assert signature_matches_inspection_visibility(signature, "http")
+    assert not signature_matches_inspection_visibility(signature, "ssl")
+    assert signature_matches_inspection_visibility(signature, "ssl", payload_decrypted=True)
 
 
 def _scenario(*events: object) -> Scenario:

@@ -86,6 +86,8 @@ class SourceTimingPlanner:
     def __init__(self, clock_profile_name: str = "complete") -> None:
         self.clock_profile_name = clock_profile_name or "complete"
         self._ecar_process_create_times: dict[str, datetime] = {}
+        self._kerberos_service_times: dict[tuple[str, str, str, str], list[datetime]] = {}
+        self._latest_session_start_times: dict[tuple[str, str], datetime] = {}
         self._latest_session_dependent_times: dict[tuple[str, str], datetime] = {}
         self._admitted_ecar_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
         self._admitted_windows_remote_transports: dict[_REMOTE_TRANSPORT_KEY, datetime] = {}
@@ -128,6 +130,20 @@ class SourceTimingPlanner:
         format_name: str,
     ) -> None:
         """Publish an admitted transport anchor for later authentication siblings."""
+
+        if (
+            format_name in {"windows_security", "windows_event_security"}
+            and event.event_type == "kerberos_service"
+            and event.kerberos is not None
+            and event.dst_host is not None
+        ):
+            key = self._kerberos_prerequisite_key(
+                format_name,
+                event.kerberos.target_username,
+                event.kerberos.source_ip,
+                event.dst_host.hostname,
+            )
+            self._kerberos_service_times.setdefault(key, []).append(event.timestamp)
 
         network = event.network
         lifecycle = event.lifecycle
@@ -273,7 +289,9 @@ class SourceTimingPlanner:
         )
         plan = self._ensure_plan(event)
         if lifecycle == "logout":
-            plan.finalized_times[ecar_session_render_key(lifecycle)] = event.timestamp
+            plan.finalized_times[ecar_session_render_key(lifecycle)] = (
+                self.session_closure_source_time(event, "ecar")
+            )
             return
         host = event.dst_host or event.src_host
         canonical_timestamp = plan.canonical_timestamp
@@ -358,7 +376,33 @@ class SourceTimingPlanner:
             self._admitted_windows_remote_transports,
             self._admitted_windows_transport_transactions,
         )
+        ticket_time: datetime | None = None
+        if event.event_type == "machine_logon" and event.auth is not None:
+            host = event.dst_host or event.src_host
+            if host is not None:
+                candidates = self._kerberos_service_times.get(
+                    self._kerberos_prerequisite_key(
+                        "windows_event_security",
+                        event.auth.username,
+                        event.auth.source_ip,
+                        host.hostname,
+                    ),
+                    [],
+                )
+                nearby = [
+                    candidate
+                    for candidate in candidates
+                    if abs((candidate - event.timestamp).total_seconds()) <= 5.0
+                ]
+                if nearby:
+                    ticket_time = max(nearby)
         if anchor is None:
+            if ticket_time is not None:
+                timestamp = max(event.timestamp, ticket_time + _SOURCE_EPSILON)
+                self._ensure_plan(event).finalized_times["windows.remote_authentication"] = (
+                    timestamp
+                )
+                return replace(event, timestamp=timestamp)
             return event
         timestamp = anchor + sample_timing_delta(
             "windows.network_logon_after_transport",
@@ -369,8 +413,27 @@ class SourceTimingPlanner:
                 event.event_type,
             ),
         )
+        if ticket_time is not None:
+            timestamp = max(timestamp, ticket_time + _SOURCE_EPSILON)
         self._ensure_plan(event).finalized_times["windows.remote_authentication"] = timestamp
         return replace(event, timestamp=timestamp)
+
+    @staticmethod
+    def _kerberos_prerequisite_key(
+        format_name: str,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+    ) -> tuple[str, str, str, str]:
+        """Return a normalized source-local machine-ticket dependency key."""
+
+        principal = username.split("@", maxsplit=1)[0].lower()
+        return (
+            format_name,
+            principal,
+            source_ip.removeprefix("::ffff:"),
+            dc_hostname.lower(),
+        )
 
     def _remote_auth_transport_anchor(
         self,
@@ -836,6 +899,18 @@ class SourceTimingPlanner:
         lifecycle = event.lifecycle
         if lifecycle is None:
             return event
+        if event.event_type in {"logon", "machine_logon", "ssh_session"}:
+            source_time = event.timestamp
+            if format_name == "ecar" and event.source_timing is not None:
+                source_time = event.source_timing.finalized_times.get(
+                    ecar_session_render_key("login"),
+                    source_time,
+                )
+            key = (format_name, lifecycle.group_id)
+            previous = self._latest_session_start_times.get(key)
+            if previous is None or source_time > previous:
+                self._latest_session_start_times[key] = source_time
+            return event
         if event.event_type == "process_terminate" and lifecycle.parent_group_id:
             source_time = self._process_termination_source_time(event, format_name)
             key = (format_name, lifecycle.parent_group_id)
@@ -920,10 +995,17 @@ class SourceTimingPlanner:
             preferred = canonical_end
         latest = self._latest_session_dependent_times.get((format_name, lifecycle.group_id))
         earliest = canonical_end
+        visible_start = self._latest_session_start_times.get((format_name, lifecycle.group_id))
+        if visible_start is not None:
+            earliest = max(earliest, visible_start + _SOURCE_EPSILON)
         if latest is not None:
-            earliest = latest + sample_timing_delta(
-                "windows.logoff_after_rendered_dependents",
-                seed_parts=(format_name, lifecycle.group_id, latest),
+            earliest = max(
+                earliest,
+                latest
+                + sample_timing_delta(
+                    "windows.logoff_after_rendered_dependents",
+                    seed_parts=(format_name, lifecycle.group_id, latest),
+                ),
             )
         tail_seconds = 4 if format_name == "syslog" else 15
         latest_allowed = canonical_end + timedelta(seconds=tail_seconds)

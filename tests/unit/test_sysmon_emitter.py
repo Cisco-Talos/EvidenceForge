@@ -260,6 +260,83 @@ class TestSysmonEventEmitter:
         assert '<Data Name="Image">C:\\Windows\\System32\\cmd.exe</Data>' in content
         assert '<Data Name="User">CORP\\jsmith</Data>' in content
 
+    def test_versioned_eventdata_uses_native_manifest_order(self, format_def, temp_output):
+        """Later-version Sysmon user fields must stay at their manifest positions."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        common = {
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": 2756,
+            "ExecutionThreadID": 3632,
+            "UtcTime": "2024-01-15 10:30:00.000",
+            "ProcessGuid": "{12345678-abcd-ef01-2345-678901234567}",
+            "ProcessId": 8052,
+            "Image": r"C:\Windows\System32\cmd.exe",
+            "User": r"CORP\jsmith",
+        }
+        emitter.emit_event(
+            {
+                **common,
+                "EventID": 7,
+                "ImageLoaded": r"C:\Windows\System32\user32.dll",
+                "Signed": "true",
+                "Signature": "Microsoft Windows",
+                "SignatureStatus": "Valid",
+            }
+        )
+        emitter.emit_event(
+            {
+                **common,
+                "EventID": 10,
+                "SourceProcessGUID": common["ProcessGuid"],
+                "SourceProcessId": 8052,
+                "SourceThreadId": 8060,
+                "SourceImage": common["Image"],
+                "TargetProcessGUID": "{87654321-abcd-ef01-2345-678901234567}",
+                "TargetProcessId": 640,
+                "TargetImage": r"C:\Windows\System32\lsass.exe",
+                "GrantedAccess": "0x1010",
+                "CallTrace": "C:\\Windows\\SYSTEM32\\ntdll.dll+9d000",
+                "SourceUser": common["User"],
+                "TargetUser": r"NT AUTHORITY\SYSTEM",
+            }
+        )
+        emitter.emit_event(
+            {
+                **common,
+                "EventID": 11,
+                "TargetFilename": r"C:\Temp\sample.txt",
+                "CreationUtcTime": common["UtcTime"],
+            }
+        )
+        emitter.emit_event(
+            {
+                **common,
+                "EventID": 13,
+                "EventType": "SetValue",
+                "TargetObject": r"HKLM\Software\Example\Value",
+                "Details": "DWORD (0x00000001)",
+            }
+        )
+        emitter.close()
+
+        content = temp_output.read_text()
+
+        def names(event_id):
+            event_xml = re.search(
+                rf"<Event\b[^>]*>.*?<EventID>{event_id}</EventID>.*?</Event>",
+                content,
+                re.DOTALL,
+            ).group(0)
+            return re.findall(r'<Data Name="([^"]+)">', event_xml)
+
+        assert names(7)[-2:] == ["SignatureStatus", "User"]
+        assert names(10)[-4:] == ["GrantedAccess", "CallTrace", "SourceUser", "TargetUser"]
+        assert names(11)[-3:] == ["TargetFilename", "CreationUtcTime", "User"]
+        assert names(13)[-3:] == ["TargetObject", "Details", "User"]
+
     def test_emit_sysmon_process_terminate_via_event(self, format_def, tmp_path):
         """Test Sysmon Event 5 via SecurityEvent dispatch."""
         from evidenceforge.events.base import SecurityEvent

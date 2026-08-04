@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
+from evidenceforge.generation.activity.tls_realism import certificate_authority_profile
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 
 _EVENT_TIME = datetime(2024, 10, 14, 12, 0, tzinfo=UTC)
@@ -75,3 +76,37 @@ def test_tls_presentation_is_stable_but_file_ids_are_connection_scoped() -> None
     planner.validate_projection(first, contexts)
     with pytest.raises(FrozenInstanceError):
         first.backend_identity = "mutated.example"  # type: ignore[misc]
+
+
+def test_leaf_issuer_bound_preserves_independent_issuance_seconds() -> None:
+    issuer_name = "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+    profile = certificate_authority_profile(issuer_name)
+    assert profile is not None
+    issuer_start = int(profile["not_valid_before"])
+    issuer_end = int(profile["not_valid_after"])
+    event_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    raw_validity = (issuer_start - 30 * 86400, issuer_end + 30 * 86400)
+
+    first = TlsCertificatePlanner._bound_to_issuer(
+        raw_validity,
+        issuer_name,
+        event_time,
+        identity="leaf:first.example",
+    )
+    repeated = TlsCertificatePlanner._bound_to_issuer(
+        raw_validity,
+        issuer_name,
+        event_time,
+        identity="leaf:first.example",
+    )
+    second = TlsCertificatePlanner._bound_to_issuer(
+        raw_validity,
+        issuer_name,
+        event_time,
+        identity="leaf:second.example",
+    )
+
+    assert first == repeated
+    assert issuer_start < first[0] < int(event_time.timestamp())
+    assert first[1] <= issuer_end
+    assert second[0] != first[0]

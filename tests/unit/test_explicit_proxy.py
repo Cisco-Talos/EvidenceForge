@@ -85,6 +85,38 @@ def test_activity_generator_stabilizes_generic_server_proxy_user_agent():
     assert all("Mozilla/" not in user_agent for user_agent in user_agents)
 
 
+def test_unmodeled_sources_get_stable_population_diverse_user_agents():
+    generator = ActivityGenerator(StateManager(), {})
+    sources = [f"198.51.100.{index}" for index in range(1, 65)]
+
+    first = [
+        generator._proxy_user_agent_for_context(
+            random.Random(42),
+            None,
+            hostname="portal.example.org",
+            domain_tags=["web"],
+            apply_domain_override=False,
+            source_identity=source,
+        )
+        for source in sources
+    ]
+    second = [
+        generator._proxy_user_agent_for_context(
+            random.Random(999),
+            None,
+            hostname="portal.example.org",
+            domain_tags=["web"],
+            apply_domain_override=False,
+            source_identity=source,
+        )
+        for source in sources
+    ]
+
+    assert first == second
+    assert len(set(first)) >= 5
+    assert max(first.count(user_agent) for user_agent in set(first)) < 32
+
+
 def test_activity_generator_uses_browser_agent_for_workstation_browser_domains():
     generator = ActivityGenerator(StateManager(), {})
     workstation = System(

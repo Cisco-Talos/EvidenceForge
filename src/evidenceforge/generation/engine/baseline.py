@@ -86,6 +86,7 @@ from evidenceforge.generation.activity.host_activity_profiles import (
 from evidenceforge.generation.activity.ids_signatures import (
     load_ids_signatures,
     render_dns_query_template,
+    signature_matches_inspection_visibility,
 )
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
@@ -113,6 +114,7 @@ from evidenceforge.generation.world_model import (
 )
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
+from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -628,6 +630,42 @@ def _extra_syslog_limit_key(system_hostname: str, entry: dict[str, Any]) -> str:
     messages = entry.get("messages") if isinstance(entry.get("messages"), list) else []
     marker = "|".join(str(message) for message in messages[:2])
     return f"{system_hostname}:{entry.get('app', '<unknown>')}:{marker}"
+
+
+def _extra_syslog_effective_limit(
+    system: System,
+    entry: dict[str, Any],
+    window_start: datetime,
+) -> int:
+    """Return a stable host-conditioned admission limit for ambient syslog.
+
+    Most program limits are literal safety caps. Ambient sudo is different: if
+    every busy host saturates the same cap, the cap becomes a fleet-wide count
+    fingerprint. Sample a zero-capable, right-skewed host/day target beneath the
+    configured ceiling while leaving all other program limits unchanged.
+    """
+    configured_limit = int(entry.get("max_per_host_window", 0) or 0)
+    if configured_limit <= 0 or entry.get("app") != "sudo":
+        return configured_limit
+
+    normalized_start = ensure_utc(window_start)
+    system_type = (system.type or "workstation").lower()
+    roles = ",".join(sorted(str(role).lower() for role in (system.roles or [])))
+    target_rng = random.Random(
+        _stable_seed(
+            "extra_syslog_sudo_target:"
+            f"{system.hostname}:{system_type}:{roles}:{normalized_start.date().isoformat()}"
+        )
+    )
+    zero_probability = 0.04 if system_type == "server" else 0.14
+    if target_rng.random() < zero_probability:
+        return 0
+
+    median_fraction = 0.52 if system_type == "server" else 0.30
+    role_factor = min(1.22, 1.0 + (0.035 * len(system.roles or [])))
+    sampled_fraction = target_rng.lognormvariate(math.log(median_fraction), 0.48)
+    target = round(configured_limit * sampled_fraction * role_factor)
+    return max(1, min(configured_limit, target))
 
 
 def _networkmanager_message_timestamp(ts: datetime) -> str:
@@ -8955,14 +8993,16 @@ class BaselineMixin:
                         k=1,
                     )[0]
                     app = entry["app"]
-                    limit = entry.get("max_per_host_window")
+                    limit = _extra_syslog_effective_limit(system, entry, self.start_time)
                     limit_key = ""
-                    if isinstance(limit, int) and limit > 0:
+                    if limit > 0:
                         if not hasattr(self, "_extra_syslog_entry_counts"):
                             self._extra_syslog_entry_counts = {}
                         limit_key = _extra_syslog_limit_key(system.hostname, entry)
                         if self._extra_syslog_entry_counts.get(limit_key, 0) >= limit:
                             continue
+                    elif entry.get("max_per_host_window"):
+                        continue
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         # DHCP syslog must be tied to the canonical lease
@@ -9234,6 +9274,17 @@ class BaselineMixin:
                     if not _filtered:
                         _filtered = _pool
                     _filtered = [s for s in _filtered if s.get("baseline_fp_allowed", True)]
+                    _filtered = [
+                        s
+                        for s in _filtered
+                        if signature_matches_inspection_visibility(
+                            s,
+                            {80: "http", 443: "ssl", 53: "dns"}.get(
+                                int(s.get("dst_port", 0)),
+                                "",
+                            ),
+                        )
+                    ]
                     _filtered = [
                         s
                         for s in _filtered

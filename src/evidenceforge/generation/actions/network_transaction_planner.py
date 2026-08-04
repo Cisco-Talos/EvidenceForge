@@ -1875,6 +1875,7 @@ class NetworkTransactionPlanner:
                     existing_user_agent=user_agent,
                     override_user_agent=proxy_ua_override,
                     apply_domain_override=apply_domain_user_agent,
+                    source_identity=src_ip,
                 )
                 proxy_referrer = generator_module._source_native_http_referrer(
                     user_agent,
@@ -2003,28 +2004,6 @@ class NetworkTransactionPlanner:
             and conn_state == "SF"
             and event.http is None  # Skip auto-generation if caller provided HttpContext
         ):
-            _USER_AGENTS_WINDOWS = [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
-            ]
-            _USER_AGENTS_LINUX = [
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
-                "curl/7.88.1",
-                "python-requests/2.31.0",
-                "Wget/1.21.3",
-            ]
-            if source_system and generator_module._get_os_category(source_system.os) == "linux":
-                ua = rng.choice(_USER_AGENTS_LINUX)
-            else:
-                ua = rng.choice(_USER_AGENTS_WINDOWS)
             # Use the already-resolved hostname for HTTP Host header and URI templates.
             # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
             host = (
@@ -2077,6 +2056,7 @@ class NetworkTransactionPlanner:
                 existing_user_agent="",
                 override_user_agent=http_ua_override,
                 apply_domain_override=True,
+                source_identity=src_ip,
             )
             redirect_status = plaintext_http_redirect_status(
                 web_host,

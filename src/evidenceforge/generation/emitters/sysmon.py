@@ -1242,17 +1242,17 @@ class SysmonEventEmitter(LogEmitter):
             "UtcTime": utc_time,
             "SourceProcessGUID": source_guid,
             "SourceProcessId": proc.pid,
-            "SourceImage": proc.image,
             "SourceThreadId": access.source_thread_id,
-            "SourceUser": user,
+            "SourceImage": proc.image,
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
-            "TargetUser": target_user,
             "GrantedAccess": granted_access,
             "CallTrace": access.call_trace
             if access and access.call_trace
             else self._get_call_trace(host.hostname),
+            "SourceUser": user,
+            "TargetUser": target_user,
         }
         self.emit_event(event_data)
 
@@ -1533,6 +1533,12 @@ class SysmonEventEmitter(LogEmitter):
                 il.signature,
             )
         signature_status = il.signature_status if il.signed else "Unavailable"
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc and proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
         hashes = self._generate_hashes(
             il.image_loaded,
             host,
@@ -1567,6 +1573,7 @@ class SysmonEventEmitter(LogEmitter):
             "Signed": "true" if il.signed else "false",
             "Signature": il.signature if il.signed else "-",
             "SignatureStatus": signature_status,
+            "User": user,
         }
         self.emit_event(event_data)
 
@@ -1605,9 +1612,9 @@ class SysmonEventEmitter(LogEmitter):
             "ProcessGuid": process_guid,
             "ProcessId": pid,
             "Image": image,
-            "User": user,
             "TargetFilename": fc.path,
             "CreationUtcTime": utc_time,
+            "User": user,
         }
         self.emit_event(event_data)
 
@@ -1664,7 +1671,6 @@ class SysmonEventEmitter(LogEmitter):
             "ProcessGuid": process_guid,
             "ProcessId": pid,
             "Image": image,
-            "User": user,
             "EventType": event_type,
             "TargetObject": self._native_registry_target_object(reg.key, event),
         }
@@ -1672,6 +1678,7 @@ class SysmonEventEmitter(LogEmitter):
         # Event 13 includes the Details field
         if event_id == 13:
             event_data["Details"] = reg.value or "-"
+        event_data["User"] = user
 
         self.emit_event(event_data)
 

@@ -291,10 +291,11 @@ def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(t
                 ],
             ),
         ),
-        time_window=TimeWindow(start=datetime(2026, 8, 3, tzinfo=UTC), duration="12m", warmup=None),
+        time_window=TimeWindow(start=datetime(2026, 8, 3, tzinfo=UTC), duration="1h", warmup=None),
         baseline_activity=BaselineActivity(description="minimal", intensity="low", variation="low"),
         storyline=storyline,
         output=OutputSpec(logs=[{"format": "snort_alert"}], destination="./output"),
+        observation_profile="complete",
     )
 
     GenerationEngine(scenario, tmp_path).generate()

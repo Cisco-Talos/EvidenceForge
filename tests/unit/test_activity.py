@@ -3694,23 +3694,25 @@ class TestActivityGenerator:
         assert machine_logon.remote_auth is not None
         assert machine_logon.remote_auth.outcome == "success"
         assert machine_logon.remote_auth.primary_transport is not None
-        assert machine_logon.remote_auth.primary_transport.role == "kerberos_validation"
+        assert machine_logon.remote_auth.primary_transport.role == "target_service"
+        assert machine_logon.remote_auth.primary_transport.tuple.dst_port in {389, 445}
         assert machine_logon.edr.object_id == machine_logoff.edr.object_id
         assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
         assert machine_logon.lifecycle.phase == "start"
         assert machine_logoff.lifecycle.phase == "closure"
-        kerberos_connection = next(
+        service_connection = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
             if call.args[0].event_type == "connection"
+            and call.args[0].network.dst_port in {389, 445}
         )
-        assert machine_logon.auth.source_port == kerberos_connection.network.src_port
+        assert machine_logon.auth.source_port == service_connection.network.src_port
         assert (
             machine_logon.remote_auth.primary_transport.transaction_id
-            == kerberos_connection.network.transaction.stable_id
+            == service_connection.network.transaction.stable_id
         )
         assert all(
-            event.kerberos.source_port == machine_logon.auth.source_port
+            event.kerberos.source_port != machine_logon.auth.source_port
             for event in kerberos_events
         )
 

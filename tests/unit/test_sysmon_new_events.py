@@ -564,6 +564,7 @@ class TestRenderEvent7:
         assert "plugin.dll" in content
         assert "Unavailable" in content
         assert '<Data Name="Signed">false</Data>' in content
+        assert '<Data Name="User">CORP\\user</Data>' in content
 
     def test_event7_system_dll_renders_windows_metadata(self, emitter):
         """System DLL image loads should not render application PE metadata."""

@@ -6575,6 +6575,7 @@ class ActivityGenerator:
         existing_user_agent: str = "",
         override_user_agent: str | None = None,
         apply_domain_override: bool = True,
+        source_identity: str | None = None,
     ) -> str:
         """Return a source-sticky proxy User-Agent for one logical client context."""
 
@@ -6624,7 +6625,7 @@ class ActivityGenerator:
             return normalize_selected_user_agent(existing_user_agent)
 
         domain_class = get_proxy_domain_class(host) or ""
-        source_key = "unknown"
+        source_key = source_identity or "unknown"
         os_category = ""
         if source_system is not None:
             os_category = _get_os_category(getattr(source_system, "os", ""))
@@ -20494,7 +20495,11 @@ class ActivityGenerator:
             tgs_before_ms=(8, 65),
             tgt_before_tgs_ms=(35, 220),
         )
-        source_port = self._reserve_kerberos_source_port(source_ip, dc_hostname, tgt_time)
+        kerberos_source_port = self._reserve_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            tgt_time,
+        )
         session_obj_id = stable_uuid(
             "ecar-machine-account-session",
             request.stable_id,
@@ -20505,25 +20510,21 @@ class ActivityGenerator:
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgt_time,
-            source_port=source_port,
+            source_port=kerberos_source_port,
         )
-        service_name = rng.choices(
-            [
-                f"host/{dc_hostname}",
-                f"ldap/{dc_hostname}",
-                f"cifs/{dc_hostname}",
-                f"DNS/{dc_hostname}",
-            ],
-            weights=[35, 35, 20, 10],
+        service, destination_port = rng.choices(
+            [("ldap", 389), ("cifs", 445)],
+            weights=[55, 45],
             k=1,
         )[0]
+        service_name = f"{service}/{dc_hostname}"
         self.generate_kerberos_service_ticket(
             username=machine_username,
             service_name=service_name,
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgs_time,
-            source_port=source_port,
+            source_port=kerberos_source_port,
         )
         target_system = self._ip_to_system.get(dc_ip)
         if target_system is None:
@@ -20533,19 +20534,27 @@ class ActivityGenerator:
                 os="Windows Server 2022",
                 type="domain_controller",
             )
+        service_source_port = self._allocate_ephemeral_port(
+            source_ip,
+            dc_ip,
+            destination_port,
+            "tcp",
+            time,
+            self._os_for_ip(source_ip),
+        )
         remote_request = WindowsRemoteAuthenticationRequest(
             target_system=target_system,
             time=time,
             source_ip=source_ip,
-            source_port=source_port,
+            source_port=service_source_port,
             logon_type=3,
             auth_protocol="Kerberos",
             outcome="success",
-            destination_port=88,
+            destination_port=destination_port,
             source_system=self._ip_to_system.get(source_ip),
             session_object_id=session_obj_id,
             logon_id=logon_id,
-            transport_role="kerberos_validation",
+            transport_role="target_service",
             source="machine_account_logon",
         )
         remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
@@ -20563,7 +20572,7 @@ class ActivityGenerator:
                 logon_type=3,
                 auth_package="Kerberos",
                 source_ip=source_ip,
-                source_port=source_port,
+                source_port=service_source_port,
                 logon_process="Kerberos",
                 lm_package="-",
                 logon_guid="{00000000-0000-0000-0000-000000000000}",

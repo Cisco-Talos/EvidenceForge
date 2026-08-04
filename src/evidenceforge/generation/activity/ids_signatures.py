@@ -82,6 +82,24 @@ def signature_by_sid(sid: int) -> dict[str, Any] | None:
     return None
 
 
+def signature_matches_inspection_visibility(
+    signature: dict[str, Any],
+    service: str,
+    *,
+    payload_decrypted: bool = False,
+) -> bool:
+    """Return whether a signature can inspect the modeled application view.
+
+    Payload-content signatures cannot fire on an opaque encrypted service.
+    Metadata signatures remain eligible because they inspect handshakes,
+    certificates, flow properties, or other visible protocol metadata.
+    """
+
+    if signature.get("inspection") != "payload_cleartext":
+        return True
+    return payload_decrypted or service not in {"ssl", "tls"}
+
+
 def effective_alert_policy(
     signature: dict[str, Any],
     override: IdsAlertPolicyOverride | None = None,

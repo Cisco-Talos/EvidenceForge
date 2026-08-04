@@ -42,6 +42,7 @@ from evidenceforge.generation.engine.baseline import (
     _cron_shell_command_line,
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
+    _extra_syslog_effective_limit,
     _is_kerberos_member_server,
     _is_windows_singleton_service_image,
     _kernel_uptime_stamp,
@@ -559,6 +560,44 @@ def test_dbus_extra_syslog_is_window_capped():
 
     assert dbus["max_per_host_window"] <= 8
     assert dbus["weight"] <= 1
+
+
+def test_ambient_sudo_limits_are_stable_host_conditioned_and_below_ceiling(linux_system):
+    """A safety ceiling must not become an identical target across Linux hosts."""
+    entry = {"app": "sudo", "messages": ["COMMAND={sudo_command}"], "max_per_host_window": 18}
+    window_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    systems = [
+        linux_system.model_copy(
+            update={
+                "hostname": f"LINUX-{index:02d}",
+                "type": "server" if index < 9 else "workstation",
+                "roles": ["web_server"] if index % 2 else ["database"],
+            }
+        )
+        for index in range(14)
+    ]
+
+    first = [_extra_syslog_effective_limit(system, entry, window_start) for system in systems]
+    second = [_extra_syslog_effective_limit(system, entry, window_start) for system in systems]
+
+    assert first == second
+    assert all(0 <= count <= 18 for count in first)
+    assert len(set(first)) >= 5
+    assert sum(count == 18 for count in first) <= 2
+
+
+def test_non_sudo_extra_syslog_limits_remain_literal(linux_system):
+    """Host-conditioned sudo admission must not change sibling program caps."""
+    entry = {"app": "dbus-daemon", "messages": ["activated"], "max_per_host_window": 8}
+
+    assert (
+        _extra_syslog_effective_limit(
+            linux_system,
+            entry,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+        )
+        == 8
+    )
 
 
 def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
