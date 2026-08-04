@@ -21304,6 +21304,19 @@ class ActivityGenerator:
             return False
         if event.firewall is not None and event.firewall.action == "deny":
             return False
+        # Domain controllers collect WFP evidence selectively in ordinary baseline
+        # traffic.  Explicit storyline bundles retain complete coverage so attack
+        # evidence remains auditable, while baseline admission avoids one 5156 row
+        # per permitted connection becoming a synthetic volume signature.
+        roles = {str(role).lower() for role in (target_system.roles or [])}
+        if "domain_controller" in roles and event.lifecycle is None:
+            seed = _stable_seed(
+                "baseline_dc_wfp:"
+                f"{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
+                f"{net.protocol}:{event.timestamp.isoformat()}"
+            )
+            if seed % 100 >= 35:
+                return False
         proto = net.protocol.lower()
         if proto == "tcp":
             if net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}:
