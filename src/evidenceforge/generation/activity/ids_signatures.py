@@ -11,7 +11,8 @@ from string import Formatter
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
-from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.models.ids import IdsAlertPolicyOverride, IdsAlertPolicySpec
 
 _CONFIG_PATH = get_activity_directory() / "ids_signatures.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -23,7 +24,30 @@ def _merge_ids_signatures(default: dict[str, Any], overlay: dict[str, Any]) -> d
     """Merge IDS signature overlay with package defaults."""
     result = dict(default)
     if "signatures" in overlay:
-        result["signatures"] = extend_list(default.get("signatures", []), overlay["signatures"])
+        overlay_signatures = overlay["signatures"]
+        policy_overrides = (
+            {
+                entry["sid"]: entry["alert_policy"]
+                for entry in overlay_signatures
+                if isinstance(entry, dict) and "sid" in entry and "alert_policy" in entry
+            }
+            if isinstance(overlay_signatures, list)
+            else {}
+        )
+        merge_entries = (
+            [
+                {key: value for key, value in entry.items() if key != "alert_policy"}
+                if isinstance(entry, dict)
+                else entry
+                for entry in overlay_signatures
+            ]
+            if isinstance(overlay_signatures, list)
+            else overlay_signatures
+        )
+        result["signatures"] = merge_keyed_list(default.get("signatures", []), merge_entries, "sid")
+        for signature in result["signatures"]:
+            if isinstance(signature, dict) and signature.get("sid") in policy_overrides:
+                signature["alert_policy"] = policy_overrides[signature["sid"]]
     return result
 
 
@@ -56,6 +80,40 @@ def signature_by_sid(sid: int) -> dict[str, Any] | None:
         if signature.get("sid") == sid:
             return dict(signature)
     return None
+
+
+def signature_matches_inspection_visibility(
+    signature: dict[str, Any],
+    service: str,
+    *,
+    payload_decrypted: bool = False,
+) -> bool:
+    """Return whether a signature can inspect the modeled application view.
+
+    Payload-content signatures cannot fire on an opaque encrypted service.
+    Metadata signatures remain eligible because they inspect handshakes,
+    certificates, flow properties, or other visible protocol metadata.
+    """
+
+    if signature.get("inspection") != "payload_cleartext":
+        return True
+    return payload_decrypted or service not in {"ssl", "tls"}
+
+
+def effective_alert_policy(
+    signature: dict[str, Any],
+    override: IdsAlertPolicyOverride | None = None,
+) -> IdsAlertPolicySpec | None:
+    """Resolve an attachment override over a signature-level alert policy."""
+
+    if override == "every":
+        return None
+    if isinstance(override, IdsAlertPolicySpec):
+        return override
+    configured = signature.get("alert_policy")
+    if configured is None or configured == "every":
+        return None
+    return IdsAlertPolicySpec.model_validate(configured)
 
 
 def validate_dns_query_template(template: str) -> str | None:

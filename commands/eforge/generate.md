@@ -25,6 +25,27 @@ Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
 
+When a scenario uses canonical `ids_alerts`, do not infer missing Snort rows from
+the authored attachment count alone. Check `GROUND_TRUTH.json`/`.md` for each
+SID's effective policy and candidate/emitted/policy-filtered sensor totals, then
+check `OBSERVATION_MANIFEST.json` for collection drops, clipping, and policy
+`filtered` status. No IDS sensor, an invisible proxy leg, a denied/cache-hit
+origin request, observation missingness, or policy cadence can all legitimately
+reduce output. Candidate spooling is disk-backed and removed on success or
+failure; a leftover EvidenceForge IDS spool indicates an interrupted process and
+may be removed once no generation process is using it.
+`GROUND_TRUTH.json` also includes the bounded `ids_evaluation` acceptance
+contract: per-sensor/SID counts, origin totals, observation totals, and an
+ordered normalized alert digest. `GROUND_TRUTH.md` renders the same information
+in its IDS Evaluation Summary. Generation accumulates this summary while Snort
+candidates finalize and does not retain alert-volume-sized state.
+
+Interpret candidates by owned transport: SSH/RDP use only their session
+connection; DHCP uses only the authored transaction and does not pass assertions
+to automatic renewals; scans and DNS families fan out across authored
+probes/requests/queries. DNS-tunnel cover traffic is not attached. IDS sensors
+do not decrypt traffic, and email attachments remain unsupported.
+
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
 
 ## Command Reference

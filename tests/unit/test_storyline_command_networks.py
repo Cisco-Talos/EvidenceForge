@@ -29,7 +29,13 @@ from evidenceforge.generation.engine.storyline import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.scenario import BeaconEventSpec, ConnectionEventSpec, System, User
+from evidenceforge.models.scenario import (
+    BeaconEventSpec,
+    ConnectionEventSpec,
+    DhcpLeaseEventSpec,
+    System,
+    User,
+)
 
 
 class TestStorylineCommandNetworks:
@@ -3315,7 +3321,7 @@ class TestStorylineCommandSideEffects:
                 "system": source,
             }
         }
-        spec = SimpleNamespace(type="dhcp_lease", requested_ip=None, mac_address=None)
+        spec = DhcpLeaseEventSpec(ids_alerts=[{"sid": 2002911, "policy": "every"}])
 
         engine._execute_typed_event(
             spec=spec,
@@ -3331,6 +3337,8 @@ class TestStorylineCommandSideEffects:
         assert lease["lease_time"] == 7200.0
         assert lease["msg_types"] == ["REQUEST", "ACK"]
         assert lease["renewal_interval"] > 0
+        assert [context.sid for context in lease["ids_alerts"]] == [2002911]
+        assert "ids_alerts" not in engine._dhcp_lease_state["ROGUE-LAPTOP"]
         assert (
             engine._dhcp_lease_state["ROGUE-LAPTOP"]["next_renewal"]
             == lease["time"].timestamp() + lease["renewal_interval"]

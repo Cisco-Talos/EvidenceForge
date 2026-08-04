@@ -143,11 +143,16 @@ class CausalityScorer(DimensionScorer):
             systems_by_name = {system.hostname: system for system in scenario.environment.systems}
             email_config = getattr(scenario.environment, "email", None)
             self._email_server_ips = {}
+            self._email_server_hosts = {}
             if email_config is not None:
                 self._email_server_ips = {
                     server.name.lower(): systems_by_name[server.system].ip
                     for server in email_config.mail_servers
                     if server.system in systems_by_name
+                }
+                self._email_server_hosts = {
+                    server.name.lower(): server.hostname.lower()
+                    for server in email_config.mail_servers
                 }
             # Build host-time index and find traces
             host_time_index = self._build_host_time_index(records)
@@ -157,6 +162,7 @@ class CausalityScorer(DimensionScorer):
             self._proxy_ips = set()
             self._email_actor_emails = {}
             self._email_server_ips = {}
+            self._email_server_hosts = {}
             host_time_index = self._build_host_time_index(records)
 
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
@@ -189,7 +195,7 @@ class CausalityScorer(DimensionScorer):
         sub_scores = [s1, s2, s3, s4, s5, s6]
         dim_score = aggregate_sub_scores(sub_scores)
 
-        host_log_profile = _build_host_log_profile(records, vis)
+        host_log_profile = _build_host_log_profile(records, vis, scenario)
 
         return PillarScore(
             number=self.number,
@@ -290,12 +296,26 @@ class CausalityScorer(DimensionScorer):
             for record in record_list:
                 if id(record) in seen:
                     continue
-                if not self._record_near_event(record, event):
-                    continue
-                if self._record_matches(record, format_name, event, event_type):
+                matches = self._record_matches(record, format_name, event, event_type)
+                if matches and (
+                    self._record_near_event(record, event)
+                    or self._email_record_has_ground_truth_identity(record, event)
+                ):
                     found.append(record)
                     seen.add(id(record))
         return found
+
+    def _email_record_has_ground_truth_identity(
+        self,
+        record: ParsedRecord,
+        event: ResolvedEvent,
+    ) -> bool:
+        ground_truth = self._email_gt.get(event.storyline_id) or {}
+        message_id = ground_truth.get("message_id")
+        if message_id and record.fields.get("message_id") == message_id:
+            return True
+        uid = record.fields.get("uid")
+        return bool(uid and uid in set(ground_truth.get("smtp_uids") or ()))
 
     @staticmethod
     def _record_near_event(record: ParsedRecord, event: ResolvedEvent) -> bool:
@@ -875,6 +895,11 @@ class CausalityScorer(DimensionScorer):
             gt = self._email_gt.get(event.storyline_id) or {}
             message_id = gt.get("message_id")
             return bool(message_id and fields.get("message_id") == message_id)
+        gt = self._email_gt.get(event.storyline_id) or {}
+        if format_name in {"zeek_smtp", "zeek_conn", "zeek_ssl"}:
+            uid = fields.get("uid")
+            if uid and uid in set(gt.get("smtp_uids") or ()):
+                return True
         if format_name != "zeek_smtp":
             return False
 
@@ -910,6 +935,12 @@ class CausalityScorer(DimensionScorer):
         event: ResolvedEvent,
     ) -> bool:
         """Match opaque TLS mailbox reads to Zeek connection/SSL evidence."""
+        if format_name == "proxy_access":
+            if event.system_ip and fields.get("client_ip") != event.system_ip:
+                return False
+            server_name = str(event.details.get("server") or "").lower()
+            expected_host = self._email_server_hosts.get(server_name)
+            return bool(expected_host and str(fields.get("host") or "").lower() == expected_host)
         if format_name not in {"zeek_conn", "zeek_ssl"}:
             return False
         if event.system_ip and fields.get("id.orig_h") != event.system_ip:
@@ -1653,6 +1684,16 @@ class CausalityScorer(DimensionScorer):
                 break
             failures.append(failure)
 
+        parent_total, parent_correct, parent_failures = self._score_process_parent_integrity(
+            records
+        )
+        total_pairs += parent_total
+        correct_pairs += parent_correct
+        for failure in parent_failures:
+            if len(failures) >= 10:
+                break
+            failures.append(failure)
+
         score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
         return SubScore(
             name="Causal Ordering",
@@ -1722,6 +1763,83 @@ class CausalityScorer(DimensionScorer):
                     f"{record.line_number} precedes its exact inbound FLOW"
                 )
         return total, correct, failures
+
+    @classmethod
+    def _score_process_parent_integrity(
+        cls,
+        records: dict[str, list[ParsedRecord]],
+    ) -> tuple[int, int, list[str]]:
+        """Reject only parents proven terminated before a child without PID reuse."""
+
+        lifecycles: dict[tuple[str, str, int], dict[str, list[datetime]]] = defaultdict(
+            lambda: {"create": [], "terminate": []}
+        )
+        children: list[tuple[str, str, int, datetime, int | None]] = []
+        for format_name in ("ecar", "windows_event_sysmon"):
+            for record in records.get(format_name, []):
+                if record.timestamp is None:
+                    continue
+                fields = record.fields
+                host = str(
+                    fields.get("hostname") or fields.get("Computer") or record.source_host or ""
+                ).lower()
+                if not host:
+                    continue
+                is_create = (
+                    format_name == "ecar"
+                    and fields.get("object") == "PROCESS"
+                    and fields.get("action") == "CREATE"
+                ) or (format_name == "windows_event_sysmon" and fields.get("EventID") == 1)
+                is_terminate = (
+                    format_name == "ecar"
+                    and fields.get("object") == "PROCESS"
+                    and fields.get("action") == "TERMINATE"
+                ) or (format_name == "windows_event_sysmon" and fields.get("EventID") == 5)
+                if not (is_create or is_terminate):
+                    continue
+                pid = cls._coerce_pid(fields.get("pid") or fields.get("ProcessId"))
+                if pid is None:
+                    continue
+                timestamp = _normalize_ts(record.timestamp)
+                key = (format_name, host, pid)
+                lifecycles[key]["create" if is_create else "terminate"].append(timestamp)
+                if is_create:
+                    parent = cls._coerce_pid(fields.get("ppid") or fields.get("ParentProcessId"))
+                    children.append((format_name, host, pid, timestamp, parent))
+
+        total = 0
+        correct = 0
+        failures: list[str] = []
+        for format_name, host, child_pid, child_time, parent_pid in children:
+            if parent_pid in {None, 0, 4}:
+                continue
+            lifecycle = lifecycles.get((format_name, host, parent_pid))
+            if lifecycle is None or not lifecycle["create"] or not lifecycle["terminate"]:
+                continue
+            prior_creates = [time for time in lifecycle["create"] if time <= child_time]
+            prior_terminations = [time for time in lifecycle["terminate"] if time < child_time]
+            if not prior_creates or not prior_terminations:
+                continue
+            total += 1
+            last_create = max(prior_creates)
+            last_terminate = max(prior_terminations)
+            if last_create > last_terminate:
+                correct += 1
+            elif len(failures) < 10:
+                failures.append(
+                    f"{format_name} {host} child PID {child_pid} references stale parent "
+                    f"PID {parent_pid}"
+                )
+        return total, correct, failures
+
+    @staticmethod
+    def _coerce_pid(value: Any) -> int | None:
+        if value in (None, "", "-"):
+            return None
+        try:
+            return int(str(value), 0)
+        except ValueError:
+            return None
 
     @staticmethod
     def _ecar_remote_auth_transport_key(fields: dict[str, Any]) -> tuple[str, ...] | None:
@@ -1835,7 +1953,7 @@ class CausalityScorer(DimensionScorer):
                     total_checks += 1
                     if is_correct:
                         correct_checks += 1
-                    elif len(failures) < 10:
+                    else:
                         failures.append(
                             f"Event {event.index}: {indicator_name} mismatch in {trace.source_format}"
                         )
@@ -1847,7 +1965,7 @@ class CausalityScorer(DimensionScorer):
             weight=0.15,
             score=score,
             details=f"{correct_checks}/{total_checks} indicator checks correct",
-            sample_failures=failures,
+            sample_failures=sorted(failures)[:10],
         )
 
     def _check_indicators(
@@ -1876,10 +1994,11 @@ class CausalityScorer(DimensionScorer):
                         user_ok = self._username_indicator_matches(f[uf], event)
                     checks.append(("username", user_ok))
                     break
-        for hf in ["Computer", "hostname"]:
-            if hf in f and f[hf]:
-                checks.append(("hostname", self._host_matches(f[hf], event.system)))
-                break
+        if trace.source_format != "cisco_asa":
+            for hf in ["Computer", "hostname"]:
+                if hf in f and f[hf]:
+                    checks.append(("hostname", self._host_matches(f[hf], event.system)))
+                    break
         if "source_ip" in details:
             for ipf in ["IpAddress", "id.orig_h", "src_ip"]:
                 if ipf in f and f[ipf] and f[ipf] != "-":
@@ -1982,76 +2101,141 @@ class CausalityScorer(DimensionScorer):
                 score=100.0,
                 details="Fewer than 2 events — nothing to link",
             )
-        raw_total_pairs = len(resolved) - 1
-        raw_linkable = 0
+        expected_by_event = {
+            event.index: self._expected_indicator_values(event) for event in resolved
+        }
+        events_by_indicator: dict[str, list[ResolvedEvent]] = defaultdict(list)
+        for event in resolved:
+            for indicator in expected_by_event[event.index]:
+                events_by_indicator[indicator].append(event)
+        edges: dict[tuple[int, int], set[str]] = defaultdict(set)
+        for indicator, events in events_by_indicator.items():
+            ordered = sorted(events, key=lambda event: (event.time, event.index))
+            for first, second in zip(ordered, ordered[1:], strict=False):
+                edges[(first.index, second.index)].add(indicator)
+
         total_pairs = 0
         linkable = 0
         excluded = 0
         failures: list[str] = []
-        for i in range(raw_total_pairs):
-            a, b = resolved[i], resolved[i + 1]
-            pair_linkable = bool(
-                self._extract_indicator_values(a) & self._extract_indicator_values(b)
-            )
-            if pair_linkable:
-                raw_linkable += 1
+        by_index = {event.index: event for event in resolved}
+        for (first_index, second_index), indicators in sorted(edges.items()):
+            a, b = by_index[first_index], by_index[second_index]
             if (not a.traces and self._event_observation_exempt(a, context)) or (
                 not b.traces and self._event_observation_exempt(b, context)
             ):
                 excluded += 1
                 continue
             total_pairs += 1
+            observed_a = self._observed_indicator_values(a)
+            observed_b = self._observed_indicator_values(b)
+            pair_linkable = bool(indicators & observed_a & observed_b)
             if pair_linkable:
                 linkable += 1
             elif len(failures) < 10:
                 failures.append(
-                    f"Events {i}→{i + 1}: no shared indicator "
-                    f"({a.actor}@{a.system} → {b.actor}@{b.system})"
+                    f"Events {first_index}→{second_index}: expected pivot not present in both "
+                    f"rendered traces ({a.actor}@{a.system} → {b.actor}@{b.system})"
                 )
         score = (100.0 * linkable / total_pairs) if total_pairs > 0 else 100.0
-        raw_score = (100.0 * raw_linkable / raw_total_pairs) if raw_total_pairs > 0 else 100.0
+        connected = {index for edge in edges for index in edge}
+        isolated = len(resolved) - len(connected)
         return SubScore(
             name="Pivot Linkability",
             key="pivot_linkability",
             weight=0.15,
             score=score,
-            raw_score=raw_score if excluded else None,
             adjusted=excluded > 0,
-            details=self._adjusted_details(
-                f"{linkable}/{total_pairs} expected-visible consecutive pairs share a "
-                "pivotable indicator",
-                raw_linkable,
-                raw_total_pairs,
-                excluded,
+            details=(
+                f"{linkable}/{total_pairs} inferred expected-visible narrative edges retain a "
+                f"shared rendered pivot; {isolated} isolated events, {excluded} observation-exempt"
             ),
             sample_failures=failures,
         )
 
-    def _extract_indicator_values(self, event: ResolvedEvent) -> set[str]:
-        values: set[str] = {event.actor.lower(), event.system.lower()}
+    def _expected_indicator_values(self, event: ResolvedEvent) -> set[str]:
+        values = {
+            self._scoped_actor_indicator(event.actor, event.system),
+            f"host:{event.system.lower()}",
+        }
         if event.system_ip:
-            values.add(event.system_ip)
-        for key in ("source_ip", "dst_ip"):
-            if key in event.details and event.details[key]:
-                values.add(str(event.details[key]))
+            values.add(f"ip:{event.system_ip.lower()}")
+        key_namespaces = {
+            "source_ip": "ip",
+            "dst_ip": "ip",
+            "answer_ip": "ip",
+            "hostname": "host",
+            "server": "host",
+            "target_system": "host",
+            "query": "domain",
+            "base_domain": "domain",
+            "url": "url",
+            "uri": "url",
+            "artifact_id": "artifact",
+            "message_ids": "artifact",
+            "target_username": "user",
+            "success_account": "user",
+            "output_file": "file",
+            "process_name": "process",
+        }
+        for detail in event.sub_details or [event.details]:
+            for key, namespace in key_namespaces.items():
+                raw = detail.get(key)
+                items = raw if isinstance(raw, list) else [raw]
+                for item in items:
+                    if item not in (None, "", "-"):
+                        values.add(f"{namespace}:{str(item).lower()}")
+        email_gt = self._email_gt.get(event.storyline_id) or {}
+        for key, namespace in (("message_id", "artifact"), ("smtp_uids", "artifact")):
+            raw = email_gt.get(key)
+            items = raw if isinstance(raw, list) else [raw]
+            for item in items:
+                if item:
+                    values.add(f"{namespace}:{str(item).lower()}")
+        return values
+
+    def _observed_indicator_values(self, event: ResolvedEvent) -> set[str]:
+        values: set[str] = set()
         for trace in event.traces:
-            for field_name in (
-                "TargetUserName",
-                "SubjectUserName",
-                "principal",
-                "username",
-                "Computer",
-                "hostname",
-                "IpAddress",
-                "id.orig_h",
-                "id.resp_h",
-                "src_ip",
-                "dst_ip",
-            ):
+            field_namespaces = {
+                "TargetUserName": "user",
+                "SubjectUserName": "user",
+                "principal": "user",
+                "username": "user",
+                "Computer": "host",
+                "hostname": "host",
+                "host": "host",
+                "server_name": "host",
+                "IpAddress": "ip",
+                "id.orig_h": "ip",
+                "id.resp_h": "ip",
+                "src_ip": "ip",
+                "dst_ip": "ip",
+                "query": "domain",
+                "url": "url",
+                "uri": "url",
+                "message_id": "artifact",
+                "msg_id": "artifact",
+                "uid": "artifact",
+                "sha256": "file",
+                "image_path": "process",
+                "NewProcessName": "process",
+            }
+            for field_name, namespace in field_namespaces.items():
                 val = trace.fields.get(field_name)
                 if val and val != "-":
-                    values.add(str(val).lower())
+                    values.add(f"{namespace}:{str(val).lower()}")
+        actor_indicator = self._scoped_actor_indicator(event.actor, event.system)
+        if any(value in values for value in {f"user:{event.actor.lower()}", actor_indicator}):
+            values.add(actor_indicator)
         return values
+
+    @staticmethod
+    def _scoped_actor_indicator(actor: str, system: str) -> str:
+        normalized = actor.lower()
+        if normalized in {"root", "system", "local service", "network service"}:
+            return f"user:{normalized}@{system.lower()}"
+        return f"user:{normalized}"
 
     # --- Sub-score 5: Temporal Integrity ---
 
@@ -2178,7 +2362,11 @@ class CausalityScorer(DimensionScorer):
         failures: list[str] = []
 
         for event in resolved:
-            groups = vis.get_expected_format_groups(event.system, event.event_types)
+            groups = vis.get_expected_format_groups(
+                event.system,
+                event.event_types,
+                event.sub_details,
+            )
             evt_time = _normalize_ts(event.time)
             evt_bucket = int(evt_time.timestamp()) // 60
 
@@ -2196,18 +2384,17 @@ class CausalityScorer(DimensionScorer):
                 group_found = False
                 for fmt in group_formats:
                     if fmt not in host_time_index.get("__formats__", {fmt: True}):
-                        # Check if format has any records at all
                         has_format = any(
-                            fmt in host_time_index.get(k, {})
-                            for lk in lookup_keys
-                            for b in range(evt_bucket - 2, evt_bucket + 3)
-                            for k in [f"{lk}|{b}"]
+                            fmt in host_time_index.get(key, {})
+                            for lookup_key in lookup_keys
+                            for bucket in range(evt_bucket - 2, evt_bucket + 3)
+                            for key in [f"{lookup_key}|{bucket}"]
                         )
                         if not has_format:
                             continue
-                    for b in range(evt_bucket - 2, evt_bucket + 3):
-                        for lk in lookup_keys:
-                            key = f"{lk}|{b}"
+                    for bucket in range(evt_bucket - 2, evt_bucket + 3):
+                        for lookup_key in lookup_keys:
+                            key = f"{lookup_key}|{bucket}"
                             if key in host_time_index and fmt in host_time_index[key]:
                                 group_found = True
                                 break
@@ -2256,6 +2443,7 @@ class CausalityScorer(DimensionScorer):
 def _build_host_log_profile(
     records: dict[str, list[ParsedRecord]],
     vis: VisibilityModel,
+    scenario: Scenario | None = None,
 ) -> dict[str, dict]:
     present: dict[str, set[str]] = defaultdict(set)
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -2278,11 +2466,22 @@ def _build_host_log_profile(
             if canonical:
                 all_hosts.add(canonical.lower())
 
+    shell_hosts = {
+        event.system.lower()
+        for event in (
+            *((scenario.storyline or []) if scenario is not None else []),
+            *((scenario.red_herrings or []) if scenario is not None else []),
+        )
+        if any(spec.type in {"process", "ssh_session"} for spec in event.events)
+    }
+
     for hostname in sorted(all_hosts):
-        expected = vis.get_expected_formats(hostname)
+        expected = set(vis.get_expected_formats(hostname))
         if not expected:
             continue
         present_fmts = present.get(hostname, set())
+        if "bash_history" not in present_fmts and hostname not in shell_hosts:
+            expected.discard("bash_history")
         missing = sorted(expected - present_fmts)
         profile[hostname] = {
             "expected_formats": sorted(expected),

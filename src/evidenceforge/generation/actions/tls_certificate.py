@@ -65,8 +65,10 @@ class TlsCertificatePlanner:
         validity: tuple[int, int],
         issuer_name: str,
         event_time: datetime,
+        *,
+        identity: str,
     ) -> tuple[int, int]:
-        """Keep a child validity interval within a configured active issuer interval."""
+        """Keep a child interval inside its issuer without copying the issuer boundary."""
 
         profile = certificate_authority_profile(issuer_name)
         if profile is None:
@@ -76,7 +78,17 @@ class TlsCertificatePlanner:
         event_epoch = int(event_time.timestamp())
         if not (issuer_start < event_epoch < issuer_end):
             return validity
-        start = max(validity[0], issuer_start)
+        start = validity[0]
+        if start <= issuer_start:
+            available_seconds = max(1, event_epoch - issuer_start - 1)
+            maximum_offset = min(45 * 86400, available_seconds)
+            minimum_offset = min(3600, maximum_offset)
+            bound_rng = random.Random(
+                _stable_seed(f"tls_child_issuer_bound:{identity}:{issuer_name}")
+            )
+            start = issuer_start + bound_rng.randint(minimum_offset, maximum_offset)
+        else:
+            start = max(start, issuer_start + 1)
         end = min(validity[1], issuer_end)
         start = min(start, event_epoch - 1)
         end = max(end, event_epoch + 1)
@@ -97,15 +109,21 @@ class TlsCertificatePlanner:
         """Return final stable chain composition and per-handshake file identities."""
 
         issuer_name = str(issuer_config["name"])
+        leaf_identity = f"leaf:{backend_identity}:{cert_name}:{issuer_name}:{key_type}:{key_size}"
         validity_fallback = int(issuer_config.get("validity_days", 397))
         validity = self._validity_window(
-            identity=f"leaf:{backend_identity}:{cert_name}:{issuer_name}:{key_type}:{key_size}",
+            identity=leaf_identity,
             event_time=event_time,
             validity_days_min=int(issuer_config.get("validity_days_min", validity_fallback)),
             validity_days_max=int(issuer_config.get("validity_days_max", validity_fallback)),
             not_before_max_days=int(issuer_config.get("not_before_max_days", 300)),
         )
-        validity = self._bound_to_issuer(validity, issuer_name, event_time)
+        validity = self._bound_to_issuer(
+            validity,
+            issuer_name,
+            event_time,
+            identity=leaf_identity,
+        )
         leaf = self._registry.resolve_certificate(
             backend_identity=backend_identity,
             subject_name=f"CN={cert_name}",

@@ -40,6 +40,7 @@ from typing import Any
 import yaml
 
 from evidenceforge.models import Scenario
+from evidenceforge.models.ids import policy_fingerprint
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -225,6 +226,7 @@ class ScenarioValidator:
         self._validate_user_primary_system_references()
         self._validate_group_member_references()
         self._validate_storyline_references()
+        self._validate_ids_alert_attachments()
         self._validate_uniqueness()
         self._validate_expanded_activities()
         self._validate_event_sequences()
@@ -258,6 +260,169 @@ class ScenarioValidator:
         self._validate_traffic_affinities()
         self._sort_issues()
         return self.issues
+
+    def _validate_ids_alert_attachments(self) -> None:
+        """Resolve attached signatures and reject scenario-wide policy ambiguity."""
+        from evidenceforge.generation.activity.ids_signatures import (
+            effective_alert_policy,
+            signature_by_sid,
+        )
+
+        effective_by_sid: dict[tuple[int, int], tuple[object, ...]] = {}
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            for event_idx, event in enumerate(events):
+                source_system = next(
+                    (
+                        system
+                        for system in self.scenario.environment.systems
+                        if system.hostname == event.system
+                    ),
+                    None,
+                )
+                source_ip = source_system.ip if source_system is not None else None
+                for spec_idx, spec in enumerate(event.events):
+                    attachments = getattr(spec, "ids_alerts", ())
+                    for attachment_idx, attachment in enumerate(attachments):
+                        path = (
+                            f"{section_name}.{event_idx}.events.{spec_idx}."
+                            f"ids_alerts.{attachment_idx}"
+                        )
+                        signature = signature_by_sid(attachment.sid)
+                        if signature is None:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.sid",
+                                    message=f"Unknown IDS signature SID {attachment.sid}",
+                                    suggestion=(
+                                        "Add the SID to activity/ids_signatures.yaml or choose "
+                                        "an existing configured signature."
+                                    ),
+                                )
+                            )
+                            continue
+                        policy = effective_alert_policy(signature, attachment.policy)
+                        identity = (int(signature.get("gid", 1)), attachment.sid)
+                        fingerprint = policy_fingerprint(policy)
+                        prior = effective_by_sid.setdefault(identity, fingerprint)
+                        if prior != fingerprint:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.policy",
+                                    message=(
+                                        f"SID {attachment.sid} has conflicting effective IDS "
+                                        "alert policies in this scenario"
+                                    ),
+                                    suggestion=(
+                                        "Use the same effective policy for every attachment of "
+                                        "a SID, or use different SIDs."
+                                    ),
+                                )
+                            )
+                        protocol, dst_ports, observed_direction = self._ids_transport_shape(
+                            spec,
+                            event.system,
+                            source_ip,
+                        )
+                        if protocol != str(signature.get("proto", "tcp")).lower():
+                            self._warn_ids_mismatch(path, attachment.sid, "protocol", protocol)
+                        signature_port = int(signature.get("dst_port", 0))
+                        if dst_ports and signature_port not in {0, *dst_ports}:
+                            observed_ports: object = (
+                                next(iter(dst_ports)) if len(dst_ports) == 1 else sorted(dst_ports)
+                            )
+                            self._warn_ids_mismatch(
+                                path,
+                                attachment.sid,
+                                "destination port",
+                                observed_ports,
+                            )
+                        if observed_direction and signature.get("direction") != observed_direction:
+                            self._warn_ids_mismatch(
+                                path,
+                                attachment.sid,
+                                "direction",
+                                observed_direction,
+                            )
+
+    def _ids_transport_shape(
+        self,
+        spec: Any,
+        event_system_name: str,
+        default_source_ip: str | None,
+    ) -> tuple[str, set[int], str | None]:
+        """Return the protocol, destination ports, and derivable direction for an event."""
+
+        event_type = str(getattr(spec, "type", ""))
+        if event_type in {"ssh_session", "rdp_session"}:
+            protocol = "tcp"
+            dst_ports = {22 if event_type == "ssh_session" else 3389}
+        elif event_type == "dhcp_lease":
+            protocol = "udp"
+            dst_ports = {67}
+        elif event_type in {"dns_query", "dga_queries", "dns_tunnel"}:
+            protocol = "udp"
+            dst_ports = {53}
+        elif event_type == "web_scan":
+            protocol = "tcp"
+            dst_ports = {int(spec.dst_port)}
+        elif event_type == "port_scan":
+            protocol = str(spec.protocol).lower()
+            dst_ports = {int(port) for port in spec.ports}
+        else:
+            protocol = str(getattr(spec, "protocol", "tcp")).lower()
+            dst_port = getattr(spec, "dst_port", None)
+            dst_ports = {int(dst_port)} if dst_port is not None else set()
+
+        source_ip = getattr(spec, "source_ip", None) or default_source_ip
+        destination_ips: list[str] = []
+        if event_type in {"ssh_session", "rdp_session"}:
+            target_system = next(
+                (
+                    system
+                    for system in self.scenario.environment.systems
+                    if system.hostname == event_system_name
+                ),
+                None,
+            )
+            if target_system is not None and getattr(spec, "source_ip", None):
+                destination_ips = [target_system.ip]
+        elif event_type == "port_scan":
+            destination_ips = list(spec.target_ips)
+        else:
+            dst_ip = getattr(spec, "dst_ip", None)
+            if dst_ip:
+                destination_ips = [dst_ip]
+
+        directions = set()
+        if source_ip:
+            for dst_ip in destination_ips:
+                src_internal = source_ip in self.ips
+                dst_internal = dst_ip in self.ips
+                if src_internal and not dst_internal:
+                    directions.add("out")
+                elif not src_internal and dst_internal:
+                    directions.add("in")
+        observed_direction = next(iter(directions)) if len(directions) == 1 else None
+        return protocol, dst_ports, observed_direction
+
+    def _warn_ids_mismatch(self, path: str, sid: int, field: str, value: object) -> None:
+        """Record a non-blocking signature/event plausibility mismatch."""
+        self.issues.append(
+            ValidationIssue(
+                severity="warning",
+                field_path=path,
+                message=f"IDS SID {sid} does not normally match event {field} {value!r}",
+                suggestion=(
+                    "Keep the attachment for an intentional nonstandard deployment, or choose "
+                    "a signature whose configured protocol, port, and direction match."
+                ),
+            )
+        )
 
     def has_errors(self) -> bool:
         """Check if any error-level issues were found.

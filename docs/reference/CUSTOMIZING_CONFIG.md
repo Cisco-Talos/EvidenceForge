@@ -172,6 +172,7 @@ library that should influence many scenarios.
 | Endpoint background noise | `endpoint_noise.yaml` (Windows scheduled-process trigger windows, host drift, skip probability, and DHCP registry emission policy) |
 | Host/persona/role volume realism | `host_activity_profiles.yaml` (coarse rate-family multipliers, firewall deny burst shaping, and data-driven artifact variants) |
 | Generated identity pools | `email_background.yaml`, `mail_public_identities.yaml`, `external_actor_profiles.yaml`, `suspicious_benign.yaml`, and `command_parameter_pools.yaml` (baseline email senders/recipients, reserved public mail replacements, omitted storyline external IPs, suspicious-benign DNS/connection targets, and command URL/host placeholders). Scenario-authored IPs/domains still override fallback pools. |
+| IDS signatures and default alert cadence | `ids_signatures.yaml` (`alert_policy` supports Snort-style `detection_filter` and `event_filter`; scenario `ids_alerts[].policy` replaces the signature default) |
 | Observation/source coverage | `observation_profiles.yaml` (named source-level missingness/delay profiles selected by scenario `observation_profile`; default `complete` keeps perfect coverage; non-complete decisions are coherent per source-local process, session, and same-UID network group; optional collection batching/window knobs belong here) |
 | Causal/source-native timing | `timing_profiles.yaml` (`relationships` for causal prerequisites, source latency, teardown margins, Zeek analyzer offsets and TLS duration floors, endpoint host-clock profiles shared by OS logs and host-resident eCAR, independent network sensor clock/path profiles, plus Windows/Sysmon collision spacing) |
 | Public NTP fallback servers and DNS tunnel timing | `network_params.yaml` (`public_ntp_servers`, `dns_tunnel_rtt`; scenario-defined internal/domain NTP servers still take precedence) |
@@ -229,6 +230,14 @@ failing visible contradictions, parse errors, value mismatches, and missing evid
 manifest marks `visible` or `delayed`. Text and JSON reports keep the adjusted score and expose
 the raw score for affected sub-scores.
 
+IDS output has an additional zero-weight `ids_integrity` hard gate fixed at
+100%. It reconciles sensor-local Snort counts and ordered normalized digests with
+`GROUND_TRUTH.json.ids_evaluation`, then checks filtering and observation totals
+against `OBSERVATION_MANIFEST.json`. Because its weight is zero, it does not
+move the overall numeric score; any contradiction still fails acceptance.
+Legacy datasets without an IDS summary skip the check unless the supplied
+scenario contains authored `ids_alerts`.
+
 For full schema documentation for each file, see the skill reference: `/eforge:references:config-evaluation`.
 
 ## Reference Documentation
@@ -243,3 +252,27 @@ For full field schemas and conventions, see the reference docs installed with th
 | Host activity (bash, systemd, syslog) | `/eforge:references:config-host-activity` |
 | Cross-file dependency map | `/eforge:references:config-dependency-graph` |
 | Validation checks | `/eforge:references:config-validation` |
+
+### IDS signature alert-policy overlays
+
+IDS signature entries merge by `sid`, so an overlay can add or replace only the
+default policy while preserving the packaged identity and metadata:
+
+```yaml
+# .eforge/config/activity/ids_signatures.yaml
+signatures:
+  - sid: 2002910
+    alert_policy:
+      event_filter: {type: both, track: by_src, count: 5, seconds: 60}
+```
+
+An omitted policy (or `every`) alerts for every visible candidate. Policy objects
+support `detection_filter`, `event_filter`, or both; track is `by_src`/`by_dst`,
+and event-filter type is `limit`/`threshold`/`both`. Counts and seconds are strict
+positive integers. Run `eforge validate-config` after editing. See the installed
+`references/config-ids.md` skill reference for exact semantics.
+
+These defaults apply when an attachment omits `policy` on any supported typed
+transport owner (`connection`, `beacon`, SSH/RDP sessions, authored DHCP,
+port/web scans, and DNS query families). They do not cause unattached network
+events to alert and do not imply IDS decryption.

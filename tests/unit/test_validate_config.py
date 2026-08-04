@@ -1972,6 +1972,43 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_malformed_ids_alert_policy(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 999004,
+                        "rev": 1,
+                        "message": "ET TEST Invalid Policy",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "tcp",
+                        "dst_port": 443,
+                        "direction": "out",
+                        "alert_policy": {
+                            "event_filter": {
+                                "type": "limit",
+                                "track": "by_src",
+                                "count": True,
+                                "seconds": 0,
+                                "unknown": "field",
+                            }
+                        },
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+        result = validate_config()
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "invalid alert_policy" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_conflicting_ids_rule_identity(self, monkeypatch):
         from evidenceforge.generation.activity import ids_signatures
 

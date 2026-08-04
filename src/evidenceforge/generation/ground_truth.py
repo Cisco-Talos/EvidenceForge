@@ -91,11 +91,13 @@ class GroundTruthGenerator:
         malicious_events: list[dict],
         red_herring_events: list[dict] | None = None,
         source_evidence_status: dict[str, dict[str, dict[str, int]]] | None = None,
+        ids_evaluation_summary: dict[str, dict[str, dict[str, object]]] | None = None,
     ):
         self.scenario = scenario
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
         self.source_evidence_status = source_evidence_status or {}
+        self.ids_evaluation_summary = ids_evaluation_summary
 
     def build_document(self) -> GroundTruthDocument:
         """Build the canonical machine-readable ground-truth document."""
@@ -113,6 +115,7 @@ class GroundTruthGenerator:
                 "observation_profile": self.scenario.observation_profile,
                 "collection_window": self._collection_window(),
                 "source_evidence_status": self._sorted_source_evidence_status(),
+                "ids_evaluation": self._build_ids_evaluation(),
                 "storyline_steps": self._build_storyline_steps(),
                 "red_herring_steps": self._build_red_herring_steps(),
                 "events": self._build_event_records(),
@@ -156,6 +159,10 @@ class GroundTruthGenerator:
         if self._include_source_evidence_status(doc):
             content.append("\n## Source Evidence Status\n")
             content.append(self._create_source_evidence_status_section(doc))
+
+        if doc.ids_evaluation is not None:
+            content.append("\n## IDS Evaluation Summary\n")
+            content.append(self._create_ids_evaluation_section(doc))
 
         content.append("\n## Indicators of Compromise (IOCs)\n")
         content.append(self._format_iocs(self._extract_iocs(doc)))
@@ -314,6 +321,54 @@ class GroundTruthGenerator:
             for cluster_id, source_status in sorted(self.source_evidence_status.items())
         }
 
+    def _build_ids_evaluation(self) -> dict | None:
+        if self.ids_evaluation_summary is None:
+            return None
+        observation: dict[str, int] = {}
+        for source_status in self.source_evidence_status.values():
+            for status, count in source_status.get("ids", {}).items():
+                observation[status] = observation.get(status, 0) + int(count)
+        return {
+            "observation": {key: observation[key] for key in sorted(observation)},
+            "sensors": {
+                sensor: {
+                    key: signatures[key]
+                    for key in sorted(
+                        signatures,
+                        key=lambda value: tuple(int(part) for part in value.split(":")),
+                    )
+                }
+                for sensor, signatures in sorted(self.ids_evaluation_summary.items())
+            },
+        }
+
+    @staticmethod
+    def _create_ids_evaluation_section(document: GroundTruthDocument) -> str:
+        summary = document.ids_evaluation
+        if summary is None:
+            return "*No IDS evaluation summary was generated.*\n"
+        observation = ", ".join(
+            f"{status}={count}" for status, count in sorted(summary.observation.items())
+        )
+        lines = [
+            f"Observation totals: {observation or 'none'}.\n",
+            "| Sensor | GID:SID | Candidates | Emitted | Policy Filtered | Origins | Digest |",
+            "|--------|---------|------------|---------|-----------------|---------|--------|",
+        ]
+        for sensor, signatures in sorted(summary.sensors.items()):
+            for key, signature in sorted(signatures.items()):
+                origins = ", ".join(
+                    f"{origin}={count}" for origin, count in sorted(signature.origins.items())
+                )
+                lines.append(
+                    f"| {sensor} | {key} | {signature.candidate} | {signature.emitted} | "
+                    f"{signature.policy_filtered} | {origins or 'none'} | "
+                    f"`{signature.emitted_sha256[:12]}` |"
+                )
+        if not summary.sensors:
+            lines.append("| *(none)* | - | 0 | 0 | 0 | none | - |")
+        return "\n".join(lines) + "\n"
+
     def _storyline_event_dicts(self, document: GroundTruthDocument) -> list[dict]:
         return [
             self._flatten_event(event)
@@ -400,15 +455,23 @@ class GroundTruthGenerator:
         if event_type == "connection":
             return (
                 f"Connection to {event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
-                f"(UID: {event.get('uid', 'N/A')})"
+                f"(UID: {event.get('uid', 'N/A')}){self._format_ids_alert_totals(event)}"
             )
         if event_type == "rdp_session":
             return (
-                f"RDP session to {event.get('dst_ip', 'N/A')}:3389 (UID: {event.get('uid', 'N/A')})"
+                f"RDP session to {event.get('dst_ip', 'N/A')}:3389 "
+                f"(UID: {event.get('uid', 'N/A')}){self._format_ids_alert_totals(event)}"
             )
         if event_type == "ssh_session":
             return (
-                f"SSH session to {event.get('dst_ip', 'N/A')}:22 (UID: {event.get('uid', 'N/A')})"
+                f"SSH session to {event.get('dst_ip', 'N/A')}:22 "
+                f"(UID: {event.get('uid', 'N/A')}){self._format_ids_alert_totals(event)}"
+            )
+        if event_type == "dhcp_lease":
+            return (
+                f"DHCP lease for {event.get('system', 'N/A')} "
+                f"(MAC: {event.get('mac_address', 'N/A')})"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "service_installed":
             return f"Service installed: {event.get('service_name', 'N/A')} ({event.get('service_file_name', 'N/A')})"
@@ -426,18 +489,21 @@ class GroundTruthGenerator:
         if event_type == "port_scan":
             return (
                 f"Port scan: {event.get('target_count', 'N/A')} targets, ports {event.get('ports', [])}, "
-                f"{event.get('total_connections', 'N/A')} denied connections + ASA threat detection alert (733100)"
+                f"{event.get('total_connections', 'N/A')} denied connections + ASA threat "
+                f"detection alert (733100){self._format_ids_alert_totals(event)}"
             )
         if event_type == "beacon":
             label = "Denied beacon" if event.get("action", "allow") == "deny" else "Beacon"
             return (
                 f"{label} to {event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
                 f"({event.get('attempt_count', 'N/A')} attempts, {event.get('termination', 'N/A')})"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "dns_query":
             return (
                 f"DNS query: {event.get('query', 'N/A')} "
                 f"({event.get('qtype', 'A')}, {event.get('rcode', 'NOERROR')})"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "email_message":
             recipients = event.get("recipients", [])
@@ -461,6 +527,7 @@ class GroundTruthGenerator:
                 f"Web scan ({event.get('preset', 'custom')}) against "
                 f"{event.get('dst_ip', 'N/A')}:{event.get('dst_port', 'N/A')} "
                 f"({event.get('request_count', 'N/A')} requests)"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "credential_spray":
             result = (
@@ -478,13 +545,14 @@ class GroundTruthGenerator:
             return (
                 f"DGA queries: {event.get('total_queries', 'N/A')} total "
                 f"({event.get('nxdomain_count', 'N/A')} NXDOMAIN, TLD: {event.get('tld', '.com')}, "
-                f"sample: {sample[:3]})"
+                f"sample: {sample[:3]}){self._format_ids_alert_totals(event)}"
             )
         if event_type == "dns_tunnel":
             return (
                 f"DNS tunnel via {event.get('base_domain', 'N/A')} "
                 f"({event.get('encoding', 'hex')}, {event.get('total_queries', 'N/A')} queries, "
                 f"{event.get('bytes_exfiltrated', 0)} bytes exfiltrated)"
+                f"{self._format_ids_alert_totals(event)}"
             )
         if event_type == "explicit_credentials":
             return (
@@ -531,6 +599,28 @@ class GroundTruthGenerator:
                 f"{shown} (sha256:{digest[:12]}){ids_suffix}"
             )
         return event.get("activity", "N/A")
+
+    @staticmethod
+    def _format_ids_alert_totals(event: dict) -> str:
+        """Render compact correlated IDS totals for Markdown ground truth."""
+        attachments = event.get("ids_alerts")
+        if not isinstance(attachments, list) or not attachments:
+            return ""
+        rendered = []
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            rendered.append(
+                "SID {sid} policy={policy} candidates={candidate} emitted={emitted} "
+                "filtered={filtered}".format(
+                    sid=attachment.get("sid", "N/A"),
+                    policy=attachment.get("effective_policy", attachment.get("policy", "pending")),
+                    candidate=attachment.get("candidate", 0),
+                    emitted=attachment.get("emitted", 0),
+                    filtered=attachment.get("policy_filtered", 0),
+                )
+            )
+        return f" [IDS: {'; '.join(rendered)}]" if rendered else ""
 
     def _include_source_evidence_status(self, document: GroundTruthDocument | None = None) -> bool:
         source_evidence_status = (

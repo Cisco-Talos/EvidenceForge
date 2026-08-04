@@ -34,7 +34,11 @@ from evidenceforge.models.scenario import (
 T0 = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
 
 
-def _visibility_engine(*, destination_profile: str = "") -> NetworkVisibilityEngine:
+def _visibility_engine(
+    *,
+    source_profile: str = "",
+    destination_profile: str = "",
+) -> NetworkVisibilityEngine:
     config = NetworkConfig(
         segments=[
             NetworkSegment(
@@ -53,6 +57,7 @@ def _visibility_engine(*, destination_profile: str = "") -> NetworkVisibilityEng
                 type="network",
                 name="source-tap",
                 monitoring_segments=["workstations"],
+                capture_profile=source_profile,
                 log_formats=["zeek"],
             ),
             NetworkSensor(
@@ -144,7 +149,9 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
             "local_orig": False,
         }
     }
-    planner = NetworkObservationPlanner(_visibility_engine())
+    planner = NetworkObservationPlanner(
+        _visibility_engine(source_profile="well_synced", destination_profile="well_synced")
+    )
 
     first = planner.plan(event, {"zeek_conn", "zeek_dns"})
     second = planner.plan(event, {"zeek_conn", "zeek_dns"})
@@ -167,6 +174,30 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
         assert observation.connection_id(event.network.zeek_uid) == observation.connection_uid
         assert observation.traffic.missed_bytes == 0
         assert observation.observed_duration >= event.network.duration
+
+
+def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> None:
+    """Default distributed taps should not clone every cross-sensor observation."""
+
+    planner = NetworkObservationPlanner(_visibility_engine())
+    differing_traffic = 0
+    relative_offsets: list[float] = []
+    for index in range(200):
+        event = _network_event(
+            start=T0 + timedelta(seconds=index * 3),
+            stable_id=f"network:distributed-texture:{index}",
+        )
+        observations = _observation_by_sensor(planner.plan(event, {"zeek_conn", "zeek_dns"}))
+        source = observations["source-tap"]
+        destination = observations["destination-tap"]
+        differing_traffic += source.traffic != destination.traffic
+        relative_offsets.append(
+            (destination.observed_start_time - source.observed_start_time).total_seconds()
+        )
+
+    assert differing_traffic >= 20
+    assert any(offset < 0 for offset in relative_offsets)
+    assert any(offset > 0 for offset in relative_offsets)
 
 
 def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatch) -> None:
@@ -261,10 +292,9 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
 
     event = _network_event()
     event._nat_swaps_by_sensor = {"destination-tap": {"src_ip": "198.51.100.25", "src_port": 62000}}
-    event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
-        event,
-        {"zeek_conn", "zeek_dns"},
-    )
+    event.network_observations = NetworkObservationPlanner(
+        _visibility_engine(source_profile="well_synced", destination_profile="well_synced")
+    ).plan(event, {"zeek_conn", "zeek_dns"})
     event.network_observations_planned = True
     conn_emitter = ZeekEmitter(
         load_format("zeek_conn"),

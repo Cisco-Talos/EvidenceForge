@@ -49,6 +49,7 @@ class ParsedRecord(BaseModel):
     parse_errors: list[str] = Field(default_factory=list)
     line_number: int | None = None
     source_host: str | None = None
+    source_instance: str | None = None
 
 
 class LogParser(ABC):
@@ -195,7 +196,10 @@ def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str,
             if parser.can_parse(candidate):
                 result.setdefault(format_name, []).append(candidate)
 
-    return result
+    return {
+        format_name: sorted(paths, key=lambda path: path.as_posix())
+        for format_name, paths in sorted(result.items())
+    }
 
 
 # Import parsers to trigger registration

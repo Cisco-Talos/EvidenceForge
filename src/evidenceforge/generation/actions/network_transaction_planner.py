@@ -59,6 +59,7 @@ class _NetworkOccurrenceDraft:
     email: Any = None
     smtp: Any = None
     ids: Any = None
+    ids_alerts: list[Any] = field(default_factory=list)
     ssl: Any = None
     http: Any = None
     file_transfer: Any = None
@@ -95,6 +96,7 @@ class _NetworkOccurrenceDraft:
             email=self.email,
             smtp=self.smtp,
             ids=self.ids,
+            ids_alerts=self.ids_alerts,
             ssl=self.ssl,
             http=self.http,
             file_transfer=self.file_transfer,
@@ -209,6 +211,7 @@ class NetworkTransactionPlanner:
         x509 = request.x509
         x509_chain = request.x509_chain
         ids = request.ids
+        ids_alerts = list(request.ids_alerts)
         http = request.http
         caller_supplied_http = http is not None
         file_transfer = request.file_transfer
@@ -517,6 +520,7 @@ class NetworkTransactionPlanner:
                 conn_state=conn_state,
                 dns=dns,
                 ids=ids,
+                ids_alerts=ids_alerts,
                 http=http,
                 file_transfer=file_transfer,
                 ocsp=ocsp,
@@ -1584,6 +1588,8 @@ class NetworkTransactionPlanner:
         # Caller-provided context overrides
         if ids is not None:
             event.ids = ids
+        if ids_alerts:
+            event.ids_alerts = list(ids_alerts)
         if email is not None:
             event.email = email
         if smtp is not None:
@@ -1869,6 +1875,7 @@ class NetworkTransactionPlanner:
                     existing_user_agent=user_agent,
                     override_user_agent=proxy_ua_override,
                     apply_domain_override=apply_domain_user_agent,
+                    source_identity=src_ip,
                 )
                 proxy_referrer = generator_module._source_native_http_referrer(
                     user_agent,
@@ -1997,28 +2004,6 @@ class NetworkTransactionPlanner:
             and conn_state == "SF"
             and event.http is None  # Skip auto-generation if caller provided HttpContext
         ):
-            _USER_AGENTS_WINDOWS = [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
-            ]
-            _USER_AGENTS_LINUX = [
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
-                "curl/7.88.1",
-                "python-requests/2.31.0",
-                "Wget/1.21.3",
-            ]
-            if source_system and generator_module._get_os_category(source_system.os) == "linux":
-                ua = rng.choice(_USER_AGENTS_LINUX)
-            else:
-                ua = rng.choice(_USER_AGENTS_WINDOWS)
             # Use the already-resolved hostname for HTTP Host header and URI templates.
             # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
             host = (
@@ -2071,6 +2056,7 @@ class NetworkTransactionPlanner:
                 existing_user_agent="",
                 override_user_agent=http_ua_override,
                 apply_domain_override=True,
+                source_identity=src_ip,
             )
             redirect_status = plaintext_http_redirect_status(
                 web_host,

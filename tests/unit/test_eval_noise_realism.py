@@ -380,4 +380,6 @@ class TestEndToEnd:
         assert result.name == "Plausibility"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert len(result.sub_scores) == 7
+        ids = next(score for score in result.sub_scores if score.key == "ids_integrity")
+        assert ids.skipped

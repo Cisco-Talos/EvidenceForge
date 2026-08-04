@@ -6575,6 +6575,7 @@ class ActivityGenerator:
         existing_user_agent: str = "",
         override_user_agent: str | None = None,
         apply_domain_override: bool = True,
+        source_identity: str | None = None,
     ) -> str:
         """Return a source-sticky proxy User-Agent for one logical client context."""
 
@@ -6624,7 +6625,7 @@ class ActivityGenerator:
             return normalize_selected_user_agent(existing_user_agent)
 
         domain_class = get_proxy_domain_class(host) or ""
-        source_key = "unknown"
+        source_key = source_identity or "unknown"
         os_category = ""
         if source_system is not None:
             os_category = _get_os_category(getattr(source_system, "os", ""))
@@ -12751,6 +12752,7 @@ class ActivityGenerator:
         x509_chain: list[X509Context] | None = None,
         tls_presentation: TlsCertificatePresentationPlan | None = None,
         ids: Optional["IdsContext"] = None,
+        ids_alerts: list["IdsContext"] | None = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
         file_transfers: list[FileTransferContext] | None = None,
@@ -12797,6 +12799,7 @@ class ActivityGenerator:
             src_port: Source port (auto-assigned ephemeral if None)
             emit_dns: If True, emit a DNS lookup for dst_ip before the connection
             ids: Optional IdsContext for IDS alert correlation (Snort emitter)
+            ids_alerts: Optional additional IDS contexts for multi-signature correlation
             http: Optional HttpContext override (skips auto-generation)
             preserve_dst_ip: Preserve caller-supplied dst_ip when the scenario or caller
                 intentionally pairs an authored hostname with a specific address. This keeps
@@ -12830,6 +12833,7 @@ class ActivityGenerator:
             x509_chain=list(x509_chain or []),
             tls_presentation=tls_presentation,
             ids=ids,
+            ids_alerts=list(ids_alerts or []),
             http=http,
             file_transfer=file_transfer,
             file_transfers=list(file_transfers or []),
@@ -16981,6 +16985,7 @@ class ActivityGenerator:
         public_key_hash: str = "",
         emit_session_close: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
         source: str = "activity_generator",
     ) -> str:
         """Generate an SSH session through the SSH action-bundle adapter.
@@ -17015,6 +17020,7 @@ class ActivityGenerator:
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
             session_end_plan=session_end_plan,
+            ids_alerts=list(ids_alerts or []),
             source=source,
         )
         return SshSessionActionBundle(request=request, executor=self).execute()
@@ -17041,6 +17047,7 @@ class ActivityGenerator:
         public_key_hash: str = "",
         emit_session_close: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
         source: str = "activity_generator",
     ) -> tuple[str, str]:
         """Execute the canonical SSH bundle and return transport and session IDs."""
@@ -17066,6 +17073,7 @@ class ActivityGenerator:
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
             session_end_plan=session_end_plan,
+            ids_alerts=list(ids_alerts or []),
             source=source,
         )
         return SshSessionActionBundle(request=request, executor=self).execute_with_identity()
@@ -20487,7 +20495,11 @@ class ActivityGenerator:
             tgs_before_ms=(8, 65),
             tgt_before_tgs_ms=(35, 220),
         )
-        source_port = self._reserve_kerberos_source_port(source_ip, dc_hostname, tgt_time)
+        kerberos_source_port = self._reserve_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            tgt_time,
+        )
         session_obj_id = stable_uuid(
             "ecar-machine-account-session",
             request.stable_id,
@@ -20498,25 +20510,21 @@ class ActivityGenerator:
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgt_time,
-            source_port=source_port,
+            source_port=kerberos_source_port,
         )
-        service_name = rng.choices(
-            [
-                f"host/{dc_hostname}",
-                f"ldap/{dc_hostname}",
-                f"cifs/{dc_hostname}",
-                f"DNS/{dc_hostname}",
-            ],
-            weights=[35, 35, 20, 10],
+        service, destination_port = rng.choices(
+            [("ldap", 389), ("cifs", 445)],
+            weights=[55, 45],
             k=1,
         )[0]
+        service_name = f"{service}/{dc_hostname}"
         self.generate_kerberos_service_ticket(
             username=machine_username,
             service_name=service_name,
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgs_time,
-            source_port=source_port,
+            source_port=kerberos_source_port,
         )
         target_system = self._ip_to_system.get(dc_ip)
         if target_system is None:
@@ -20526,19 +20534,27 @@ class ActivityGenerator:
                 os="Windows Server 2022",
                 type="domain_controller",
             )
+        service_source_port = self._allocate_ephemeral_port(
+            source_ip,
+            dc_ip,
+            destination_port,
+            "tcp",
+            time,
+            self._os_for_ip(source_ip),
+        )
         remote_request = WindowsRemoteAuthenticationRequest(
             target_system=target_system,
             time=time,
             source_ip=source_ip,
-            source_port=source_port,
+            source_port=service_source_port,
             logon_type=3,
             auth_protocol="Kerberos",
             outcome="success",
-            destination_port=88,
+            destination_port=destination_port,
             source_system=self._ip_to_system.get(source_ip),
             session_object_id=session_obj_id,
             logon_id=logon_id,
-            transport_role="kerberos_validation",
+            transport_role="target_service",
             source="machine_account_logon",
         )
         remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
@@ -20556,7 +20572,7 @@ class ActivityGenerator:
                 logon_type=3,
                 auth_package="Kerberos",
                 source_ip=source_ip,
-                source_port=source_port,
+                source_port=service_source_port,
                 logon_process="Kerberos",
                 lm_package="-",
                 logon_guid="{00000000-0000-0000-0000-000000000000}",
@@ -21401,6 +21417,7 @@ class ActivityGenerator:
         source_process_factory: RdpSourceProcessFactory | None = None,
         preserve_explicit_source: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
@@ -21420,6 +21437,7 @@ class ActivityGenerator:
             source_process_factory=source_process_factory,
             preserve_explicit_source=preserve_explicit_source,
             session_end_plan=session_end_plan,
+            ids_alerts=ids_alerts,
         )
         return uid
 
@@ -21437,6 +21455,7 @@ class ActivityGenerator:
         source_process_factory: RdpSourceProcessFactory | None = None,
         preserve_explicit_source: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> tuple[str, str]:
         """Execute the canonical RDP bundle and return transport and session IDs."""
 
@@ -21454,6 +21473,7 @@ class ActivityGenerator:
                 logon_id=logon_id or "",
                 preserve_explicit_source=preserve_explicit_source,
                 session_end_plan=session_end_plan,
+                ids_alerts=list(ids_alerts or []),
             ),
             source_process_factory=source_process_factory,
         )
@@ -23100,6 +23120,7 @@ class ActivityGenerator:
         msg_types: list[str] | None = None,
         domain: str | None = None,
         renewal_interval: float | None = None,
+        ids_alerts: list[IdsContext] | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         request = DhcpLeaseRequest(
@@ -23112,6 +23133,7 @@ class ActivityGenerator:
             msg_types=msg_types,
             domain=domain,
             renewal_interval=renewal_interval,
+            ids_alerts=list(ids_alerts or []),
         )
         DhcpLeaseActionBundle(executor=self, request=request).execute()
 
@@ -23190,6 +23212,7 @@ class ActivityGenerator:
                 msg_types=msg_types,
                 duration=dhcp_duration,
             ),
+            ids_alerts=list(request.ids_alerts),
         )
         self.dispatcher.dispatch(event)
         dispatcher_emitters = getattr(self.dispatcher, "emitters", {})

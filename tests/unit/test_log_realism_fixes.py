@@ -68,7 +68,7 @@ class TestSnortRevField:
         )
         event._sensor_hostnames_by_format = {"snort_alert": ["ids-01"]}
         emitter.emit(event)
-        emitter.flush()
+        emitter.close()
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
         assert "[1:2002677:14]" in output
@@ -100,7 +100,7 @@ class TestSnortRevField:
         )
         event._sensor_hostnames_by_format = {"snort_alert": ["ids-01"]}
         emitter.emit(event)
-        emitter.flush()
+        emitter.close()
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
         assert "[1:384:1]" in output

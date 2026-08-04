@@ -340,6 +340,34 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
+Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`,
+`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events may
+attach multiple configured SIDs with `ids_alerts`. The attachment asserts a
+match; EvidenceForge does not execute the full rule predicate or decrypt
+traffic. A tuple without an explicit or built-in IDS context does not alert.
+Filtering is deferred until sensor visibility, clock, and
+NAT/PAT projection are known, then tracked independently per sensor and visible
+source/destination IP. `GROUND_TRUTH.json`/`.md` expose effective policy and
+candidate/emitted/policy-filtered totals; policy suppression appears as
+`filtered` IDS evidence in `OBSERVATION_MANIFEST.json`. Raw Snort events are
+unchanged.
+
+The optional schema-v1 `ids_evaluation` section in `GROUND_TRUTH.json` is the
+automated acceptance contract. For each sensor and `(gid, sid)` it records
+candidate, emitted, policy-filtered, visible/delayed, and authorized-origin
+totals plus a SHA-256 digest over normalized alerts in file order. Normalization
+covers sensor identity, UTC timestamp, signature metadata, protocol, full tuple,
+and the sensor-visible NAT/PAT projection. Overall IDS observation totals
+reconcile visible, delayed, dropped, filtered, and out-of-window attempts. The
+Markdown IDS Evaluation Summary renders the same counts with abbreviated
+digests.
+
+Attachments follow only owned transports: the SSH/RDP session connection, the
+authored DHCP transaction, each scan/web request, and each authored DNS-family
+query. Automatic DHCP renewals and DNS-tunnel cover queries do not inherit them.
+Authored web-scan SIDs coexist with automatic alerts and win duplicate
+`(gid, sid)` collisions. Email transport attachments remain deferred.
+
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
 2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
@@ -349,6 +377,8 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 **Known Limitations:**
 - IDS alert variety is limited to curated SID pools (not full ruleset simulation)
+- Attached alerts do not support rule parsing, `rate_filter`, CIDR suppression,
+  or IPS actions
 
 ---
 

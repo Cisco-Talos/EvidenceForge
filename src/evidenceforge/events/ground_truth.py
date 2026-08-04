@@ -44,6 +44,7 @@ class GroundTruthAttributesBase(BaseModel):
     family: str | None = None
     group_name: str | None = None
     interval: str | int | float | None = None
+    ids_alerts: list[dict[str, object]] | None = None
     logon_id: str | None = None
     logon_type: int | None = None
     mail_action: str | None = None
@@ -540,6 +541,60 @@ class GroundTruthStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class IdsEvaluationSignature(BaseModel):
+    """Bounded expected-output summary for one signature on one IDS sensor."""
+
+    gid: int = Field(ge=0)
+    sid: int = Field(gt=0)
+    candidate: int = Field(ge=0)
+    emitted: int = Field(ge=0)
+    policy_filtered: int = Field(ge=0)
+    emitted_visible: int = Field(ge=0)
+    emitted_delayed: int = Field(ge=0)
+    origins: dict[Literal["authored_attachment", "built_in", "raw"], int] = Field(
+        default_factory=dict
+    )
+    emitted_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_totals(self) -> IdsEvaluationSignature:
+        """Keep candidate, emission, filtering, and origin totals internally consistent."""
+
+        if self.candidate != self.emitted + self.policy_filtered:
+            raise ValueError("IDS candidate must equal emitted plus policy_filtered")
+        if self.emitted != self.emitted_visible + self.emitted_delayed:
+            raise ValueError("IDS emitted must equal emitted_visible plus emitted_delayed")
+        if sum(self.origins.values()) != self.emitted:
+            raise ValueError("IDS origin totals must equal emitted")
+        return self
+
+
+class IdsEvaluationSummary(BaseModel):
+    """Sensor-local IDS integrity contract stored in canonical ground truth."""
+
+    observation: dict[str, int] = Field(default_factory=dict)
+    sensors: dict[str, dict[str, IdsEvaluationSignature]] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_sensor_keys(self) -> IdsEvaluationSummary:
+        """Require stable ``gid:sid`` keys and non-negative observation counts."""
+
+        for status, count in self.observation.items():
+            if status not in {"visible", "delayed", "dropped", "filtered", "out_of_window"}:
+                raise ValueError(f"unknown IDS observation status {status!r}")
+            if count < 0:
+                raise ValueError(f"IDS observation count for {status!r} must be non-negative")
+        for signatures in self.sensors.values():
+            for key, summary in signatures.items():
+                if key != f"{summary.gid}:{summary.sid}":
+                    raise ValueError(f"IDS signature key {key!r} does not match its gid/sid")
+        return self
+
+
 class GroundTruthDocument(BaseModel):
     """Canonical machine-readable ground-truth document."""
 
@@ -550,6 +605,7 @@ class GroundTruthDocument(BaseModel):
     observation_profile: str
     collection_window: dict[str, str | None]
     source_evidence_status: dict[str, dict[str, dict[str, int]]] = Field(default_factory=dict)
+    ids_evaluation: IdsEvaluationSummary | None = None
     storyline_steps: list[GroundTruthStep] = Field(default_factory=list)
     red_herring_steps: list[GroundTruthStep] = Field(default_factory=list)
     events: list[GroundTruthEvent] = Field(default_factory=list)

@@ -113,6 +113,7 @@ class SecurityEvent:
     remote_thread: RemoteThreadContext | None = None
     process_access: ProcessAccessContext | None = None
     ids: IdsContext | None = None
+    ids_alerts: list[IdsContext] = field(default_factory=list)
     image_load: ImageLoadContext | None = None
     syslog: SyslogContext | None = None
     weird: WeirdContext | None = None
@@ -167,6 +168,16 @@ class SecurityEvent:
     # Planned source-native observation times keyed by source family/profile.
     # SecurityEvent.timestamp remains canonical world time.
     source_timing: SourceTimingPlan | None = None
+
+    def all_ids_alerts(self) -> tuple[IdsContext, ...]:
+        """Return canonical IDS alerts, including the legacy singular context."""
+
+        alerts = list(self.ids_alerts)
+        if self.ids is not None and not any(
+            alert.gid == self.ids.gid and alert.sid == self.ids.sid for alert in alerts
+        ):
+            alerts.insert(0, self.ids)
+        return tuple(alerts)
 
     # Correlated action lifecycle and frozen network-sensor projections.
     # EventDispatcher allocates event_id before state application and observation.

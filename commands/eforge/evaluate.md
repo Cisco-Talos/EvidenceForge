@@ -11,7 +11,7 @@ description: >
 
 # EvidenceForge Data Quality Evaluator
 
-You are helping the user evaluate the quality of generated synthetic security log datasets using EvidenceForge's evaluation framework. The eval command scores datasets across **4 pillars** with 20 sub-scores, all deterministic and statistical. Your job is to run the eval, interpret the results, review sample records for realism, and provide actionable improvement suggestions.
+You are helping the user evaluate the quality of generated synthetic security log datasets using EvidenceForge's evaluation framework. The eval command scores datasets across **4 pillars** with 21 sub-scores, all deterministic and statistical. Your job is to run the eval, interpret the results, review sample records for realism, and provide actionable improvement suggestions.
 
 ## Quick Start
 
@@ -24,6 +24,19 @@ eforge eval scenarios/<slug>/data --scenario scenarios/<slug>/scenario.yaml --ve
 Default to `eforge` for all CLI execution. If `eforge` is not found and you are
 in an EvidenceForge source checkout, retry the same command with
 `uv run eforge ...`.
+
+Canonical IDS reconciliation is automated by the zero-weight
+`plausibility.ids_integrity` hard gate. It compares every per-sensor `(gid, sid)`
+count and ordered normalized digest in `GROUND_TRUTH.json` with parsed Snort
+rows, including the sensor-visible UTC timestamp, signature metadata, complete
+tuple, ephemeral source port, and NAT/PAT projection. It also reconciles policy
+filtering and observation totals and requires every emitted row to have an
+authorized authored, built-in, or raw origin. Legacy datasets without
+`ids_evaluation` skip this check with a warning, but a scenario containing
+authored `ids_alerts` fails when the summary is missing or invalid.
+For DHCP, count only the authored transaction, not later automatic renewals; for
+DNS tunnel activity, exclude generated background cover queries. For web scans,
+account for automatic and authored SIDs and the authored-wins duplicate rule.
 
 If they don't have generated output yet, suggest using `/eforge generate` first.
 
@@ -133,12 +146,13 @@ For each pillar, explain what the score means in practical terms:
 - Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins defined in `cross_source_pairs.yaml` plus built-in email checks — pairs include Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+host → same process name), zeek_conn ↔ Cisco ASA (same 4-tuple), web_access/proxy ↔ zeek_http (same client+URI+10s bucket → same status/method), zeek_ssl ↔ zeek_x509 (cert chain fuids → server_name ∈ SAN), and email checks where SMTP UIDs join to conn.log, visible SMTP FUIDs join to files.log, and plaintext SMTP subject metadata agrees with `ARTIFACTS_MANIFEST.json` email records. A score below 100 means real field disagreements were found.
 - User Behavioral Diversity: Do different users behave differently, or are they cookie-cutter clones?
 - Benign Anomaly Rate: Is there a realistic 1–5% rate of anomalous-but-benign events? Zero anomalies is as implausible as 50%.
+- IDS Correlation Integrity: Do sensor-local Snort rows exactly match canonical counts, ordered digests, origins, and observation totals? This is a 100% hard gate with zero scoring weight.
 
 **Pillar 3: Causality (weight 0.25)**
 - Causal Ordering: Are logon→process→logoff and lock→reauth→unlock sequences correctly ordered? DNS before TCP? Kerberos/DC TGT/TGS before domain logons? NTLM/DC validation and Windows audit/process-access companions after their owning evidence?
 - Storyline Event Presence: Are all expected-visible storyline events visible in at least one log source? For non-`complete` observation profiles with a manifest, source rows marked `dropped`, `filtered`, or `out_of_window` are excluded from this coverage denominator.
 - Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames from the scenario?
-- Pivot Linkability: Can a hunter pivot between consecutive expected-visible attack steps using shared field values?
+- Pivot Linkability: Can a hunter pivot along inferred narrative edges built from shared typed indicators such as hosts, IPs, accounts, domains, URLs, files/hashes, and artifact/message IDs? Unrelated interleaved steps are not connected, generic ports/protocols are excluded, and isolated events are reported separately.
 - Storyline Temporal Integrity: Are expected-visible attack events in the right relative order at the right times?
 - Storyline Trace Coverage: For each expected-visible log format group on each involved host, does the storyline leave a trace?
 

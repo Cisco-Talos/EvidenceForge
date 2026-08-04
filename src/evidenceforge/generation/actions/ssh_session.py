@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
@@ -41,6 +41,7 @@ from evidenceforge.events.contexts import (
     AuthContext,
     EdrContext,
     HostContext,
+    IdsContext,
     ProcessContext,
     SyslogContext,
 )
@@ -122,6 +123,7 @@ class SshSessionRequest:
     public_key_hash: str = ""
     emit_session_close: bool = False
     session_end_plan: SessionEndPlan | None = None
+    ids_alerts: list[IdsContext] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property
@@ -140,6 +142,7 @@ class SshSessionRequest:
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
             f"{self.emit_session_close}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
+            f"{self.ids_alerts}:"
             f"{self.source}:{self.time.isoformat()}"
         )
         return f"ssh-session-{seed:016x}"
@@ -157,7 +160,7 @@ class SshSessionRequest:
             f"{self.duration or ''}:{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
-            f"{self.emit_session_close}:{self.source}:{self.time.isoformat()}"
+            f"{self.emit_session_close}:{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
         )
         return f"ssh-session-exec-{seed:016x}"
 
@@ -567,6 +570,7 @@ class SshSessionActionBundle:
             preserve_dst_ip=True,
             responding_pid=responding_pid or -1,
             ssh_attempted_username=request.user.username,
+            ids_alerts=list(request.ids_alerts),
         )
         state.uid = network_uid
         state.network_visible = bool(network_uid)

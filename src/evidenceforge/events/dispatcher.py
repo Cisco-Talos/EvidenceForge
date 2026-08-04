@@ -295,6 +295,7 @@ class EventDispatcher:
                     event_to_emit.timestamp,
                 )
             self._record_observation(event, format_name, status)
+            event_to_emit._source_observation_status = status
             if event.raw is not None:
                 emitter.emit_raw(event_to_emit.raw.fields)
             else:
@@ -660,3 +661,20 @@ class EventDispatcher:
         cluster = self._source_evidence_status.setdefault(cluster_id, {})
         source_counts = cluster.setdefault(source, ObservationSummary())
         source_counts.record(status)
+
+    def reconcile_ids_policy_filtering(
+        self,
+        cluster_id: str,
+        *,
+        emitted_visible: int,
+        emitted_delayed: int,
+        policy_filtered: int,
+    ) -> None:
+        """Replace pre-policy IDS admissions with finalized alert-level counts."""
+        if not cluster_id:
+            return
+        cluster = self._source_evidence_status.setdefault(cluster_id, {})
+        summary = cluster.setdefault("ids", ObservationSummary())
+        summary.visible = emitted_visible
+        summary.delayed = emitted_delayed
+        summary.filtered += policy_filtered

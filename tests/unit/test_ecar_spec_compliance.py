@@ -45,6 +45,7 @@ from evidenceforge.events.contexts import (
     EdrContext,
     FileContext,
     HostContext,
+    ImageLoadContext,
     NetworkContext,
     ProcessContext,
     RegistryContext,
@@ -643,6 +644,54 @@ class TestFileEventActions:
         record = json.loads(emitter._render_event(row))
         assert record["properties"]["image_path"] == proc.image
         assert record["properties"]["command_line"] == proc.command_line
+
+
+class TestModuleEventActorIdentity:
+    def test_module_load_promotes_canonical_actor_principal(self, emitter, ts):
+        """MODULE/LOAD should expose the canonical actor principal at top level."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        actor = _canonical_process_identity(
+            host.hostname,
+            4321,
+            ts,
+            image=r"C:\Windows\System32\svchost.exe",
+            principal=r"NT AUTHORITY\NETWORK SERVICE",
+            os_category="windows",
+        )
+        process = ProcessContext(
+            pid=actor.pid,
+            parent_pid=actor.parent_pid,
+            image=actor.image,
+            command_line=actor.command_line,
+            username=actor.principal,
+            start_time=actor.started_at,
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_module_event(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="image_load",
+                src_host=host,
+                process=process,
+                image_load=ImageLoadContext(image_loaded=r"C:\Windows\System32\kernel32.dll"),
+                identity_plan=EventIdentityPlan(actor=actor),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        record = json.loads(emitter._render_event(row))
+        assert record["principal"] == actor.principal
+        assert record["actorID"] == actor.object_id
+        assert record["pid"] == actor.pid
+        assert record["properties"]["source_principal"] == actor.principal
 
     def test_registry_event_carries_known_process_provenance(self, emitter, ts):
         """eCAR REGISTRY rows should preserve known source process provenance."""

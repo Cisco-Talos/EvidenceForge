@@ -31,9 +31,10 @@ Sub-scores (weights sum to 1.0):
   anomaly_rate        (0.10): Realistic 1-5% anomalous-but-benign event rate.
 """
 
+import hashlib
+import itertools
 import logging
 import math
-import random
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
@@ -56,6 +57,7 @@ from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.rules import load_rules_file
 from evidenceforge.evaluation.visibility import VisibilityModel
+from evidenceforge.events.ids_evaluation import new_ids_digest, update_ids_digest
 from evidenceforge.models.scenario import Scenario
 
 logger = logging.getLogger(__name__)
@@ -85,34 +87,39 @@ class PlausibilityScorer(DimensionScorer):
         context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
+        context = context or EvaluationContext()
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
 
-        progress("sub_score_start", {"name": "Value & OS Plausibility", "step": 1, "total": 6})
+        progress("sub_score_start", {"name": "Value & OS Plausibility", "step": 1, "total": 7})
         s1 = self._score_value_plausibility(records, vis)
         progress("sub_score_done", {"name": "Value & OS Plausibility", "score": s1.score})
 
-        progress("sub_score_start", {"name": "Co-occurrence Rules", "step": 2, "total": 6})
+        progress("sub_score_start", {"name": "Co-occurrence Rules", "step": 2, "total": 7})
         s2 = self._score_co_occurrence(records)
         progress("sub_score_done", {"name": "Co-occurrence Rules", "score": s2.score})
 
-        progress("sub_score_start", {"name": "Distribution Fit", "step": 3, "total": 6})
+        progress("sub_score_start", {"name": "Distribution Fit", "step": 3, "total": 7})
         s3 = self._score_distribution_fit(records)
         progress("sub_score_done", {"name": "Distribution Fit", "score": s3.score})
 
-        progress("sub_score_start", {"name": "Cross-Source Field Agreement", "step": 4, "total": 6})
+        progress("sub_score_start", {"name": "Cross-Source Field Agreement", "step": 4, "total": 7})
         s4 = self._score_field_agreement(records)
         progress("sub_score_done", {"name": "Cross-Source Field Agreement", "score": s4.score})
 
-        progress("sub_score_start", {"name": "User Behavioral Diversity", "step": 5, "total": 6})
+        progress("sub_score_start", {"name": "User Behavioral Diversity", "step": 5, "total": 7})
         s5 = self._score_user_diversity(records)
         progress("sub_score_done", {"name": "User Behavioral Diversity", "score": s5.score})
 
-        progress("sub_score_start", {"name": "Anomaly Rate", "step": 6, "total": 6})
+        progress("sub_score_start", {"name": "Anomaly Rate", "step": 6, "total": 7})
         s6 = self._score_anomaly_rate(records, scenario)
         progress("sub_score_done", {"name": "Anomaly Rate", "score": s6.score})
 
-        sub_scores = [s1, s2, s3, s4, s5, s6]
+        progress("sub_score_start", {"name": "IDS Correlation Integrity", "step": 7, "total": 7})
+        s7 = self._score_ids_integrity(records, scenario, context)
+        progress("sub_score_done", {"name": "IDS Correlation Integrity", "score": s7.score})
+
+        sub_scores = [s1, s2, s3, s4, s5, s6, s7]
         dim_score = aggregate_sub_scores(sub_scores)
 
         return PillarScore(
@@ -220,7 +227,7 @@ class PlausibilityScorer(DimensionScorer):
                 continue
             valid = [r for r in record_list if not r.parse_errors]
             if len(valid) > max_sample:
-                valid = random.sample(valid, max_sample)
+                valid = _stable_records(valid, max_sample)
 
             for record in valid:
                 for rule in rules:
@@ -365,8 +372,6 @@ class PlausibilityScorer(DimensionScorer):
     # --- Sub-score 5: User Behavioral Diversity ---
 
     def _score_user_diversity(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        import itertools
-
         user_types: dict[str, Counter] = defaultdict(Counter)
         for _fmt, record_list in records.items():
             for record in record_list:
@@ -385,22 +390,19 @@ class PlausibilityScorer(DimensionScorer):
                 details="Fewer than 2 users with sufficient data — skipped",
             )
 
-        user_list = list(users_with_data.keys())
+        user_list = sorted(users_with_data)
         total_pairs = len(user_list) * (len(user_list) - 1) // 2
         max_pairs = 200
 
         if total_pairs <= max_pairs:
             pairs = list(itertools.combinations(range(len(user_list)), 2))
         else:
-            pairs_set: set = set()
-            while len(pairs_set) < max_pairs:
-                import random as _rng
-
-                i = _rng.randrange(len(user_list))
-                j = _rng.randrange(len(user_list))
-                if i != j:
-                    pairs_set.add((min(i, j), max(i, j)))
-            pairs = list(pairs_set)
+            pairs = sorted(
+                itertools.combinations(range(len(user_list)), 2),
+                key=lambda pair: hashlib.sha256(
+                    f"{user_list[pair[0]]}\0{user_list[pair[1]]}".encode()
+                ).digest(),
+            )[:max_pairs]
 
         similarities: list[float] = []
         for i, j in pairs:
@@ -461,8 +463,161 @@ class PlausibilityScorer(DimensionScorer):
             details=f"{anomalous}/{total} events anomalous ({rate:.1%}), target 1-5%",
         )
 
+    def _score_ids_integrity(
+        self,
+        records: dict[str, list[ParsedRecord]],
+        scenario: Scenario,
+        context: EvaluationContext,
+    ) -> SubScore:
+        """Reconcile rendered alerts with canonical sensor-local IDS ground truth."""
+
+        document = context.ground_truth
+        if document is None or document.ids_evaluation is None:
+            if _scenario_has_ids_attachments(scenario):
+                return SubScore(
+                    name="IDS Correlation Integrity",
+                    key="ids_integrity",
+                    weight=0.0,
+                    score=0.0,
+                    details="Authored ids_alerts require GROUND_TRUTH.json ids_evaluation",
+                    sample_failures=["Missing or invalid IDS evaluation ground truth"],
+                )
+            return SubScore(
+                name="IDS Correlation Integrity",
+                key="ids_integrity",
+                weight=0.0,
+                score=None,
+                skipped=True,
+                details="Legacy dataset has no IDS evaluation summary; check skipped",
+            )
+
+        checks = 0
+        passing = 0
+        failures: list[str] = []
+
+        def check(condition: bool, message: str) -> None:
+            nonlocal checks, passing
+            checks += 1
+            if condition:
+                passing += 1
+            elif len(failures) < 10:
+                failures.append(message)
+
+        for event in document.events:
+            for attachment in event.attributes.ids_alerts or []:
+                candidate = int(attachment.get("candidate", 0))
+                emitted = int(attachment.get("emitted", 0))
+                filtered = int(attachment.get("policy_filtered", 0))
+                check(
+                    candidate == emitted + filtered,
+                    f"{event.storyline_id} SID {attachment.get('sid')} totals disagree",
+                )
+
+        actual: dict[str, dict[str, dict[str, Any]]] = {}
+        for record in records.get("snort_alert", []):
+            if record.parse_errors or record.timestamp is None:
+                continue
+            sensor = record.source_instance or "__direct__"
+            key = f"{int(record.fields.get('gid', 1))}:{int(record.fields['sid'])}"
+            summary = actual.setdefault(sensor, {}).setdefault(
+                key,
+                {"emitted": 0, "digest": new_ids_digest()},
+            )
+            summary["emitted"] += 1
+            update_ids_digest(
+                summary["digest"],
+                sensor,
+                record.fields | {"timestamp": record.timestamp},
+            )
+
+        expected_keys = {
+            (sensor, key)
+            for sensor, signatures in document.ids_evaluation.sensors.items()
+            for key in signatures
+        }
+        actual_keys = {(sensor, key) for sensor, signatures in actual.items() for key in signatures}
+        for sensor, key in sorted(expected_keys | actual_keys):
+            expected = document.ids_evaluation.sensors.get(sensor, {}).get(key)
+            observed = actual.get(sensor, {}).get(key)
+            check(expected is not None, f"Unexpected Snort rows for {sensor} {key}")
+            check(observed is not None, f"Missing Snort rows for {sensor} {key}")
+            if expected is None or observed is None:
+                continue
+            check(
+                expected.emitted == observed["emitted"],
+                f"{sensor} {key} emitted {observed['emitted']} != expected {expected.emitted}",
+            )
+            check(
+                expected.emitted_sha256 == observed["digest"].hexdigest(),
+                f"{sensor} {key} normalized alert digest differs",
+            )
+
+        observation = document.ids_evaluation.observation
+        signatures = [
+            signature
+            for sensor_signatures in document.ids_evaluation.sensors.values()
+            for signature in sensor_signatures.values()
+        ]
+        rendered = sum(signature.emitted for signature in signatures)
+        policy_filtered = sum(signature.policy_filtered for signature in signatures)
+        check(
+            rendered == observation.get("visible", 0) + observation.get("delayed", 0),
+            "IDS visible/delayed totals do not equal rendered alerts",
+        )
+        check(
+            observation.get("filtered", 0) >= policy_filtered,
+            "IDS filtered observation total is lower than policy-filtered candidates",
+        )
+        source_observation: dict[str, int] = {}
+        for source_status in document.source_evidence_status.values():
+            for status, count in source_status.get("ids", {}).items():
+                source_observation[status] = source_observation.get(status, 0) + count
+        check(
+            source_observation == observation,
+            "IDS summary disagrees with ground-truth source_evidence_status",
+        )
+        if context.observation_manifest is not None:
+            check(
+                context.observation_manifest.source_summary.get("ids", {}) == observation,
+                "IDS summary disagrees with OBSERVATION_MANIFEST.json",
+            )
+
+        score = 100.0 * passing / checks if checks else 100.0
+        return SubScore(
+            name="IDS Correlation Integrity",
+            key="ids_integrity",
+            weight=0.0,
+            score=score,
+            details=f"{passing}/{checks} IDS integrity checks pass",
+            sample_failures=failures,
+        )
+
 
 # --- Module-level helpers ---
+
+
+def _stable_records(records: list[ParsedRecord], limit: int) -> list[ParsedRecord]:
+    """Select a repeatable bounded record sample independent of process RNG state."""
+
+    return sorted(
+        records,
+        key=lambda record: hashlib.sha256(
+            (
+                f"{record.source_format}\0{record.source_instance or ''}\0"
+                f"{record.line_number or 0}\0{record.raw}"
+            ).encode()
+        ).digest(),
+    )[:limit]
+
+
+def _scenario_has_ids_attachments(scenario: Scenario) -> bool:
+    """Return whether a typed storyline or red-herring event authors IDS attachments."""
+
+    return any(
+        bool(getattr(spec, "ids_alerts", None))
+        for cluster in (*(scenario.storyline or []), *(scenario.red_herrings or []))
+        for spec in cluster.events
+    )
 
 
 def _check_os_plausibility(record: ParsedRecord, fmt: str) -> bool | None:

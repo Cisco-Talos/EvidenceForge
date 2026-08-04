@@ -421,12 +421,26 @@ Zeek/web-access correlation. `ScheduledScanOverlapActionBundle` covers
 suspicious-but-benign scanner noise, and `NmapCommandProbeActionBundle` covers
 network probes caused by modeled nmap processes.
 
-IDS alert callers supply one data-driven signature or preset rule, and
-`IdsAlertActionBundle` builds the canonical alert context attached to network
+IDS alert callers may supply multiple data-driven signatures, and
+`IdsAlertActionBundle` builds canonical alert contexts attached to network
 evidence. The bundle owns `(gid, sid, rev)` identity,
 message/classification/priority normalization, and optional signature-owned DNS
-payload construction for DNS alerts. Snort/Suricata emitters render `IdsContext`
-only; signature choice and alert payload construction remain upstream.
+payload construction for DNS alerts. Typed transport owners (`connection`,
+`beacon`, SSH/RDP sessions, authored DHCP transactions, scans, and DNS activity)
+carry attachments only on their owned physical canonical connections. Automatic
+DHCP renewals and DNS-tunnel cover traffic do not inherit authored assertions;
+web-scan automatic alerts coexist with authored attachments, with authored
+contexts winning duplicate `(gid, sid)` identities. Explicit proxy-capable
+attachments follow each existing physical proxy leg. A network tuple alone is
+never sufficient to create an alert, and the current IDS model performs no
+decryption. The Snort emitter first consumes frozen sensor visibility, clock, and
+NAT/PAT projections, then stores candidates in a bounded-memory SQLite spool.
+Finalization sorts by sensor-observed time and stable identity before applying
+per-sensor `(gid, sid, tracked visible IP)` detection/event filters. This avoids
+storyline insertion-order effects and keeps long beacon campaigns from retaining
+all candidates in memory. Invisible, dropped, warm-up, clipped, and nonexistent
+proxy legs never advance policy state. Raw Snort events remain an explicit
+source-local escape hatch.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
 `HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
@@ -675,7 +689,7 @@ EvaluationEngine
 ├── Pillars (4 scoring modules — currently still 5 legacy scorers during transition)
 │   ├── Parseability    (30%) — spec conformance, format constraints
 │   ├── Plausibility    (25%) — OS/value correctness, co-occurrence, distributions,
-│   │                           user diversity, benign anomaly rate
+│   │                           user diversity, anomaly rate, zero-weight IDS integrity gate
 │   ├── Causality       (25%) — causal ordering, event presence, indicator accuracy,
 │   │                           pivot linkability, storyline temporal integrity
 │   └── Timing          (20%) — attack-chain timing, burstiness, diurnal patterns,
@@ -695,6 +709,15 @@ EvaluationEngine
 ```
 
 Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
+
+Snort finalization incrementally builds a bounded `ids_evaluation` contract in
+canonical ground truth. Evaluation preserves each parsed record's host/sensor
+source instance and exactly compares the contract's sensor-local counts and
+ordered normalized digests with rendered alerts. The check is a 100% hard gate
+but has zero score weight. Older datasets skip it explicitly unless their
+scenario authors IDS attachments. Storyline pivot linkability is inferred from
+typed stable indicators; it connects consecutive events per indicator rather
+than scoring unrelated globally consecutive steps.
 
 - **Grace period:** Events within the scenario's `logon_grace_period` (default 30m) from scenario start are exempt from causal ordering checks, since data collection begins mid-session with pre-existing user sessions.
 - **Per-rule tolerance:** Rules can specify a `tolerance` fraction (e.g., 0.03 for DNS→TCP) allowing a percentage of failures without penalty. Used for intentional direct-IP baseline connections.

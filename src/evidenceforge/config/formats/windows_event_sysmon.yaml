@@ -217,13 +217,10 @@ variants:
       - name: SourceProcessId
         type: integer
         required: true
-      - name: SourceImage
-        type: string
-        required: true
       - name: SourceThreadId
         type: integer
         required: true
-      - name: SourceUser
+      - name: SourceImage
         type: string
         required: true
       - name: TargetProcessGUID
@@ -235,15 +232,18 @@ variants:
       - name: TargetImage
         type: string
         required: true
-      - name: TargetUser
-        type: string
-        required: true
       - name: GrantedAccess
         type: string
         required: true
       - name: CallTrace
         type: string
         required: false
+      - name: SourceUser
+        type: string
+        required: true
+      - name: TargetUser
+        type: string
+        required: true
 
   # Sysmon EventID 3: Network Connection
   - name: sysmon_network_connect
@@ -355,6 +355,9 @@ variants:
       - name: SignatureStatus
         type: string
         required: true
+      - name: User
+        type: string
+        required: true
 
   # Sysmon EventID 11: File Created
   - name: sysmon_file_create
@@ -376,13 +379,13 @@ variants:
       - name: Image
         type: string
         required: true
-      - name: User
-        type: string
-        required: true
       - name: TargetFilename
         type: string
         required: true
       - name: CreationUtcTime
+        type: string
+        required: true
+      - name: User
         type: string
         required: true
 
@@ -409,10 +412,10 @@ variants:
       - name: Image
         type: string
         required: true
-      - name: User
+      - name: TargetObject
         type: string
         required: true
-      - name: TargetObject
+      - name: User
         type: string
         required: true
 
@@ -439,13 +442,13 @@ variants:
       - name: Image
         type: string
         required: true
-      - name: User
-        type: string
-        required: true
       - name: TargetObject
         type: string
         required: true
       - name: Details
+        type: string
+        required: true
+      - name: User
         type: string
         required: true
 
@@ -559,15 +562,15 @@ output:
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="SourceProcessGUID">{{ SourceProcessGUID }}</Data>
         <Data Name="SourceProcessId">{{ SourceProcessId }}</Data>
-        <Data Name="SourceImage">{{ SourceImage }}</Data>
         <Data Name="SourceThreadId">{{ SourceThreadId }}</Data>
-        <Data Name="SourceUser">{{ SourceUser }}</Data>
+        <Data Name="SourceImage">{{ SourceImage }}</Data>
         <Data Name="TargetProcessGUID">{{ TargetProcessGUID }}</Data>
         <Data Name="TargetProcessId">{{ TargetProcessId }}</Data>
         <Data Name="TargetImage">{{ TargetImage }}</Data>
-        <Data Name="TargetUser">{{ TargetUser }}</Data>
         <Data Name="GrantedAccess">{{ GrantedAccess }}</Data>
         <Data Name="CallTrace">{{ CallTrace | default('') }}</Data>
+        <Data Name="SourceUser">{{ SourceUser }}</Data>
+        <Data Name="TargetUser">{{ TargetUser }}</Data>
         {% elif EventID == 3 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
@@ -603,15 +606,16 @@ output:
         <Data Name="Signed">{{ Signed }}</Data>
         <Data Name="Signature">{{ Signature | default('-') }}</Data>
         <Data Name="SignatureStatus">{{ SignatureStatus }}</Data>
+        <Data Name="User">{{ User }}</Data>
         {% elif EventID == 11 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
-        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetFilename">{{ TargetFilename }}</Data>
         <Data Name="CreationUtcTime">{{ CreationUtcTime }}</Data>
+        <Data Name="User">{{ User }}</Data>
         {% elif EventID == 12 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="EventType">{{ EventType }}</Data>
@@ -619,8 +623,8 @@ output:
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
-        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetObject">{{ TargetObject }}</Data>
+        <Data Name="User">{{ User }}</Data>
         {% elif EventID == 13 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="EventType">SetValue</Data>
@@ -628,9 +632,9 @@ output:
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
-        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetObject">{{ TargetObject }}</Data>
         <Data Name="Details">{{ Details | default('-') }}</Data>
+        <Data Name="User">{{ User }}</Data>
         {% elif EventID == 22 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>

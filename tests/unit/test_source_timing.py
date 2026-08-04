@@ -19,6 +19,7 @@ from evidenceforge.events.contexts import (
     DnsContext,
     FileContext,
     HostContext,
+    KerberosContext,
     NetworkContext,
     ProcessAccessContext,
     ProcessContext,
@@ -221,6 +222,66 @@ def test_session_closure_follows_same_source_process_termination_with_bounded_ta
     assert planned.source_timing.canonical_timestamp == canonical_end
     assert planned.timestamp > process_source_time
     assert planned.timestamp <= canonical_end + timedelta(seconds=15)
+
+
+def test_ecar_logout_finalized_time_consumes_bundle_closure_plan() -> None:
+    """eCAR must clamp an unplanned closure after delayed remote authentication."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    canonical_end = login_event.timestamp + timedelta(milliseconds=25)
+    lifecycle = ActionLifecycleContext(
+        group_id="network-session-group",
+        canonical_start=login_event.timestamp,
+        phase="start",
+    )
+    login_event.lifecycle = lifecycle
+    logoff_event = SecurityEvent(
+        timestamp=canonical_end,
+        event_type="logoff",
+        dst_host=login_event.dst_host,
+        auth=login_event.auth,
+        lifecycle=replace(lifecycle, phase="closure"),
+    )
+
+    planner.plan_event(flow_event, "ecar")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+    planned_logoff = planner.plan_event(logoff_event, "ecar")
+
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    logout_time = planned_logoff.source_timing.finalized_times[ecar_session_render_key("logout")]
+    assert planned_logoff.timestamp == logout_time
+    assert logout_time > login_time
+
+
+def test_machine_logon_follows_visible_kerberos_service_ticket() -> None:
+    """Rendered machine authentication must follow its admitted service ticket."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    login_event.event_type = "machine_logon"
+    login_event.auth.username = "WIN-TEST-01$"
+    ticket_event = SecurityEvent(
+        timestamp=login_event.timestamp + timedelta(milliseconds=500),
+        event_type="kerberos_service",
+        dst_host=login_event.dst_host,
+        kerberos=KerberosContext(
+            target_username="WIN-TEST-01$",
+            target_domain="CORP.LOCAL",
+            service_name="cifs/DC-01",
+            source_ip=f"::ffff:{login_event.auth.source_ip}",
+            source_port=54213,
+        ),
+    )
+
+    planned_ticket = planner.plan_event(ticket_event, "windows_event_security")
+    planner.record_admitted_source_event(planned_ticket, "windows_event_security")
+    planner.plan_event(flow_event, "windows_event_security")
+    planner.record_admitted_source_event(flow_event, "windows_event_security")
+    planned_login = planner.plan_event(login_event, "windows_event_security")
+
+    assert planned_login.timestamp > planned_ticket.timestamp
 
 
 def test_ecar_identity_plan_preserves_parent_create_dependent_terminate_order(

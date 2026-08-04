@@ -72,6 +72,7 @@ from evidenceforge.generation.activity.http_content import (
 )
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
     MAX_HTTP_RESPONSE_BODY_LEN,
     BeaconHttpSequenceEntry,
@@ -113,6 +114,80 @@ _HTTP_USER_AGENT_OVERRIDE_PATTERNS = (
         """
     ),
 )
+
+
+def _build_ids_alert_contexts(
+    attachments: Sequence[IdsAlertAttachmentSpec],
+    *,
+    time: datetime,
+    src_ip: str,
+    dst_ip: str,
+    dst_port: int,
+    proto: str,
+    rng: random.Random,
+    source: str,
+) -> list[Any]:
+    """Resolve authored SID references into canonical IDS contexts."""
+
+    if not attachments:
+        return []
+    from evidenceforge.generation.activity.ids_signatures import signature_by_sid
+
+    contexts = []
+    for attachment in attachments:
+        signature = signature_by_sid(attachment.sid)
+        if signature is None:
+            raise ValueError(
+                f"Unknown IDS signature SID {attachment.sid}; add it to ids_signatures.yaml"
+            )
+        contexts.append(
+            IdsAlertActionBundle(
+                IdsAlertRequest(
+                    signature=signature,
+                    time=time,
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    proto=proto,
+                    rng=rng,
+                    source=source,
+                    direction=str(signature.get("direction", "")),
+                    policy=attachment.policy,
+                )
+            ).execute()
+        )
+    return contexts
+
+
+def _ids_attachment_ground_truth(
+    attachments: Sequence[IdsAlertAttachmentSpec],
+) -> list[dict[str, Any]]:
+    """Describe effective attachment policies before sensor totals are finalized."""
+    from evidenceforge.generation.activity.ids_signatures import (
+        effective_alert_policy,
+        signature_by_sid,
+    )
+
+    result = []
+    for attachment in attachments:
+        signature = signature_by_sid(attachment.sid)
+        if signature is None:
+            continue
+        policy = effective_alert_policy(signature, attachment.policy)
+        result.append(
+            {
+                "sid": attachment.sid,
+                "effective_policy": (
+                    "every" if policy is None else policy.model_dump(mode="json", exclude_none=True)
+                ),
+                "candidate": 0,
+                "emitted": 0,
+                "policy_filtered": 0,
+            }
+        )
+    return result
+
+
 _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
     r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
     re.IGNORECASE,
@@ -3901,6 +3976,16 @@ class StorylineMixin:
                 network_time=time,
                 rng=rng,
             )
+            ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=connection_time,
+                src_ip=source_ip,
+                dst_ip=effective_dst_ip,
+                dst_port=dst_port,
+                proto="tcp",
+                rng=rng,
+                source="storyline_connection",
+            )
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=effective_dst_ip,
@@ -3914,6 +3999,7 @@ class StorylineMixin:
                 emit_dns=emit_dns,
                 source_system=src_sys,
                 http=http_ctx,
+                ids_alerts=ids_alerts,
                 pid=story_pid,
                 process_image=story_image,
                 hostname=conn_hostname,
@@ -3930,6 +4016,10 @@ class StorylineMixin:
             malicious_event["dst_ip"] = logged_dst_ip
             malicious_event["dst_port"] = dst_port
             malicious_event["uid"] = _ground_truth_uid(uid, source_ip, logged_dst_ip)
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(
+                    getattr(spec, "ids_alerts", [])
+                )
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
@@ -3970,6 +4060,16 @@ class StorylineMixin:
             target = next(
                 (s for s in self.scenario.environment.systems if s.ip == system.ip), system
             )
+            authored_ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=time,
+                src_ip=spec.source_ip or system.ip,
+                dst_ip=target.ip,
+                dst_port=22,
+                proto="tcp",
+                rng=rng,
+                source="storyline_ssh_session",
+            )
             if hasattr(self, "world_planner"):
                 source_system = (
                     self.world_model.system_for_ip(spec.source_ip)
@@ -3987,6 +4087,7 @@ class StorylineMixin:
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
                     session_end_plan=self._session_end_plan_for_current_start(),
+                    ids_alerts=authored_ids_alerts,
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -3996,6 +4097,7 @@ class StorylineMixin:
                     time=time,
                     source_ip=source_ip,
                     emit_session_close=True,
+                    ids_alerts=authored_ids_alerts,
                 )
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:
@@ -4023,10 +4125,22 @@ class StorylineMixin:
                 result_source_ip,
                 target.ip,
             )
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "rdp_session":
             target = next(
                 (s for s in self.scenario.environment.systems if s.ip == system.ip), system
+            )
+            authored_ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=time,
+                src_ip=spec.source_ip or system.ip,
+                dst_ip=target.ip,
+                dst_port=3389,
+                proto="tcp",
+                rng=rng,
+                source="storyline_rdp_session",
             )
             if hasattr(self, "world_planner"):
                 source_system = (
@@ -4045,6 +4159,7 @@ class StorylineMixin:
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
                     session_end_plan=self._session_end_plan_for_current_start(),
+                    ids_alerts=authored_ids_alerts,
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -4053,6 +4168,7 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    ids_alerts=authored_ids_alerts,
                 )
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:
@@ -4081,6 +4197,8 @@ class StorylineMixin:
                 result_source_ip,
                 target.ip,
             )
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "account_created":
             dc = next(
@@ -4391,6 +4509,16 @@ class StorylineMixin:
             )
             renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
+            authored_ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=time,
+                src_ip=system.ip,
+                dst_ip=dhcp_server,
+                dst_port=67,
+                proto="udp",
+                rng=rng,
+                source="storyline_dhcp_lease",
+            )
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=time,
@@ -4400,6 +4528,7 @@ class StorylineMixin:
                 uid=generate_zeek_uid("C"),
                 msg_types=msg_types,
                 renewal_interval=renewal_interval,
+                ids_alerts=authored_ids_alerts,
             )
             if hasattr(self, "_dhcp_lease_state"):
                 self._dhcp_lease_state[system.hostname] = {
@@ -4411,6 +4540,8 @@ class StorylineMixin:
                     "system": system,
                 }
             malicious_event["mac_address"] = mac
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "port_scan":
             malicious_event = PortScanActionBundle(
@@ -4757,6 +4888,16 @@ class StorylineMixin:
                         src_sys,
                         tick_time,
                     )
+                tick_ids_alerts = _build_ids_alert_contexts(
+                    getattr(spec, "ids_alerts", []),
+                    time=tick_time,
+                    src_ip=beacon_src_ip,
+                    dst_ip=beacon_dst_ip,
+                    dst_port=spec.dst_port,
+                    proto=spec.protocol,
+                    rng=rng,
+                    source="storyline_beacon",
+                )
                 if spec.action == "deny":
                     proxy_chain = getattr(self.activity_generator, "_proxy_routes", {}).get(
                         beacon_src_ip
@@ -4821,6 +4962,7 @@ class StorylineMixin:
                             emit_dns=tick_emit_dns,
                             source_system=src_sys,
                             http=tick_http_ctx,
+                            ids_alerts=tick_ids_alerts,
                             proxy=proxy_ctx,
                             hostname=conn_hostname if conn_hostname is not None else spec.hostname,
                             pid=story_pid,
@@ -4841,6 +4983,7 @@ class StorylineMixin:
                             proto=spec.protocol,
                             conn_state=deny_conn_state,
                             firewall=fw_ctx,
+                            ids_alerts=tick_ids_alerts,
                             emit_dns=False,
                         )
                 else:
@@ -4859,6 +5002,7 @@ class StorylineMixin:
                         emit_dns=tick_emit_dns,
                         source_system=src_sys,
                         http=tick_http_ctx,
+                        ids_alerts=tick_ids_alerts,
                         hostname=conn_hostname,
                         pid=story_pid,
                         process_image=story_image,
@@ -4878,6 +5022,8 @@ class StorylineMixin:
             term = spec.duration or spec.end_time or f"count={spec.count}"
             malicious_event["termination"] = term
             malicious_event["attempt_count"] = attempt_count
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "dns_query":
             # QTYPE name → numeric mapping
@@ -4941,6 +5087,16 @@ class StorylineMixin:
                 rejected=spec.rcode == "REFUSED",
                 rtt=_dns_rtt(rng, dns_server_ip),
             )
+            authored_ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=time,
+                src_ip=query_src_ip,
+                dst_ip=dns_server_ip,
+                dst_port=53,
+                proto="udp",
+                rng=rng,
+                source="storyline_dns_query",
+            )
 
             self.activity_generator.generate_connection(
                 src_ip=query_src_ip,
@@ -4955,11 +5111,14 @@ class StorylineMixin:
                 resp_bytes=rng.randint(80, 400) if spec.rcode == "NOERROR" else rng.randint(40, 80),
                 conn_state="SF",
                 duration=rng.uniform(0.001, 0.05),
+                ids_alerts=authored_ids_alerts,
             )
 
             malicious_event["query"] = spec.query
             malicious_event["qtype"] = spec.qtype
             malicious_event["rcode"] = spec.rcode
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "web_scan":
             malicious_event = WebScanActionBundle(
@@ -5146,6 +5305,16 @@ class StorylineMixin:
                     rejected=False,
                     rtt=_dns_rtt(rng, dns_server_ip),
                 )
+                authored_ids_alerts = _build_ids_alert_contexts(
+                    getattr(spec, "ids_alerts", []),
+                    time=tick_time,
+                    src_ip=query_src_ip,
+                    dst_ip=dns_server_ip,
+                    dst_port=53,
+                    proto="udp",
+                    rng=rng,
+                    source="storyline_dga_queries",
+                )
 
                 self.activity_generator.generate_connection(
                     src_ip=query_src_ip,
@@ -5162,6 +5331,7 @@ class StorylineMixin:
                     else rng.randint(40, 80),
                     conn_state="SF",
                     duration=rng.uniform(0.001, 0.05),
+                    ids_alerts=authored_ids_alerts,
                 )
                 query_count += 1
                 if query_count % 500 == 0:
@@ -5173,6 +5343,8 @@ class StorylineMixin:
             malicious_event["nxdomain_count"] = nxdomain_count
             malicious_event["domain_sample"] = domain_sample
             malicious_event["tld"] = spec.tld
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "dns_tunnel":
             import base64 as _b64
@@ -5444,6 +5616,16 @@ class StorylineMixin:
                 )
 
                 dns_server_ip = rng.choice(dns_server_ips)
+                authored_ids_alerts = _build_ids_alert_contexts(
+                    getattr(spec, "ids_alerts", []),
+                    time=tick_time,
+                    src_ip=query_src_ip,
+                    dst_ip=dns_server_ip,
+                    dst_port=53,
+                    proto="udp",
+                    rng=rng,
+                    source="storyline_dns_tunnel",
+                )
                 self.activity_generator.generate_connection(
                     src_ip=query_src_ip,
                     dst_ip=dns_server_ip,
@@ -5455,6 +5637,7 @@ class StorylineMixin:
                     emit_dns=False,
                     resp_bytes=resp_bytes,
                     duration=dns_ctx.rtt,
+                    ids_alerts=authored_ids_alerts,
                 )
                 total_bytes += len(visible_payload)
                 query_count += 1
@@ -5464,6 +5647,8 @@ class StorylineMixin:
             malicious_event["qtype"] = spec.qtype
             malicious_event["total_queries"] = query_count
             malicious_event["bytes_exfiltrated"] = total_bytes
+            if getattr(spec, "ids_alerts", []):
+                malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
 
         elif spec.type == "explicit_credentials":
             story_pid, _story_image = self._last_storyline_process_for_system(system)
@@ -5791,6 +5976,16 @@ class StorylineMixin:
             jitter_offset = rng.uniform(-spacing * 0.45, spacing * 0.55)
             scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
             self.state_manager.set_current_time(scan_time)
+            authored_ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=scan_time,
+                src_ip=scan_src_ip,
+                dst_ip=target_ip,
+                dst_port=port,
+                proto=spec.protocol,
+                rng=rng,
+                source="storyline_port_scan",
+            )
 
             from evidenceforge.events.contexts import FirewallContext
 
@@ -5858,6 +6053,7 @@ class StorylineMixin:
                 conn_state=None if spec.protocol == "icmp" else scan_conn_state,
                 firewall=firewall,
                 emit_dns=False,
+                ids_alerts=authored_ids_alerts,
             )
             total_count += 1
 
@@ -5865,6 +6061,8 @@ class StorylineMixin:
         malicious_event["ports"] = spec.ports
         malicious_event["total_connections"] = total_count
         malicious_event["protocol"] = spec.protocol
+        if getattr(spec, "ids_alerts", []):
+            malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
         return malicious_event
 
     def _execute_web_scan_bundle(self, request: WebScanRequest) -> dict[str, Any]:
@@ -6119,6 +6317,16 @@ class StorylineMixin:
                 rng, is_tls=is_tls
             )
             http_for_conn = http_ctx if conn_state == "SF" else None
+            authored_ids_alerts = _build_ids_alert_contexts(
+                getattr(spec, "ids_alerts", []),
+                time=tick_time,
+                src_ip=scan_src_ip,
+                dst_ip=scan_dst_ip,
+                dst_port=spec.dst_port,
+                proto="tcp",
+                rng=rng,
+                source="storyline_web_scan",
+            )
 
             self.activity_generator.generate_connection(
                 src_ip=scan_src_ip,
@@ -6136,6 +6344,7 @@ class StorylineMixin:
                 hostname=scan_host if spec.hostname else None,
                 pid=story_pid,
                 ids=ids_ctx,
+                ids_alerts=authored_ids_alerts,
             )
             request_count += 1
 
@@ -6143,6 +6352,8 @@ class StorylineMixin:
         malicious_event["dst_port"] = spec.dst_port
         malicious_event["preset"] = spec.preset
         malicious_event["request_count"] = request_count
+        if getattr(spec, "ids_alerts", []):
+            malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
         return malicious_event
 
     def _resolve_firewall_interface(self, ip: str) -> str:

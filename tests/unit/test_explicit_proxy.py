@@ -85,6 +85,38 @@ def test_activity_generator_stabilizes_generic_server_proxy_user_agent():
     assert all("Mozilla/" not in user_agent for user_agent in user_agents)
 
 
+def test_unmodeled_sources_get_stable_population_diverse_user_agents():
+    generator = ActivityGenerator(StateManager(), {})
+    sources = [f"198.51.100.{index}" for index in range(1, 65)]
+
+    first = [
+        generator._proxy_user_agent_for_context(
+            random.Random(42),
+            None,
+            hostname="portal.example.org",
+            domain_tags=["web"],
+            apply_domain_override=False,
+            source_identity=source,
+        )
+        for source in sources
+    ]
+    second = [
+        generator._proxy_user_agent_for_context(
+            random.Random(999),
+            None,
+            hostname="portal.example.org",
+            domain_tags=["web"],
+            apply_domain_override=False,
+            source_identity=source,
+        )
+        for source in sources
+    ]
+
+    assert first == second
+    assert len(set(first)) >= 5
+    assert max(first.count(user_agent) for user_agent in set(first)) < 32
+
+
 def test_activity_generator_uses_browser_agent_for_workstation_browser_domains():
     generator = ActivityGenerator(StateManager(), {})
     workstation = System(
@@ -684,7 +716,7 @@ def _emitters() -> dict[str, Mock]:
     emitters["zeek_http"].can_handle.side_effect = lambda event: event.http is not None
     emitters["zeek_ssl"].can_handle.side_effect = lambda event: event.ssl is not None
     emitters["proxy_access"].can_handle.side_effect = lambda event: event.proxy is not None
-    emitters["snort_alert"].can_handle.side_effect = lambda event: event.ids is not None
+    emitters["snort_alert"].can_handle.side_effect = lambda event: bool(event.all_ids_alerts())
     emitters["cisco_asa"].can_handle.side_effect = lambda event: (
         event.network is not None and not event.network.application_layer_only
     )
@@ -3427,6 +3459,82 @@ class TestExplicitProxyVisibility:
             not call.args[0].network.application_layer_only
             for call in emitters["proxy_access"].emit.call_args_list
         )
+
+    def test_ids_attachments_follow_both_existing_proxy_transport_legs(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="ids",
+                    name="both-sides-ids",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["snort_alert"],
+                )
+            ]
+        )
+        ids = IdsContext(
+            sid=2028401,
+            message="ET JA3 test",
+            classification="potentially-bad-traffic",
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            ids_alerts=[ids],
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/first",
+                version="1.1",
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        alerts = [call.args[0] for call in emitters["snort_alert"].emit.call_args_list]
+        assert len(alerts) == 2
+        tuples = {
+            (event.network.src_ip, event.network.dst_ip, event.network.dst_port) for event in alerts
+        }
+        assert ("10.0.1.10", "10.0.3.10", 8080) in tuples
+        assert any(src == "10.0.3.10" and port == 443 for src, _dst, port in tuples)
+        assert all(event.ids_alerts == [ids] for event in alerts)
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 3, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            ids_alerts=[ids],
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/second",
+                version="1.1",
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+        assert emitters["snort_alert"].emit.call_count == 2
 
     def test_denied_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(

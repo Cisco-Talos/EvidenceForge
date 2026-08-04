@@ -512,6 +512,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             logger.info(f"Stopping {format_name} emitter thread")
             emitter.close()
 
+        snort_emitter = self.emitters.get("snort_alert")
+        ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
+        if ids_summary:
+            self._apply_ids_alert_summary(ids_summary)
+        self._ids_evaluation_summary = getattr(snort_emitter, "ids_evaluation_summary", None)
+
         if self.activity_generator is not None:
             self.activity_generator.write_artifacts_manifest()
 
@@ -520,6 +526,49 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         write_collection_profile(self.ground_truth_dir, self.scenario, self.output_target)
 
         logger.info("All emitters closed")
+
+    def _apply_ids_alert_summary(
+        self,
+        summary: dict[str, dict[int, dict[str, object]]],
+    ) -> None:
+        """Attach finalized sensor totals to ground truth and observation accounting."""
+        for cluster_id, sid_totals in summary.items():
+            filtered = sum(int(totals.get("policy_filtered", 0)) for totals in sid_totals.values())
+            emitted_visible = sum(
+                int(totals.get("emitted_visible", 0)) for totals in sid_totals.values()
+            )
+            emitted_delayed = sum(
+                int(totals.get("emitted_delayed", 0)) for totals in sid_totals.values()
+            )
+            self.dispatcher.reconcile_ids_policy_filtering(
+                cluster_id,
+                emitted_visible=emitted_visible,
+                emitted_delayed=emitted_delayed,
+                policy_filtered=filtered,
+            )
+            for event in (*self.malicious_events, *self.red_herring_events):
+                if event.get("storyline_cluster_id") != cluster_id:
+                    continue
+                attachments = event.get("ids_alerts")
+                if not isinstance(attachments, list):
+                    continue
+                for attachment in attachments:
+                    if not isinstance(attachment, dict):
+                        continue
+                    totals = sid_totals.get(attachment.get("sid"))
+                    if totals is not None:
+                        attachment.update(
+                            {
+                                key: totals[key]
+                                for key in (
+                                    "sid",
+                                    "effective_policy",
+                                    "candidate",
+                                    "emitted",
+                                    "policy_filtered",
+                                )
+                            }
+                        )
 
     def _generate_ground_truth(self) -> None:
         """Generate GROUND_TRUTH.json, derived GROUND_TRUTH.md, and the observation manifest."""
@@ -537,6 +586,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             malicious_events=self.malicious_events,
             red_herring_events=self.red_herring_events,
             source_evidence_status=source_evidence_status,
+            ids_evaluation_summary=getattr(self, "_ids_evaluation_summary", None),
         )
 
         document = generator.build_document()

@@ -30,6 +30,14 @@ correctness gates such as parseability, value plausibility, field agreement, and
 ordering remain strict. Adjusted sub-scores expose `raw_score` in JSON and show `raw:<score>` in
 the text report.
 
+`plausibility.ids_integrity` is a special zero-weight 100% hard gate. It validates
+the bounded `GROUND_TRUTH.json.ids_evaluation` contract against parsed,
+sensor-provenanced Snort rows and `OBSERVATION_MANIFEST.json`. Its zero weight
+keeps the overall numeric score unchanged while any count, digest, origin, tuple,
+timestamp, filtering, or observation contradiction fails acceptance. Legacy
+ground truth without the section skips the gate unless the supplied scenario
+authors `ids_alerts`, in which case absence is a failure.
+
 ### Structure
 
 ```yaml
@@ -87,6 +95,7 @@ pillars:
 | plausibility | `field_agreement` | no |
 | plausibility | `user_diversity` | no |
 | plausibility | `anomaly_rate` | no |
+| plausibility | `ids_integrity` | yes (100%; zero weight) |
 | causality | `causal_ordering` | yes |
 | causality | `event_presence` | yes |
 | causality | `indicator_accuracy` | no |

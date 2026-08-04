@@ -331,8 +331,11 @@ class ObservationPolicy:
             return f"registry:{event.registry.key}:{event.registry.value}"
         if event.file:
             return f"file:{event.file.path}:{event.file.action}"
-        if event.ids:
-            return f"ids:{event.ids.sid}:{event.ids.message}"
+        ids_alerts = event.all_ids_alerts()
+        if ids_alerts:
+            return "ids:" + ",".join(
+                f"{alert.gid}:{alert.sid}:{alert.message}" for alert in ids_alerts
+            )
         return "event"
 
     @staticmethod

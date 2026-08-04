@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
@@ -102,6 +102,7 @@ class ProxyTransactionRequest:
     ocsp_transaction: OcspTransactionPlan | None = None
     parent_action_group_id: str | None = None
     source: str = "activity_generator"
+    ids_alerts: list[IdsContext] = field(default_factory=list)
 
     @property
     def stable_id(self) -> str:
@@ -241,6 +242,7 @@ class ProxyTransactionExecutor(Protocol):
         conn_state: str | None = None,
         dns: DnsContext | None = None,
         ids: IdsContext | None = None,
+        ids_alerts: list[IdsContext] | None = None,
         http: HttpContext | None = None,
         file_transfer: FileTransferContext | None = None,
         pe: PeContext | None = None,
@@ -474,6 +476,8 @@ class ProxyTransactionActionBundle:
             pid=client_pid,
             source_system=request.source_system,
             conn_state=request.conn_state or "SF",
+            ids=request.ids,
+            ids_alerts=list(request.ids_alerts),
             http=client_http,
             file_transfer=client_file_transfer,
             pe=client_pe,
@@ -527,6 +531,7 @@ class ProxyTransactionActionBundle:
             conn_state=phase_plan.origin_conn_state,
             dns=request.dns,
             ids=request.ids,
+            ids_alerts=list(request.ids_alerts),
             http=egress_http,
             file_transfer=egress_file_transfer,
             pe=egress_pe,

@@ -345,6 +345,41 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
+Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`,
+`port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events can
+attach multiple configured SIDs with `ids_alerts`. Attachments assert that a
+signature matches; the generator does not run the full Snort rule predicate or
+decrypt traffic. A network tuple without an explicit or built-in IDS context
+does not alert. Candidates are projected through sensor
+visibility, clock, and NAT/PAT views before per-sensor `detection_filter` and
+`event_filter` state is applied. Deferred candidates use a disk-backed spool and
+are deterministically ordered, so long beacons stay memory-bounded and authored
+storyline order cannot change filtering results. Raw Snort events retain their
+existing source-local behavior.
+
+Each attachment follows only the physical transports owned by its authored
+event. SSH/RDP attach to their session transport, DHCP only to the explicitly
+authored transaction, scans and web scans to each probe/request, and DNS families
+to their authored queries. Automatic DHCP renewals and DNS-tunnel background
+cover queries do not inherit attachments. Authored web-scan SIDs coexist with
+automatic preset/path/rate alerts and take precedence on a duplicate `(gid, sid)`.
+Email transport attachments remain deferred.
+
+`GROUND_TRUTH.json` and `.md` record each attached SID, its effective policy, and
+candidate/emitted/policy-filtered sensor totals. Policy suppression is also
+reported as `filtered` IDS evidence in `OBSERVATION_MANIFEST.json`; collection
+drops and output-window clipping are distinct and never advance filter counters.
+
+The optional schema-v1 `ids_evaluation` section in `GROUND_TRUTH.json` is the
+automated acceptance contract. For each sensor and `(gid, sid)` it records
+candidate, emitted, policy-filtered, visible/delayed, and authorized-origin
+totals plus a SHA-256 digest over normalized alerts in file order. Normalization
+covers sensor identity, UTC timestamp, signature metadata, protocol, full tuple,
+and the sensor-visible NAT/PAT projection. Overall observation totals reconcile
+visible, delayed, dropped, filtered, and out-of-window IDS attempts. The
+Markdown IDS Evaluation Summary renders the same counts with abbreviated
+digests.
+
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
 2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
@@ -354,6 +389,8 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 **Known Limitations:**
 - IDS alert variety is limited to curated SID pools (not full ruleset simulation)
+- Signature attachments declare matches; they do not parse or execute Snort rules,
+  `rate_filter`, CIDR suppression, or IPS actions
 
 ---
 

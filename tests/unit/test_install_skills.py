@@ -94,6 +94,24 @@ class TestInstallSkills:
         assert "external_actor_profiles.yaml" in config_ref
         assert "command_parameter_pools.yaml" in validation_ref
 
+    def test_installed_skills_include_correlated_ids_guidance(self, tmp_path):
+        """Claude command install includes IDS authoring, validation, and config references."""
+        install_skills(tmp_path)
+
+        root = tmp_path / "eforge"
+        scenario_skill = (root / "scenario.md").read_text()
+        assert "ids_alerts" in scenario_skill
+        assert "dhcp_lease" in scenario_skill
+        assert "email_message" in scenario_skill
+        assert "one effective policy" in (root / "validate.md").read_text()
+        assert "policy-filtered" in (root / "generate.md").read_text()
+        assert "ids_integrity" in (root / "evaluate.md").read_text()
+        ids_ref = (root / "references" / "config-ids.md").read_text()
+        assert "detection_filter" in ids_ref
+        assert "limit | threshold | both" in ids_ref
+        assert "dns_tunnel" in ids_ref
+        assert "does not decrypt" in ids_ref
+
     def test_no_persona_files_installed(self, tmp_path):
         """Persona YAMLs are NOT installed (skills use eforge info instead)."""
         install_skills(tmp_path)
@@ -275,6 +293,21 @@ class TestInstallChatGPTSkills:
 
         assert "identity_pools" in config_skill
         assert "mail_public_identities.yaml" in config_ref
+
+    def test_chatgpt_and_codex_installs_bundle_ids_guidance(self, tmp_path):
+        """Generated SKILL.md trees retain correlated IDS guidance and detailed references."""
+        install_chatgpt_skills(tmp_path)
+
+        scenario_skill = (tmp_path / "eforge-scenario" / "SKILL.md").read_text()
+        assert "ids_alerts" in scenario_skill
+        assert "rdp_session" in scenario_skill
+        assert "email_read" in scenario_skill
+        assert "policy-filtered" in (tmp_path / "eforge-generate" / "SKILL.md").read_text()
+        assert "ids_integrity" in (tmp_path / "eforge-evaluate" / "SKILL.md").read_text()
+        ids_ref = tmp_path / "eforge-config" / "references" / "config-ids.md"
+        assert ids_ref.is_file()
+        assert "event_filter" in ids_ref.read_text()
+        assert "mail-event" in ids_ref.read_text()
 
     def test_chatgpt_references_are_limited_per_skill(self, tmp_path):
         """ChatGPT skills only receive the references they need."""
