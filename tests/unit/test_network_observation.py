@@ -15,7 +15,11 @@ from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.events.contexts import DnsContext, HttpContext, IdsContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
-from evidenceforge.events.network import NetworkSensorObservation
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import NetworkSensorObservationTiming
 from evidenceforge.generation.emitters.snort import SnortEmitter
@@ -76,6 +80,7 @@ def _network_event(
     *,
     start: datetime = T0,
     stable_id: str = "network:test-transaction",
+    protocol: str = "udp",
 ) -> SecurityEvent:
     duration = 2.5
     network = NetworkContext(
@@ -83,7 +88,7 @@ def _network_event(
         src_port=51000,
         dst_ip="10.0.2.40",
         dst_port=53,
-        protocol="udp",
+        protocol=protocol,
         service="dns",
         zeek_uid="CObservationTest1",
         conn_id="conn-observation-test",
@@ -98,7 +103,7 @@ def _network_event(
         resp_ip_bytes=9072,
         conn_state="SF",
         history="Dd",
-        ip_proto=17,
+        ip_proto=6 if protocol == "tcp" else 17,
     )
     transaction = network.finalize_transaction(
         stable_id,
@@ -222,7 +227,7 @@ def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatc
         "evidenceforge.generation.network_observation.network_sensor_observation_timing",
         lambda _profile_name: forced_loss,
     )
-    event = _network_event()
+    event = _network_event(protocol="tcp")
     event._sensor_hostnames_by_format = {"zeek_conn": ["destination-tap"]}
     planner = NetworkObservationPlanner(_visibility_engine(destination_profile="lossy_span"))
 
@@ -243,6 +248,38 @@ def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatc
         canonical.resp.payload_bytes * 0.1,
         abs=1,
     )
+
+
+def test_non_tcp_capture_loss_preserves_datagram_accounting_without_stream_gaps() -> None:
+    """UDP/ICMP observations must not publish Zeek TCP stream-gap semantics."""
+
+    timing = NetworkSensorObservationTiming(
+        profile_name="lossy_datagrams",
+        clock_offset_min_us=0,
+        clock_offset_max_us=0,
+        clock_drift_min_ppm=0,
+        clock_drift_max_ppm=0,
+        route_delay_min_us=0,
+        route_delay_max_us=0,
+        event_jitter_min_us=0,
+        event_jitter_max_us=0,
+        capture_loss_probability=1.0,
+        capture_loss_min_fraction=0.1,
+        capture_loss_max_fraction=0.1,
+        capture_loss_max_missed_bytes=10_000,
+    )
+    canonical = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=1_000, packets=10, ip_bytes=1_280),
+        resp=DirectionalTrafficLedger(payload_bytes=500, packets=5, ip_bytes=640),
+    )
+
+    observed = NetworkObservationPlanner._observed_traffic(
+        canonical, timing, "zeek-core", "udp-loss", "udp"
+    )
+
+    assert observed.orig.payload_bytes < canonical.orig.payload_bytes
+    assert observed.resp.payload_bytes < canonical.resp.payload_bytes
+    assert observed.missed_bytes == 0
 
 
 def test_sensor_clock_offset_drift_and_route_delay_are_stable(monkeypatch) -> None:
