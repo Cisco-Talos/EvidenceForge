@@ -350,13 +350,14 @@ class SensorMultiplexEmitter(LogEmitter):
         original_src_ip = render_data.get("id.orig_h") or render_data.get("_id.orig_h")
         original_dst_ip = render_data.get("id.resp_h") or render_data.get("_id.resp_h")
         tuple_view = observation.tuple_view
+        is_icmp = render_data.get("proto") == "icmp"
         if "id.orig_h" in render_data:
             render_data["id.orig_h"] = tuple_view.src_ip
-        if "id.orig_p" in render_data:
+        if "id.orig_p" in render_data and not is_icmp:
             render_data["id.orig_p"] = tuple_view.src_port
         if "id.resp_h" in render_data:
             render_data["id.resp_h"] = tuple_view.dst_ip
-        if "id.resp_p" in render_data:
+        if "id.resp_p" in render_data and not is_icmp:
             render_data["id.resp_p"] = tuple_view.dst_port
         for field, value in {
             "src_ip": tuple_view.src_ip,
