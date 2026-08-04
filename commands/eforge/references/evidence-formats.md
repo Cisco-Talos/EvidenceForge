@@ -352,6 +352,16 @@ candidate/emitted/policy-filtered totals; policy suppression appears as
 `filtered` IDS evidence in `OBSERVATION_MANIFEST.json`. Raw Snort events are
 unchanged.
 
+The optional schema-v1 `ids_evaluation` section in `GROUND_TRUTH.json` is the
+automated acceptance contract. For each sensor and `(gid, sid)` it records
+candidate, emitted, policy-filtered, visible/delayed, and authorized-origin
+totals plus a SHA-256 digest over normalized alerts in file order. Normalization
+covers sensor identity, UTC timestamp, signature metadata, protocol, full tuple,
+and the sensor-visible NAT/PAT projection. Overall IDS observation totals
+reconcile visible, delayed, dropped, filtered, and out-of-window attempts. The
+Markdown IDS Evaluation Summary renders the same counts with abbreviated
+digests.
+
 Attachments follow only owned transports: the SSH/RDP session connection, the
 authored DHCP transaction, each scan/web request, and each authored DNS-family
 query. Automatic DHCP renewals and DNS-tunnel cover queries do not inherit them.

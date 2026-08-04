@@ -25,7 +25,7 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 - **Deterministic engine, LLM-assisted authoring.** Scenario creation uses Claude Code Skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
 
-- **Built-in quality evaluation.** A 4-pillar scoring framework (20 sub-scores) measures parseability, plausibility, causality, and timing. Know exactly how good your data is before using it.
+- **Built-in quality evaluation.** A 4-pillar scoring framework (21 sub-scores) measures parseability, plausibility, causality, and timing. Know exactly how good your data is before using it.
 
 ## Quick Start
 
@@ -82,7 +82,7 @@ For scripted or non-interactive use:
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir>` | Generate logs from a scenario file |
 | `eforge validate <scenario.yaml>` | Validate scenario schema and cross-references |
-| `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (4 pillars, 20 sub-scores) |
+| `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (4 pillars, 21 sub-scores) |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
 | `eforge install-skills [--agent all\|claude\|chatgpt\|codex] [--global]` | Install project-local or user-wide agent skills; defaults to all agents (`codex` aliases `chatgpt`) |
@@ -128,7 +128,7 @@ Every generated scenario includes a `GROUND_TRUTH.md` file. Attack scenarios doc
 - **Ground truth documentation** — Every run generates a GROUND_TRUTH.md; attack scenarios include narrative, timeline, and IOCs
 - **Parallel generation** — Threaded emitters write all formats simultaneously with temporal consistency
 - **Scenario validation** — Cross-reference checking, uniqueness constraints, and network topology validation
-- **Data quality evaluation** — 4-pillar scoring framework (20 sub-scores) with acceptance criteria
+- **Data quality evaluation** — 4-pillar scoring framework (21 sub-scores) with acceptance criteria
 - **Multi-timezone support** — Pattern-based timezone overrides per system hostname
 
 ## Supported Log Formats

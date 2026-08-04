@@ -105,7 +105,7 @@ class TestInstallSkills:
         assert "email_message" in scenario_skill
         assert "one effective policy" in (root / "validate.md").read_text()
         assert "policy-filtered" in (root / "generate.md").read_text()
-        assert "candidate/emitted/policy-filtered" in (root / "evaluate.md").read_text()
+        assert "ids_integrity" in (root / "evaluate.md").read_text()
         ids_ref = (root / "references" / "config-ids.md").read_text()
         assert "detection_filter" in ids_ref
         assert "limit | threshold | both" in ids_ref
@@ -303,6 +303,7 @@ class TestInstallChatGPTSkills:
         assert "rdp_session" in scenario_skill
         assert "email_read" in scenario_skill
         assert "policy-filtered" in (tmp_path / "eforge-generate" / "SKILL.md").read_text()
+        assert "ids_integrity" in (tmp_path / "eforge-evaluate" / "SKILL.md").read_text()
         ids_ref = tmp_path / "eforge-config" / "references" / "config-ids.md"
         assert ids_ref.is_file()
         assert "event_filter" in ids_ref.read_text()

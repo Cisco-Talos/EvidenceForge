@@ -25,7 +25,8 @@ temporal distribution, network visibility modeling, and multi-OS support.
 workflow, prebuilt personas, skill installation, and scenario reference docs.
 
 **Phase 4: Data Quality Evaluation.** `eforge eval` with deterministic scoring,
-source parsers, and acceptance criteria.
+source-instance-aware parsers, inferred narrative pivots, acceptance criteria,
+and exact correlated-IDS integrity gating.
 
 **Phase 5: Data Realism Improvements.** Major generator-level realism fixes for
 identity, protocol, process, temporal, and baseline noise patterns.

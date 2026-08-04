@@ -34,6 +34,11 @@ origin request, observation missingness, or policy cadence can all legitimately
 reduce output. Candidate spooling is disk-backed and removed on success or
 failure; a leftover EvidenceForge IDS spool indicates an interrupted process and
 may be removed once no generation process is using it.
+`GROUND_TRUTH.json` also includes the bounded `ids_evaluation` acceptance
+contract: per-sensor/SID counts, origin totals, observation totals, and an
+ordered normalized alert digest. `GROUND_TRUTH.md` renders the same information
+in its IDS Evaluation Summary. Generation accumulates this summary while Snort
+candidates finalize and does not retain alert-volume-sized state.
 
 Interpret candidates by owned transport: SSH/RDP use only their session
 connection; DHCP uses only the authored transaction and does not pass assertions

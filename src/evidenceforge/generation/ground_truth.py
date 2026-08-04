@@ -91,11 +91,13 @@ class GroundTruthGenerator:
         malicious_events: list[dict],
         red_herring_events: list[dict] | None = None,
         source_evidence_status: dict[str, dict[str, dict[str, int]]] | None = None,
+        ids_evaluation_summary: dict[str, dict[str, dict[str, object]]] | None = None,
     ):
         self.scenario = scenario
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
         self.source_evidence_status = source_evidence_status or {}
+        self.ids_evaluation_summary = ids_evaluation_summary
 
     def build_document(self) -> GroundTruthDocument:
         """Build the canonical machine-readable ground-truth document."""
@@ -113,6 +115,7 @@ class GroundTruthGenerator:
                 "observation_profile": self.scenario.observation_profile,
                 "collection_window": self._collection_window(),
                 "source_evidence_status": self._sorted_source_evidence_status(),
+                "ids_evaluation": self._build_ids_evaluation(),
                 "storyline_steps": self._build_storyline_steps(),
                 "red_herring_steps": self._build_red_herring_steps(),
                 "events": self._build_event_records(),
@@ -156,6 +159,10 @@ class GroundTruthGenerator:
         if self._include_source_evidence_status(doc):
             content.append("\n## Source Evidence Status\n")
             content.append(self._create_source_evidence_status_section(doc))
+
+        if doc.ids_evaluation is not None:
+            content.append("\n## IDS Evaluation Summary\n")
+            content.append(self._create_ids_evaluation_section(doc))
 
         content.append("\n## Indicators of Compromise (IOCs)\n")
         content.append(self._format_iocs(self._extract_iocs(doc)))
@@ -313,6 +320,54 @@ class GroundTruthGenerator:
             }
             for cluster_id, source_status in sorted(self.source_evidence_status.items())
         }
+
+    def _build_ids_evaluation(self) -> dict | None:
+        if self.ids_evaluation_summary is None:
+            return None
+        observation: dict[str, int] = {}
+        for source_status in self.source_evidence_status.values():
+            for status, count in source_status.get("ids", {}).items():
+                observation[status] = observation.get(status, 0) + int(count)
+        return {
+            "observation": {key: observation[key] for key in sorted(observation)},
+            "sensors": {
+                sensor: {
+                    key: signatures[key]
+                    for key in sorted(
+                        signatures,
+                        key=lambda value: tuple(int(part) for part in value.split(":")),
+                    )
+                }
+                for sensor, signatures in sorted(self.ids_evaluation_summary.items())
+            },
+        }
+
+    @staticmethod
+    def _create_ids_evaluation_section(document: GroundTruthDocument) -> str:
+        summary = document.ids_evaluation
+        if summary is None:
+            return "*No IDS evaluation summary was generated.*\n"
+        observation = ", ".join(
+            f"{status}={count}" for status, count in sorted(summary.observation.items())
+        )
+        lines = [
+            f"Observation totals: {observation or 'none'}.\n",
+            "| Sensor | GID:SID | Candidates | Emitted | Policy Filtered | Origins | Digest |",
+            "|--------|---------|------------|---------|-----------------|---------|--------|",
+        ]
+        for sensor, signatures in sorted(summary.sensors.items()):
+            for key, signature in sorted(signatures.items()):
+                origins = ", ".join(
+                    f"{origin}={count}" for origin, count in sorted(signature.origins.items())
+                )
+                lines.append(
+                    f"| {sensor} | {key} | {signature.candidate} | {signature.emitted} | "
+                    f"{signature.policy_filtered} | {origins or 'none'} | "
+                    f"`{signature.emitted_sha256[:12]}` |"
+                )
+        if not summary.sensors:
+            lines.append("| *(none)* | - | 0 | 0 | 0 | none | - |")
+        return "\n".join(lines) + "\n"
 
     def _storyline_event_dicts(self, document: GroundTruthDocument) -> list[dict]:
         return [

@@ -595,6 +595,61 @@ def test_authored_plural_ids_context_overrides_automatic_same_sid() -> None:
     assert event.all_ids_alerts() == (authored,)
 
 
+def test_authored_same_sid_precedence_records_authored_origin(tmp_path) -> None:
+    automatic = IdsContext(sid=1001, message="automatic", classification="misc-activity")
+    authored = IdsContext(sid=1001, message="authored", classification="misc-activity")
+    emitter = SnortEmitter(
+        format_def=load_format("snort_alert"), output_path=tmp_path / "snort.log"
+    )
+    emitter.emit(
+        SecurityEvent(
+            timestamp=T0,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.8",
+                src_port=50000,
+                dst_ip="198.51.100.10",
+                dst_port=443,
+                protocol="tcp",
+            ),
+            ids=automatic,
+            ids_alerts=[authored],
+        )
+    )
+    emitter.close()
+
+    summary = emitter.ids_evaluation_summary["__direct__"]["1:1001"]
+    assert summary["origins"] == {"authored_attachment": 1}
+    assert "authored" in (tmp_path / "snort.log").read_text()
+
+
+def test_raw_snort_entry_is_included_without_output_change(tmp_path) -> None:
+    emitter = SnortEmitter(
+        format_def=load_format("snort_alert"), output_path=tmp_path / "snort.log"
+    )
+    raw = {
+        "timestamp": T0,
+        "gid": 1,
+        "sid": 77,
+        "rev": 2,
+        "message": "raw alert",
+        "classification": "misc-activity",
+        "priority": 3,
+        "protocol": "udp",
+        "src_ip": "2001:db8::1",
+        "src_port": 53,
+        "dst_ip": "2001:db8::2",
+        "dst_port": 53000,
+    }
+    emitter.emit_raw(raw)
+    emitter.close()
+
+    assert "[1:77:2] raw alert" in (tmp_path / "snort.log").read_text()
+    summary = emitter.ids_evaluation_summary["__direct__"]["1:77"]
+    assert summary["candidate"] == summary["emitted"] == 1
+    assert summary["origins"] == {"raw": 1}
+
+
 def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
     policy = IdsAlertPolicyContext(
         event_filter=IdsEventFilterContext(type="limit", track="by_src", count=1, seconds=60)
@@ -634,6 +689,12 @@ def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
     assert totals["candidate"] == 4
     assert totals["emitted"] == 2
     assert totals["policy_filtered"] == 2
+    evaluation = emitter.ids_evaluation_summary
+    for sensor in ("inside", "outside"):
+        summary = evaluation[sensor]["1:2028401"]
+        assert summary["candidate"] == 2
+        assert summary["emitted"] == 1
+        assert summary["policy_filtered"] == 1
 
 
 def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch) -> None:
@@ -769,3 +830,5 @@ def test_ids_documentation_and_skill_reference_stay_in_parity() -> None:
         assert "dhcp_lease" in content
         assert "dns_tunnel" in content
         assert "email" in content
+        if "evidence" in path.name.lower():
+            assert "ids_evaluation" in content

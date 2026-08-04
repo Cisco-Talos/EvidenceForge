@@ -230,6 +230,14 @@ failing visible contradictions, parse errors, value mismatches, and missing evid
 manifest marks `visible` or `delayed`. Text and JSON reports keep the adjusted score and expose
 the raw score for affected sub-scores.
 
+IDS output has an additional zero-weight `ids_integrity` hard gate fixed at
+100%. It reconciles sensor-local Snort counts and ordered normalized digests with
+`GROUND_TRUTH.json.ids_evaluation`, then checks filtering and observation totals
+against `OBSERVATION_MANIFEST.json`. Because its weight is zero, it does not
+move the overall numeric score; any contradiction still fails acceptance.
+Legacy datasets without an IDS summary skip the check unless the supplied
+scenario contains authored `ids_alerts`.
+
 For full schema documentation for each file, see the skill reference: `/eforge:references:config-evaluation`.
 
 ## Reference Documentation

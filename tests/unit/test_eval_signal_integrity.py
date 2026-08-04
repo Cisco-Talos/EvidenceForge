@@ -98,6 +98,49 @@ def _scenario_with_storyline(storyline_yaml: list[dict]) -> Scenario:
     )
 
 
+class TestProcessParentIntegrity:
+    @staticmethod
+    def _ecar(action: str, pid: int, at: int, ppid: int | None = None) -> ParsedRecord:
+        fields = {"object": "PROCESS", "action": action, "hostname": "WS-01", "pid": pid}
+        if ppid is not None:
+            fields["ppid"] = ppid
+        return _record("ecar", fields, T0 + timedelta(seconds=at))
+
+    def test_detects_parent_terminated_before_child(self) -> None:
+        records = {
+            "ecar": [
+                self._ecar("CREATE", 100, 0, 4),
+                self._ecar("TERMINATE", 100, 10),
+                self._ecar("CREATE", 200, 20, 100),
+            ]
+        }
+
+        total, correct, failures = CausalityScorer._score_process_parent_integrity(records)
+
+        assert (total, correct) == (1, 0)
+        assert "stale parent PID 100" in failures[0]
+
+    def test_allows_parent_pid_reuse_before_child(self) -> None:
+        records = {
+            "ecar": [
+                self._ecar("CREATE", 100, 0, 4),
+                self._ecar("TERMINATE", 100, 10),
+                self._ecar("CREATE", 100, 15, 4),
+                self._ecar("CREATE", 200, 20, 100),
+            ]
+        }
+
+        total, correct, failures = CausalityScorer._score_process_parent_integrity(records)
+
+        assert (total, correct) == (1, 1)
+        assert not failures
+
+    def test_pre_window_or_observation_gap_is_not_scored(self) -> None:
+        records = {"ecar": [self._ecar("CREATE", 200, 20, 100)]}
+
+        assert CausalityScorer._score_process_parent_integrity(records) == (0, 0, [])
+
+
 class TestStorylineResolution:
     def test_iso_timestamp(self):
         scenario = _scenario_with_storyline(

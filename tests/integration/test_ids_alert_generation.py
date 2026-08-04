@@ -6,6 +6,7 @@
 import json
 from datetime import UTC, datetime
 
+from evidenceforge.evaluation.engine import EvaluationEngine
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
@@ -115,9 +116,18 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
     assert totals["emitted"] == 1
     assert totals["policy_filtered"] == 2
     assert totals["candidate"] == totals["emitted"] + totals["policy_filtered"]
+    ids_evaluation = ground_truth["ids_evaluation"]
+    sensor_summary = ids_evaluation["sensors"]["ids01"]["1:2028401"]
+    assert sensor_summary["candidate"] == 3
+    assert sensor_summary["emitted"] == 1
+    assert sensor_summary["policy_filtered"] == 2
+    assert sensor_summary["origins"] == {"authored_attachment": 1}
+    assert len(sensor_summary["emitted_sha256"]) == 64
     markdown = (tmp_path / "GROUND_TRUTH.md").read_text(encoding="utf-8")
     assert "SID 2028401" in markdown
     assert "candidates=3 emitted=1 filtered=2" in markdown
+    assert "## IDS Evaluation Summary" in markdown
+    assert sensor_summary["emitted_sha256"][:12] in markdown
 
     manifest = json.loads((tmp_path / "OBSERVATION_MANIFEST.json").read_text(encoding="utf-8"))
     storyline = next(
@@ -126,6 +136,16 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
     ids_status = storyline["source_status"]["ids"]
     assert ids_status["filtered"] == 2
     assert ids_status.get("visible", 0) + ids_status.get("delayed", 0) == 1
+
+    report = EvaluationEngine(output_dir=tmp_path, scenario=scenario).run()
+    ids_score = next(
+        score
+        for pillar in report.pillars
+        for score in pillar.sub_scores
+        if score.key == "ids_integrity"
+    )
+    assert ids_score.score == 100.0
+    assert report.generated_at == datetime.fromisoformat(ground_truth["generated_at"])
 
 
 def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(tmp_path) -> None:

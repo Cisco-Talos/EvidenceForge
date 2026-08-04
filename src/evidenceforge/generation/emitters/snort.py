@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
     IdsDetectionFilterContext,
     IdsEventFilterContext,
 )
+from evidenceforge.events.ids_evaluation import new_ids_digest, update_ids_digest
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.ids_filtering import IdsAlertCandidate, IdsAlertFilterEngine
 
@@ -63,6 +64,7 @@ class SnortEmitter(SensorMultiplexEmitter):
         self._spool_connection: sqlite3.Connection | None = None
         self._spool_path: Path | None = None
         self._ids_alert_summary: dict[str, dict[int, dict[str, Any]]] = {}
+        self._ids_evaluation_summary: dict[str, dict[str, dict[str, Any]]] = {}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle physical canonical transports that carry an IdsContext."""
@@ -75,6 +77,7 @@ class SnortEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         """Render IdsContext to Snort fast alert format."""
         net = event.network
+        authored = {(alert.gid, alert.sid) for alert in event.ids_alerts}
         for ids in event.all_ids_alerts():
             event_data = {
                 "timestamp": event.timestamp,
@@ -96,6 +99,9 @@ class SnortEmitter(SensorMultiplexEmitter):
                 "_source_observation_status": getattr(
                     event, "_source_observation_status", "visible"
                 ),
+                "_ids_origin": (
+                    "authored_attachment" if (ids.gid, ids.sid) in authored else "built_in"
+                ),
                 **self._sensor_metadata(event, "snort_alert"),
             }
             self.emit_event(event_data)
@@ -110,7 +116,24 @@ class SnortEmitter(SensorMultiplexEmitter):
         if event_data.pop("_ids_candidate", False):
             self._spool_candidate(event_data)
             return None
-        return self._render_alert(event_data)
+        rendered = self._render_alert(event_data)
+        if rendered is not None:
+            sensor = str(event_data.get("_sensor_identity", "__direct__"))
+            self._record_evaluation_emission(
+                sensor,
+                event_data,
+                origin=str(event_data.get("_ids_origin", "raw")),
+                observation_status=str(event_data.get("_source_observation_status", "visible")),
+                count_candidate=True,
+            )
+        return rendered
+
+    def emit_raw(self, event_data: dict[str, Any]) -> None:
+        """Render an unchanged raw Snort entry while recording its authorized origin."""
+
+        payload = dict(event_data)
+        payload["_ids_origin"] = "raw"
+        super().emit_raw(payload)
 
     def _render_alert(self, event_data: dict[str, Any]) -> str | None:
         """Render one already-admitted alert or an unchanged raw Snort entry."""
@@ -156,7 +179,8 @@ class SnortEmitter(SensorMultiplexEmitter):
                 policy TEXT,
                 cluster_id TEXT NOT NULL,
                 event_id TEXT NOT NULL,
-                observation_status TEXT NOT NULL
+                observation_status TEXT NOT NULL,
+                origin TEXT NOT NULL
             )"""
         )
         self._spool_connection = connection
@@ -180,8 +204,8 @@ class SnortEmitter(SensorMultiplexEmitter):
             connection.execute(
                 """INSERT INTO candidates
                 (sensor, timestamp, gid, sid, payload, policy, cluster_id, event_id,
-                 observation_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 observation_status, origin)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(event_data.get("_sensor_identity", "__direct__")),
                     timestamp.isoformat(),
@@ -192,6 +216,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                     str(event_data.get("_cluster_id", "")),
                     str(event_data.get("_event_id", "")),
                     str(event_data.get("_source_observation_status", "visible")),
+                    str(event_data.get("_ids_origin", "built_in")),
                 ),
             )
 
@@ -224,7 +249,7 @@ class SnortEmitter(SensorMultiplexEmitter):
         filter_engine = IdsAlertFilterEngine()
         rows = connection.execute(
             """SELECT sensor, timestamp, gid, sid, payload, policy, cluster_id,
-            observation_status
+            observation_status, origin
             FROM candidates
             ORDER BY timestamp, sensor, event_id, gid, sid, sequence"""
         )
@@ -237,6 +262,7 @@ class SnortEmitter(SensorMultiplexEmitter):
             policy_json,
             cluster_id,
             observation_status,
+            origin,
         ) in rows:
             payload = json.loads(payload_json)
             payload["timestamp"] = datetime.fromisoformat(timestamp)
@@ -263,8 +289,11 @@ class SnortEmitter(SensorMultiplexEmitter):
                 },
             )
             sid_summary["candidate"] += 1
+            evaluation = self._evaluation_signature(sensor, gid, sid)
+            evaluation["candidate"] += 1
             if not filter_engine.admit(candidate):
                 sid_summary["policy_filtered"] += 1
+                evaluation["policy_filtered"] += 1
                 continue
             rendered = self._render_alert(payload)
             if rendered is not None:
@@ -274,6 +303,51 @@ class SnortEmitter(SensorMultiplexEmitter):
                     "emitted_delayed" if observation_status == "delayed" else "emitted_visible"
                 )
                 sid_summary[status_key] += 1
+                self._record_evaluation_emission(
+                    sensor,
+                    payload,
+                    origin=origin,
+                    observation_status=observation_status,
+                    count_candidate=False,
+                )
+
+    def _evaluation_signature(self, sensor: str, gid: int, sid: int) -> dict[str, Any]:
+        signatures = self._ids_evaluation_summary.setdefault(sensor, {})
+        return signatures.setdefault(
+            f"{gid}:{sid}",
+            {
+                "gid": gid,
+                "sid": sid,
+                "candidate": 0,
+                "emitted": 0,
+                "policy_filtered": 0,
+                "emitted_visible": 0,
+                "emitted_delayed": 0,
+                "origins": {},
+                "_digest": new_ids_digest(),
+            },
+        )
+
+    def _record_evaluation_emission(
+        self,
+        sensor: str,
+        payload: dict[str, Any],
+        *,
+        origin: str,
+        observation_status: str,
+        count_candidate: bool,
+    ) -> None:
+        summary = self._evaluation_signature(
+            sensor, int(payload.get("gid", 1)), int(payload["sid"])
+        )
+        if count_candidate:
+            summary["candidate"] += 1
+        summary["emitted"] += 1
+        status_key = "emitted_delayed" if observation_status == "delayed" else "emitted_visible"
+        summary[status_key] += 1
+        origins = summary["origins"]
+        origins[origin] = origins.get(origin, 0) + 1
+        update_ids_digest(summary["_digest"], sensor, payload)
 
     def flush(self) -> None:
         """Commit deferred candidates and flush already-rendered raw alerts."""
@@ -303,3 +377,20 @@ class SnortEmitter(SensorMultiplexEmitter):
     def ids_alert_summary(self) -> dict[str, dict[int, dict[str, Any]]]:
         """Return per-storyline-event, per-SID candidate and filtering totals."""
         return self._ids_alert_summary
+
+    @property
+    def ids_evaluation_summary(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Return bounded sensor/SID totals and expected rendered-alert digests."""
+
+        return {
+            sensor: {
+                key: {
+                    name: (value.hexdigest() if name == "_digest" else value)
+                    for name, value in summary.items()
+                    if name != "_digest"
+                }
+                | {"emitted_sha256": summary["_digest"].hexdigest()}
+                for key, summary in signatures.items()
+            }
+            for sensor, signatures in self._ids_evaluation_summary.items()
+        }

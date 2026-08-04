@@ -108,3 +108,4 @@ pairs:
       - a_field: server_name
         b_field: san.dns
         b_is_list: true
+        normalize: lower

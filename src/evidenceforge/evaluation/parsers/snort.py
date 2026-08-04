@@ -22,9 +22,10 @@
 
 """Parser for Snort/Suricata fast alert files."""
 
+import ipaddress
 import re
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import LogParser, ParsedRecord, register_parser
@@ -50,14 +51,17 @@ class SnortAlertParser(LogParser):
         return path.name in {"snort_alert.log", "snort_alert.alert"}
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        seed_year = self.scenario.time_window.start.year if self.scenario is not None else None
+        if seed_year is None:
+            seed_year = datetime.now(UTC).year
         with path.open(encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                yield self._parse_line(line, line_num)
+                yield self._parse_line(line, line_num, seed_year)
 
-    def _parse_line(self, raw: str, line_num: int) -> ParsedRecord:
+    def _parse_line(self, raw: str, line_num: int, seed_year: int) -> ParsedRecord:
         fields: dict = {}
         errors: list[str] = []
         timestamp = None
@@ -80,8 +84,8 @@ class SnortAlertParser(LogParser):
 
         # Parse timestamp (MM/DD-HH:MM:SS.ffffff — no year)
         try:
-            ts_with_year = f"{datetime.now().year}/{ts_str}"
-            timestamp = datetime.strptime(ts_with_year, "%Y/%m/%d-%H:%M:%S.%f")
+            ts_with_year = f"{seed_year}/{ts_str}"
+            timestamp = datetime.strptime(ts_with_year, "%Y/%m/%d-%H:%M:%S.%f").replace(tzinfo=UTC)
         except ValueError:
             errors.append(f"Invalid timestamp: {ts_str}")
 
@@ -117,11 +121,29 @@ class SnortAlertParser(LogParser):
 
     @staticmethod
     def _parse_endpoint(endpoint: str) -> tuple[str, int | None]:
-        """Parse 'ip:port' or just 'ip'."""
-        if ":" in endpoint:
-            parts = endpoint.rsplit(":", 1)
+        """Parse IPv4/bracketed-IPv6 endpoints; bare IPv6 is portless."""
+
+        bracketed = re.fullmatch(r"\[([^]]+)](?::(\d+))?", endpoint)
+        if bracketed:
+            address, port = bracketed.groups()
             try:
-                return parts[0], int(parts[1])
+                ipaddress.ip_address(address)
             except ValueError:
                 return endpoint, None
+            return address, int(port) if port is not None else None
+
+        try:
+            ipaddress.ip_address(endpoint)
+        except ValueError:
+            pass
+        else:
+            return endpoint, None
+
+        address, separator, port = endpoint.rpartition(":")
+        if separator and port.isdigit():
+            try:
+                ipaddress.ip_address(address)
+            except ValueError:
+                return endpoint, None
+            return address, int(port)
         return endpoint, None

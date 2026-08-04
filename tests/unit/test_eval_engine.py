@@ -76,6 +76,10 @@ class TestEvaluationEngine:
         hard_criteria = [c for c in report.acceptance_criteria if c.level == "hard"]
         assert len(hard_criteria) > 0
         for c in hard_criteria:
+            if c.sub_score_key == "ids_integrity":
+                assert c.actual is None
+                assert c.passed is None
+                continue
             assert c.actual is not None
             assert c.passed is not None
 
@@ -102,3 +106,13 @@ class TestEvaluationEngine:
 
         assert report.total_records == 0
         assert report.overall_score is not None  # 100 (no failures)
+
+    def test_report_is_repeatable_except_evaluated_at(self, retail_scenario):
+        """Stable discovery and sampling produce identical evaluation content."""
+
+        first = EvaluationEngine(output_dir=GOOD_FIXTURES, scenario=retail_scenario).run()
+        second = EvaluationEngine(output_dir=GOOD_FIXTURES, scenario=retail_scenario).run()
+
+        assert first.model_dump(exclude={"evaluated_at"}) == second.model_dump(
+            exclude={"evaluated_at"}
+        )

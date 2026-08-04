@@ -252,7 +252,7 @@ class TestSpillageEval:
     def test_eval_acceptance_passes(self, spillage_scenario, tmp_path):
         out = _generate(spillage_scenario, tmp_path / "out")
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**spillage_scenario)).run()
-        hard = [c for c in report.acceptance_criteria if c.level == "hard"]
+        hard = [c for c in report.acceptance_criteria if c.level == "hard" and c.passed is not None]
         assert hard and all(c.passed for c in hard), [
             (c.name, c.actual) for c in hard if not c.passed
         ]

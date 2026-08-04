@@ -370,6 +370,16 @@ candidate/emitted/policy-filtered sensor totals. Policy suppression is also
 reported as `filtered` IDS evidence in `OBSERVATION_MANIFEST.json`; collection
 drops and output-window clipping are distinct and never advance filter counters.
 
+The optional schema-v1 `ids_evaluation` section in `GROUND_TRUTH.json` is the
+automated acceptance contract. For each sensor and `(gid, sid)` it records
+candidate, emitted, policy-filtered, visible/delayed, and authorized-origin
+totals plus a SHA-256 digest over normalized alerts in file order. Normalization
+covers sensor identity, UTC timestamp, signature metadata, protocol, full tuple,
+and the sensor-visible NAT/PAT projection. Overall observation totals reconcile
+visible, delayed, dropped, filtered, and out-of-window IDS attempts. The
+Markdown IDS Evaluation Summary renders the same counts with abbreviated
+digests.
+
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
 2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)

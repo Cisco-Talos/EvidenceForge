@@ -453,6 +453,37 @@ class TestSnortAlertParser:
         assert first.fields["dst_ip"] == "10.0.10.50"
         assert first.fields["dst_port"] == 54321
 
+    def test_uses_scenario_year_and_utc(self, tmp_path):
+        from datetime import datetime
+        from types import SimpleNamespace
+
+        from evidenceforge.evaluation.parsers.snort import SnortAlertParser
+
+        path = tmp_path / "snort_alert.log"
+        path.write_text(
+            "02/03-12:34:56.123456 [**] [1:99:1] test [**] "
+            "[Classification: Misc activity] [Priority: 3] {UDP} "
+            "192.0.2.1:53 -> 198.51.100.2:5353\n",
+            encoding="utf-8",
+        )
+        parser = SnortAlertParser()
+        parser.scenario = SimpleNamespace(
+            time_window=SimpleNamespace(start=datetime(2031, 2, 1, tzinfo=UTC))
+        )
+
+        record = next(parser.parse_file(path))
+
+        assert record.timestamp == datetime(2031, 2, 3, 12, 34, 56, 123456, tzinfo=UTC)
+
+    def test_parses_bracketed_and_portless_ipv6(self):
+        from evidenceforge.evaluation.parsers.snort import SnortAlertParser
+
+        parser = SnortAlertParser()
+
+        assert parser._parse_endpoint("[2001:db8::1]:49152") == ("2001:db8::1", 49152)
+        assert parser._parse_endpoint("[2001:db8::2]") == ("2001:db8::2", None)
+        assert parser._parse_endpoint("2001:db8::3") == ("2001:db8::3", None)
+
 
 class TestWebAccessParser:
     def test_parses_all_lines(self):

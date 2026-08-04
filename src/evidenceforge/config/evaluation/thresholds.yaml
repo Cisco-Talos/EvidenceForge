@@ -64,6 +64,11 @@ pillars:
         aspirational: 95
         hard_gate: false
         # 1–5 % goldilocks band; validate bands against calibration data.
+      ids_integrity:
+        minimum: 100
+        aspirational: 100
+        hard_gate: true
+        # Exact rendered-output contract; any contradiction is a generator defect.
 
   # Pillar 3 — Causality
   # Goal: before/after relationships are correct in background noise and

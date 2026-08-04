@@ -109,10 +109,19 @@ The attack storyline must actually materialize correctly in the data, within sen
 |-----------|-----------------|--------------|
 | **Event Presence** (0.25) | Storyline events that should be visible (within sensor coverage) produced at least one trace | `100 * found / expected_visible` |
 | **Indicator Accuracy** (0.25) | Present storyline events carry the correct indicators (IPs, usernames, hostnames, process names as specified in scenario) | `100 * correct_indicators / total_indicators` |
-| **Pivot Linkability** (0.25) | Consecutive storyline steps share at least one common indicator a hunter could pivot on | `100 * linkable_pairs / consecutive_pairs` |
+| **Pivot Linkability** (0.25) | Inferred narrative edges share a stable typed indicator a hunter can pivot on | `100 * linkable_edges / inferred_edges`; connect consecutive events per host/IP/account/domain/URL/file/hash/artifact indicator, exclude generic values, and report isolated events separately |
 | **Storyline Temporal Integrity** (0.25) | Storyline events appear in correct order at approximately correct times | `100 * correctly_timed / total_storyline_events` (with tolerance) |
 
 **Note**: not all storyline events need to produce traces — realistic gaps are acceptable. Acceptance threshold: Event Presence >= 90%.
+
+**IDS integrity contract:** correlated IDS output adds a zero-weight 100% hard
+gate. Generation stores bounded per-sensor/SID counts, authorized origins,
+observation totals, and ordered normalized SHA-256 digests in schema-v1
+`GROUND_TRUTH.json`. Evaluation compares that contract exactly with parsed Snort
+rows and `OBSERVATION_MANIFEST.json`. Zero weight prevents double-counting IDS in
+the composite score, while any missing, extra, mutated, misplaced, filtered, or
+tuple/timestamp-divergent alert fails acceptance. Legacy ground truth skips the
+gate unless its supplied scenario authors `ids_alerts`.
 
 ---
 
@@ -237,7 +246,7 @@ src/evidenceforge/evaluation/
     pillars/
         __init__.py
         parseability.py        # Pillar 1: spec_conformance + format_constraints
-        plausibility.py        # Pillar 2: value_plausibility, co_occurrence, distribution_fit, field_agreement, user_diversity, anomaly_rate
+        plausibility.py        # Pillar 2: value/co-occurrence/distribution/agreement/diversity/anomaly + zero-weight IDS integrity gate
         causality.py           # Pillar 3: causal_ordering, event_presence, indicator_accuracy, pivot_linkability, temporal_integrity, storyline_trace_coverage
         timing.py              # Pillar 4: attack_chain_timing, burstiness, system_regularity, diurnal_pattern, volume_adequacy, rate_plausibility
     _shared.py             # Shared helpers (field maps, username/hostname extractors, JSD)

@@ -148,7 +148,10 @@ class VisibilityModel:
         return self._host_formats.get(resolved, set()) if resolved else set()
 
     def get_expected_format_groups(
-        self, hostname: str, event_types: list[str]
+        self,
+        hostname: str,
+        event_types: list[str],
+        event_details: list[dict] | None = None,
     ) -> list[tuple[str, set[str]]]:
         """Get format groups applicable to a storyline event on this host.
 
@@ -173,29 +176,18 @@ class VisibilityModel:
         if not host_formats:
             return []
 
-        _HOST_LOCAL = {
+        host_local_formats = {
             "windows_event_security",
             "windows_event_sysmon",
             "syslog",
             "bash_history",
             "ecar",
         }
-        _NETWORK = {
-            "zeek_conn",
-            "zeek_dns",
-            "zeek_http",
-            "zeek_ssl",
-            "zeek_dhcp",
-            "snort_alert",
-            "cisco_asa",
-            "web_access",
-            "proxy_access",
-        }
-
-        host_local = host_formats & _HOST_LOCAL
-        # Network types apply if connection events are present
-        network_types = {
+        host_local = host_formats & host_local_formats
+        transport_types = {
             "connection",
+            "ssh_session",
+            "rdp_session",
             "dhcp_lease",
             "port_scan",
             "beacon",
@@ -204,16 +196,53 @@ class VisibilityModel:
             "dga_queries",
             "dns_tunnel",
         }
-        # Note: credential_spray produces auth events (4625/syslog), not network traces —
-        # intentionally excluded from network_types so eval doesn't require Zeek/ASA traces.
+        protocol_groups: dict[str, tuple[set[str], set[str]]] = {
+            "dns": (
+                {"dns_query", "dga_queries", "dns_tunnel"},
+                {"zeek_dns"},
+            ),
+            "dhcp": ({"dhcp_lease"}, {"zeek_dhcp"}),
+            "http": (
+                {"web_scan"},
+                {"zeek_http", "web_access", "proxy_access"},
+            ),
+            "smtp": (
+                {"email_message"},
+                {"zeek_smtp", "email_artifacts", "zeek_conn", "zeek_ssl"},
+            ),
+            "mailbox": (
+                {"email_read"},
+                {"zeek_conn", "zeek_ssl", "proxy_access"},
+            ),
+        }
 
         groups: list[tuple[str, set[str]]] = []
         if host_local:
             groups.append(("host_local", host_local))
-        if network_types & set(event_types):
-            # Include network group — these won't be in host_formats but
-            # should be checked in the records if available
-            groups.append(("network", _NETWORK))
+        event_type_set = set(event_types)
+        if transport_types & event_type_set:
+            transport = {"zeek_conn", "snort_alert", "cisco_asa"} & self._enabled
+            if transport:
+                groups.append(("network_transport", transport))
+        for group_name, (applicable_types, formats) in protocol_groups.items():
+            enabled_formats = formats & self._enabled
+            if applicable_types & event_type_set and enabled_formats:
+                groups.append((group_name, enabled_formats))
+
+        details = event_details or []
+        services = {str(detail.get("service") or "").lower() for detail in details}
+        if services & {"http", "https"}:
+            http_formats = {"zeek_http", "web_access", "proxy_access"} & self._enabled
+            if http_formats:
+                groups.append(("http", http_formats))
+        if services & {"ssl", "https", "tls"}:
+            tls_formats = {"zeek_ssl", "zeek_x509", "zeek_ocsp", "zeek_files"} & self._enabled
+            if tls_formats:
+                groups.append(("tls", tls_formats))
+        if services & {"ntp"}:
+            ntp_formats = {"zeek_ntp"} & self._enabled
+            if ntp_formats:
+                groups.append(("ntp", ntp_formats))
 
         return groups
 

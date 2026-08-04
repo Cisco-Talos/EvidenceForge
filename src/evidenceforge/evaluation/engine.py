@@ -45,6 +45,7 @@ from evidenceforge.evaluation.pillars import (
     TimingScorer,
 )
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
+from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.events.observation_manifest import load_observation_manifest
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import read_output_target_marker
@@ -235,20 +236,34 @@ class EvaluationEngine:
         if document is None:
             return result
         for rec in document.events:
-            if rec.kind != "email_message" or not rec.emitted:
+            if rec.kind not in {"email_message", "email_read"} or not rec.emitted:
                 continue
             sid = rec.storyline_id
-            message_id = rec.attributes.message_id
-            if not (sid and message_id):
+            if not sid:
                 continue
-            result[sid] = {
-                "message_id": message_id,
-                "artifact_path": rec.attributes.artifact_path,
-                "smtp_uids": list(rec.attributes.smtp_uids or ()),
-                "subject": rec.attributes.subject,
-                "sender": rec.attributes.sender,
-                "recipients": list(rec.attributes.recipients or ()),
-            }
+            if rec.kind == "email_message":
+                message_id = rec.attributes.message_id
+                if not message_id:
+                    continue
+                result[sid] = {
+                    "kind": rec.kind,
+                    "time": rec.time,
+                    "message_id": message_id,
+                    "artifact_path": rec.attributes.artifact_path,
+                    "smtp_uids": list(rec.attributes.smtp_uids or ()),
+                    "subject": rec.attributes.subject,
+                    "sender": rec.attributes.sender,
+                    "recipients": list(rec.attributes.recipients or ()),
+                    "outcome": rec.attributes.outcome,
+                }
+            else:
+                result[sid] = {
+                    "kind": rec.kind,
+                    "time": rec.time,
+                    "uid": rec.attributes.uid,
+                    "server": rec.attributes.server,
+                    "protocol": rec.attributes.protocol,
+                }
         return result
 
     def run(self) -> QualityReport:
@@ -268,8 +283,10 @@ class EvaluationEngine:
 
         logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
         observation_manifest = load_observation_manifest(self.output_dir, self.scenario)
+        ground_truth = load_ground_truth_document(self.output_dir, self.scenario)
         context = EvaluationContext(
             observation_manifest=observation_manifest,
+            ground_truth=ground_truth,
             spillage_ground_truth=self._load_spillage_ground_truth(),
             adversarial_payload_ground_truth=self._load_adversarial_payload_ground_truth(),
             email_ground_truth=self._load_email_ground_truth(),
@@ -352,6 +369,7 @@ class EvaluationEngine:
 
         return QualityReport(
             scenario_name=self.scenario.name,
+            generated_at=ground_truth.generated_at if ground_truth is not None else None,
             evaluated_at=datetime.now(UTC),
             total_records=total_records,
             source_counts=source_counts,
@@ -374,7 +392,7 @@ class EvaluationEngine:
         source_counts: dict[str, int] = {}
 
         total_formats = len(file_map)
-        for i, (format_name, paths) in enumerate(file_map.items(), 1):
+        for i, (format_name, paths) in enumerate(sorted(file_map.items()), 1):
             self._progress(
                 "parsing_format",
                 {
@@ -387,13 +405,30 @@ class EvaluationEngine:
             parser.scenario = self.scenario
             parser.output_target = self.output_target
             format_records: list[ParsedRecord] = []
-            for path in paths:
+            for path in sorted(paths):
                 logger.info(f"Parsing {format_name}: {path.name}")
-                format_records.extend(parser.parse_file(path))
+                source_instance = self._source_instance(path)
+                parsed = list(parser.parse_file(path))
+                for record in parsed:
+                    record.source_instance = source_instance
+                parsed.sort(key=lambda record: (record.line_number or 0, record.raw))
+                format_records.extend(parsed)
             records[format_name] = format_records
             source_counts[format_name] = len(format_records)
 
         return records, source_counts
+
+    def _source_instance(self, path: Path) -> str:
+        """Return the nearest non-year directory identifying a host or sensor."""
+
+        try:
+            parts = path.resolve().relative_to(self.output_dir.resolve()).parts[:-1]
+        except ValueError:
+            return "__artifact__"
+        for part in reversed(parts):
+            if not (len(part) == 4 and part.isdigit()):
+                return part
+        return "__direct__"
 
     @staticmethod
     def _compute_overall(pillars: list[PillarScore]) -> float | None:

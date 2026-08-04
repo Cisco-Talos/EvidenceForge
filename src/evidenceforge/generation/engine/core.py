@@ -516,6 +516,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
         if ids_summary:
             self._apply_ids_alert_summary(ids_summary)
+        self._ids_evaluation_summary = getattr(snort_emitter, "ids_evaluation_summary", None)
 
         if self.activity_generator is not None:
             self.activity_generator.write_artifacts_manifest()
@@ -585,6 +586,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             malicious_events=self.malicious_events,
             red_herring_events=self.red_herring_events,
             source_evidence_status=source_evidence_status,
+            ids_evaluation_summary=getattr(self, "_ids_evaluation_summary", None),
         )
 
         document = generator.build_document()

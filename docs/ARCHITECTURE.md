@@ -689,7 +689,7 @@ EvaluationEngine
 ├── Pillars (4 scoring modules — currently still 5 legacy scorers during transition)
 │   ├── Parseability    (30%) — spec conformance, format constraints
 │   ├── Plausibility    (25%) — OS/value correctness, co-occurrence, distributions,
-│   │                           user diversity, benign anomaly rate
+│   │                           user diversity, anomaly rate, zero-weight IDS integrity gate
 │   ├── Causality       (25%) — causal ordering, event presence, indicator accuracy,
 │   │                           pivot linkability, storyline temporal integrity
 │   └── Timing          (20%) — attack-chain timing, burstiness, diurnal patterns,
@@ -709,6 +709,15 @@ EvaluationEngine
 ```
 
 Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
+
+Snort finalization incrementally builds a bounded `ids_evaluation` contract in
+canonical ground truth. Evaluation preserves each parsed record's host/sensor
+source instance and exactly compares the contract's sensor-local counts and
+ordered normalized digests with rendered alerts. The check is a 100% hard gate
+but has zero score weight. Older datasets skip it explicitly unless their
+scenario authors IDS attachments. Storyline pivot linkability is inferred from
+typed stable indicators; it connects consecutive events per indicator rather
+than scoring unrelated globally consecutive steps.
 
 - **Grace period:** Events within the scenario's `logon_grace_period` (default 30m) from scenario start are exempt from causal ordering checks, since data collection begins mid-session with pre-existing user sessions.
 - **Per-rule tolerance:** Rules can specify a `tolerance` fraction (e.g., 0.03 for DNS→TCP) allowing a percentage of failures without penalty. Used for intentional direct-IP baseline connections.
