@@ -6145,7 +6145,10 @@ class ActivityGenerator:
                 f"{source_system.hostname}:{key}:{image}:{username}:{time.isoformat()}"
             )
         )
-        lead_seconds = process_rng.uniform(45.0, 420.0)
+        if self._connection_owner_is_one_shot_network_client(image, command_line):
+            lead_seconds = process_rng.uniform(0.12, 3.5)
+        else:
+            lead_seconds = process_rng.uniform(45.0, 420.0)
         process_time = time - timedelta(seconds=lead_seconds)
         scenario_start = getattr(self, "_scenario_start_time", None)
         if scenario_start is not None:
@@ -6274,6 +6277,18 @@ class ActivityGenerator:
                 )
             )
         return False
+
+    @classmethod
+    def _connection_owner_is_one_shot_network_client(
+        cls,
+        image: str,
+        command_line: str,
+    ) -> bool:
+        """Return whether a connection owner should start near its first network action."""
+        normalized_image = image.lower().replace("\\", "/")
+        if "/apt/methods/" in normalized_image:
+            return True
+        return cls._connection_owner_requires_exact_command_line(image, command_line)
 
     def _ensure_user_connection_owner_process(
         self,
