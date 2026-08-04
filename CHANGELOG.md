@@ -6,6 +6,34 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.14.0 (2026-08-04)
+
+This minor release adds canonical multi-alert IDS attachments and exact
+cross-source evaluation integrity, then hardens the generator against realism
+findings discovered through repeated blind assessment.
+
+**Correlated IDS evidence**
+
+- Added typed, transport-owned IDS alert attachments with multi-SID support,
+  sensor-local routing, filtering policy, validation, configuration overlays,
+  documentation, and source-native Snort rendering (`2be53773`, `96f5afe1`).
+- Added exact IDS integrity evaluation across ground truth, transport evidence,
+  visibility, sensors, and rendered alerts, including acceptance gates and
+  regression coverage for correlation failures (`e023286b`).
+
+**Cross-source and source-native realism**
+
+- Corrected eCAR session timing and module principal ownership, machine-account
+  application transport semantics, versioned Sysmon manifests, and
+  deterministic leaf-certificate issuance (`3dfbd680`).
+- Replaced exact sudo ceilings and public-client User-Agent monoculture with
+  host/source-sticky distributions, and added sensor-local timing and bounded
+  capture-accounting texture for distributed network observations
+  (`3dfbd680`).
+- Prevented impossible baseline signatures and payload-content alerts on opaque
+  TLS while retaining metadata-visible TLS detections and cleartext payload
+  coverage (`3dfbd680`).
+
 ## v1.13.1 (2026-07-30)
 
 This patch release hardens agent-facing security boundaries and CI dependency
