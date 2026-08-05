@@ -6145,7 +6145,10 @@ class ActivityGenerator:
                 f"{source_system.hostname}:{key}:{image}:{username}:{time.isoformat()}"
             )
         )
-        lead_seconds = process_rng.uniform(45.0, 420.0)
+        if self._connection_owner_is_one_shot_network_client(image, command_line):
+            lead_seconds = process_rng.uniform(0.12, 3.5)
+        else:
+            lead_seconds = process_rng.uniform(45.0, 420.0)
         process_time = time - timedelta(seconds=lead_seconds)
         scenario_start = getattr(self, "_scenario_start_time", None)
         if scenario_start is not None:
@@ -6274,6 +6277,18 @@ class ActivityGenerator:
                 )
             )
         return False
+
+    @classmethod
+    def _connection_owner_is_one_shot_network_client(
+        cls,
+        image: str,
+        command_line: str,
+    ) -> bool:
+        """Return whether a connection owner should start near its first network action."""
+        normalized_image = image.lower().replace("\\", "/")
+        if "/apt/methods/" in normalized_image:
+            return True
+        return cls._connection_owner_requires_exact_command_line(image, command_line)
 
     def _ensure_user_connection_owner_process(
         self,
@@ -21304,6 +21319,19 @@ class ActivityGenerator:
             return False
         if event.firewall is not None and event.firewall.action == "deny":
             return False
+        # Domain controllers collect WFP evidence selectively in ordinary baseline
+        # traffic.  Explicit storyline bundles retain complete coverage so attack
+        # evidence remains auditable, while baseline admission avoids one 5156 row
+        # per permitted connection becoming a synthetic volume signature.
+        roles = {str(role).lower() for role in (target_system.roles or [])}
+        if "domain_controller" in roles and event.lifecycle is None:
+            seed = _stable_seed(
+                "baseline_dc_wfp:"
+                f"{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
+                f"{net.protocol}:{event.timestamp.isoformat()}"
+            )
+            if seed % 100 >= 35:
+                return False
         proto = net.protocol.lower()
         if proto == "tcp":
             if net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}:
