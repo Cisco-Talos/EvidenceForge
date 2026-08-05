@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "reviewed_at": "2026-08-05",
+  "generated_root": "/private/tmp/eforge-realism-review",
+  "generated_outputs_tracked": false,
+  "manifest_hash_method": "SHA-256 of the sorted, relative-path shasum -a 256 manifest beneath data/",
+  "commands": {
+    "validate": "uv run eforge validate SCENARIO",
+    "generate": "uv run eforge generate SCENARIO --output-dir OUTPUT --force",
+    "evaluate": "uv run eforge eval OUTPUT/data --scenario SCENARIO --json",
+    "probe": ".venv/bin/python scripts/realism_review_probe.py OUTPUT --output REPORT",
+    "tests_non_slow": "uv run pytest --no-cov",
+    "tests_slow": "uv run pytest --no-cov --include-slow -m slow",
+    "tests_external_parsers": "uv run pytest --no-cov --include-external-parsers -m external_parser -q -rs",
+    "lint": "uv run ruff check .",
+    "format_check": "uv run ruff format --check ."
+  },
+  "quality_gates": [
+    {
+      "name": "scenario_validation",
+      "status": "mixed",
+      "evidence": "The normal scenarios validated. tests/fixtures/scenarios/full-coverage-apt.yaml failed because all three network segments omit the required exposure field; a temporary copy adding only those fields was used for empirical coverage."
+    },
+    {
+      "name": "ruff_check",
+      "status": "passed",
+      "result": "All checks passed"
+    },
+    {
+      "name": "ruff_format_check",
+      "status": "passed",
+      "result": "447 files already formatted"
+    },
+    {
+      "name": "non_slow_tests",
+      "status": "passed",
+      "result": "5075 passed, 41 skipped in 215.04 seconds"
+    },
+    {
+      "name": "slow_scale_tests",
+      "status": "passed_with_skip",
+      "result": "13 passed, 1 skipped, 5102 deselected in 58.57 seconds; the memory test was skipped"
+    },
+    {
+      "name": "external_parser_tests",
+      "status": "unavailable",
+      "result": "4 skipped: Docker/Podman Compose unavailable for three checks; Splunk also requires EFORGE_ACCEPT_SPLUNK_LICENSE=1"
+    },
+    {
+      "name": "cli_real_parser_evaluation",
+      "status": "unimplemented",
+      "result": "eforge eval --real-parsers is a reserved option and does not run parsers"
+    }
+  ],
+  "datasets": [
+    {
+      "name": "minimal",
+      "scenario": "tests/fixtures/scenarios/minimal.yaml",
+      "output": "/private/tmp/eforge-realism-review/minimal",
+      "profile": "complete",
+      "duration": "1h",
+      "data_files": 9,
+      "data_bytes": 208896,
+      "json_log_lines": 57,
+      "manifest_sha256": "33970af442b751b206189efd6923100e44df58249fa970fbb748e31272e269c5",
+      "probe": {"errors": 2, "warnings": 2, "checks": ["dhcp_role_separation", "zeek_self_connection"]},
+      "evaluation": {"records": 175, "overall_score": 96.8484, "acceptance_passed": true}
+    },
+    {
+      "name": "minimal-repeat",
+      "scenario": "tests/fixtures/scenarios/minimal.yaml",
+      "output": "/private/tmp/eforge-realism-review/minimal-repeat",
+      "profile": "complete",
+      "duration": "1h",
+      "data_files": 9,
+      "data_bytes": 208896,
+      "json_log_lines": 57,
+      "manifest_sha256": "33970af442b751b206189efd6923100e44df58249fa970fbb748e31272e269c5",
+      "repeat_equivalence": "byte-identical relative file manifest"
+    },
+    {
+      "name": "baseline-only",
+      "scenario": "tests/fixtures/scenarios/baseline-only.yaml",
+      "output": "/private/tmp/eforge-realism-review/baseline-only",
+      "data_files": 16,
+      "data_bytes": 5513216,
+      "json_log_lines": 2915,
+      "manifest_sha256": "c36bf4a699e53f14fda408ddc5dc4c4d4f9fcf55a58198fbeaefec28305b8366",
+      "probe": {"errors": 0, "warnings": 0},
+      "generation_warning": "Four of five users have no primary-system assignment"
+    },
+    {
+      "name": "full-coverage-apt-adapted",
+      "scenario": "/private/tmp/eforge-realism-review/full-coverage-apt-adapted.yaml",
+      "source_scenario": "tests/fixtures/scenarios/full-coverage-apt.yaml",
+      "adaptation": "Added only required network-segment exposure values; generator behavior unchanged",
+      "output": "/private/tmp/eforge-realism-review/full-coverage-apt-adapted",
+      "data_files": 54,
+      "data_bytes": 51048448,
+      "json_log_lines": 37963,
+      "manifest_sha256": "2c9beec045706b77527a5ebcccc44700ad3c76640fa7c990484b741061250e14",
+      "probe": {"errors": 0, "warnings": 0},
+      "evaluation": {
+        "records": 62084,
+        "overall_score": 93.4466,
+        "acceptance_passed": true,
+        "event_presence": "25/26",
+        "indicator_mismatches": 20,
+        "pivot_linkability": "31/36",
+        "temporal_integrity": "24/26; one out of order and one untraced",
+        "storyline_trace_coverage": "26/32",
+        "anomaly_score": 18
+      },
+      "generation_warnings": ["No firewall despite desired coverage", "Canonical path mismatches for procdump and 7z"]
+    },
+    {
+      "name": "branch-enterprise",
+      "scenario": "/private/tmp/eforge-realism-review/branch-enterprise.yaml",
+      "source_scenario": "scenarios/branch-office-example/scenario.yaml",
+      "adaptation": "Changed only scenario name and observation profile to enterprise_standard",
+      "output": "/private/tmp/eforge-realism-review/branch-enterprise",
+      "data_files": 40,
+      "data_bytes": 32714752,
+      "json_log_lines": 36062,
+      "manifest_sha256": "748c9a30c48d73bb68e69e43b7549662c08b01d8a453e10e5a854024498d671c",
+      "probe": {"errors": 44, "warnings": 2, "checks": ["ecar_explorer_parentage", "ecar_failed_attempt_identity_unique", "ecar_linux_login_parentage", "ecar_process_after_session_logout", "ecar_rdp_transport_before_auth", "ecar_ssh_actor_overlapping_connections", "ids_transport_semantics", "sysmon_logon_guid_immutable", "windows_4648_native_fields", "zeek_aaaa_success_distribution", "zeek_file_interval", "zeek_ocsp_duration_distribution"]},
+      "evaluation": {"records": 48848, "sources": 18, "overall_score": 96.1891, "acceptance_passed": true, "indicator_mismatches": 9, "pivot_linkability": "2/5"},
+      "generation_warning": "A public hostname is not declared in network identities; generation synthesized its address"
+    },
+    {
+      "name": "minimal-30d",
+      "scenario": "/private/tmp/eforge-realism-review/minimal-30d.yaml",
+      "source_scenario": "tests/fixtures/scenarios/minimal.yaml",
+      "output": "/private/tmp/eforge-realism-review/minimal-30d",
+      "duration": "30d",
+      "data_files": 10,
+      "data_bytes": 113549312,
+      "json_log_lines": 16671,
+      "manifest_sha256": "2607187a9a8dccafd0f9c8aa77058cc71b9cca823661484c603b8f741e190004",
+      "probe": {"errors": 1442, "warnings": 1442, "checks": ["dhcp_role_separation", "zeek_self_connection"]}
+    }
+  ],
+  "integrated_24h_matrix": {
+    "scenario_source": "scenarios/branch-office-example/scenario.yaml",
+    "profiles": ["complete", "enterprise_standard"],
+    "requested_seed_count_per_profile": 5,
+    "actual_variation": "Scenario-name variants 1 through 5; the public scenario and CLI models expose no coherent generation seed",
+    "limitation": "GenerationEngine resets the thread-local RNG to 42, so these are not true user-controlled seeds. Scenario-name-derived stable substreams vary some decisions, while the global stream remains fixed.",
+    "probe_summary": "The original Zeek-focused probe found zero violations in all ten runs. The expanded eCAR probe found repeated failed-attempt identities in nine of ten runs and one process acting 10.334 seconds after termination.",
+    "runs": [
+      {"name": "branch-24h-complete-1", "files": 40, "bytes": 117772288, "json_log_lines": 124027, "manifest_sha256": "5b2553da0357f5e83dd6b270cb4c268e48254e067109ad1b12263787465b91af", "expanded_probe_errors": 3},
+      {"name": "branch-24h-complete-2", "files": 40, "bytes": 117702656, "json_log_lines": 122563, "manifest_sha256": "61e9ae9ec277235037ba5ec8be1cb6ed2ffaf62196a1650b12be542a78bc9fb9", "expanded_probe_errors": 5},
+      {"name": "branch-24h-complete-3", "files": 40, "bytes": 110039040, "json_log_lines": 115351, "manifest_sha256": "5ab155d96e3b3409963cb5d28292f6e4089b16854452071b7281bdc53d3b4af0", "expanded_probe_errors": 1},
+      {"name": "branch-24h-complete-4", "files": 40, "bytes": 114765824, "json_log_lines": 123095, "manifest_sha256": "d3196a4de0b60f0f18875945d4a746a73c89d46f57ed9021ded681a2a1038b5e", "expanded_probe_errors": 1},
+      {"name": "branch-24h-complete-5", "files": 40, "bytes": 119676928, "json_log_lines": 128263, "manifest_sha256": "984c4496abe90bde44bb4d4ab47aef5fb7d02ad01fcaa319ba4b6d5837223477", "expanded_probe_errors": 3},
+      {"name": "branch-24h-enterprise_standard-1", "files": 40, "bytes": 116023296, "json_log_lines": 122298, "manifest_sha256": "5c71d6a04f1c5b0881aa4c67149f6f738da9593df34373f79f3ade0d5bda0f30", "expanded_probe_errors": 1},
+      {"name": "branch-24h-enterprise_standard-2", "files": 40, "bytes": 114987008, "json_log_lines": 118295, "manifest_sha256": "4c3a10ed0b7c3de6aef5c1170e8361e10418ca26fcad89f01367677db0d1c352", "expanded_probe_errors": 1},
+      {"name": "branch-24h-enterprise_standard-3", "files": 40, "bytes": 117673984, "json_log_lines": 123150, "manifest_sha256": "76bf4f6eb8ce3677bf7b0982fe41b665d3dfb5f5c0501c32f3c4fbc4c64cc42a", "expanded_probe_errors": 0},
+      {"name": "branch-24h-enterprise_standard-4", "files": 40, "bytes": 117325824, "json_log_lines": 115932, "manifest_sha256": "5a149b4b43e5f04475010ab84b36d3c30194edc29b7c250842d7c4603e05d269", "expanded_probe_errors": 3},
+      {"name": "branch-24h-enterprise_standard-5", "files": 40, "bytes": 118607872, "json_log_lines": 129228, "manifest_sha256": "33998832afbb28e51e44fbdd97884e6ed2e6a25a486a163386423f0baa926ec7", "expanded_probe_errors": 2}
+    ]
+  },
+  "seven_day_baseline_matrix": {
+    "limitation": "Scenario-name variants, not true user-controlled seeds",
+    "generation_warning": "Four users lack primary-system assignments",
+    "runs": [
+      {"name": "baseline-7d-1", "files": 16, "bytes": 211132416, "json_log_lines": 100886, "manifest_sha256": "39ebd67c4b0441df8ffab2999c1f574797135e02f3b6ed85d7871a459db35564", "probe_errors": 0},
+      {"name": "baseline-7d-2", "files": 16, "bytes": 250277888, "json_log_lines": 120156, "manifest_sha256": "ae4f6df6b86ea87f6d150f27eb01424395369d885d6da0bce9d8270e4eee0839", "probe_errors": 0},
+      {"name": "baseline-7d-3", "files": 16, "bytes": 248569856, "json_log_lines": 124137, "manifest_sha256": "24feabf1d0510154f3e441a39ab6db20489653abfd31df1a6da1950a38c9ccfa", "probe_errors": 0}
+    ]
+  },
+  "format_filter_equivalence": {
+    "full": "/private/tmp/eforge-realism-review/branch-24h-complete-1",
+    "filtered": "/private/tmp/eforge-realism-review/branch-24h-complete-1-zeek-only",
+    "filtered_manifest_sha256": "5f36a19ba6ca62f0e525121f33fd097a955f65d6f8f0fe2f0d877c801cc14f38",
+    "equivalent": false,
+    "all_nine_zeek_files_differ": true,
+    "record_counts": {
+      "conn": {"full": 20591, "filtered": 12885},
+      "dhcp": {"full": 195, "filtered": 194},
+      "dns": {"full": 2806, "filtered": 2509},
+      "files": {"full": 2123, "filtered": 1384},
+      "http": {"full": 1803, "filtered": 1196},
+      "ocsp": {"full": 64, "filtered": 79},
+      "pe": {"full": 8, "filtered": 12},
+      "ssl": {"full": 3155, "filtered": 1445},
+      "x509": {"full": 1615, "filtered": 833}
+    }
+  },
+  "output_targets": [
+    {"name": "sof-elk", "output": "/private/tmp/eforge-realism-review/minimal-sof-elk", "files": 9, "bytes": 126976, "json_log_lines": 175, "manifest_sha256": "dc3373e2cf3e1340005dc8acf43aac5d0b4dd09982e38bf6969a0fd5797dafeb", "result": "generated; Windows XML was transformed to yearly SNARE sidecars"},
+    {"name": "splunk", "output": "/private/tmp/eforge-realism-review/minimal-splunk", "files": 9, "bytes": 192512, "json_log_lines": 57, "manifest_sha256": "5ac5fe5d6a9bfe465b0240d5b959014bea7a08997ee46f8e8ab71e396469c69a", "result": "generated; Windows XML layout preserved"}
+  ],
+  "known_limitations": [
+    "The public API has no scenario-level or CLI seed, so the requested multi-seed matrix could only be approximated with scenario-name variants.",
+    "Container-backed external parsers were unavailable in the review environment.",
+    "The probe is deliberately invariant-focused and does not prove semantic realism when it reports no findings.",
+    "Generated outputs are temporary and untracked; the manifest hashes and recorded commands are the durable reproducibility evidence."
+  ]
+}

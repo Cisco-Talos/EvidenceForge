@@ -48,6 +48,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Implement the approved canonical contracts as bounded feature-branch batches,
+  beginning with the behavior-preserving registry, semantic occurrence-key, authored-intent,
+  seal-validation, and early safety foundation. See the
+  [contract foundation worklog](docs/worklog/2026-08-05-canonical-contract-foundation.md) and the
+  [approved contracts](docs/design/realism-review/contract-proposals.md).
 - [ ] Continue current-dev realism assessment only if another loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.

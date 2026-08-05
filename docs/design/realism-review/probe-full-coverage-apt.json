@@ -1,0 +1,67 @@
+{
+  "collection_window_epoch": [
+    1731416400.0,
+    1731438000.0
+  ],
+  "dataset": "/private/tmp/eforge-realism-review/full-coverage-apt-adapted",
+  "files": {
+    "json": {
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/DC-01.hartfield-law.local/ecar.json": 6916,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/FILE-SRV-01.hartfield-law.local/ecar.json": 2450,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/MAIL-01.hartfield-law.local/ecar.json": 858,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/SQL-SRV-01.hartfield-law.local/ecar.json": 1707,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WEB-01.hartfield-law.local/ecar.json": 910,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-DOKONKWO-01.hartfield-law.local/ecar.json": 1682,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-JWALKER-01.hartfield-law.local/ecar.json": 1450,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-KMILLS-01.hartfield-law.local/ecar.json": 1862,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-MSANTOS-01.hartfield-law.local/ecar.json": 1751,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-PCHEN-01.hartfield-law.local/ecar.json": 1516,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-SLIU-01.hartfield-law.local/ecar.json": 1309,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/conn.json": 7571,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/dhcp.json": 53,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/dns.json": 1793,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/files.json": 936,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/http.json": 97,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/ntp.json": 63,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/ocsp.json": 67,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/pe.json": 1,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/ssl.json": 1732,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-core/x509.json": 700,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/conn.json": 710,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/dns.json": 125,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/files.json": 42,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/http.json": 20,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/ocsp.json": 2,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/pe.json": 1,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/ssl.json": 127,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/zeek-dmz/x509.json": 31
+    },
+    "xml": {
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/DC-01.hartfield-law.local/windows_event_security.xml": 7884,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/DC-01.hartfield-law.local/windows_event_sysmon.xml": 946,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/FILE-SRV-01.hartfield-law.local/windows_event_security.xml": 1845,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/FILE-SRV-01.hartfield-law.local/windows_event_sysmon.xml": 555,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/SQL-SRV-01.hartfield-law.local/windows_event_security.xml": 872,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/SQL-SRV-01.hartfield-law.local/windows_event_sysmon.xml": 532,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-DOKONKWO-01.hartfield-law.local/windows_event_security.xml": 1294,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-DOKONKWO-01.hartfield-law.local/windows_event_sysmon.xml": 721,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-JWALKER-01.hartfield-law.local/windows_event_security.xml": 1104,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-JWALKER-01.hartfield-law.local/windows_event_sysmon.xml": 663,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-KMILLS-01.hartfield-law.local/windows_event_security.xml": 1485,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-KMILLS-01.hartfield-law.local/windows_event_sysmon.xml": 741,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-MSANTOS-01.hartfield-law.local/windows_event_security.xml": 1338,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-MSANTOS-01.hartfield-law.local/windows_event_sysmon.xml": 785,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-PCHEN-01.hartfield-law.local/windows_event_security.xml": 1115,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-PCHEN-01.hartfield-law.local/windows_event_sysmon.xml": 711,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-SLIU-01.hartfield-law.local/windows_event_security.xml": 954,
+      "/private/tmp/eforge-realism-review/full-coverage-apt-adapted/data/WS-SLIU-01.hartfield-law.local/windows_event_sysmon.xml": 507
+    }
+  },
+  "findings": [],
+  "schema_version": 1,
+  "summary": {
+    "by_check": {},
+    "by_severity": {},
+    "total": 0
+  }
+}

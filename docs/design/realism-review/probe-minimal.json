@@ -1,0 +1,90 @@
+{
+  "collection_window_epoch": [
+    1705312800.0,
+    1705316400.0
+  ],
+  "dataset": "/private/tmp/eforge-realism-review/minimal",
+  "files": {
+    "json": {
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/conn.json": 21,
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/dhcp.json": 2,
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/files.json": 10,
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/http.json": 5,
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/ocsp.json": 2,
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/ssl.json": 9,
+      "/private/tmp/eforge-realism-review/minimal/data/core-zeek/x509.json": 8
+    },
+    "xml": {
+      "/private/tmp/eforge-realism-review/minimal/data/TEST-01.example.com/windows_event_security.xml": 59,
+      "/private/tmp/eforge-realism-review/minimal/data/TEST-01.example.com/windows_event_sysmon.xml": 59
+    }
+  },
+  "findings": [
+    {
+      "check": "zeek_self_connection",
+      "evidence": {
+        "tuple": [
+          "10.0.0.1",
+          68,
+          "10.0.0.1",
+          67
+        ],
+        "uid": "C7FGeXPSMYMtQwWgC7"
+      },
+      "message": "Connection originator and responder are the same IP",
+      "path": "/private/tmp/eforge-realism-review/minimal/data/core-zeek/conn.json",
+      "severity": "warning"
+    },
+    {
+      "check": "zeek_self_connection",
+      "evidence": {
+        "tuple": [
+          "10.0.0.1",
+          68,
+          "10.0.0.1",
+          67
+        ],
+        "uid": "CT18o51vHtBU5sZuS9"
+      },
+      "message": "Connection originator and responder are the same IP",
+      "path": "/private/tmp/eforge-realism-review/minimal/data/core-zeek/conn.json",
+      "severity": "warning"
+    },
+    {
+      "check": "dhcp_role_separation",
+      "evidence": {
+        "address": "10.0.0.1",
+        "uids": [
+          "C7FGeXPSMYMtQwWgC7"
+        ]
+      },
+      "message": "DHCP client, server, and assigned address are identical",
+      "path": "/private/tmp/eforge-realism-review/minimal/data/core-zeek/dhcp.json",
+      "severity": "error"
+    },
+    {
+      "check": "dhcp_role_separation",
+      "evidence": {
+        "address": "10.0.0.1",
+        "uids": [
+          "CT18o51vHtBU5sZuS9"
+        ]
+      },
+      "message": "DHCP client, server, and assigned address are identical",
+      "path": "/private/tmp/eforge-realism-review/minimal/data/core-zeek/dhcp.json",
+      "severity": "error"
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "by_check": {
+      "dhcp_role_separation": 2,
+      "zeek_self_connection": 2
+    },
+    "by_severity": {
+      "error": 2,
+      "warning": 2
+    },
+    "total": 4
+  }
+}

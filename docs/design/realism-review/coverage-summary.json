@@ -1,0 +1,239 @@
+{
+  "baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "counts": {
+    "authored_event_specs": 31,
+    "concrete_action_bundles": 51,
+    "concrete_formats": 23,
+    "discovered_event_types": 66,
+    "dynamic_security_event_constructors": 7,
+    "generate_methods_with_call_sites": 57,
+    "literal_internal_event_types": 48,
+    "mutable_context_dataclasses": 38,
+    "plans_and_identities": 27,
+    "security_event_constructors": 68,
+    "security_event_fields": 55,
+    "state_manager_methods_with_call_sites": 53
+  },
+  "coverage": {
+    "authored_with_storyline_dispatch": 31,
+    "authored_with_tests": 31,
+    "bundles_with_anchor": 48,
+    "bundles_with_call_site": 51,
+    "bundles_with_tests": 48,
+    "contexts_with_emitter_consumer": 32,
+    "contexts_with_source_constructor": 36,
+    "contexts_with_tests": 30,
+    "formats_with_emitter_class": 23,
+    "formats_with_evaluator_reference": 23,
+    "formats_with_tests": 23,
+    "internal_with_literal_constructor": 48
+  },
+  "path_classification_gaps": {
+    "action_bundles": {
+      "missing": [],
+      "unknown": []
+    },
+    "contexts": {
+      "missing": [],
+      "unknown": []
+    },
+    "events": {
+      "missing": [],
+      "unknown": []
+    },
+    "formats": {
+      "missing": [],
+      "unknown": []
+    },
+    "plans_and_identities": {
+      "missing": [],
+      "unknown": []
+    }
+  },
+  "review_state": {
+    "dynamic_probe_coverage": "complete_with_documented_limitations",
+    "manual_path_classification": "complete",
+    "source_reference_coverage": "complete_23_of_23",
+    "static_inventory": "complete"
+  },
+  "schema_version": "evidenceforge-realism-review-coverage/v1",
+  "unresolved_static_inventory": {
+    "authored_without_storyline_dispatch": [],
+    "bundles_without_anchor": [
+      "EmailAccessActionBundle",
+      "EmailDeliveryActionBundle",
+      "OcspTransactionActionBundle"
+    ],
+    "bundles_without_static_call_site": [],
+    "contexts_without_emitter_consumer": [
+      "EmailContext",
+      "IdsAlertPolicyContext",
+      "IdsDetectionFilterContext",
+      "IdsEventFilterContext",
+      "ProcessTargetSecurityContext",
+      "RawContext"
+    ],
+    "contexts_without_source_constructor": [
+      "ProcessTargetSecurityContext",
+      "WeirdContext"
+    ],
+    "dynamic_event_type_constructor_count": 7,
+    "emitter_contract_types_without_producer": [
+      "module_load",
+      "special_privileges"
+    ],
+    "formats_without_emitter_class": [],
+    "formats_without_test_reference": [],
+    "internal_consumer_without_literal_constructor": [
+      "module_load",
+      "special_privileges"
+    ],
+    "resolved_dynamic_event_type_constructors": [
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "edr",
+          "file",
+          "process",
+          "src_host"
+        ],
+        "event_type_expression": "event_type",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 11415,
+        "resolved_event_types": [
+          "file_create",
+          "file_delete",
+          "file_modify",
+          "file_read"
+        ],
+        "scope": "ActivityGenerator._execute_process_create_bundle"
+      },
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "edr",
+          "file",
+          "process",
+          "src_host"
+        ],
+        "event_type_expression": "event_type",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 11464,
+        "resolved_event_types": [
+          "file_create",
+          "file_delete",
+          "file_modify",
+          "file_read"
+        ],
+        "scope": "ActivityGenerator._execute_process_create_bundle"
+      },
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "edr",
+          "file",
+          "process",
+          "src_host"
+        ],
+        "event_type_expression": "_FILE_ACTION_EVENT_TYPES[action_name]",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 16521,
+        "resolved_event_types": [
+          "file_create",
+          "file_delete",
+          "file_modify",
+          "file_read"
+        ],
+        "scope": "ActivityGenerator._emit_email_endpoint_file_event"
+      },
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "scheduled_task",
+          "src_host"
+        ],
+        "event_type_expression": "f'scheduled_task_{action}'",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 22064,
+        "resolved_event_types": [
+          "scheduled_task_created",
+          "scheduled_task_deleted",
+          "scheduled_task_disabled",
+          "scheduled_task_enabled"
+        ],
+        "scope": "ActivityGenerator._execute_scheduled_task_bundle"
+      },
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "dst_host",
+          "group_membership"
+        ],
+        "event_type_expression": "event_type",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 22414,
+        "resolved_event_types": [
+          "group_member_added_global",
+          "group_member_added_local",
+          "group_member_added_universal",
+          "group_member_removed_global",
+          "group_member_removed_local",
+          "group_member_removed_universal"
+        ],
+        "scope": "ActivityGenerator._execute_group_membership_change_bundle"
+      },
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "edr",
+          "file",
+          "src_host"
+        ],
+        "event_type_expression": "event_type",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/engine/baseline.py",
+        "line": 6503,
+        "resolved_event_types": [
+          "file_create",
+          "file_delete",
+          "file_modify",
+          "file_read"
+        ],
+        "scope": "BaselineMixin._emit_smb_file_operations"
+      },
+      {
+        "call": "SecurityEvent",
+        "contexts_attached_at_construction": [
+          "auth",
+          "edr",
+          "file",
+          "process",
+          "src_host"
+        ],
+        "event_type_expression": "event_type",
+        "event_type_literals": [],
+        "file": "src/evidenceforge/generation/engine/baseline.py",
+        "line": 6632,
+        "resolved_event_types": [
+          "file_create",
+          "file_delete",
+          "file_modify",
+          "file_read"
+        ],
+        "scope": "BaselineMixin._emit_ecar_file_churn"
+      }
+    ],
+    "unresolved_dynamic_event_type_constructors": []
+  }
+}

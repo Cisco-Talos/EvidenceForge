@@ -1,0 +1,431 @@
+{
+  "schema_version": "evidenceforge-realism-review-path-classifications/v1",
+  "baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "method": "manual static trace grouped by common ownership and entry-path semantics",
+  "classification_vocabulary": {
+    "single_canonical_path": "No competing production path was found for the same semantic occurrence.",
+    "intentional_adapter": "A compatibility or intent adapter deliberately delegates to a canonical lower-level path.",
+    "behaviorally_equivalent_alternate_entry": "Multiple entries build the same contract today but remain separate implementations that can drift.",
+    "incompatible_bypass": "A path bypasses or recreates facts owned by the canonical path.",
+    "duplicate_owner": "More than one layer owns the same semantic fact or lifecycle.",
+    "unsupported_escape_hatch": "The path is intentionally outside normal cross-source guarantees or has no supported producer."
+  },
+  "events": [
+    {
+      "names": [
+        "adversarial_payload",
+        "beacon",
+        "credential_spray",
+        "dga_queries",
+        "dns_query",
+        "dns_tunnel",
+        "email_message",
+        "email_read",
+        "group_member_added",
+        "port_scan",
+        "process",
+        "rdp_session",
+        "spillage",
+        "web_scan",
+        "workstation_lock",
+        "workstation_unlock"
+      ],
+      "classification": "intentional_adapter",
+      "owner": "typed storyline dispatcher and the delegated action/generator family",
+      "assessment": "These are authored intent names, not canonical SecurityEvent occurrence kinds. Their branches deliberately expand into lower-level occurrences."
+    },
+    {
+      "names": [
+        "account_changed",
+        "account_created",
+        "account_deleted",
+        "bash_command",
+        "create_remote_thread",
+        "dhcp_lease",
+        "explicit_credentials",
+        "failed_logon",
+        "kerberos_preauth_failed",
+        "kerberos_service",
+        "kerberos_tgt",
+        "kerberos_tgt_renewal",
+        "log_cleared",
+        "logon",
+        "machine_logon",
+        "ntlm_validation",
+        "password_change",
+        "password_reset",
+        "process_access",
+        "service_installed",
+        "ssh_session",
+        "workstation_locked",
+        "workstation_unlocked"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "named action bundle or its current ActivityGenerator compatibility executor",
+      "assessment": "All discovered authored, baseline, causal, and compatibility entries converge on one occurrence-construction family. Several bundles are thin facades, which is tracked as an architectural risk rather than a second output path."
+    },
+    {
+      "names": ["connection"],
+      "classification": "intentional_adapter",
+      "owner": "NetworkConnectionActionBundle and NetworkTransactionPlanner for transport; ProxyTransactionActionBundle for requests on a reused tunnel",
+      "assessment": "All real transports converge on the network bundle. The only direct alternate constructor is an application-layer-only proxy request on an already-owned CONNECT transport; its overloaded event_type is contract debt but it is explicitly excluded from network emitters."
+    },
+    {
+      "names": [
+        "file_create",
+        "file_delete",
+        "file_modify",
+        "file_read"
+      ],
+      "classification": "behaviorally_equivalent_alternate_entry",
+      "owner": "the real-world action bundle or process/storyline side-effect path that caused each file occurrence",
+      "assessment": "File occurrences are built directly by several higher-level owners. They currently share FileContext/ProcessContext semantics, but no single file-occurrence contract enforces equivalent identity, lifecycle, and timing across every entry."
+    },
+    {
+      "names": [
+        "group_member_added_global",
+        "group_member_added_local",
+        "group_member_added_universal",
+        "group_member_removed_global",
+        "group_member_removed_local",
+        "group_member_removed_universal",
+        "scheduled_task_created",
+        "scheduled_task_deleted",
+        "scheduled_task_disabled",
+        "scheduled_task_enabled"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "GroupMembershipChangeActionBundle or ScheduledTaskActionBundle compatibility executor",
+      "assessment": "Finite dynamic event names are selected inside one bundle family and projected by Windows Security."
+    },
+    {
+      "names": ["image_load"],
+      "classification": "behaviorally_equivalent_alternate_entry",
+      "owner": "process-execution side effects and the public image-load generator",
+      "assessment": "Automatic process side effects and explicit/baseline image loads construct equivalent events independently; current context morphology is aligned but can drift."
+    },
+    {
+      "names": ["logoff"],
+      "classification": "intentional_adapter",
+      "owner": "owning session bundle",
+      "assessment": "Generic, machine, anonymous, and SSH close paths construct logoff-shaped occurrences for distinct session kinds. Compatibility routes converge before emitting the same modeled session; no duplicate emission path was found."
+    },
+    {
+      "names": ["process_create"],
+      "classification": "incompatible_bypass",
+      "owner": "ProcessExecutionActionBundle for process lifecycle; source timing planner for source-native times",
+      "assessment": "Parent-chain repair constructs process events outside the bundle, and the Sysmon emitter constructs a synthetic SecurityEvent solely to recompute process-create timing. The latter crosses the projection boundary."
+    },
+    {
+      "names": ["process_terminate"],
+      "classification": "duplicate_owner",
+      "owner": "ProcessTerminationActionBundle",
+      "assessment": "User processes terminate through the bundle while system processes use a separate direct implementation with overlapping state, identity, timing, and rendering responsibilities."
+    },
+    {
+      "names": [
+        "registry_modify",
+        "sensor_startup",
+        "syslog",
+        "system_process_create",
+        "wfp_connection"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "source-local activity path or a dependent occurrence owned by its parent action",
+      "assessment": "These occurrences have one production contract per semantic variant. They are source-local or dependent evidence and do not independently own cross-source transport or session facts."
+    },
+    {
+      "names": ["module_load", "special_privileges"],
+      "classification": "unsupported_escape_hatch",
+      "owner": "none",
+      "assessment": "These names remain in emitter support tables but have no production SecurityEvent producer. Image loads use image_load; privilege event 4672 is emitted as renderer-side fan-out from logon."
+    },
+    {
+      "names": ["raw"],
+      "classification": "unsupported_escape_hatch",
+      "owner": "RawContext and EventDispatcher.dispatch_raw",
+      "assessment": "Raw intentionally bypasses canonical cross-source consistency and is reviewed only for target routing, validation, and safety."
+    }
+  ],
+  "contexts": [
+    {
+      "names": [
+        "AccountManagementContext",
+        "AuthContext",
+        "DhcpContext",
+        "DnsContext",
+        "EdrContext",
+        "FileContext",
+        "FileTransferContext",
+        "FirewallContext",
+        "GroupMembershipContext",
+        "HostContext",
+        "HttpContext",
+        "IdsContext",
+        "ImageLoadContext",
+        "KerberosContext",
+        "NatContext",
+        "NetworkContext",
+        "NtpContext",
+        "OcspContext",
+        "PeContext",
+        "ProcessAccessContext",
+        "ProcessContext",
+        "ProxyContext",
+        "RegistryContext",
+        "RemoteThreadContext",
+        "ScheduledTaskContext",
+        "ServiceContext",
+        "SmtpContext",
+        "SslContext",
+        "X509Context"
+      ],
+      "classification": "duplicate_owner",
+      "owner": "proposed canonical occurrence builder or action bundle named by the event family",
+      "assessment": "These shared-fact carriers are mutable and are populated across generators, planners, and bundles. Their field ownership is semantically canonical but not mechanically exclusive, so duplicate ownership remains an architectural risk until frozen contracts/builders are introduced."
+    },
+    {
+      "names": [
+        "IdsAlertPolicyContext",
+        "IdsDetectionFilterContext",
+        "IdsEventFilterContext",
+        "ProcessTargetSecurityContext"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "their enclosing IdsContext or ProcessContext",
+      "assessment": "These are nested value objects rather than independent SecurityEvent slots; lack of a direct emitter slot or constructor is intentional."
+    },
+    {
+      "names": ["ShellContext", "SyslogContext"],
+      "classification": "single_canonical_path",
+      "owner": "source-local shell/syslog occurrence builder",
+      "assessment": "These contexts carry source-local evidence and do not own facts shared with other formats."
+    },
+    {
+      "names": ["EmailContext"],
+      "classification": "incompatible_bypass",
+      "owner": "none; SMTP and email-artifact paths use SmtpContext and bundle-local EmailDeliveryResult",
+      "assessment": "EmailContext is attached to planned connections but no emitter or evaluator consumes it, leaving a parallel legacy truth that can drift silently."
+    },
+    {
+      "names": ["WeirdContext"],
+      "classification": "unsupported_escape_hatch",
+      "owner": "none",
+      "assessment": "The Zeek weird emitter supports the context, but production auto-weird generation is disabled and no production constructor exists."
+    },
+    {
+      "names": ["RawContext"],
+      "classification": "unsupported_escape_hatch",
+      "owner": "raw dispatcher",
+      "assessment": "RawContext is intentionally consumed by routing rather than by canonical emitters and has no cross-source consistency guarantee."
+    }
+  ],
+  "plans_and_identities": [
+    {
+      "names": [
+        "EventIdentityPlan",
+        "ProcessIdentity",
+        "SessionIdentity",
+        "ThreadIdentity"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "IdentityLifecycleManager and StateManager",
+      "assessment": "Frozen identity snapshots define object relationships, though SecurityEvent also retains overlapping mutable legacy identity fields."
+    },
+    {
+      "names": ["RemoteAuthenticationPlan", "RemoteAuthenticationTransportPlan"],
+      "classification": "single_canonical_path",
+      "owner": "WindowsRemoteAuthenticationActionBundle",
+      "assessment": "Frozen plans own authentication/transport correlation and are passed to canonical auth occurrences."
+    },
+    {
+      "names": [
+        "DirectionalTrafficLedger",
+        "NetworkSensorObservation",
+        "NetworkTrafficLedger",
+        "NetworkTransactionPlan",
+        "NetworkTuple"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "NetworkTransactionPlanner and NetworkConnectionActionBundle",
+      "assessment": "Frozen transport and observation snapshots centralize tuple, accounting, UID, and per-sensor visibility truth."
+    },
+    {
+      "names": [
+        "CertificateIdentityPlan",
+        "DkimKeyPlan",
+        "OcspTransactionPlan",
+        "TlsCertificatePresentationPlan"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "cryptographic identity/presentation planners",
+      "assessment": "Frozen cryptographic identities are designed for cross-source reuse; direct tests are sparse or absent and require empirical contract probes."
+    },
+    {
+      "names": ["ProxyTransactionPlan"],
+      "classification": "single_canonical_path",
+      "owner": "ProxyTransactionActionBundle",
+      "assessment": "Frozen proxy phase times and outcomes are owned by the proxy bundle."
+    },
+    {
+      "names": ["SessionEndPlan"],
+      "classification": "single_canonical_path",
+      "owner": "session-owning action bundle",
+      "assessment": "Frozen end intent is carried into session state and close occurrences."
+    },
+    {
+      "names": ["ActionAnchor", "TimingSpec"],
+      "classification": "single_canonical_path",
+      "owner": "action bundle and causal-rule definition",
+      "assessment": "Frozen metadata provides deterministic action and timing-rule identity."
+    },
+    {
+      "names": ["SourceTimingPlan"],
+      "classification": "duplicate_owner",
+      "owner": "SourceTimingPlanner",
+      "assessment": "The plan is mutable, attached to mutable SecurityEvent, and may be created or finalized by generators, dispatcher, and emitters; source timing ownership is therefore distributed."
+    },
+    {
+      "names": ["TemporalConstraint"],
+      "classification": "single_canonical_path",
+      "owner": "TemporalConstraintGraph",
+      "assessment": "Frozen graph edge contract."
+    },
+    {
+      "names": ["TemporalNode"],
+      "classification": "single_canonical_path",
+      "owner": "TemporalConstraintGraph",
+      "assessment": "Mutable solver workspace is intentionally not a published canonical plan; its scope should remain private to graph resolution."
+    },
+    {
+      "names": [
+        "DatabaseEndpoint",
+        "HostWorld",
+        "SessionBootstrapResult",
+        "SessionPlan",
+        "UserWorld"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "WorldModel and WorldPlanner",
+      "assessment": "Frozen world decisions and session placement results own scenario-to-operational resolution."
+    }
+  ],
+  "action_bundles": [
+    {
+      "names": [
+        "AccountChangedActionBundle",
+        "AccountCreatedActionBundle",
+        "AccountDeletedActionBundle",
+        "AnonymousLogonActionBundle",
+        "CreateRemoteThreadActionBundle",
+        "DhcpLeaseActionBundle",
+        "DnsLookupActionBundle",
+        "FailedLogonActionBundle",
+        "GroupMembershipChangeActionBundle",
+        "KerberosConnectionAuditActionBundle",
+        "KerberosLogonTicketsActionBundle",
+        "KerberosPreauthFailureActionBundle",
+        "KerberosServiceTicketActionBundle",
+        "KerberosTgtActionBundle",
+        "KerberosTgtRenewalActionBundle",
+        "LogClearedActionBundle",
+        "LogoffActionBundle",
+        "LogonActionBundle",
+        "MachineAccountLogonActionBundle",
+        "NmapCommandProbeActionBundle",
+        "NtlmValidationActionBundle",
+        "PasswordChangeActionBundle",
+        "PasswordResetActionBundle",
+        "PortScanActionBundle",
+        "ProcessAccessActionBundle",
+        "ProcessExecutionActionBundle",
+        "ProcessTerminationActionBundle",
+        "ScheduledScanOverlapActionBundle",
+        "ScheduledTaskActionBundle",
+        "ServiceLogonActionBundle",
+        "WebScanActionBundle",
+        "WorkstationLockActionBundle",
+        "WorkstationUnlockActionBundle"
+      ],
+      "classification": "intentional_adapter",
+      "owner": "ActivityGenerator or baseline/storyline compatibility executor",
+      "assessment": "These bundles expose stable anchors and request types but delegate execution back into legacy orchestration. They converge callers today but do not yet mechanically own the implementation."
+    },
+    {
+      "names": ["EmailAccessActionBundle", "EmailDeliveryActionBundle"],
+      "classification": "intentional_adapter",
+      "owner": "ActivityGenerator email compatibility executors",
+      "assessment": "Both converge email callers but lack ActionAnchor and direct bundle tests, leaving lifecycle/correlation identity weaker than other bundle families."
+    },
+    {
+      "names": [
+        "BrowserSessionActionBundle",
+        "ExplicitCredentialUseActionBundle",
+        "HttpResponseFileTransferActionBundle",
+        "IdsAlertActionBundle",
+        "LinuxShellCommandActionBundle",
+        "LinuxSudoSessionActionBundle",
+        "NetworkConnectionActionBundle",
+        "ProxyTransactionActionBundle",
+        "RdpSessionActionBundle",
+        "ScpReceiverFileActionBundle",
+        "SmbFileTransferMetadataActionBundle",
+        "SshSessionActionBundle",
+        "StagedArchiveSmbReadActionBundle",
+        "WindowsRemoteAuthenticationActionBundle",
+        "WindowsServiceInstallActionBundle"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "the named action bundle",
+      "assessment": "These bundles perform substantive planning, lifecycle coordination, or canonical occurrence construction and are the intended owners for their behavior families."
+    },
+    {
+      "names": ["OcspTransactionActionBundle"],
+      "classification": "single_canonical_path",
+      "owner": "OcspTransactionActionBundle",
+      "assessment": "The bundle owns OCSP request/response planning and delegates transport to the network contract, but lacks an ActionAnchor and needs stronger direct contract tests."
+    }
+  ],
+  "formats": [
+    {
+      "names": [
+        "bash_history",
+        "cisco_asa",
+        "ecar",
+        "proxy_access",
+        "snort_alert",
+        "syslog",
+        "web_access",
+        "zeek_conn",
+        "zeek_dhcp",
+        "zeek_dns",
+        "zeek_files",
+        "zeek_http",
+        "zeek_ntp",
+        "zeek_ocsp",
+        "zeek_packet_filter",
+        "zeek_pe",
+        "zeek_reporter",
+        "zeek_smtp",
+        "zeek_ssl",
+        "zeek_weird",
+        "zeek_x509"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "source-native emitter projection",
+      "assessment": "Static inspection found no sibling-generation trigger or shared-fact ownership in these emitters; detailed source-fidelity review remains separate."
+    },
+    {
+      "names": ["windows_event_security"],
+      "classification": "duplicate_owner",
+      "owner": "Windows Security emitter plus upstream logon occurrence",
+      "assessment": "The emitter projects most events but also creates 4672 fan-out from logon while retaining unreachable special_privileges support, so occurrence versus source-record ownership is mixed."
+    },
+    {
+      "names": ["windows_event_sysmon"],
+      "classification": "incompatible_bypass",
+      "owner": "Sysmon emitter for projection; upstream network and timing planners for shared truth",
+      "assessment": "The emitter recomputes destination hostname and constructs a synthetic process_create SecurityEvent to derive source timing, crossing the projection boundary."
+    }
+  ]
+}

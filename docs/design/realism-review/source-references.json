@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "reviewed_at": "2026-08-05",
+  "method": "Each registered concrete format was traced from its YAML definition through its emitter and compared with an official specification or public primary exemplar. Optional fields were assessed as a source-fidelity surface, not as a requirement to emit every possible field.",
+  "formats": [
+    {
+      "format": "bash_history",
+      "code": ["src/evidenceforge/config/formats/bash_history.yaml", "src/evidenceforge/generation/emitters/bash_history.py"],
+      "references": ["https://www.gnu.org/s/bash/manual/html_node/Bash-History-Facilities.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "Epoch comment lines followed by commands match Bash history-file timestamp semantics."
+    },
+    {
+      "format": "cisco_asa",
+      "code": ["src/evidenceforge/config/formats/cisco_asa.yaml", "src/evidenceforge/generation/emitters/cisco_asa.py"],
+      "references": ["https://www.cisco.com/c/en/us/td/docs/security/asa/syslog/asa-syslog.pdf"],
+      "assessment": "aligned_with_dialect_limitations",
+      "confidence": "high",
+      "notes": "The supported 302/305/106/733 families and classic ASA prefix are source-shaped. The format models a bounded message subset and classic timestamp mode rather than every current ASA logging option."
+    },
+    {
+      "format": "ecar",
+      "code": ["src/evidenceforge/config/formats/ecar.yaml", "src/evidenceforge/generation/emitters/ecar.py"],
+      "references": ["https://github.com/FiveDirections/OpTC-data/blob/master/ecar.md", "https://github.com/FiveDirections/OpTC-data", "https://entrepot.recherche.data.gouv.fr/dataset.xhtml?persistentId=doi%3A10.57745%2FUXCWOC"],
+      "assessment": "project_dialect",
+      "confidence": "medium",
+      "notes": "The object/action/properties model and UUID relationships follow the public OpTC eCAR description. EvidenceForge extends the public object/action vocabulary, while no versioned machine-readable upstream schema exists; interoperability therefore cannot be claimed beyond this documented dialect. The corrected public dataset also documents identifier/property defects in the original corpus."
+    },
+    {
+      "format": "proxy_access",
+      "code": ["src/evidenceforge/config/formats/proxy_access.yaml", "src/evidenceforge/generation/emitters/proxy_access.py"],
+      "references": ["https://httpd.apache.org/docs/current/en/mod/mod_log_config.html"],
+      "assessment": "custom_dialect",
+      "confidence": "high",
+      "notes": "The prefix is combined-log shaped, but absolute URLs/CONNECT targets and the trailing quoted metadata block are an EvidenceForge proxy dialect, not an Apache or Nginx standard combined format."
+    },
+    {
+      "format": "snort_alert",
+      "code": ["src/evidenceforge/config/formats/snort_alert.yaml", "src/evidenceforge/generation/emitters/snort.py"],
+      "references": ["https://docs.snort.org/start/alert_logging"],
+      "assessment": "compatible_variant",
+      "confidence": "medium",
+      "notes": "Timestamp, generator/signature/revision tuple, classification, priority, protocol, and endpoints match the fast-alert family. Snort 3 exemplars quote messages and may include AppID; the generated line is closer to a common Snort 2/Suricata-compatible variant."
+    },
+    {
+      "format": "syslog",
+      "code": ["src/evidenceforge/config/formats/syslog.yaml", "src/evidenceforge/generation/emitters/syslog.py"],
+      "references": ["https://www.rfc-editor.org/info/rfc5424/"],
+      "assessment": "aligned_with_validation_gap",
+      "confidence": "high",
+      "notes": "The PRI/version/timestamp/hostname/app/procid/msgid/structured-data layout follows RFC 5424. Format validation does not enforce the RFC token-length and character constraints for APP-NAME, PROCID, MSGID, and HOSTNAME."
+    },
+    {
+      "format": "web_access",
+      "code": ["src/evidenceforge/config/formats/web_access.yaml", "src/evidenceforge/generation/emitters/web_access.py"],
+      "references": ["https://httpd.apache.org/docs/current/en/mod/mod_log_config.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "The record morphology matches the NCSA combined log format."
+    },
+    {
+      "format": "windows_event_security",
+      "code": ["src/evidenceforge/config/formats/windows_event_security.yaml", "src/evidenceforge/generation/emitters/windows.py"],
+      "references": ["https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-schema", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4624", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4648", "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/advanced-audit-policy-configuration"],
+      "assessment": "bounded_subset_with_4648_schema_defect",
+      "confidence": "high",
+      "notes": "The XML event envelope and most supported Security payloads are source-shaped. Event 4648 is a current defect: the official manifest and public exemplar use IpAddress/IpPort, while the format definition and emitter use NetworkAddress/NetworkPort. The emitter is a selected-event renderer, not an EVTX writer, and fixed provider/task/version metadata creates a maintenance obligation as Windows variants evolve."
+    },
+    {
+      "format": "windows_event_sysmon",
+      "code": ["src/evidenceforge/config/formats/windows_event_sysmon.yaml", "src/evidenceforge/generation/emitters/sysmon.py"],
+      "references": ["https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon", "https://learn.microsoft.com/en-us/windows/security/operating-system-security/sysmon/sysmon-events"],
+      "assessment": "aligned_with_architectural_defects",
+      "confidence": "high",
+      "notes": "Supported event shapes and UTC timestamps align with Sysmon. Shared destination hostname and one ProcessGuid path are recomputed in the emitter, violating cross-source ownership even when individual rows remain source-shaped."
+    },
+    {
+      "format": "zeek_conn",
+      "code": ["src/evidenceforge/config/formats/zeek_conn.yaml", "src/evidenceforge/generation/emitters/zeek.py"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/conn.html", "https://docs.zeek.org/en/current/scripts/base/protocols/conn/main.zeek.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "JSON fields, originator/responder semantics, UID, state, history, and accounting match Zeek's connection model."
+    },
+    {
+      "format": "zeek_dhcp",
+      "code": ["src/evidenceforge/config/formats/zeek_dhcp.yaml", "src/evidenceforge/generation/emitters/zeek_dhcp.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/protocols/dhcp/main.zeek.html"],
+      "assessment": "field_aligned_world_defect",
+      "confidence": "high",
+      "notes": "Field morphology is Zeek-compatible. Minimal environments can render the same address as client, server, and assignment, which is an upstream world-planning defect rather than an emitter-format defect."
+    },
+    {
+      "format": "zeek_dns",
+      "code": ["src/evidenceforge/config/formats/zeek_dns.yaml", "src/evidenceforge/generation/emitters/zeek_dns.py"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/dns.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "Tuple, transaction, query, response-code, flag, answer, TTL, rejection, and opcode fields match Zeek JSON conventions."
+    },
+    {
+      "format": "zeek_files",
+      "code": ["src/evidenceforge/config/formats/zeek_files.yaml", "src/evidenceforge/generation/emitters/zeek_files.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/frameworks/files/main.zeek.html"],
+      "assessment": "aligned_with_timing_defect",
+      "confidence": "high",
+      "notes": "FUID, host lists, connection joins, analyzer, byte accounting, timeout, and hash fields match the files framework. In the integrated probe, 21 file observations end 1-2 ms after their parent conn interval, so cross-record timing is currently defective even though field morphology is aligned."
+    },
+    {
+      "format": "zeek_http",
+      "code": ["src/evidenceforge/config/formats/zeek_http.yaml", "src/evidenceforge/generation/emitters/zeek_http.py"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/http.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "Connection tuple, transaction depth, request/response morphology, file joins, and MIME arrays match Zeek's HTTP log."
+    },
+    {
+      "format": "zeek_ntp",
+      "code": ["src/evidenceforge/config/formats/zeek_ntp.yaml", "src/evidenceforge/generation/emitters/zeek_ntp.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/protocols/ntp/main.zeek.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "NTP fields are source-shaped and dynamic probes require a response-bearing parent connection."
+    },
+    {
+      "format": "zeek_ocsp",
+      "code": ["src/evidenceforge/config/formats/zeek_ocsp.yaml", "src/evidenceforge/generation/emitters/zeek_ocsp.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/files/x509/log-ocsp.zeek.html"],
+      "assessment": "aligned_narrow_optionality_with_distribution_defect",
+      "confidence": "medium",
+      "notes": "Field names and FUID semantics follow Zeek. EvidenceForge requires nextUpdate in its local schema, narrowing upstream optionality and producing a recognizable completeness fingerprint. All 36 integrated OCSP-response file observations have an exact 0.02-second duration, adding a source-visible synthetic fingerprint."
+    },
+    {
+      "format": "zeek_packet_filter",
+      "code": ["src/evidenceforge/config/formats/zeek_packet_filter.yaml", "src/evidenceforge/generation/emitters/zeek_packet_filter.py"],
+      "references": ["https://docs.zeek.org/en/current/log-formats.html"],
+      "assessment": "aligned",
+      "confidence": "medium",
+      "notes": "Node/filter/init/success morphology matches Zeek's packet-filter diagnostic examples."
+    },
+    {
+      "format": "zeek_pe",
+      "code": ["src/evidenceforge/config/formats/zeek_pe.yaml", "src/evidenceforge/generation/emitters/zeek_pe.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/files/pe/index.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "FUID, compile time, architecture, subsystem, mitigation, table, and section fields follow Zeek PE analysis."
+    },
+    {
+      "format": "zeek_reporter",
+      "code": ["src/evidenceforge/config/formats/zeek_reporter.yaml", "src/evidenceforge/generation/emitters/zeek_reporter.py"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/capture-loss-and-reporter.html", "https://docs.zeek.org/en/current/scripts/base/frameworks/reporter/main.zeek.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "Timestamp, level, message, and location match Zeek reporter diagnostics."
+    },
+    {
+      "format": "zeek_smtp",
+      "code": ["src/evidenceforge/config/formats/zeek_smtp.yaml", "src/evidenceforge/generation/emitters/zeek_smtp.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/protocols/smtp/main.zeek.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "Connection, SMTP envelope/header, path, TLS, depth, and file-join fields follow Zeek SMTP."
+    },
+    {
+      "format": "zeek_ssl",
+      "code": ["src/evidenceforge/config/formats/zeek_ssl.yaml", "src/evidenceforge/generation/emitters/zeek_ssl.py"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/ssl.html", "https://docs.zeek.org/en/current/scripts/base/protocols/ssl/files.zeek.html"],
+      "assessment": "aligned_sparse_subset",
+      "confidence": "high",
+      "notes": "Tuple, UID, TLS version/cipher/SNI, resumption, establishment, history, and certificate joins are compatible. Uniform omission of other common optional fields such as curve and next_protocol is a potential synthetic fingerprint."
+    },
+    {
+      "format": "zeek_weird",
+      "code": ["src/evidenceforge/config/formats/zeek_weird.yaml", "src/evidenceforge/generation/emitters/zeek_weird.py"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/weird-and-notice.html", "https://docs.zeek.org/en/current/scripts/base/frameworks/notice/weird.zeek.html"],
+      "assessment": "format_aligned_unreachable",
+      "confidence": "high",
+      "notes": "The record shape is compatible, but no production SecurityEvent constructor attaches WeirdContext; the registered format is reachable only through direct emitter tests/raw behavior."
+    },
+    {
+      "format": "zeek_x509",
+      "code": ["src/evidenceforge/config/formats/zeek_x509.yaml", "src/evidenceforge/generation/emitters/zeek_x509.py"],
+      "references": ["https://docs.zeek.org/en/current/scripts/base/files/x509/main.zeek.html"],
+      "assessment": "aligned",
+      "confidence": "high",
+      "notes": "FUID, fingerprint, certificate namespace, SAN, CA constraint, and client/host flags match Zeek X.509 JSON conventions."
+    }
+  ],
+  "limitations": [
+    "The SOF-ELK and Splunk container-backed parser tests could not run because no Docker/Podman Compose daemon was available; Splunk additionally requires explicit license acceptance.",
+    "No proprietary production corpus was used. Review relied on public official documentation and public-domain or public research exemplars.",
+    "eCAR has a public prose description and corpus but no stable versioned machine-readable upstream schema; EvidenceForge interoperability is therefore assessed as a dialect, not certified conformance."
+  ]
+}
