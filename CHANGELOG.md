@@ -11,6 +11,11 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 This patch release corrects source-native network and endpoint behavior found
 through blind realism assessment, without adding new scenario capabilities.
 
+**Dependency security**
+
+- Updated `cryptography` to 50.0.0, incorporating the upstream fix for
+  CVE-2026-69247 in PKCS#7 recipient-key decryption.
+
 **Network and timing correctness**
 
 - Kept datagram capture loss protocol-native by limiting Zeek stream-gap
