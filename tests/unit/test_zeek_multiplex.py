@@ -32,6 +32,12 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import DnsContext, HttpContext, NetworkContext, X509Context
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+    NetworkTuple,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
@@ -232,6 +238,62 @@ class TestPerSensorDirectoryRouting:
                 assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
                 assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
             assert dmz["duration"] == core["duration"]
+
+    def test_sensor_observation_preserves_icmp_type_code_pseudo_ports(self):
+        """Observation tuple projection must not replace Zeek ICMP type/code."""
+        fmt = load_format("zeek_conn")
+        started = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        traffic = NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(payload_bytes=120, packets=1, ip_bytes=148),
+            resp=DirectionalTrafficLedger(payload_bytes=120, packets=1, ip_bytes=148),
+        )
+        observation = NetworkSensorObservation(
+            sensor_identity="core",
+            path_role="internal",
+            capture_profile="full",
+            tuple_view=NetworkTuple("10.0.0.1", 0, "10.0.0.2", 0, "icmp"),
+            connection_uid="CTestIcmpObserved",
+            connection_ids=(),
+            file_ids=(),
+            local_orig=True,
+            local_resp=True,
+            observed_start_time=started,
+            observed_close_time=started.replace(microsecond=40000),
+            traffic=traffic,
+            visible_formats=frozenset({"zeek_conn"}),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            emitter = ZeekEmitter(fmt, Path(tmpdir), sensor_hostnames=["core"])
+            emitter.emit_event(
+                {
+                    "ts": started,
+                    "uid": "CTestIcmp1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 8,
+                    "id.resp_h": "10.0.0.2",
+                    "id.resp_p": 0,
+                    "proto": "icmp",
+                    "service": "icmp",
+                    "duration": 0.04,
+                    "orig_bytes": 120,
+                    "resp_bytes": 120,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "orig_ip_bytes": 148,
+                    "resp_ip_bytes": 148,
+                    "conn_state": "SF",
+                    "history": "Dd",
+                    "_sensor_hostnames": ["core"],
+                    "_network_sensor_observations": {"core": observation},
+                    "_network_observations_planned": True,
+                    "_canonical_network_start": started,
+                }
+            )
+            emitter.close()
+            row = json.loads((Path(tmpdir) / "core" / "conn.json").read_text().strip())
+
+        assert row["id.orig_p"] == 8
+        assert row["id.resp_p"] == 0
 
     @pytest.mark.parametrize("conn_duration", [0.024625, 0.024925])
     def test_dns_emitter_does_not_synthesize_sensor_observation(self, conn_duration):

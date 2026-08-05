@@ -22,7 +22,7 @@
 
 [project]
 name = "evidence-forge"
-version = "1.14.0"
+version = "1.14.1"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
 license = "MIT"
@@ -41,7 +41,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "json-logic-qubit>=0.9.1",
     "python-dotenv>=1.2.2",
-    "cryptography>=49.0.0",
+    "cryptography>=50.0.0",
 ]
 
 [project.scripts]

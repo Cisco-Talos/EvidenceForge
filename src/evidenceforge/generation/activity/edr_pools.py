@@ -469,7 +469,7 @@ def _runmru_command(rng: random.Random, user: str) -> str:
     commands = load_edr_pools().get("runmru_commands", _DEFAULT_RUNMRU_COMMANDS)
     command_template = str(rng.choice(commands))
     username = user or "Default"
-    command = re.sub(r"\{(user|username)\}", username, command_template)
+    command = re.sub(r"\{(user|username)\}", lambda _match: username, command_template)
     return command if command.endswith("\\1") else f"{command}\\1"
 
 

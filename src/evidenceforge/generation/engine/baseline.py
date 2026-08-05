@@ -7122,6 +7122,17 @@ class BaselineMixin:
                 persona_conns = get_persona_connections("_server_admin", os_cat)
             else:
                 persona_conns = get_persona_connections(persona, os_cat)
+            # Database hosts should not inherit generic server-admin package
+            # update/dashboard browsing. Keep admin sessions focused on
+            # database-adjacent control-plane activity.
+            if "database" in self._activity_roles_for_system(system):
+                persona_conns = [
+                    conn
+                    for conn in persona_conns
+                    if not (
+                        conn.get("role") == "_external" and conn.get("service") in {"http", "ssl"}
+                    )
+                ]
             if not persona_conns:
                 continue
             p_weights = [c.get("weight", 1) for c in persona_conns]

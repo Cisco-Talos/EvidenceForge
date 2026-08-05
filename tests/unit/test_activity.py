@@ -4806,6 +4806,57 @@ class TestActivityGenerator:
             assert proc is not None
             assert "#" not in proc.command_line
 
+    def test_one_shot_connection_owner_starts_near_first_network_action(
+        self, activity_gen, state_manager
+    ):
+        """Target-bearing clients should not idle for minutes before their first flow."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+        )
+        state_manager.set_current_time(timestamp)
+
+        pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=server,
+            time=timestamp,
+            service="http",
+            dst_port=8080,
+            proto="tcp",
+            hostname="registry.npmjs.org",
+            http=HttpContext(
+                method="CONNECT",
+                host="registry.npmjs.org",
+                uri="registry.npmjs.org:443",
+                user_agent="python-requests/2.31.0",
+            ),
+        )
+
+        proc = state_manager.get_process(server.hostname, pid)
+        assert proc is not None
+        assert timedelta(milliseconds=120) <= timestamp - proc.start_time <= timedelta(seconds=3.5)
+
+    @pytest.mark.parametrize(
+        "image,command_line",
+        [
+            ("/usr/bin/wget", "wget -q -O - https://example.test/"),
+            ("/usr/lib/apt/methods/https", "/usr/lib/apt/methods/https"),
+            (
+                "/usr/local/bin/service-healthcheck",
+                "service-healthcheck --url https://example.test/health",
+            ),
+        ],
+    )
+    def test_one_shot_connection_owner_classification(self, image, command_line):
+        """Sibling one-shot network client families share the startup contract."""
+        assert ActivityGenerator._connection_owner_is_one_shot_network_client(
+            image,
+            command_line,
+        )
+
     def test_workstation_ssh_connection_materializes_user_owner(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
