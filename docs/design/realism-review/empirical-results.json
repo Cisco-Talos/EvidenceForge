@@ -7,7 +7,7 @@
   "manifest_hash_method": "SHA-256 of the sorted, relative-path shasum -a 256 manifest beneath data/",
   "commands": {
     "validate": "uv run eforge validate SCENARIO",
-    "generate": "uv run eforge generate SCENARIO --output-dir OUTPUT --force",
+    "generate": "uv run eforge generate SCENARIO --output OUTPUT --force",
     "evaluate": "uv run eforge eval OUTPUT/data --scenario SCENARIO --json",
     "probe": ".venv/bin/python scripts/realism_review_probe.py OUTPUT --output REPORT",
     "tests_non_slow": "uv run pytest --no-cov",

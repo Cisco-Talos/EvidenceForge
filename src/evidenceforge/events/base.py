@@ -69,6 +69,7 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
+from evidenceforge.events.contracts import SemanticOccurrenceKey, ShadowSealResult
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
@@ -182,6 +183,12 @@ class SecurityEvent:
     # Correlated action lifecycle and frozen network-sensor projections.
     # EventDispatcher allocates event_id before state application and observation.
     event_id: str = ""
+    # Shadow-only action-relative identity. Existing event_id generation remains authoritative
+    # until each event family migrates through an approved vertical slice.
+    occurrence_key: SemanticOccurrenceKey | None = None
+    # Immutable contract snapshot captured at dispatch after identity planning. It is diagnostic
+    # during the foundation stage and does not change state, routing, observation, or projection.
+    contract_seal: ShadowSealResult | None = None
     lifecycle: ActionLifecycleContext | None = None
     identity_plan: EventIdentityPlan | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()

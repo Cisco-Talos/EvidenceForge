@@ -242,7 +242,7 @@ The architecture report records ten root-cause findings:
   the current local CLI boundary.
 - One evaluator full-corpus RSS concern is deferred pending a calibrated capacity benchmark.
 - Strong controls include safe YAML loading, sandboxed Jinja, DTD/entity rejection, pinned
-  workflows, and hardened SOF-ELK staging.
+  workflows, and hardened SOF-ELK® staging.
 - Docker and licensed Splunk runtime dependencies were unavailable, so three optional Splunk
   findings have complete static traces but no runtime reproduction.
 

@@ -100,7 +100,10 @@ This separation means scenario creation benefits from LLM reasoning about attack
 
 ### Consistency by Construction
 
-The core architectural principle is that **two emitters cannot disagree about shared fields because there is only one source of truth.**
+The target architectural principle is that **two emitters cannot disagree about shared fields
+because there is only one source of truth.** The current compatibility model has not completed
+that migration for every field and event family; the typed registry and shadow-seal boundary below
+make remaining contract debt measurable before enforcement.
 
 A `SecurityEvent` object carries all the data for one logical evidence-producing
 occurrence. Multiple contexts on that event describe facets of the same occurrence
@@ -233,7 +236,7 @@ The `SecurityEvent` dataclass (`src/evidenceforge/events/base.py`) is the centra
 ```
 SecurityEvent
 ├── timestamp: datetime (UTC)
-├── event_type: str ("logon", "process_create", "connection", ...)
+├── event_type: str (compatibility field checked against EventKind during shadow sealing)
 ├── src_host: HostContext (originating system — hostname, IP, OS, domain, FQDN)
 ├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
@@ -248,7 +251,9 @@ SecurityEvent
 ├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command)
-├── ... (27 context types total)
+├── ... (typed semantic context fields plus immutable plans)
+├── occurrence_key: SemanticOccurrenceKey (optional migration identity)
+├── contract_seal: ShadowSealResult (immutable diagnostic snapshot)
 ├── source_timing: SourceTimingPlan (planned source-native timestamps)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```
@@ -264,7 +269,27 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
   coordinate them with an action bundle and emit distinct `SecurityEvent`s.
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
-- `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
+- `RawLogEntry` and the compatibility `RawContext` pipeline adapter serve the explicit user-facing
+  `raw` event type. They remain outside canonical cross-source consistency guarantees.
+
+`src/evidenceforge/events/contracts.py` defines the closed `EventKind`, `ContextKind`, and
+`FormatKind` domains plus one `EventKindContract` per currently produced canonical kind. The
+dispatcher captures an immutable `CanonicalOccurrenceSnapshot` after identity planning and records
+missing/forbidden context and identity discrepancies. This is intentionally shadow-only in the
+foundation batch: violations are diagnostic and do not block state application, routing,
+observation, or projection. The user-facing `raw` path remains outside the registry, and the two
+legacy consumer-only names (`module_load` and `special_privileges`) are not advertised as produced
+canonical kinds.
+
+`ActionAnchor.action_id` and `SemanticOccurrenceKey` provide stable action-relative identity
+without replacing existing event IDs yet. Instance keys should be domain identities such as a
+connection, transfer, or authentication-attempt key; positional ordinals are reserved for
+otherwise indistinguishable peer repetitions.
+
+`AuthoredIntentLedger` (`src/evidenceforge/generation/intent_ledger.py`) is captured from the
+validated scenario before planning. It remains independent from generated occurrence and
+observation data so future ground-truth reconciliation can expose authored intents that failed to
+plan or render. The foundation stores this ledger but does not change current ground-truth output.
 
 ### Action Bundles
 

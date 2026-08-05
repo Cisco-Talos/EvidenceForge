@@ -42,6 +42,7 @@ from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
@@ -120,6 +121,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.end_time: datetime | None = None
         self.malicious_events: list[dict] = []  # Track for GROUND_TRUTH.md
         self.red_herring_events: list[dict] = []  # Track for Red Herrings section
+        # Independent pre-planning oracle for the approved ground-truth reconciliation contract.
+        # It is intentionally not projected yet, so this foundation does not change output.
+        self.authored_intent_ledger = AuthoredIntentLedger.from_scenario(scenario)
         self.network_resolver = ScenarioNetworkResolver.from_scenario(scenario)
 
         # Event counter for record IDs

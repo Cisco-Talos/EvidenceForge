@@ -16,11 +16,13 @@ from email.utils import parsedate_to_datetime
 from hashlib import md5, sha1, sha256
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
-from evidenceforge.events.contexts import DnsContext, SslContext
+from evidenceforge.events.contexts import DnsContext, EmailContext, SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.generation.activity.generator import ActivityGenerator
@@ -35,6 +37,7 @@ from evidenceforge.generation.activity.mail_public_identities import (
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import GenerationError
 from evidenceforge.models.scenario import (
     BaselineActivity,
     EmailArtifactsConfig,
@@ -450,6 +453,21 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert manifest_path in discovered["email_artifacts"]
     artifact_records = list(get_parser("email_artifacts").parse_file(manifest_path))
     assert artifact_records[0].fields["message_id"] == messages[0]["message_id"]
+
+
+def test_email_artifact_writer_rejects_artifact_id_path_escape(tmp_path: Path) -> None:
+    """Authored artifact identity must not become an escaping output path."""
+    generator = object.__new__(ActivityGenerator)
+    generator._email_artifact_dir = tmp_path / "artifacts"
+    context = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id="../outside",
+        envelope_from="alice@example.test",
+        header_from="alice@example.test",
+    )
+
+    with pytest.raises(GenerationError, match="Unsafe email artifact filename"):
+        generator._write_email_artifact(context)
 
 
 def test_email_artifacts_mode_none_skips_artifact_manifest(tmp_path: Path) -> None:

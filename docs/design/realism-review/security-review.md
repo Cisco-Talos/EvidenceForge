@@ -80,7 +80,7 @@ the process itself is not a network service.
 - Jinja rendering is sandboxed.
 - XML inputs reject DTD and entity declarations.
 - Workflow actions are pinned and build surfaces did not produce a reportable supply-chain path.
-- SOF-ELK staging has stronger containment controls than the affected Splunk paths.
+- SOF-ELK® staging has stronger containment controls than the affected Splunk paths.
 - Raw records are an explicit escape hatch, and adversarial payload text is treated as inert
   generated evidence rather than executed content.
 

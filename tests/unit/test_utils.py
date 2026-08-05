@@ -34,8 +34,9 @@ from evidenceforge.models import (
     Timezone,
     User,
 )
-from evidenceforge.models.exceptions import ScenarioIncludeError
+from evidenceforge.models.exceptions import GenerationError, ScenarioIncludeError
 from evidenceforge.utils import (
+    ScenarioIncludeBudget,
     convert_to_output_timezone,
     ensure_directory,
     get_system_timezone,
@@ -44,6 +45,7 @@ from evidenceforge.utils import (
     parse_duration,
     parse_iso8601,
     redact_secrets,
+    resolve_safe_child_path,
     resolve_time_window,
     validate_output_path,
     write_yaml,
@@ -678,6 +680,72 @@ includes:
 
         with pytest.raises(ScenarioIncludeError, match="not both"):
             load_scenario_yaml(scenario_file)
+
+    def test_load_scenario_yaml_enforces_include_depth_budget(self, tmp_path):
+        """Deep acyclic include chains should fail before unbounded recursion."""
+        (tmp_path / "leaf.yaml").write_text("description: leaf\n")
+        (tmp_path / "middle.yaml").write_text("includes: leaf.yaml\n")
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text("includes: middle.yaml\nname: bounded\n")
+
+        with pytest.raises(ScenarioIncludeError, match="depth exceeds limit 2"):
+            load_scenario_yaml(
+                scenario_file,
+                include_budget=ScenarioIncludeBudget(max_depth=2),
+            )
+
+    def test_load_scenario_yaml_enforces_include_file_budget(self, tmp_path):
+        """Wide include graphs should fail at the shared file counter."""
+        (tmp_path / "partial.yaml").write_text("description: partial\n")
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text("includes: partial.yaml\nname: bounded\n")
+
+        with pytest.raises(ScenarioIncludeError, match="file count exceeds limit 1"):
+            load_scenario_yaml(
+                scenario_file,
+                include_budget=ScenarioIncludeBudget(max_files=1),
+            )
+
+    def test_load_scenario_yaml_enforces_include_byte_budget(self, tmp_path):
+        """Cumulative bytes should be bounded before YAML parsing and merging."""
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text("name: larger-than-budget\n")
+
+        with pytest.raises(ScenarioIncludeError, match="bytes exceed limit 8"):
+            load_scenario_yaml(
+                scenario_file,
+                include_budget=ScenarioIncludeBudget(max_bytes=8),
+            )
+
+    def test_resolve_safe_child_path_accepts_one_filename(self, tmp_path):
+        """Safe generated filenames should resolve beneath the declared root."""
+        root = tmp_path / "artifacts"
+        root.mkdir()
+
+        assert resolve_safe_child_path(root, "message-001.eml") == root / "message-001.eml"
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["../outside.eml", "nested/message.eml", "/tmp/outside.eml", ""],
+    )
+    def test_resolve_safe_child_path_rejects_unsafe_components(self, tmp_path, filename):
+        """Generated filenames must not traverse or introduce subdirectories."""
+        root = tmp_path / "artifacts"
+        root.mkdir()
+
+        with pytest.raises(GenerationError, match="Unsafe output filename"):
+            resolve_safe_child_path(root, filename)
+
+    def test_resolve_safe_child_path_rejects_existing_symlink_escape(self, tmp_path):
+        """An existing child symlink must not redirect a generated write outside its root."""
+        root = tmp_path / "artifacts"
+        root.mkdir()
+        outside = tmp_path / "outside.eml"
+        outside.write_text("preserve")
+        (root / "message.eml").symlink_to(outside)
+
+        with pytest.raises(GenerationError, match="path escapes output root"):
+            resolve_safe_child_path(root, "message.eml")
 
     def test_load_yaml_not_found(self):
         """Test loading non-existent file raises error."""

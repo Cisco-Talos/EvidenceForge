@@ -190,7 +190,7 @@
     }
   ],
   "limitations": [
-    "The SOF-ELK and Splunk container-backed parser tests could not run because no Docker/Podman Compose daemon was available; Splunk additionally requires explicit license acceptance.",
+    "The SOF-ELK® and Splunk container-backed parser tests could not run because no Docker/Podman Compose daemon was available; Splunk additionally requires explicit license acceptance.",
     "No proprietary production corpus was used. Review relied on public official documentation and public-domain or public research exemplars.",
     "eCAR has a public prose description and corpus but no stable versioned machine-readable upstream schema; EvidenceForge interoperability is therefore assessed as a dialect, not certified conformance."
   ]

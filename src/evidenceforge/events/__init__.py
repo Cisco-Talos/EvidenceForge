@@ -49,10 +49,30 @@ from evidenceforge.events.contexts import (
     ShellContext,
     SmtpContext,
 )
+from evidenceforge.events.contracts import (
+    EVENT_KIND_CONTRACTS,
+    CanonicalOccurrenceSnapshot,
+    ContextKind,
+    EventKind,
+    EventKindContract,
+    OccurrenceRole,
+    SemanticOccurrenceKey,
+    ShadowSealResult,
+    shadow_seal,
+)
 
 __all__ = [
     "SecurityEvent",
     "RawLogEntry",
+    "EventKind",
+    "ContextKind",
+    "EventKindContract",
+    "EVENT_KIND_CONTRACTS",
+    "OccurrenceRole",
+    "SemanticOccurrenceKey",
+    "CanonicalOccurrenceSnapshot",
+    "ShadowSealResult",
+    "shadow_seal",
     "RemoteAuthenticationPlan",
     "RemoteAuthenticationTransportPlan",
     "HostContext",

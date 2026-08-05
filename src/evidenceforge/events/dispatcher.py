@@ -30,11 +30,13 @@ Two-layer filtering for emitter selection:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.contracts import shadow_seal
 from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.events.observation import (
     ObservationDecision,
@@ -135,6 +137,8 @@ class EventDispatcher:
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
         self._event_sequence = 0
+        self._contract_violation_counts: Counter[str] = Counter()
+        self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
         self.storyline_cluster_id: str | None = None
         from evidenceforge.generation.source_timing import SourceTimingPlanner
 
@@ -159,6 +163,21 @@ class EventDispatcher:
             }
             for cluster_id, source_summaries in sorted(self._source_evidence_status.items())
         }
+
+    @property
+    def contract_violation_counts(self) -> dict[str, int]:
+        """Return shadow contract discrepancies without enabling enforcement."""
+
+        return dict(sorted(self._contract_violation_counts.items()))
+
+    @property
+    def contract_violations_by_event(self) -> dict[str, dict[str, int]]:
+        """Return shadow discrepancies grouped by event kind and stable violation code."""
+
+        result: dict[str, dict[str, int]] = {}
+        for (event_type, code), count in sorted(self._contract_violations_by_event.items()):
+            result.setdefault(event_type, {})[code] = count
+        return result
 
     def network_identifier_for_format(
         self,
@@ -218,6 +237,11 @@ class EventDispatcher:
         if event.network is not None:
             event.network.validate_finalized_transaction()
         self.identity_lifecycle_planner.plan(event)
+        event.contract_seal = shadow_seal(event)
+        for violation in event.contract_seal.violations:
+            self._contract_violation_counts[violation.code.value] += 1
+            self._contract_violations_by_event[(event.event_type, violation.code.value)] += 1
+            logger.debug("Shadow event-contract violation: %s", violation.message)
         if not event.event_id:
             event.event_id = stable_uuid(
                 "security-event",

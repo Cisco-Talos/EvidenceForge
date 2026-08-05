@@ -220,6 +220,7 @@ from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, ProxyAuthPolicyConfig, System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
+from evidenceforge.utils.files import resolve_safe_child_path
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
@@ -16656,7 +16657,11 @@ class ActivityGenerator:
         if artifact_dir is None:
             return ""
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        path = artifact_dir / f"{email_ctx.artifact_id}.eml"
+        path = resolve_safe_child_path(
+            artifact_dir,
+            f"{email_ctx.artifact_id}.eml",
+            label="email artifact filename",
+        )
         path.write_bytes(self._render_email_artifact(email_ctx).encode("utf-8"))
         return path.relative_to(artifact_dir.parent.parent).as_posix()
 

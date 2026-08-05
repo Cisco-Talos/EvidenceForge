@@ -24,15 +24,64 @@
 
 import copy
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from evidenceforge.models.exceptions import ConfigurationError, ScenarioIncludeError
+from evidenceforge.models.exceptions import (
+    ConfigurationError,
+    GenerationError,
+    ScenarioIncludeError,
+)
 
 SCENARIO_INCLUDE_KEY = "includes"
 SCENARIO_INCLUDE_ALIAS = "include"
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioIncludeBudget:
+    """Hard safety limits for recursive scenario composition."""
+
+    max_depth: int = 32
+    max_files: int = 256
+    max_bytes: int = 16 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        """Reject nonsensical include-budget configuration."""
+
+        if self.max_depth < 1 or self.max_files < 1 or self.max_bytes < 1:
+            raise ValueError("Scenario include budgets must be positive")
+
+
+@dataclass(slots=True)
+class _ScenarioIncludeBudgetState:
+    """Mutable counters scoped to one scenario load."""
+
+    budget: ScenarioIncludeBudget
+    files: int = 0
+    bytes: int = 0
+
+    def consume(self, path: Path, *, depth: int) -> None:
+        """Account for one file before reading it and reject budget overflow."""
+
+        if depth > self.budget.max_depth:
+            raise ScenarioIncludeError(
+                f"Scenario include depth exceeds limit {self.budget.max_depth}: {path}"
+            )
+        size = path.stat().st_size
+        self.files += 1
+        self.bytes += size
+        if self.files > self.budget.max_files:
+            raise ScenarioIncludeError(
+                f"Scenario include file count exceeds limit {self.budget.max_files}: {path}"
+            )
+        if self.bytes > self.budget.max_bytes:
+            raise ScenarioIncludeError(
+                "Scenario include bytes exceed limit "
+                f"{self.budget.max_bytes}: loaded {self.bytes} bytes at {path}"
+            )
 
 
 def load_yaml(path: Path | str) -> dict:
@@ -61,7 +110,11 @@ def load_yaml(path: Path | str) -> dict:
         raise ConfigurationError(f"Invalid YAML in {path}: {e}") from e
 
 
-def load_scenario_yaml(path: Path | str) -> dict[str, Any]:
+def load_scenario_yaml(
+    path: Path | str,
+    *,
+    include_budget: ScenarioIncludeBudget | None = None,
+) -> dict[str, Any]:
     """Load a scenario YAML file and expand top-level includes.
 
     Scenario include paths are resolved relative to the file that declares them.
@@ -71,6 +124,8 @@ def load_scenario_yaml(path: Path | str) -> dict[str, Any]:
 
     Args:
         path: Path to scenario YAML file
+        include_budget: Optional bounded composition policy. Defaults to the documented hard
+            safety limits.
 
     Returns:
         Expanded scenario dictionary
@@ -81,7 +136,12 @@ def load_scenario_yaml(path: Path | str) -> dict[str, Any]:
         ScenarioIncludeError: If include expansion fails
     """
     scenario_path = Path(path).resolve()
-    data, _origins = _load_yaml_with_includes(scenario_path, stack=())
+    budget_state = _ScenarioIncludeBudgetState(include_budget or ScenarioIncludeBudget())
+    data, _origins = _load_yaml_with_includes(
+        scenario_path,
+        stack=(),
+        budget_state=budget_state,
+    )
     return data
 
 
@@ -107,12 +167,14 @@ def _load_yaml_with_includes(
     path: Path,
     *,
     stack: tuple[Path, ...],
+    budget_state: _ScenarioIncludeBudgetState,
 ) -> tuple[dict[str, Any], dict[tuple[str, ...], Path]]:
     """Load a YAML mapping, recursively expanding its scenario includes."""
     if path in stack:
         chain = " -> ".join(str(p) for p in (*stack, path))
         raise ScenarioIncludeError(f"Circular scenario include detected: {chain}")
 
+    budget_state.consume(path, depth=len(stack) + 1)
     data = _load_raw_yaml(path)
     include_entries = _extract_include_entries(data, path)
 
@@ -129,6 +191,7 @@ def _load_yaml_with_includes(
         include_data, include_origins = _load_yaml_with_includes(
             include_path,
             stack=next_stack,
+            budget_state=budget_state,
         )
         _merge_disjoint_mapping(
             merged,
@@ -155,6 +218,19 @@ def _load_yaml_with_includes(
         incoming_source=path,
     )
     return merged, origins
+
+
+def resolve_safe_child_path(root: Path, filename: str, *, label: str = "output filename") -> Path:
+    """Resolve one untrusted filename beneath a root without traversal or symlink escape."""
+
+    candidate = Path(filename)
+    if not filename or candidate.is_absolute() or candidate.name != filename:
+        raise GenerationError(f"Unsafe {label}: expected one filename component, got {filename!r}")
+    resolved_root = root.resolve()
+    destination = (resolved_root / candidate).resolve()
+    if not destination.is_relative_to(resolved_root) or destination == resolved_root:
+        raise GenerationError(f"Unsafe {label}: path escapes output root: {filename!r}")
+    return destination
 
 
 def _extract_include_entries(data: dict[str, Any], path: Path) -> list[str]:
