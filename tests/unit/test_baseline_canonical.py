@@ -201,6 +201,31 @@ def test_interactive_startup_activity_pacing_respects_hour_and_logoff_boundaries
     )
 
 
+def test_planned_baseline_logoff_is_published_to_all_session_consumers():
+    """A path without the local deadline map must still reject post-logoff reuse."""
+
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    state_manager = StateManager()
+    state_manager.set_current_time(current_hour - timedelta(hours=2))
+    logon_id = state_manager.create_session(
+        "analyst",
+        "WS-01",
+        2,
+        "-",
+        logon_guid_required=False,
+    )
+    engine = object.__new__(BaselineMixin)
+    engine.state_manager = state_manager
+
+    engine._publish_planned_session_end_plans(
+        current_hour,
+        {("WS-01", logon_id): 15 * 60},
+    )
+
+    assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=14)) is not None
+    assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=16)) is None
+
+
 def test_locked_workstation_activity_defers_until_after_unlock():
     """Foreground baseline activity should not occur while the workstation is visibly locked."""
     engine = object.__new__(BaselineMixin)
@@ -1955,7 +1980,7 @@ class TestDhcpLease:
 
 
 class TestAnonymousLogon:
-    """Anonymous logon events dispatch without creating sessions."""
+    """Anonymous logons use a complete short-lived session lifecycle."""
 
     def test_generate_anonymous_logon_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2027,10 +2052,10 @@ class TestAnonymousLogon:
         assert network_event.lifecycle is not None
         assert network_event.lifecycle.parent_group_id == event.remote_auth.stable_id
 
-    def test_anonymous_logon_no_session_created(
+    def test_anonymous_logon_session_is_closed_after_paired_logoff(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """Anonymous logon should NOT create a session in StateManager."""
+        """Anonymous session identity should remain resolvable after normal closure."""
         dc = System(
             hostname="DC-01",
             ip="10.0.10.100",
@@ -2042,6 +2067,15 @@ class TestAnonymousLogon:
         activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
         sessions_after = len(state_manager.state.active_sessions)
         assert sessions_after == sessions_before
+        event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        )
+        identity = state_manager.get_session_identity(event.auth.logon_id)
+        assert identity is not None
+        assert identity.object_id == event.edr.object_id
+        assert identity.logon_guid == "{00000000-0000-0000-0000-000000000000}"
 
     def test_anonymous_logon_plans_transport_without_source_host_metadata(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2106,8 +2140,11 @@ class TestAnonymousLogon:
         assert ecar_events[0].edr.object_id
         assert ecar_events[1].edr.object_id == ecar_events[0].edr.object_id
         assert ecar_events[1].auth.logon_id == ecar_events[0].auth.logon_id
-        assert ecar_events[0].lifecycle is None
-        assert ecar_events[1].lifecycle is None
+        assert ecar_events[0].lifecycle is not None
+        assert ecar_events[1].lifecycle is not None
+        assert ecar_events[0].lifecycle.group_id == ecar_events[1].lifecycle.group_id
+        assert ecar_events[0].lifecycle.phase == "start"
+        assert ecar_events[1].lifecycle.phase == "closure"
         assert timestamp < win_events[1].timestamp <= timestamp + timedelta(seconds=30)
         assert len(state_manager.state.active_sessions) == sessions_before
 

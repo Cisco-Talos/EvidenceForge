@@ -61,6 +61,7 @@ _MAX_GENERATED_LOGON_LUID = 0xFFFFFFFF
 _GENERATED_LOGON_LUID_SPAN = _MAX_GENERATED_LOGON_LUID - _MIN_GENERATED_LOGON_LUID + 1
 _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
+_NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -151,6 +152,7 @@ class StateManager:
         self._logon_id_used_host_bases: set[int] = set()
         self._logon_id_epochs: dict[str, datetime] = {}
         self._logon_id_second_ordinals: dict[tuple[str, int, int], int] = {}
+        self._semantic_peer_ordinals: dict[tuple[str, str], int] = {}
         self._logon_id_block_offsets: dict[str, dict[int, int]] = {}
         self._used_logon_ids: set[int] = set()
         self._logon_id_aliases: dict[str, str] = {}
@@ -308,6 +310,17 @@ class StateManager:
                 event_time = self.state.current_time
             return f"0x{self._allocate_logon_luid(system, event_time):x}"
 
+    def next_semantic_peer_ordinal(self, family: str, stable_key: str) -> int:
+        """Allocate an ordinal scoped only to otherwise identical semantic peers."""
+
+        if not family or not stable_key:
+            raise ValueError("Semantic peer ordinals require a family and stable key")
+        with self._lock:
+            key = (family, stable_key)
+            ordinal = self._semantic_peer_ordinals.get(key, 0)
+            self._semantic_peer_ordinals[key] = ordinal + 1
+            return ordinal
+
     def _allocate_windows_session_id(
         self,
         system: str,
@@ -402,6 +415,7 @@ class StateManager:
         transport_pid: int | None = None,
         start_time: datetime | None = None,
         logon_guid: str = "",
+        logon_guid_required: bool | None = None,
         session_id: int | None = None,
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
@@ -455,6 +469,12 @@ class StateManager:
                 logon_id,
                 windows_session_id,
             )
+            if logon_guid_required is not None:
+                logon_guid = (
+                    self._stable_logon_guid(system, logon_id)
+                    if logon_guid_required
+                    else _NULL_LOGON_GUID
+                )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -663,6 +683,7 @@ class StateManager:
         session_kind: str = "logon",
         transport_pid: int | None = None,
         logon_guid: str = "",
+        logon_guid_required: bool | None = None,
         session_id: int | None = None,
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
@@ -701,6 +722,12 @@ class StateManager:
                 logon_id,
                 windows_session_id,
             )
+            if logon_guid_required is not None:
+                logon_guid = (
+                    self._stable_logon_guid(system, logon_id)
+                    if logon_guid_required
+                    else _NULL_LOGON_GUID
+                )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -766,6 +793,11 @@ class StateManager:
             if source_ready_time is not None:
                 session.source_ready_time = ensure_utc(source_ready_time)
             if logon_guid is not None:
+                if session.logon_guid and session.logon_guid != logon_guid:
+                    raise StateError(
+                        "Cannot replace published session LogonGuid for "
+                        f"{logon_id}: {session.logon_guid} -> {logon_guid}"
+                    )
                 session.logon_guid = logon_guid
             if session_id is not None:
                 session.session_id = session_id
@@ -842,6 +874,7 @@ class StateManager:
                 session_kind=session.session_kind,
                 started_at=session.start_time,
                 lifecycle_group_id=session.lifecycle_group_id,
+                logon_guid=session.logon_guid,
                 parent_lifecycle_group_id=session.parent_lifecycle_group_id,
             )
 
@@ -865,9 +898,6 @@ class StateManager:
         require_nonzero: bool = True,
     ) -> str:
         """Return the canonical LogonGuid for a session, creating it if needed."""
-        null_guid = "{00000000-0000-0000-0000-000000000000}"
-        if not require_nonzero:
-            return null_guid
         with self._lock:
             resolved = self._resolve_logon_id(logon_id)
             session = self.state.active_sessions.get(resolved)
@@ -876,7 +906,11 @@ class StateManager:
                 session = ended[0] if ended is not None else None
             if session is not None and session.logon_guid:
                 return session.logon_guid
-            guid = self._stable_logon_guid(system, resolved or logon_id)
+            guid = (
+                self._stable_logon_guid(system, resolved or logon_id)
+                if require_nonzero
+                else _NULL_LOGON_GUID
+            )
             if session is not None:
                 session.logon_guid = guid
             return guid

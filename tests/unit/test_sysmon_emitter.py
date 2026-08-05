@@ -382,21 +382,14 @@ class TestSysmonEventEmitter:
         assert 'SystemTime="2024-01-15T10:30:00.0000000Z"' not in content
         assert '<Data Name="UtcTime">2024-01-15 10:30:00.000</Data>' not in content
 
-    def test_logon_guid_is_stable_per_host_logon_session(self, format_def, temp_output):
-        """Sysmon LogonGuid should identify the logon session, not each process."""
+    def test_unknown_session_does_not_invent_emitter_owned_logon_guid(
+        self, format_def, temp_output
+    ):
+        """Sysmon must not recompute shared session identity inside the emitter."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
 
-        guid_a = emitter._generate_logon_guid("WKS-01", "0xabc123")
-        guid_b = emitter._generate_logon_guid("WKS-01", "0xabc123")
-        guid_other_session = emitter._generate_logon_guid("WKS-01", "0xdef456")
-        guid_other_host = emitter._generate_logon_guid("WKS-02", "0xabc123")
-
-        assert guid_a == guid_b
-        assert guid_a != guid_other_session
-        assert guid_a != guid_other_host
-        assert re.fullmatch(
-            r"\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}",
-            guid_a,
+        assert emitter._resolve_logon_guid("WKS-01", "0xabc123", None) == (
+            "{00000000-0000-0000-0000-000000000000}"
         )
 
     def test_process_create_uses_state_session_logon_guid(self, format_def, tmp_path):
@@ -412,6 +405,7 @@ class TestSysmonEventEmitter:
         state_manager.set_current_time(datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
         logon_id = state_manager.create_session("jsmith", "WKS-01", 3, "10.0.0.20")
         logon_guid = state_manager.get_or_create_session_logon_guid(logon_id, "WKS-01")
+        state_manager.end_session(logon_id, datetime(2024, 1, 15, 10, 30, 2, tzinfo=UTC))
         emitter._state_manager = state_manager
 
         host = HostContext(

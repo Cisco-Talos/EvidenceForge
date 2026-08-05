@@ -101,6 +101,7 @@ class SessionIdentity:
     session_kind: str
     started_at: datetime
     lifecycle_group_id: str
+    logon_guid: str = ""
     parent_lifecycle_group_id: str = ""
 
     def __post_init__(self) -> None:

@@ -806,6 +806,54 @@ class TestSessionManagement:
         assert session.logon_guid == guid_a
         assert guid_a != "{00000000-0000-0000-0000-000000000000}"
 
+    def test_session_logon_guid_nullability_is_immutable(self):
+        """Later consumers cannot upgrade a published null LogonGuid for one LogonID."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        logon_id = sm.create_session("jdoe", "WS-01", 3, "192.168.1.50")
+
+        null_guid = sm.get_or_create_session_logon_guid(
+            logon_id,
+            "WS-01",
+            require_nonzero=False,
+        )
+        later = sm.get_or_create_session_logon_guid(
+            logon_id,
+            "WS-01",
+            require_nonzero=True,
+        )
+
+        assert null_guid == "{00000000-0000-0000-0000-000000000000}"
+        assert later == null_guid
+        with pytest.raises(StateError, match="Cannot replace published session LogonGuid"):
+            sm.update_session_metadata(
+                logon_id,
+                logon_guid="{11111111-2222-4333-8444-555555555555}",
+            )
+
+    def test_create_session_can_finalize_logon_guid_policy_before_publication(self):
+        """Session creation can seal nullability before any dependent process exists."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        null_id = sm.create_session(
+            "service",
+            "WS-01",
+            5,
+            "-",
+            logon_guid_required=False,
+        )
+        nonnull_id = sm.create_session(
+            "jdoe",
+            "WS-01",
+            2,
+            "-",
+            logon_guid_required=True,
+        )
+
+        assert sm.get_session(null_id).logon_guid == "{00000000-0000-0000-0000-000000000000}"
+        assert sm.get_session(nonnull_id).logon_guid != "{00000000-0000-0000-0000-000000000000}"
+
     def test_generated_logon_guids_use_uuid4_morphology(self):
         """Deterministic LogonGuid values should use normal RFC variant/version nibbles."""
         sm = StateManager()
@@ -922,6 +970,16 @@ class TestSessionManagement:
         ids = [sm.create_session(f"user{i}", f"WS-{i:02d}", 3, f"192.168.1.{i}") for i in range(20)]
 
         assert len(set(ids)) == len(ids)
+
+    def test_semantic_peer_ordinals_are_scoped_by_stable_action_key(self):
+        """Unrelated peer allocation must not renumber attempts in another action."""
+
+        sm = StateManager()
+
+        assert sm.next_semantic_peer_ordinal("failed_logon", "action-a") == 0
+        assert sm.next_semantic_peer_ordinal("failed_logon", "action-b") == 0
+        assert sm.next_semantic_peer_ordinal("failed_logon", "action-a") == 1
+        assert StateManager().next_semantic_peer_ordinal("failed_logon", "action-a") == 0
 
     def test_create_session_supports_more_than_legacy_host_bucket_count(self):
         """Large scenarios should not exhaust Windows LogonID host ranges."""

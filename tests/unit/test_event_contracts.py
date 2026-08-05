@@ -50,6 +50,15 @@ def test_registry_is_closed_over_every_event_kind() -> None:
     assert LEGACY_CONSUMER_ONLY_EVENT_TYPES.isdisjoint(kind.value for kind in EventKind)
 
 
+def test_ssh_contract_allows_unmodeled_external_transport_source() -> None:
+    """External SSH clients retain tuple truth without requiring a modeled source host."""
+
+    contract = EVENT_KIND_CONTRACTS[EventKind.SSH_SESSION]
+
+    assert ContextKind.SRC_HOST not in contract.required_contexts
+    assert ContextKind.SRC_HOST in contract.optional_contexts
+
+
 def test_registry_matches_reviewed_constructor_context_and_format_inventory() -> None:
     """The approved path census seeds an exact closure gate for the foundation registry."""
 

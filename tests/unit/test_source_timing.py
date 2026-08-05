@@ -1012,11 +1012,38 @@ def test_remote_auth_ecar_login_follows_admitted_exact_transport() -> None:
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(login_event, "ecar")
 
-    flow_time = flow_event.source_timing.finalized_times[
-        ecar_flow_render_key("inbound", "FILE-SRV-01")
+    assert flow_event.src_host is not None
+    endpoint_flow_times = [
+        flow_event.source_timing.finalized_times[
+            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
+        ],
+        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", "FILE-SRV-01")],
     ]
     login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
-    assert timedelta(milliseconds=8) <= login_time - flow_time <= timedelta(milliseconds=140)
+    assert (
+        timedelta(milliseconds=8)
+        <= login_time - max(endpoint_flow_times)
+        <= timedelta(milliseconds=140)
+    )
+
+
+def test_remote_auth_ecar_login_follows_later_source_endpoint_flow() -> None:
+    """RDP authentication must not precede the source endpoint FLOW observation."""
+
+    planner = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+
+    planner.plan_event(flow_event, "ecar")
+    assert flow_event.source_timing is not None
+    assert flow_event.src_host is not None
+    source_flow_key = ecar_flow_render_key("outbound", flow_event.src_host.hostname)
+    source_flow_time = flow_event.timestamp + timedelta(milliseconds=900)
+    flow_event.source_timing.finalized_times[source_flow_key] = source_flow_time
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+
+    login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+    assert timedelta(milliseconds=8) <= login_time - source_flow_time <= timedelta(milliseconds=140)
 
 
 def test_ssh_ecar_login_follows_admitted_exact_transport() -> None:
@@ -1077,9 +1104,13 @@ def test_remote_auth_failed_ecar_login_follows_transport_without_session() -> No
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(failed_event, "ecar")
 
-    flow_time = flow_event.source_timing.finalized_times[
-        ecar_flow_render_key("inbound", "FILE-SRV-01")
-    ]
+    assert flow_event.src_host is not None
+    flow_time = max(
+        flow_event.source_timing.finalized_times[
+            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
+        ],
+        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", "FILE-SRV-01")],
+    )
     failure_time = failed_event.source_timing.finalized_times[
         ecar_session_render_key("failed_login")
     ]
@@ -1225,9 +1256,13 @@ def test_remote_auth_timing_reuses_transaction_without_parent_action_metadata() 
     planner.plan_event(flow_event, "ecar")
     planner.record_admitted_source_event(flow_event, "ecar")
     planner.plan_event(login_event, "ecar")
-    ecar_flow_time = flow_event.source_timing.finalized_times[
-        ecar_flow_render_key("inbound", target.hostname)
-    ]
+    assert flow_event.src_host is not None
+    ecar_flow_time = max(
+        flow_event.source_timing.finalized_times[
+            ecar_flow_render_key("outbound", flow_event.src_host.hostname)
+        ],
+        flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", target.hostname)],
+    )
     ecar_login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
     assert (
         timedelta(milliseconds=8) <= ecar_login_time - ecar_flow_time <= timedelta(milliseconds=140)

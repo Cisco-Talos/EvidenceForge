@@ -154,10 +154,7 @@ class SourceTimingPlanner:
             and network.transaction is not None
             and event.dst_host is not None
         ):
-            timestamp = self._finalized_time(
-                event,
-                ecar_flow_render_key("inbound", event.dst_host.hostname),
-            )
+            timestamp = self._latest_ecar_endpoint_flow_time(event)
             if timestamp is not None:
                 self._admitted_ecar_transport_transactions[
                     self._transaction_transport_key(
@@ -225,10 +222,7 @@ class SourceTimingPlanner:
         if event.event_type == "connection" and network.transaction is not None:
             transaction_id = network.transaction.stable_id
             if format_name == "ecar" and event.dst_host is not None:
-                timestamp = self._finalized_time(
-                    event,
-                    ecar_flow_render_key("inbound", event.dst_host.hostname),
-                )
+                timestamp = self._latest_ecar_endpoint_flow_time(event)
                 if timestamp is not None:
                     self._admitted_ecar_remote_transports[
                         self._remote_transport_key(
@@ -560,6 +554,27 @@ class SourceTimingPlanner:
     def _finalized_time(event: SecurityEvent, key: str) -> datetime | None:
         plan = event.source_timing
         return plan.finalized_times.get(key) if plan is not None else None
+
+    @classmethod
+    def _latest_ecar_endpoint_flow_time(cls, event: SecurityEvent) -> datetime | None:
+        """Return the later admitted endpoint observation for one eCAR transport."""
+
+        timestamps = []
+        if event.src_host is not None:
+            timestamp = cls._finalized_time(
+                event,
+                ecar_flow_render_key("outbound", event.src_host.hostname),
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+        if event.dst_host is not None:
+            timestamp = cls._finalized_time(
+                event,
+                ecar_flow_render_key("inbound", event.dst_host.hostname),
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+        return max(timestamps) if timestamps else None
 
     def _plan_ecar_flow_times(self, event: SecurityEvent) -> None:
         """Finalize every host-local FLOW timestamp and attribution decision."""

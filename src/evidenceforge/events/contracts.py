@@ -688,8 +688,8 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     ),
     EventKind.SSH_SESSION: _contract(
         EventKind.SSH_SESSION,
-        required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.EDR, ContextKind.PROCESS),
+        required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
+        optional=_contexts(ContextKind.EDR, ContextKind.PROCESS, ContextKind.SRC_HOST),
         src=HostSemantic.TRANSPORT_SOURCE,
         dst=HostSemantic.TARGET,
         identity=IdentityRequirement.REQUIRED,

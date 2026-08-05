@@ -41,6 +41,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import (
     BrowserSessionActionBundle,
     BrowserSessionRequest,
@@ -2973,6 +2974,7 @@ class BaselineMixin:
         # so no dependent activity is timestamped after a visible 4634 for the
         # same session.
         planned_logoffs = self._plan_logoffs_for_hour(enabled_users, current_hour)
+        self._publish_planned_session_end_plans(current_hour, planned_logoffs)
         proxy_auth_deadlines: dict[tuple[str, str], datetime] = {}
         for (system_hostname, logon_id), offset in planned_logoffs.items():
             session = self.state_manager.get_session(logon_id)
@@ -5198,6 +5200,28 @@ class BaselineMixin:
                     logoff_offset = rng.uniform(0, 3599)
                     planned[(session.system, session.logon_id)] = logoff_offset
         return planned
+
+    def _publish_planned_session_end_plans(
+        self,
+        current_hour: datetime,
+        planned_logoffs: dict[tuple[str, str], float],
+    ) -> None:
+        """Make baseline logoff decisions visible to every session consumer."""
+
+        for (_system_hostname, logon_id), offset in planned_logoffs.items():
+            session = self.state_manager.get_session(logon_id)
+            if session is None:
+                continue
+            existing = session.end_plan
+            if existing is not None and existing.is_authoritative:
+                continue
+            self.state_manager.plan_session_end(
+                logon_id,
+                SessionEndPlan(
+                    canonical_end=current_hour + timedelta(seconds=offset),
+                    authority="generated",
+                ),
+            )
 
     def _generate_logoffs_for_hour(
         self,

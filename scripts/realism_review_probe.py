@@ -592,6 +592,8 @@ def _check_ecar_lifecycles(
         and record.get("action") == "CREATE"
         and str((record.get("properties") or {}).get("image_path") or "").endswith("/login")
         and "systemd" in str((record.get("properties") or {}).get("parent_image_path") or "")
+        and str((record.get("properties") or {}).get("source_principal") or "").lower()
+        not in {"root", "nt authority\\system", "system"}
     ]
     if inverted_linux_logins:
         findings.append(

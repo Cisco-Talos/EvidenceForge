@@ -153,6 +153,26 @@ class TestFailedLogonWindows:
         sessions = state_manager.get_sessions_for_user("alice.smith")
         assert len(sessions) == 0
 
+    def test_same_timestamp_attempts_have_distinct_action_relative_identity(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Identical retries share an action family but receive distinct peer ordinals."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(test_user, win_system, timestamp)
+        activity_gen.generate_failed_logon(test_user, win_system, timestamp)
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "failed_logon"
+        ]
+        assert len(events) == 2
+        assert events[0].occurrence_key.action_id == events[1].occurrence_key.action_id
+        assert events[0].occurrence_key.instance_key == "attempt:0"
+        assert events[1].occurrence_key.instance_key == "attempt:1"
+        assert events[0].edr.object_id != events[1].edr.object_id
+
     def test_subject_is_null_for_failed_logon(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):

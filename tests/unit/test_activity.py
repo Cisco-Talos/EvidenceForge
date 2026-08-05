@@ -3662,6 +3662,7 @@ class TestActivityGenerator:
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
 
+        sessions_before = len(state_manager.state.active_sessions)
         activity_gen.generate_machine_account_logon(
             hostname="WKS-01",
             machine_username="WKS-01$",
@@ -3700,6 +3701,10 @@ class TestActivityGenerator:
         assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
         assert machine_logon.lifecycle.phase == "start"
         assert machine_logoff.lifecycle.phase == "closure"
+        assert len(state_manager.state.active_sessions) == sessions_before
+        identity = state_manager.get_session_identity(machine_logon.auth.logon_id)
+        assert identity is not None
+        assert identity.object_id == machine_logon.edr.object_id
         service_connection = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
@@ -4915,10 +4920,10 @@ class TestActivityGenerator:
         assert connection_event.process.image == r"C:\Windows\System32\OpenSSH\ssh.exe"
         assert connection_event.process.username == test_user.username
 
-    def test_workstation_ssh_owner_is_scoped_to_command_target(
+    def test_workstation_ssh_owner_is_one_shot_per_transport(
         self, activity_gen, test_user, state_manager
     ):
-        """Target-bearing SSH client processes should not be reused across hosts."""
+        """Each SSH transport should have a distinct client unless multiplexing is explicit."""
         timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
         workstation = System(
             hostname="WS-AJOHNSON-01",
@@ -4992,9 +4997,70 @@ class TestActivityGenerator:
         assert app_proc is not None
         assert proxy_proc is not None
         assert app_pid != proxy_pid
-        assert app_reuse_pid == app_pid
+        assert app_reuse_pid not in {app_pid, proxy_pid}
         assert app_proc.command_line == "ssh.exe APP-INT-01"
         assert proxy_proc.command_line == "ssh.exe PROXY-01"
+
+    def test_connection_owner_process_is_not_reused_across_logon_sessions(
+        self, activity_gen, test_user, state_manager
+    ):
+        """A process from an ended session cannot own a new session's transport."""
+        first_time = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(first_time - timedelta(minutes=10))
+        first_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(first_time)
+        first_pid, _ = activity_gen._ensure_user_connection_owner_process(
+            source_system=workstation,
+            time=first_time,
+            service="smb",
+            dst_port=445,
+            os_category="windows",
+            hostname="FILE-SRV-01",
+            ssh_attempted_username=None,
+        )
+        first_process = state_manager.get_process(workstation.hostname, first_pid)
+        assert first_process is not None
+        assert first_process.logon_id == first_logon_id
+
+        state_manager.end_session(first_logon_id, first_time + timedelta(minutes=1))
+        second_time = first_time + timedelta(minutes=5)
+        state_manager.set_current_time(second_time - timedelta(minutes=1))
+        second_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(second_time)
+        second_pid, _ = activity_gen._ensure_user_connection_owner_process(
+            source_system=workstation,
+            time=second_time,
+            service="smb",
+            dst_port=445,
+            os_category="windows",
+            hostname="FILE-SRV-01",
+            ssh_attempted_username=None,
+        )
+
+        second_process = state_manager.get_process(workstation.hostname, second_pid)
+        assert second_process is not None
+        assert second_pid != first_pid
+        assert second_process.logon_id == second_logon_id
 
     def test_ssh_session_windows_client_command_names_remote_user(
         self, activity_gen, state_manager, mock_emitters
@@ -10391,6 +10457,59 @@ class TestActivityGenerator:
             if proc.command_line == "/usr/lib/systemd/systemd --user" and proc.logon_id == logon_id
         ]
         assert len(user_managers) == 1
+
+    def test_linux_server_console_login_is_not_child_of_user_systemd(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Server console ancestry should be system manager -> login -> shell."""
+        session_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(session_time)
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+            start_time=session_time,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid}}
+
+        shell_pid = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon_id,
+            logon_time=session_time,
+            activity_time=session_time + timedelta(minutes=5),
+        )
+
+        assert shell_pid is not None
+        shell = state_manager.get_process(linux.hostname, shell_pid)
+        assert shell is not None
+        login = state_manager.get_process(linux.hostname, shell.parent_pid)
+        assert login is not None
+        assert login.image == "/bin/login"
+        assert login.parent_pid == systemd_pid
+        assert not any(
+            process.command_line == "/usr/lib/systemd/systemd --user"
+            and process.logon_id == logon_id
+            for process in state_manager.get_processes_on_system(linux.hostname)
+        )
 
     def test_linux_workstation_python_requests_proxy_stays_unattributed(
         self, activity_gen, test_user, state_manager

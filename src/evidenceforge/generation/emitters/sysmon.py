@@ -910,28 +910,16 @@ class SysmonEventEmitter(LogEmitter):
         imphash = hashlib.md5(f"imp:{seed}".encode(), usedforsecurity=False).hexdigest().upper()
         return f"SHA1={sha1},MD5={md5},SHA256={sha256},IMPHASH={imphash}"
 
-    @staticmethod
-    def _generate_logon_guid(hostname: str, logon_id: str) -> str:
-        """Generate one stable Sysmon LogonGuid per host/logon session."""
-        normalized = logon_id or "0x0"
-        digest = bytearray(
-            hashlib.sha256(f"sysmon_logon_guid:{hostname}:{normalized}".encode()).digest()[:16]
-        )
-        digest[6] = (digest[6] & 0x0F) | 0x40
-        digest[8] = (digest[8] & 0x3F) | 0x80
-        hexed = digest.hex()
-        return f"{{{hexed[:8]}-{hexed[8:12]}-{hexed[12:16]}-{hexed[16:20]}-{hexed[20:32]}}}"
-
     def _resolve_logon_guid(self, hostname: str, logon_id: str, auth: Any | None) -> str:
         """Resolve the canonical Windows LogonGuid for Sysmon process telemetry."""
         if auth is not None and getattr(auth, "logon_guid", ""):
             return auth.logon_guid
         sm = getattr(self, "_state_manager", None)
         if sm is not None and logon_id:
-            session = sm.get_session(logon_id)
-            if session is not None and getattr(session, "logon_guid", ""):
-                return session.logon_guid
-        return self._generate_logon_guid(hostname, logon_id)
+            identity = sm.get_session_identity(logon_id)
+            if identity is not None and identity.logon_guid:
+                return identity.logon_guid
+        return "{00000000-0000-0000-0000-000000000000}"
 
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""

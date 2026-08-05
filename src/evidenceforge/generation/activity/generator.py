@@ -81,6 +81,7 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
+from evidenceforge.events.contracts import OccurrenceRole
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
@@ -179,6 +180,7 @@ from evidenceforge.generation.actions import (
     file_transfer_hashes,
     http_response_parent_duration_floor,
 )
+from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -6291,6 +6293,13 @@ class ActivityGenerator:
             return True
         return cls._connection_owner_requires_exact_command_line(image, command_line)
 
+    @staticmethod
+    def _connection_owner_requires_unique_transport_process(image: str) -> bool:
+        """Return whether each transport needs a distinct short-lived client process."""
+
+        executable = image.lower().replace("\\", "/").rsplit("/", 1)[-1]
+        return executable in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}
+
     def _ensure_user_connection_owner_process(
         self,
         *,
@@ -6327,11 +6336,13 @@ class ActivityGenerator:
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
             if proc.username == user.username
+            and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and (not require_exact_command or proc.command_line == command_line)
             and proc.start_time is not None
             and ensure_utc(proc.start_time) <= ensure_utc(time)
             and not self._foreground_process_expired_for_attribution(source_system, proc, time)
+            and not self._connection_owner_requires_unique_transport_process(proc.image)
         ]
         if running_candidates:
             proc = max(running_candidates, key=lambda candidate: candidate.start_time)
@@ -7528,6 +7539,7 @@ class ActivityGenerator:
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
             if proc.username == user.username
+            and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and (not require_exact_command or proc.command_line == command_line)
             and proc.start_time is not None
@@ -7706,6 +7718,7 @@ class ActivityGenerator:
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
             if proc.username == user.username
+            and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
@@ -9005,6 +9018,7 @@ class ActivityGenerator:
 
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
+        requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
 
         # Phase 1: Allocate or resolve IDs from StateManager
         if logon_id is None:
@@ -9015,6 +9029,7 @@ class ActivityGenerator:
                 source_ip=auth_source_ip,
                 source_port=source_port or 0,
                 session_kind=session_kind,
+                logon_guid_required=requires_logon_guid,
                 lifecycle_group_id=lifecycle_group_id,
             )
         else:
@@ -9029,6 +9044,7 @@ class ActivityGenerator:
                     start_time=time,
                     source_port=source_port or 0,
                     session_kind=session_kind,
+                    logon_guid_required=requires_logon_guid,
                     lifecycle_group_id=lifecycle_group_id,
                 )
             else:
@@ -9048,7 +9064,6 @@ class ActivityGenerator:
         if request.session_end_plan is not None:
             self.state_manager.plan_session_end(logon_id, request.session_end_plan)
 
-        requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
         auth_logon_guid = self.state_manager.get_or_create_session_logon_guid(
             logon_id,
             system.hostname,
@@ -9056,8 +9071,6 @@ class ActivityGenerator:
         )
         session_for_guid = self.state_manager.get_session(logon_id)
         session_id = session_for_guid.session_id if session_for_guid is not None else 0
-        if requires_logon_guid or not (session_for_guid and session_for_guid.logon_guid):
-            self.state_manager.update_session_metadata(logon_id, logon_guid=auth_logon_guid)
         elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
@@ -9622,9 +9635,23 @@ class ActivityGenerator:
                 target_user=effective_username if known_account else None,
             )
 
+        attempt_ordinal = self.state_manager.next_semantic_peer_ordinal(
+            "failed_logon",
+            request.stable_id,
+        )
+        occurrence_key = ActionAnchor(
+            family="failed_logon",
+            stable_id=request.stable_id,
+            source=request.source,
+        ).occurrence_key(
+            OccurrenceRole.PRIMARY,
+            f"attempt:{attempt_ordinal}",
+        )
+
         event = SecurityEvent(
             timestamp=time,
             event_type="failed_logon",
+            occurrence_key=occurrence_key,
             dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username=effective_username,
@@ -9650,14 +9677,7 @@ class ActivityGenerator:
                 subject_logon_id="0x0",
             ),
             edr=EdrContext(
-                object_id=stable_uuid(
-                    "failed-logon-edr",
-                    system.hostname,
-                    effective_username,
-                    time.isoformat(),
-                    source_ip,
-                    linux_ssh_source_port or failed_profile["source_port"],
-                )
+                object_id=occurrence_key.occurrence_id,
             ),
         )
 
@@ -13189,6 +13209,7 @@ class ActivityGenerator:
             proc
             for proc in self.state_manager.get_processes_on_system(system.hostname)
             if proc.username == user.username
+            and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
@@ -17370,42 +17391,44 @@ class ActivityGenerator:
             "workstation",
             "laptop",
         } or target_system.hostname.upper().startswith(("WS-", "LT-"))
-        user_systemd_time = max(
-            logon_time + timedelta(milliseconds=90),
-            bash_time - timedelta(milliseconds=900 + (shell_seed % 320)),
-        )
-        if user_systemd_time >= bash_time:
-            user_systemd_time = logon_time + timedelta(milliseconds=90)
-
         session = self.state_manager.get_session(logon_id)
         bootstrap_lifecycle_group_id = session.lifecycle_group_id if session is not None else ""
-        user_systemd_pid = self._active_linux_session_user_manager_pid(
-            user=user,
-            target_system=target_system,
-            logon_id=logon_id,
-            at_time=bash_time,
-        )
-        if user_systemd_pid is None:
-            user_systemd_pid = self.generate_process(
-                user=user,
-                system=target_system,
-                time=user_systemd_time,
-                logon_id=logon_id,
-                process_name="/usr/lib/systemd/systemd",
-                command_line="/usr/lib/systemd/systemd --user",
-                parent_pid=root_parent_pid,
-                suppress_command_file_effect=True,
-                lifecycle_group_id=bootstrap_lifecycle_group_id,
+        user_systemd_time = logon_time
+        user_systemd_pid: int | None = None
+        if workstation_like:
+            user_systemd_time = max(
+                logon_time + timedelta(milliseconds=90),
+                bash_time - timedelta(milliseconds=900 + (shell_seed % 320)),
             )
-            if session is not None:
-                session.session_user_manager_pid = user_systemd_pid
+            if user_systemd_time >= bash_time:
+                user_systemd_time = logon_time + timedelta(milliseconds=90)
+            user_systemd_pid = self._active_linux_session_user_manager_pid(
+                user=user,
+                target_system=target_system,
+                logon_id=logon_id,
+                at_time=bash_time,
+            )
+            if user_systemd_pid is None:
+                user_systemd_pid = self.generate_process(
+                    user=user,
+                    system=target_system,
+                    time=user_systemd_time,
+                    logon_id=logon_id,
+                    process_name="/usr/lib/systemd/systemd",
+                    command_line="/usr/lib/systemd/systemd --user",
+                    parent_pid=root_parent_pid,
+                    suppress_command_file_effect=True,
+                    lifecycle_group_id=bootstrap_lifecycle_group_id,
+                )
+                if session is not None:
+                    session.session_user_manager_pid = user_systemd_pid
 
-        user_systemd_proc = self.state_manager.get_process(
-            target_system.hostname,
-            user_systemd_pid,
-        )
-        if user_systemd_proc is not None and user_systemd_proc.start_time is not None:
-            user_systemd_time = ensure_utc(user_systemd_proc.start_time)
+            user_systemd_proc = self.state_manager.get_process(
+                target_system.hostname,
+                user_systemd_pid,
+            )
+            if user_systemd_proc is not None and user_systemd_proc.start_time is not None:
+                user_systemd_time = ensure_utc(user_systemd_proc.start_time)
 
         if workstation_like:
             parent_image = "/usr/libexec/gnome-terminal-server"
@@ -17440,7 +17463,7 @@ class ActivityGenerator:
             logon_id=logon_id,
             process_name=parent_image,
             command_line=parent_command,
-            parent_pid=user_systemd_pid,
+            parent_pid=user_systemd_pid if user_systemd_pid is not None else root_parent_pid,
             suppress_command_file_effect=True,
             lifecycle_group_id=bootstrap_lifecycle_group_id,
         )
@@ -20520,11 +20543,6 @@ class ActivityGenerator:
             dc_hostname,
             tgt_time,
         )
-        session_obj_id = stable_uuid(
-            "ecar-machine-account-session",
-            request.stable_id,
-            logon_id,
-        )
         self.generate_kerberos_tgt(
             username=machine_username,
             source_ip=source_ip,
@@ -20572,14 +20590,26 @@ class ActivityGenerator:
             outcome="success",
             destination_port=destination_port,
             source_system=self._ip_to_system.get(source_ip),
-            session_object_id=session_obj_id,
             logon_id=logon_id,
             transport_role="target_service",
             source="machine_account_logon",
         )
+        session = self.state_manager.register_session(
+            logon_id=logon_id,
+            username=machine_username,
+            system=dc_hostname,
+            logon_type=3,
+            source_ip=source_ip,
+            start_time=time,
+            source_port=service_source_port,
+            session_kind="network",
+            logon_guid_required=False,
+            lifecycle_group_id=remote_request.stable_id,
+        )
+        session_obj_id = session.ecar_object_id
         remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
             self,
-            remote_request,
+            replace(remote_request, session_object_id=session_obj_id),
         ).execute()
         event = SecurityEvent(
             timestamp=time,
@@ -20631,6 +20661,7 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(logoff_event)
+        self.state_manager.end_session(logon_id, logoff_event.timestamp)
 
     def generate_kerberos_tgt(
         self,
@@ -21689,6 +21720,7 @@ class ActivityGenerator:
             source_ip="-",
             start_time=time,
             session_kind="service",
+            logon_guid_required=False,
             lifecycle_group_id=request.stable_id,
         )
         host = self._build_host_context(system)
@@ -23287,7 +23319,7 @@ class ActivityGenerator:
         system: "System",
         time: datetime,
     ) -> None:
-        """Generate an anonymous logon event (4624 type 3) without creating a session.
+        """Generate a short-lived anonymous logon event (4624 type 3).
 
         Used for Windows server/DC background SMB enumeration traffic.
         """
@@ -23295,7 +23327,7 @@ class ActivityGenerator:
         AnonymousLogonActionBundle(self, request).execute()
 
     def _execute_anonymous_logon_bundle(self, request: AnonymousLogonRequest) -> None:
-        """Generate an anonymous logon event (4624 type 3) without creating a session."""
+        """Generate one state-backed, short-lived anonymous Type 3 session."""
         system = request.system
         time = request.time
 
@@ -23315,32 +23347,41 @@ class ActivityGenerator:
             source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
             workstation_name = source_system.hostname if source_system else "-"
         logon_id = self.state_manager.allocate_logon_id(system.hostname, time)
-        session_obj_id = stable_uuid(
-            "anonymous-network-session",
-            system.hostname,
-            logon_id,
-            source_ip,
-            source_port,
-            time.isoformat(),
-        )
-        remote_authentication_plan = None
+        remote_request = None
+        lifecycle_group_id = request.stable_id
         if source_ip != "-":
+            remote_request = WindowsRemoteAuthenticationRequest(
+                target_system=system,
+                time=time,
+                source_ip=source_ip,
+                source_port=source_port,
+                logon_type=3,
+                auth_protocol="NTLM",
+                outcome="success",
+                destination_port=445,
+                source_system=source_system,
+                logon_id=logon_id,
+                source="anonymous_logon",
+            )
+            lifecycle_group_id = remote_request.stable_id
+        session = self.state_manager.register_session(
+            logon_id=logon_id,
+            username="ANONYMOUS LOGON",
+            system=system.hostname,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=source_port,
+            start_time=time,
+            session_kind="anonymous_network",
+            logon_guid_required=False,
+            lifecycle_group_id=lifecycle_group_id,
+        )
+        session_obj_id = session.ecar_object_id
+        remote_authentication_plan = None
+        if remote_request is not None:
             remote_authentication_plan = WindowsRemoteAuthenticationActionBundle(
                 self,
-                WindowsRemoteAuthenticationRequest(
-                    target_system=system,
-                    time=time,
-                    source_ip=source_ip,
-                    source_port=source_port,
-                    logon_type=3,
-                    auth_protocol="NTLM",
-                    outcome="success",
-                    destination_port=445,
-                    source_system=source_system,
-                    session_object_id=session_obj_id,
-                    logon_id=logon_id,
-                    source="anonymous_logon",
-                ),
+                replace(remote_request, session_object_id=session_obj_id),
             ).execute()
         primary_transport = (
             remote_authentication_plan.primary_transport
@@ -23384,9 +23425,10 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
         logoff_delay = rng.uniform(1.0, 30.0)
+        logoff_time = time + timedelta(seconds=logoff_delay)
         self.dispatcher.dispatch(
             SecurityEvent(
-                timestamp=time + timedelta(seconds=logoff_delay),
+                timestamp=logoff_time,
                 event_type="logoff",
                 dst_host=self._build_host_context(system),
                 auth=AuthContext(
@@ -23413,6 +23455,7 @@ class ActivityGenerator:
                 ),
             )
         )
+        self.state_manager.end_session(logon_id, logoff_time)
 
     def generate_syslog_event(
         self,

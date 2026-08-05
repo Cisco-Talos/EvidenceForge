@@ -1163,11 +1163,13 @@ def test_linux_local_session_shell_has_visible_terminal_parent(
     session = state_manager.get_session(logon_id)
     assert user_manager is not None
     assert session is not None
-    assert {
-        user_manager.lifecycle_group_id,
-        parent_proc.lifecycle_group_id,
-        shell_proc.lifecycle_group_id,
-    } == {session.lifecycle_group_id}
+    assert parent_proc.lifecycle_group_id == session.lifecycle_group_id
+    assert shell_proc.lifecycle_group_id == session.lifecycle_group_id
+    if parent_proc.image == "/bin/login":
+        assert user_manager.image in {"/sbin/init", "/usr/lib/systemd/systemd"}
+        assert user_manager.lifecycle_group_id != session.lifecycle_group_id
+    else:
+        assert user_manager.lifecycle_group_id == session.lifecycle_group_id
 
 
 def test_find_user_session_handles_mixed_timezone_start_times(
