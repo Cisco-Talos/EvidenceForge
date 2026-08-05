@@ -6,6 +6,32 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.14.1 (2026-08-04)
+
+This patch release corrects source-native network and endpoint behavior found
+through blind realism assessment, without adding new scenario capabilities.
+
+**Network and timing correctness**
+
+- Kept datagram capture loss protocol-native by limiting Zeek stream-gap
+  semantics to TCP while retaining UDP/ICMP packet-loss accounting
+  (`d8725913`).
+- Preserved Zeek ICMP echo type/code identity through multiplexed sensor
+  observation and added regression coverage for the `8/0` convention
+  (`70efa8bb`).
+- Replaced narrow proxy timing grids and multi-minute one-shot client startup
+  delays with bounded, application-native timing for proxy requests, `wget`,
+  APT transport helpers, and health checks (`adb7ca0c`, `697959a5`).
+
+**Host-role and endpoint robustness**
+
+- Reduced domain-controller WFP baseline concentration and kept database-host
+  administrative traffic focused on role-appropriate services (`5ea6098b`,
+  `821efd3a`).
+- Prevented eCAR RunMRU materialization from interpreting backslashes in
+  domain-qualified Windows usernames as regular-expression replacement escapes
+  (`7fb1d660`).
+
 ## v1.14.0 (2026-08-04)
 
 This minor release adds canonical multi-alert IDS attachments and exact
