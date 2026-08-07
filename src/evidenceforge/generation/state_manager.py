@@ -62,6 +62,8 @@ _GENERATED_LOGON_LUID_SPAN = _MAX_GENERATED_LOGON_LUID - _MIN_GENERATED_LOGON_LU
 _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
 _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
+_LINUX_PID_BLOCK_SECONDS = 300
+_LINUX_PID_RATE_DENOMINATOR = 10
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -1092,18 +1094,19 @@ class StateManager:
         self._pid_time_epochs[system] = epoch
         return epoch
 
-    def _linux_pid_block_stride(self, system: str, block: int) -> int:
-        """Return background process churn for one coarse Linux PID time block."""
-        return 997 + (_stable_seed(f"linux_pid_stride:{system}:{block}") % 311)
+    @staticmethod
+    def _linux_pid_rate_numerator(system: str) -> int:
+        """Return a stable sub-one-per-second host PID churn rate."""
+        return 7 + (_stable_seed(f"linux_pid_rate:{system}") % 3)
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
         """Return deterministic per-host Linux PID churn before a coarse time block."""
         if block <= 0:
             return 0
-
-        block_width = 96
-        jitter = _stable_seed(f"linux_pid_block_jitter:{system}:{block}") % 32
-        return (block * block_width) + jitter
+        elapsed_seconds = block * _LINUX_PID_BLOCK_SECONDS
+        return (
+            elapsed_seconds * self._linux_pid_rate_numerator(system)
+        ) // _LINUX_PID_RATE_DENOMINATOR
 
     @staticmethod
     def _normalize_linux_pid(pid: int) -> int:
@@ -1141,15 +1144,14 @@ class StateManager:
         current_time = ensure_utc(current_time or self.state.current_time)
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
-        block = elapsed_seconds // 300
-        slot = (elapsed_seconds % 300) // 10
-        ordinal_key = (system, block, slot)
+        rate_numerator = self._linux_pid_rate_numerator(system)
+        time_offset = (elapsed_seconds * rate_numerator) // _LINUX_PID_RATE_DENOMINATOR
+        ordinal_key = (system, time_offset, 0)
         ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
-        gap = 23 + max(1, int(pid_rng.lognormvariate(0.7, 0.8)))
+        gap = max(1, min(5, int(pid_rng.lognormvariate(0.3, 0.8))))
         self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
-        pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
-        pid += (slot * 2) + ordinal
+        pid = self._pid_counters[system] + time_offset + ordinal
         pid = self._normalize_linux_pid(pid)
 
         running = {process.pid for process in self._running_processes.find("system", system)}
@@ -1175,11 +1177,6 @@ class StateManager:
                     or candidate > minimum_pid_exclusive
                 )
                 and (future_pid_exclusive is None or candidate < future_pid_exclusive)
-                and not allocations.matches_elapsed_delta(
-                    current_time,
-                    candidate,
-                    tolerance=1.0,
-                )
             )
 
         def bounded_candidate(salt: int) -> int | None:

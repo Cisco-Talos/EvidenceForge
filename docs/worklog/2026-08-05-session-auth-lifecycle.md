@@ -153,3 +153,80 @@ realism: the panels were independent and evaluated a broadly changed output. The
 conclusion is narrower: the intended defects are gone, while previously unprioritized sibling
 and downstream contradictions are now decisive. Batch 3 remains gated until the four lifecycle
 and source-sequence families above are remediated and reassessed.
+
+## Gate-repair loop 1 contract: Linux process identity and observation
+
+Classification: `sibling_defect`; intended fix classification: `family_level`.
+
+- **Owning abstractions:** `StateManager` owns the one host-local Linux PID namespace and process
+  lifecycle; the SSH action bundle plus `SourceTimingPlanner` own the ordering between a responder
+  process observation and same-PID SSH syslog.
+- **Family invariant:** absent an explicitly modeled PID-space wrap, Linux process-create PIDs are
+  strictly increasing by host-native process start time, including durable and syslog-only
+  processes. Every same-PID SSH connection/auth message must render after the destination eCAR
+  process create when that create is observed.
+- **Entry paths:** engine process-tree seeding and fixed registration; baseline user/system/cron
+  processes; activity and storyline process bundles; SSH/SCP/SFTP responder and client helpers;
+  file-transfer helpers; and transient `sudo`, PAM, sshd, and daemon syslog PID allocation.
+- **Consumers:** canonical process/session identity, eCAR PROCESS/FLOW/USER_SESSION rows, Linux
+  syslog PID fields, process parent/child and termination evidence, ground-truth identity
+  references, lifecycle probes, and PID allocator/source-timing tests.
+- **Layer rationale:** PID ordering is shared host truth and therefore belongs in `StateManager`,
+  not an eCAR rewrite. SSH cross-source ordering belongs in the bundle/source-timing boundary,
+  because delaying one syslog template or emitter would leave sibling SSH paths inconsistent.
+- **Sibling coverage:** the repair must cover canonical and transient allocations, out-of-order
+  generator traversal, parent/child bursts, baseline and typed SSH sessions, and repeat-run
+  determinism. PID wrap/reuse beyond the current long-duration window remains a separately tested
+  boundary. Windows module scheduling and EventRecordID throughput are intentionally deferred to
+  the next gate-repair loop.
+
+### Gate-repair loop 1 implementation and static validation
+
+- Replaced overlapping ten-second Linux PID bands with one host-specific monotonic churn function
+  shared by canonical and transient allocations. The temporal allocation index remains the owner
+  of lower and upper bounds when generator traversal is out of chronological order.
+- Removed the elapsed-seconds collision heuristic from PID acceptance. The new sub-one-per-second
+  host rate already avoids a one-PID-per-second fingerprint, while the heuristic rejected natural
+  candidates and forced bounded fallbacks that produced the observed reversals.
+- Added one shared Linux process-observation floor and applied it to successful SSH sessions,
+  generic port-22 pre-auth failures, and typed failed-SSH logons. Each path shifts the entire
+  source-local syslog sequence together, preserving its internal timing texture.
+- The first integrated regeneration showed that allocator order alone was insufficient: eCAR
+  process-create latency and generic per-request lifecycle grouping could still reorder explicit
+  same-shell pipeline stages. eCAR process-create latency now changes slowly and coherently per
+  host, and an explicit process concurrency group takes precedence over each stage's compatibility
+  action lifecycle for observation decisions.
+- A later safety regeneration exposed two process terminations 51–101 ms after their eCAR logout
+  when the newly coherent process delay exceeded the independent session delay. Non-authoritative
+  logoff planning now budgets the active profile's worst same-source delay difference after the
+  latest planned eCAR process termination. The general probe returns that previously repaired
+  lifecycle check to zero.
+- The standalone reproduction produced 188 adjacent PID reversals before the repair and zero with
+  the new allocator regression. Focused state and SSH tests cover shuffled dense allocation,
+  success, generic failure, typed failure, dense eCAR source timing, and pipeline observation-group
+  precedence.
+- `uv run ruff check .`: passed.
+- `uv run ruff format --check .`: passed; 452 files already formatted.
+- `uv run pytest --no-cov -q`: 5,112 passed and 41 skipped in 226.71 seconds.
+
+### Gate-repair loop 1 rendered evidence
+
+- Integrated output:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop1/branch-enterprise`.
+- Repeat output:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop1/branch-enterprise-repeat`.
+- `diff -qr` returned zero: the two identical-input outputs are byte-identical.
+- Across 152 PROXY and 135 WEB Linux eCAR process creates, both adjacent PID reversals and creates
+  below the prior visible maximum are zero.
+- Across 13 PROXY and 26 WEB responder PIDs visible in both eCAR and SSH syslog, syslog-before-create
+  occurrences are zero. First syslog messages follow eCAR creation by 20–266 ms.
+- The general realism probe reports 28 remaining unrelated findings: 27 errors and one warning in
+  Windows 4648 field naming, Zeek file intervals, and OCSP duration distribution. All six original
+  Batch-2 checks and both gate-repair-loop checks are zero.
+- Human-readable and JSON `eforge eval` both pass at 95.52/100 over 50,793 records. Parseability is
+  100, plausibility 97.82, causality 88.36, timing 94.90, and all 7,556 evaluated causal pairs are
+  correctly ordered. The evaluator's 40/100 pivot-linkability flag and its existing indicator and
+  cross-source samples remain inputs to later review batches.
+- The post-loop blind gate remains pending; the Windows module and EventRecordID gate repairs are
+  intentionally next so the panel evaluates the complete failed-gate batch rather than another
+  knowingly blocked intermediate dataset.

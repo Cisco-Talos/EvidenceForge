@@ -397,8 +397,8 @@ class TestStateManagerInit:
         assert offset > 0
         assert sm._linux_pid_block_offsets == {}
 
-    def test_linux_visible_pids_stay_in_lived_in_desktop_range_after_days(self):
-        """Long collection windows should not create obvious million-range PID bands."""
+    def test_linux_visible_pids_stay_below_pid_max_after_days(self):
+        """Ordinary multi-day uptime should retain plausible pre-wrap PID values."""
         sm = StateManager()
         boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
         sm.register_boot_time("linux01", boot_time)
@@ -413,7 +413,7 @@ class TestStateManagerInit:
             integrity_level="Medium",
         )
 
-        assert 8_000 <= pid < 180_000
+        assert 8_000 <= pid < 400_000
 
     def test_linux_pids_increase_across_time_bucket_boundary(self):
         """Linux PIDs should not sawtooth downward at five-minute boundaries."""
@@ -572,6 +572,29 @@ class TestStateManagerInit:
             ]
 
         assert allocate_sequence() == allocate_sequence()
+
+    def test_linux_pid_order_survives_dense_out_of_order_transient_allocation(self):
+        """Host PID chronology must not depend on generator traversal order."""
+        import random
+
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        chronological_times = [boot_time + timedelta(seconds=offset * 3) for offset in range(400)]
+        allocation_times = list(chronological_times)
+        random.Random(17).shuffle(allocation_times)
+        sm = StateManager()
+        sm.register_boot_time("linux01", boot_time)
+
+        allocations = sorted(
+            (
+                event_time,
+                sm.allocate_transient_linux_pid("linux01", event_time),
+            )
+            for event_time in allocation_times
+        )
+
+        chronological_pids = [pid for _event_time, pid in allocations]
+        assert chronological_pids == sorted(chronological_pids)
+        assert len(set(chronological_pids)) == len(chronological_pids)
 
     def test_linux_transient_pid_rejects_non_linux_hosts_before_allocator_init(self):
         """Transient Linux PIDs should not initialize a Windows host namespace."""

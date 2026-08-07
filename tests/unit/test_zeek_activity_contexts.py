@@ -669,11 +669,18 @@ class TestSslContextPopulation:
             ),
         )
 
+        executor = MagicMock()
+        executor._clamp_after_visible_linux_process_create.side_effect = (
+            lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"): (
+                requested_time
+            )
+        )
         resolved = SshSessionActionBundle(
             request=request,
-            executor=MagicMock(),
+            executor=executor,
         )._resolve_linux_auth_lifecycle(
             event=event,
+            responder_pid=4242,
             syslog_seed=("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
             conn_delay_ms=35,
             accepted_gap_ms=90,
@@ -773,7 +780,7 @@ class TestSslContextPopulation:
             + observation_gap
         )
 
-    def test_ssh_connection_syslog_precedes_responder_process_source_time(self, activity_gen):
+    def test_ssh_connection_syslog_follows_responder_process_source_time(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -834,7 +841,7 @@ class TestSslContextPopulation:
 
         assert ecar_process_times
         assert responder_event.timestamp >= transport_event.timestamp
-        assert min(ecar_process_times) > connection_event.timestamp
+        assert connection_event.timestamp > max(ecar_process_times)
 
     def test_ssh_session_bundle_renders_publickey_and_optional_close(self, activity_gen):
         gen, events = activity_gen
@@ -2125,7 +2132,50 @@ class TestSslContextPopulation:
             if key.startswith("source.ecar_process_create|")
         ]
         assert ecar_process_times
-        assert min(ecar_process_times) > connection_syslog_event.timestamp
+        assert connection_syslog_event.timestamp > max(ecar_process_times)
+
+    def test_failed_logon_ssh_syslog_follows_responder_process_source_time(self, activity_gen):
+        """Typed failed SSH auth shares the responder process observation floor."""
+        gen, events = activity_gen
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_failed_logon(
+            user,
+            target,
+            datetime(2024, 1, 15, 10, 0, 2, tzinfo=UTC),
+            logon_type=10,
+            source_ip="10.0.10.50",
+        )
+
+        connection_syslog_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Connection from")
+        )
+        responder_event = next(
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.pid == connection_syslog_event.syslog.pid
+        )
+        assert responder_event.source_timing is not None
+        ecar_process_times = [
+            timestamp
+            for key, timestamp in responder_event.source_timing.source_times.items()
+            if key.startswith("source.ecar_process_create|")
+        ]
+        assert ecar_process_times
+        assert connection_syslog_event.timestamp > max(ecar_process_times)
 
     def test_port_22_connection_without_service_sets_destination_side_transport_pid(
         self, activity_gen
@@ -2405,7 +2455,7 @@ class TestSslContextPopulation:
         conn_event = next(event for event in events if event.event_type == "connection")
         assert conn_event.network.src_port == 51112
 
-    def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
+    def test_ssh_syslog_sub_events_are_source_ordered_with_timing_texture(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -2444,7 +2494,7 @@ class TestSslContextPopulation:
         assert (
             timedelta(milliseconds=30)
             <= times[0] - transport_event.timestamp
-            <= timedelta(milliseconds=170)
+            <= timedelta(seconds=2)
         )
         assert times[1] > EcarEmitter._flow_identity_deadline(transport_event)
         assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(milliseconds=3501)

@@ -292,6 +292,16 @@ class SshSessionExecutor(Protocol):
         """Return or materialize the source-side SSH client process."""
         ...
 
+    def _clamp_after_visible_linux_process_create(
+        self,
+        system: System,
+        pid: int,
+        time: datetime,
+        relationship_key: str = "source.ecar_dependent_after_process_create",
+    ) -> datetime:
+        """Keep Linux same-process observations after visible eCAR creation."""
+        ...
+
     def _remember_ssh_responder_pid(
         self,
         source_ip: str,
@@ -709,6 +719,7 @@ class SshSessionActionBundle:
             )
         resolved_times = self._resolve_linux_auth_lifecycle(
             event=event,
+            responder_pid=plan.sshd_pid,
             syslog_seed=plan.syslog_seed,
             conn_delay_ms=plan.conn_delay_ms,
             accepted_gap_ms=plan.accepted_gap_ms,
@@ -776,6 +787,7 @@ class SshSessionActionBundle:
         self,
         *,
         event: SecurityEvent,
+        responder_pid: int,
         syslog_seed: tuple[Any, ...],
         conn_delay_ms: int,
         accepted_gap_ms: int,
@@ -815,14 +827,21 @@ class SshSessionActionBundle:
         )
         graph = TemporalConstraintGraph()
         graph.add_node("transport_open", transport_open_time)
+        preferred_connection_time = _ssh_syslog_time(
+            transport_open_time,
+            "connection",
+            conn_delay_ms,
+            *syslog_seed,
+        )
+        connection_time = self.executor._clamp_after_visible_linux_process_create(
+            request.target_system,
+            responder_pid,
+            preferred_connection_time,
+        )
+        responder_source_shift = connection_time - preferred_connection_time
         graph.add_node(
             "connection",
-            _ssh_syslog_time(
-                transport_open_time,
-                "connection",
-                conn_delay_ms,
-                *syslog_seed,
-            ),
+            connection_time,
         )
         graph.add_node(
             "accepted",
@@ -831,7 +850,8 @@ class SshSessionActionBundle:
                 "accepted",
                 auth_ready_delay_ms,
                 *syslog_seed,
-            ),
+            )
+            + responder_source_shift,
         )
         graph.add_node(
             "pam",
@@ -840,7 +860,8 @@ class SshSessionActionBundle:
                 "pam",
                 auth_ready_delay_ms + pam_gap_ms,
                 *syslog_seed,
-            ),
+            )
+            + responder_source_shift,
         )
         graph.add_node(
             "logind",
@@ -849,7 +870,8 @@ class SshSessionActionBundle:
                 "logind",
                 auth_ready_delay_ms + pam_gap_ms + logind_gap_ms,
                 *syslog_seed,
-            ),
+            )
+            + responder_source_shift,
         )
         graph.constrain_after(
             "connection",

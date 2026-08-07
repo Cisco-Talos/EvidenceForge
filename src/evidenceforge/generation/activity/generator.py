@@ -10031,6 +10031,17 @@ class ActivityGenerator:
             failure_time + timedelta(milliseconds=70 + ((seed >> 24) % 240)),
             connection_time + timedelta(seconds=duration),
         )
+        visible_connection_time = self._clamp_after_visible_linux_process_create(
+            system,
+            responder_pid,
+            connection_message_time,
+        )
+        if visible_connection_time > connection_message_time:
+            source_shift = visible_connection_time - connection_message_time
+            connection_message_time += source_shift
+            invalid_user_time += source_shift
+            failure_time += source_shift
+            close_time += source_shift
 
         rows: list[tuple[datetime, int, str]] = [
             (
@@ -10300,9 +10311,17 @@ class ActivityGenerator:
                     visible_termination_times.append(visible_termination_time)
             if visible_termination_times and authoritative_end_plan is None:
                 latest_visible_termination = max(visible_termination_times)
-                minimum_logoff_time = latest_visible_termination + sample_timing_delta(
-                    "windows.logoff_after_rendered_dependents",
-                    seed_parts=(system.hostname, logon_id, latest_visible_termination),
+                observation_gap = self.dispatcher.observation_policy.maximum_delay_difference(
+                    "ecar",
+                    "ecar",
+                )
+                minimum_logoff_time = (
+                    latest_visible_termination
+                    + sample_timing_delta(
+                        "windows.logoff_after_rendered_dependents",
+                        seed_parts=(system.hostname, logon_id, latest_visible_termination),
+                    )
+                    + observation_gap
                 )
                 time = max(time, minimum_logoff_time)
 
@@ -11707,6 +11726,24 @@ class ActivityGenerator:
             seed_parts=(system.hostname, pid, visible_create_time, time),
         )
 
+    def _clamp_after_visible_linux_process_create(
+        self,
+        system: System,
+        pid: int,
+        time: datetime,
+        relationship_key: str = "source.ecar_dependent_after_process_create",
+    ) -> datetime:
+        """Keep Linux same-process observations after visible eCAR creation."""
+        if pid <= 0 or _get_os_category(system.os) != "linux":
+            return time
+        visible_create_time = self.process_source_create_time(system.hostname, pid)
+        if visible_create_time is None or time > visible_create_time:
+            return time
+        return visible_create_time + sample_timing_delta(
+            relationship_key,
+            seed_parts=(system.hostname, pid, visible_create_time, time),
+        )
+
     def _plan_process_source_create_times(self, event: SecurityEvent) -> None:
         """Precompute source-create timestamps before threaded emitters render."""
         host = event.src_host
@@ -12093,9 +12130,24 @@ class ActivityGenerator:
             failed_delta_ms + 40 + ((seed >> 24) % 180),
             int((duration or 0.0) * 1000) + 20,
         )
+        process_visible_connection_time = self._clamp_after_visible_linux_process_create(
+            target_system,
+            sshd_pid,
+            time + timedelta(milliseconds=connection_delta_ms),
+        )
+        process_floor_shift_ms = max(
+            0,
+            math.ceil(
+                (
+                    process_visible_connection_time
+                    - (time + timedelta(milliseconds=connection_delta_ms))
+                ).total_seconds()
+                * 1000
+            ),
+        )
         rows = [
             (
-                connection_delta_ms,
+                connection_delta_ms + process_floor_shift_ms,
                 6,
                 f"Connection from {source_ip} port {source_port} on {target_system.ip} port 22",
             )
@@ -12110,7 +12162,7 @@ class ActivityGenerator:
             if known_account:
                 rows.append(
                     (
-                        failed_delta_ms,
+                        failed_delta_ms + process_floor_shift_ms,
                         4,
                         f"Failed password for {attempted_username} "
                         f"from {source_ip} port {source_port} ssh2",
@@ -12121,12 +12173,12 @@ class ActivityGenerator:
                 rows.extend(
                     [
                         (
-                            invalid_delta_ms,
+                            invalid_delta_ms + process_floor_shift_ms,
                             5,
                             f"Invalid user {attempted_username} from {source_ip} port {source_port}",
                         ),
                         (
-                            failed_delta_ms,
+                            failed_delta_ms + process_floor_shift_ms,
                             4,
                             f"Failed password for invalid user {attempted_username} "
                             f"from {source_ip} port {source_port} ssh2",
@@ -12138,12 +12190,12 @@ class ActivityGenerator:
             rows.extend(
                 [
                     (
-                        invalid_delta_ms,
+                        invalid_delta_ms + process_floor_shift_ms,
                         5,
                         f"Invalid user unknown from {source_ip} port {source_port}",
                     ),
                     (
-                        failed_delta_ms,
+                        failed_delta_ms + process_floor_shift_ms,
                         4,
                         f"Failed password for invalid user unknown "
                         f"from {source_ip} port {source_port} ssh2",
@@ -12153,7 +12205,7 @@ class ActivityGenerator:
             close_subject = "invalid user unknown"
         rows.append(
             (
-                close_delta_ms,
+                close_delta_ms + process_floor_shift_ms,
                 6,
                 f"Connection closed by {close_subject} {source_ip} port {source_port} [preauth]",
             )

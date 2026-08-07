@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.activity.timing_profiles import (
+    TimingWindow,
     endpoint_clock_timing,
     get_timing_window,
     network_sensor_observation_timing,
@@ -1446,7 +1447,10 @@ class SourceTimingPlanner:
             default_max_ms=0,
             default_position="after",
         )
-        delta = sample_timing_delta(source_key, seed_parts=seed_parts)
+        if source_key == "source.ecar_process_create":
+            delta = self._coherent_ecar_process_create_latency(event, source_key, window)
+        else:
+            delta = sample_timing_delta(source_key, seed_parts=seed_parts)
         micro_noise = (
             self._source_micro_noise(source_key, seed_parts)
             if window.relationship_class == "same_observation"
@@ -1459,6 +1463,38 @@ class SourceTimingPlanner:
         else:
             source_time = canonical_time + delta + micro_noise
         return source_time + self._endpoint_clock_adjustment(event, source_key, seed_parts)
+
+    @staticmethod
+    def _coherent_ecar_process_create_latency(
+        event: SecurityEvent,
+        source_key: str,
+        window: TimingWindow,
+    ) -> timedelta:
+        """Return slowly varying host-local eCAR process observation latency.
+
+        Independent per-process latency samples can visibly reorder successive
+        process creates even when their canonical starts and PIDs are ordered.
+        A real host collector's queue delay changes coherently, so model it as a
+        continuous triangular wave whose slope is far below wall-clock time.
+        """
+
+        host = event.src_host or event.dst_host
+        hostname = str(getattr(host, "hostname", "") or "unknown-host")
+        minimum_us = window.min_ms * 1_000
+        latency_span_us = max(0, (window.max_ms - window.min_ms) * 1_000)
+        if latency_span_us == 0:
+            return timedelta(microseconds=minimum_us)
+
+        seed = _stable_seed(f"coherent-source-latency:{source_key}:{hostname}")
+        period_seconds = 2_700 + (seed % 2_701)
+        period_us = period_seconds * 1_000_000
+        half_period_us = period_us // 2
+        phase_us = (seed >> 16) % period_us
+        canonical_us = round(ensure_utc(event.timestamp).timestamp() * 1_000_000)
+        position_us = (canonical_us + phase_us) % period_us
+        distance_us = min(position_us, period_us - position_us)
+        latency_us = minimum_us + (latency_span_us * distance_us) // half_period_us
+        return timedelta(microseconds=latency_us)
 
     def _preferred_source_time(
         self,

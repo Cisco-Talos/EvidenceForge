@@ -16,6 +16,7 @@ from evidenceforge.config.observation_profiles import (
 )
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 ObservationStatus = Literal["visible", "delayed", "dropped", "filtered", "out_of_window"]
 
@@ -246,9 +247,42 @@ class ObservationPolicy:
         max_ms = _safe_int(delay.get("max_ms", 0), 0, minimum=0, maximum=3_600_000)
         if max_ms <= 0 or max_ms < min_ms:
             return timedelta(0)
+        if (
+            source == "ecar"
+            and event.process is not None
+            and event.process.start_time is not None
+            and not event.process.concurrency_group_id
+        ):
+            return self._coherent_process_delay(event, source, min_ms, max_ms)
         seed = _stable_seed(f"observation.delay|{self.profile_name}|{source}|{identity}")
         delay_ms = random.Random(seed).randint(min_ms, max_ms)
         return timedelta(milliseconds=delay_ms)
+
+    @staticmethod
+    def _coherent_process_delay(
+        event: SecurityEvent,
+        source: str,
+        min_ms: int,
+        max_ms: int,
+    ) -> timedelta:
+        """Return a process-coherent host delay that cannot reorder starts."""
+
+        host = event.src_host or event.dst_host
+        hostname = str(getattr(host, "hostname", "") or "unknown-host")
+        span_us = (max_ms - min_ms) * 1_000
+        if span_us <= 0:
+            return timedelta(milliseconds=min_ms)
+
+        seed = _stable_seed(f"coherent-observation-delay:{source}:{hostname}")
+        period_seconds = 2_700 + (seed % 2_701)
+        period_us = period_seconds * 1_000_000
+        half_period_us = period_us // 2
+        phase_us = (seed >> 16) % period_us
+        start_us = round(ensure_utc(event.process.start_time).timestamp() * 1_000_000)
+        position_us = (start_us + phase_us) % period_us
+        distance_us = min(position_us, period_us - position_us)
+        delay_us = (min_ms * 1_000) + (span_us * distance_us) // half_period_us
+        return timedelta(microseconds=delay_us)
 
     def _event_identity(
         self,
@@ -285,6 +319,8 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if source == "ecar" and event.process and event.process.concurrency_group_id:
+            return f"process-group:{event.process.concurrency_group_id}"
         if event.lifecycle is not None:
             return f"action-lifecycle:{event.lifecycle.group_id}"
         if source == "ecar":
@@ -303,8 +339,6 @@ class ObservationPolicy:
                 f"{event.storyline_cluster_id}:{event.process.username}:"
                 f"{event.process.pid}:{image}"
             )
-        if source == "ecar" and event.process and event.process.concurrency_group_id:
-            return f"process-group:{event.process.concurrency_group_id}"
         if source == "syslog":
             ssh_session_group = self._syslog_ssh_session_group_key(event)
             if ssh_session_group:

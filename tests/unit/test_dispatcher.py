@@ -971,6 +971,11 @@ class TestObservationProfiles:
             timestamp=_make_ts(),
             event_type="system_process_create",
             src_host=host,
+            lifecycle=ActionLifecycleContext(
+                group_id="process-request-shell",
+                canonical_start=_make_ts(),
+                phase="start",
+            ),
             process=ProcessContext(
                 pid=838396,
                 parent_pid=36175,
@@ -984,6 +989,11 @@ class TestObservationProfiles:
             timestamp=_make_ts() + timedelta(milliseconds=120),
             event_type="system_process_create",
             src_host=host,
+            lifecycle=ActionLifecycleContext(
+                group_id="process-request-workload",
+                canonical_start=_make_ts() + timedelta(milliseconds=120),
+                phase="start",
+            ),
             process=ProcessContext(
                 pid=838421,
                 parent_pid=838396,
@@ -995,6 +1005,58 @@ class TestObservationProfiles:
         )
 
         assert policy.decide("ecar", shell).delay == policy.decide("ecar", workload).delay
+
+    def test_ecar_process_observation_delay_preserves_dense_host_order(self, monkeypatch):
+        """Independent process lifecycles must not reorder under eCAR collection delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 25, "max_ms": 2500},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_dense_process_delay_test")
+        host = HostContext(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        observed_times = []
+
+        for ordinal in range(400):
+            start_time = _make_ts() + timedelta(milliseconds=ordinal * 3)
+            event = SecurityEvent(
+                timestamp=start_time,
+                event_type="process_create",
+                src_host=host,
+                lifecycle=ActionLifecycleContext(
+                    group_id=f"independent-process-{ordinal}",
+                    canonical_start=start_time,
+                    phase="start",
+                ),
+                process=ProcessContext(
+                    pid=520_000 + ordinal,
+                    parent_pid=1,
+                    image="/usr/bin/true",
+                    command_line="true",
+                    username="root",
+                    start_time=start_time,
+                ),
+            )
+            observed_times.append(event.timestamp + policy.decide("ecar", event).delay)
+
+        assert observed_times == sorted(observed_times)
+        assert len(set(observed_times)) == len(observed_times)
 
     def test_ecar_cron_process_group_preserves_visibility(self, monkeypatch):
         """Cron eCAR process groups should not lose rows independently of CRON syslog."""

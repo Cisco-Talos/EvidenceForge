@@ -469,6 +469,36 @@ def test_linux_ecar_uses_linux_host_clock_profile() -> None:
     assert enterprise_time != complete_time
 
 
+def test_linux_ecar_process_create_latency_preserves_dense_host_order() -> None:
+    """Host-coherent eCAR latency must not reorder tightly spaced process starts."""
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+    base_time = _base_time()
+    observed_times = []
+
+    for ordinal in range(400):
+        event_time = base_time + timedelta(milliseconds=ordinal * 3)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="process_create",
+            src_host=_linux_host_context(),
+            process=replace(
+                _process_context(event_time),
+                pid=520_000 + ordinal,
+                start_time=event_time,
+            ),
+        )
+        observed_times.append(
+            planner.source_time(
+                event,
+                "source.ecar_process_create",
+                seed_parts=("LINUX-TEST-01", 520_000 + ordinal, event_time),
+            )
+        )
+
+    assert observed_times == sorted(observed_times)
+    assert len(set(observed_times)) == len(observed_times)
+
+
 def test_ecar_flow_uses_clock_of_rendering_endpoint() -> None:
     """Inbound and outbound eCAR FLOW rows should use their local endpoint clocks."""
 
