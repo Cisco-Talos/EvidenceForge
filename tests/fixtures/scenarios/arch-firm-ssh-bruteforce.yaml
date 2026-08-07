@@ -132,10 +132,12 @@ environment:
         cidr: "192.168.10.0/24"
         description: "Office workstation network"
         systems: [WS-DESIGN-01, WS-DESIGN-02, WS-DESIGN-03, WS-DESIGN-04, WS-ADMIN-01]
+        exposure: internal
       - name: server_dmz
         cidr: "192.168.20.0/24"
         description: "Server network and DMZ"
         systems: [DC-01, FILE-SRV-01, WEB-SRV-01]
+        exposure: both
     sensors:
       - type: network
         name: core-switch-tap

@@ -40,6 +40,7 @@ from typing import Any
 import yaml
 
 from evidenceforge.models import Scenario
+from evidenceforge.models.exceptions import PathSafetyError
 from evidenceforge.models.ids import policy_fingerprint
 from evidenceforge.utils.rng import _stable_seed
 
@@ -166,6 +167,7 @@ class ScenarioValidator:
         scenario: Scenario,
         oob_hosts: tuple[str, ...] = (),
         scenario_root: Path | None = None,
+        allow_large_workload: bool = False,
     ):
         """Initialize validator with a scenario.
 
@@ -179,6 +181,7 @@ class ScenarioValidator:
         self.scenario = scenario
         self.oob_hosts = tuple(oob_hosts)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
+        self.allow_large_workload = allow_large_workload
         self.issues: list[ValidationIssue] = []
 
         # Build lookup sets for fast reference checking
@@ -215,6 +218,32 @@ class ScenarioValidator:
             for host in identity.hosts
         }
 
+    def _validate_workload_limits(self) -> None:
+        """Reject compact scenarios whose projected work exceeds supported defaults."""
+
+        from evidenceforge.generation.workload import estimate_workload
+
+        try:
+            estimate = estimate_workload(self.scenario, scenario_root=self.scenario_root)
+        except (OSError, ValueError, yaml.YAMLError, PathSafetyError):
+            # The owning asset/schema validators provide the actionable parse/path issue.
+            return
+        for violation in estimate.limit_violations:
+            self.issues.append(
+                ValidationIssue(
+                    severity="info" if self.allow_large_workload else "error",
+                    field_path="workload",
+                    message=(
+                        f"Trusted large-workload override accepted: {violation}"
+                        if self.allow_large_workload
+                        else f"Projected workload exceeds the supported envelope: {violation}"
+                    ),
+                    suggestion=(
+                        "Review available capacity, then use --allow-large-workload explicitly."
+                    ),
+                )
+            )
+
     def validate(self) -> list[ValidationIssue]:
         """Run all validation checks and return issues found.
 
@@ -249,6 +278,7 @@ class ScenarioValidator:
         self._validate_spillage_events()
         self._validate_adversarial_payload_events()
         self._validate_email_config()
+        self._validate_workload_limits()
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
@@ -1211,29 +1241,19 @@ class ScenarioValidator:
         """Validate optional email corpus sidecar and return known message IDs."""
         if not email_config.corpus:
             return set()
-        corpus_path = Path(email_config.corpus)
-        if not corpus_path.is_absolute():
-            corpus_path = self.scenario_root / corpus_path
-        if not corpus_path.exists():
-            self.issues.append(
-                ValidationIssue(
-                    severity="error",
-                    field_path="environment.email.corpus",
-                    message=f"Email corpus file not found: {email_config.corpus}",
-                    suggestion="Create the corpus file relative to the scenario YAML directory.",
-                )
-            )
-            return set()
         try:
-            with corpus_path.open("r", encoding="utf-8") as handle:
-                raw = yaml.safe_load(handle) or {}
-        except (OSError, yaml.YAMLError) as exc:
+            from evidenceforge.utils.assets import load_email_corpus_yaml
+
+            raw = load_email_corpus_yaml(self.scenario_root, email_config.corpus) or {}
+        except (OSError, ValueError, yaml.YAMLError, PathSafetyError) as exc:
             self.issues.append(
                 ValidationIssue(
                     severity="error",
                     field_path="environment.email.corpus",
-                    message=f"Email corpus file could not be parsed: {exc}",
-                    suggestion="Fix email_corpus.yaml so it is valid YAML.",
+                    message=f"Email corpus file could not be safely loaded: {exc}",
+                    suggestion=(
+                        "Use a regular, non-symlink YAML file relative to the scenario directory."
+                    ),
                 )
             )
             return set()

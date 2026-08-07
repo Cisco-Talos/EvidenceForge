@@ -954,6 +954,37 @@ def _iter_shuffled_port_scan_pairs(
         yield targets[target_index], ports[port_index]
 
 
+def _sample_network_hosts(
+    network: Any,
+    count: int,
+    rng: random.Random,
+) -> list[str]:
+    """Sample host addresses in O(requested targets) for IPv4 or enormous IPv6 networks."""
+
+    import ipaddress
+    import sys
+
+    if network.version == 4:
+        edge_reserve = 2 if network.prefixlen < 31 else 0
+        first_address = int(network.network_address) + (1 if edge_reserve else 0)
+    else:
+        edge_reserve = 1 if network.prefixlen < 127 else 0
+        first_address = int(network.network_address) + edge_reserve
+    population_size = max(0, int(network.num_addresses) - edge_reserve)
+    sample_size = min(max(0, count), population_size)
+    if population_size <= sys.maxsize:
+        offsets = rng.sample(range(population_size), sample_size)
+    else:
+        offsets = []
+        seen_offsets: set[int] = set()
+        while len(offsets) < sample_size:
+            offset = rng.randrange(population_size)
+            if offset not in seen_offsets:
+                seen_offsets.add(offset)
+                offsets.append(offset)
+    return [str(ipaddress.ip_address(first_address + offset)) for offset in offsets]
+
+
 def _port_scan_connection_profile(
     rng,
     *,
@@ -5984,9 +6015,9 @@ class StorylineMixin:
                             all_hosts.append(public_target)
                 else:
                     net = ipaddress.ip_network(seg.cidr, strict=False)
-                    all_hosts = [str(h) for h in net.hosts()]
+                    all_hosts = _sample_network_hosts(net, spec.target_count, rng)
                 count = min(spec.target_count, len(all_hosts))
-                resolved_targets = rng.sample(all_hosts, count)
+                resolved_targets = rng.sample(all_hosts, count) if is_external_scan else all_hosts
             else:
                 resolved_targets = []
         else:

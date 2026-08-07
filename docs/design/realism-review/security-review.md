@@ -8,6 +8,9 @@ Snapshot: `codex-security-snapshot/v1:sha256:42528a309387007d2298edd853bcbcea8c9
 
 Status: **complete, sealed, and indexed** on 2026-08-05
 
+Remediation status: **SEC-001 through SEC-010 resolved and SEC-DEFER-001 closed in Batch 6** on
+2026-08-07. The sealed scan evidence remains unchanged; the implementation evidence is additive.
+
 ## Result
 
 The standard repository scan produced ten validated findings: eight medium-severity and two
@@ -62,6 +65,24 @@ The local CLI boundary is important but not dispositive: scenarios and generated
 normal sharing units. A downloaded scenario can therefore cross a human trust boundary even when
 the process itself is not a network service.
 
+## Batch 6 remediation disposition
+
+| IDs | Disposition | Enforced boundary |
+| --- | --- | --- |
+| SEC-001, SEC-007 | Resolved | No-follow, regular-file scenario reads and exclusive contained artifact writes |
+| SEC-002, SEC-003 | Resolved | Allocation-free generation, duration, occurrence, render, and email-expansion budgets |
+| SEC-004 | Resolved | CIDR host selection proportional to requested targets, including IPv6 |
+| SEC-005 | Resolved | Include depth, file-count, source-byte, and expanded-node limits |
+| SEC-006 | Resolved | Linear Snare parsing plus a shared 16 MiB record ceiling |
+| SEC-008, SEC-010 | Resolved | No-symlink/no-special-file Splunk log and application-directory staging |
+| SEC-009 | Resolved | Preflighted and stream-counted ZIP/TAR extraction budgets with cleanup |
+| SEC-DEFER-001 | Closed | Measured evaluator envelope: 512 MiB, 10,000 files, and 500,000 parsed records |
+
+Every boundary has a malicious regression and a legitimate control. Trusted resource overrides
+are named API/CLI decisions and do not disable path, file-type, YAML ambiguity, or archive-member
+safety. Exact contracts, commands, capacity measurements, and validation results are recorded in
+`batch6-results.json` and `evaluator-capacity-results.json`.
+
 ## Candidate dispositions
 
 - **Deferred:** the evaluator retains a full parsed corpus in memory. Static evidence establishes
@@ -84,7 +105,7 @@ the process itself is not a network service.
 - Raw records are an explicit escape hatch, and adversarial payload text is treated as inert
   generated evidence rather than executed content.
 
-## Limitations
+## Baseline limitations at scan time
 
 - Docker/Podman Compose was unavailable, and Splunk checks additionally require a locally accepted
   license. The three Splunk findings therefore have complete static traces but no runtime parser
@@ -94,7 +115,13 @@ the process itself is not a network service.
 - Phase 1 authoring skills were excluded except where they define or consume the scenario-schema
   contract.
 
-## Recommended security sequence
+The first two limitations were subsequently narrowed by Batch 6: archive and staging behavior is
+covered by static review plus unit-level filesystem/archive controls, and the evaluator capacity
+candidate has a calibrated bounded-RSS probe and a default rejection envelope. A licensed Splunk
+runtime parser execution remains unavailable and is still recorded as an external integration
+limitation rather than inferred.
+
+## Original recommended security sequence
 
 1. Establish the proposed input/resource-budget and safe-asset/path contracts.
 2. Fix artifact write containment and corpus read containment at shared boundaries.
@@ -104,5 +131,6 @@ the process itself is not a network service.
 5. Introduce one no-symlink, containment-enforcing staging helper for both Splunk input trees.
 6. Define the evaluator capacity envelope and close `SEC-DEFER-001` with a measured test.
 
-These are recommendations only. They are not implemented by this review and inherit the separate
-contract-approval gate.
+These recommendations were not implemented during the frozen review itself. They were approved
+through the separate contract gate and implemented on the Batch 6 feature branch; the sealed scan
+remains the historical source for discovery evidence.

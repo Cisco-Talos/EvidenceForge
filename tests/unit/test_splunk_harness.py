@@ -27,6 +27,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from evidenceforge.external_parsers.splunk import (
     CIM_EXPECTATIONS_BY_FORMAT,
     SPLUNK_SOURCE_SPECS,
     CimMode,
+    SplunkArchiveBudget,
     SplunkStageManifest,
     _cim_dataset_failures,
     _cim_dataset_validation_search,
@@ -103,6 +105,21 @@ def test_stage_splunk_logs_accepts_multifamily_parser_sample(tmp_path: Path) -> 
     }
     assert not unsupported
     assert not any(log.staged.parent == tmp_path / "stage" / "data" for log in staged_logs)
+
+
+def test_stage_splunk_logs_rejects_supported_name_symlink(tmp_path: Path) -> None:
+    """A supported filename cannot redirect staging to an out-of-tree source."""
+    outside = tmp_path / "outside-conn.json"
+    outside.write_text('{"uid":"outside"}\n', encoding="utf-8")
+    data_dir = tmp_path / "data"
+    sensor = data_dir / "sensor"
+    sensor.mkdir(parents=True)
+    (sensor / "conn.json").symlink_to(outside)
+
+    with pytest.raises(SplunkHarnessError, match="Splunk staged log"):
+        stage_splunk_logs(data_dir, tmp_path / "stage")
+
+    assert outside.read_text(encoding="utf-8") == '{"uid":"outside"}\n'
 
 
 def test_build_splunk_configs_writes_generated_app_and_supplied_apps(
@@ -195,6 +212,101 @@ def test_stage_splunk_apps_extracts_safe_tar_archive(tmp_path: Path) -> None:
 
     assert app_names == ("SafeApp",)
     assert (tmp_path / "apps" / "SafeApp" / "default" / "props.conf").read_text(
+        encoding="utf-8"
+    ) == "[source::dummy]\n"
+
+
+def test_stage_splunk_apps_rejects_descendant_symlink_and_cleans_partial_tree(
+    tmp_path: Path,
+) -> None:
+    """Directory staging never dereferences an embedded file or directory symlink."""
+    outside = tmp_path / "outside.conf"
+    outside.write_text("secret = outside\n", encoding="utf-8")
+    app = tmp_path / "UnsafeApp"
+    (app / "default").mkdir(parents=True)
+    (app / "default" / "props.conf").write_text("[safe]\n", encoding="utf-8")
+    (app / "linked.conf").symlink_to(outside)
+    destination = tmp_path / "apps"
+
+    with pytest.raises(SplunkHarnessError, match="contains a symlink"):
+        stage_splunk_apps((app,), destination)
+
+    assert not (destination / "UnsafeApp").exists()
+
+
+def test_stage_splunk_apps_enforces_archive_member_budget_and_cleans_temp(
+    tmp_path: Path,
+) -> None:
+    """Archive member-count rejection occurs before extraction and leaves no partial tree."""
+    archive_path = tmp_path / "many.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("App/", b"")
+        archive.writestr("App/default/", b"")
+        archive.writestr("App/default/props.conf", b"[source::dummy]\n")
+    destination = tmp_path / "apps"
+
+    with pytest.raises(SplunkHarnessError, match="3 members; limit is 2"):
+        stage_splunk_apps(
+            (archive_path,),
+            destination,
+            archive_budget=SplunkArchiveBudget(
+                max_members=2,
+                max_expanded_bytes=1024,
+                max_member_bytes=1024,
+                max_compression_ratio=1000,
+            ),
+        )
+
+    assert list(destination.iterdir()) == []
+
+
+def test_stage_splunk_apps_enforces_expanded_bytes_and_compression_ratio(
+    tmp_path: Path,
+) -> None:
+    """Preflight rejects both oversized expansion and high-ratio compressed members."""
+    expanded_archive = tmp_path / "expanded.zip"
+    with zipfile.ZipFile(expanded_archive, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("App/default/props.conf", b"12345")
+
+    with pytest.raises(SplunkHarnessError, match="expands to 5 bytes"):
+        stage_splunk_apps(
+            (expanded_archive,),
+            tmp_path / "expanded-apps",
+            archive_budget=SplunkArchiveBudget(
+                max_members=10,
+                max_expanded_bytes=4,
+                max_member_bytes=10,
+                max_compression_ratio=1000,
+            ),
+        )
+
+    ratio_archive = tmp_path / "ratio.zip"
+    with zipfile.ZipFile(ratio_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("App/default/props.conf", b"0" * 4096)
+
+    with pytest.raises(SplunkHarnessError, match="compression ratio"):
+        stage_splunk_apps(
+            (ratio_archive,),
+            tmp_path / "ratio-apps",
+            archive_budget=SplunkArchiveBudget(
+                max_members=10,
+                max_expanded_bytes=8192,
+                max_member_bytes=8192,
+                max_compression_ratio=2,
+            ),
+        )
+
+
+def test_stage_splunk_apps_extracts_safe_zip_archive(tmp_path: Path) -> None:
+    """A normal bounded ZIP application remains supported."""
+    archive_path = tmp_path / "safe.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("SafeZip/default/props.conf", b"[source::dummy]\n")
+
+    app_names = stage_splunk_apps((archive_path,), tmp_path / "apps")
+
+    assert app_names == ("SafeZip",)
+    assert (tmp_path / "apps" / "SafeZip" / "default" / "props.conf").read_text(
         encoding="utf-8"
     ) == "[source::dummy]\n"
 

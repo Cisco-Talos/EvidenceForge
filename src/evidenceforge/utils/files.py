@@ -47,11 +47,12 @@ class ScenarioIncludeBudget:
     max_depth: int = 32
     max_files: int = 256
     max_bytes: int = 16 * 1024 * 1024
+    max_nodes: int = 1_000_000
 
     def __post_init__(self) -> None:
         """Reject nonsensical include-budget configuration."""
 
-        if self.max_depth < 1 or self.max_files < 1 or self.max_bytes < 1:
+        if self.max_depth < 1 or self.max_files < 1 or self.max_bytes < 1 or self.max_nodes < 1:
             raise ValueError("Scenario include budgets must be positive")
 
 
@@ -62,6 +63,7 @@ class _ScenarioIncludeBudgetState:
     budget: ScenarioIncludeBudget
     files: int = 0
     bytes: int = 0
+    nodes: int = 0
 
     def consume(self, path: Path, *, depth: int) -> None:
         """Account for one file before reading it and reject budget overflow."""
@@ -83,6 +85,36 @@ class _ScenarioIncludeBudgetState:
                 f"{self.budget.max_bytes}: loaded {self.bytes} bytes at {path}"
             )
 
+    def consume_nodes(self, value: Any, *, path: Path) -> None:
+        """Account for parsed logical nodes without trusting alias graph shape."""
+
+        active: set[int] = set()
+
+        def visit(node: Any) -> None:
+            self.nodes += 1
+            if self.nodes > self.budget.max_nodes:
+                raise ScenarioIncludeError(
+                    f"Scenario expanded node count exceeds limit {self.budget.max_nodes}: {path}"
+                )
+            if not isinstance(node, (dict, list, tuple, set)):
+                return
+            node_id = id(node)
+            if node_id in active:
+                raise ScenarioIncludeError(f"Recursive YAML alias graph is not supported: {path}")
+            active.add(node_id)
+            try:
+                if isinstance(node, dict):
+                    for key, child in node.items():
+                        visit(key)
+                        visit(child)
+                else:
+                    for child in node:
+                        visit(child)
+            finally:
+                active.remove(node_id)
+
+        visit(value)
+
 
 def load_yaml(path: Path | str) -> dict:
     """Load and parse YAML file safely.
@@ -103,8 +135,9 @@ def load_yaml(path: Path | str) -> dict:
         raise FileNotFoundError(f"File not found: {path}")
 
     try:
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from evidenceforge.utils.yaml_loader import load_yaml_file
+
+        data = load_yaml_file(path)
         return data or {}
     except yaml.YAMLError as e:
         raise ConfigurationError(f"Invalid YAML in {path}: {e}") from e
@@ -151,8 +184,9 @@ def _load_raw_yaml(path: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"File not found: {path}")
 
     try:
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        from evidenceforge.utils.yaml_loader import load_yaml_file
+
+        data = load_yaml_file(path)
     except yaml.YAMLError as e:
         raise ConfigurationError(f"Invalid YAML in {path}: {e}") from e
 
@@ -176,6 +210,7 @@ def _load_yaml_with_includes(
 
     budget_state.consume(path, depth=len(stack) + 1)
     data = _load_raw_yaml(path)
+    budget_state.consume_nodes(data, path=path)
     include_entries = _extract_include_entries(data, path)
 
     merged: dict[str, Any] = {}

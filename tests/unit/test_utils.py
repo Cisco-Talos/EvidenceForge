@@ -34,7 +34,11 @@ from evidenceforge.models import (
     Timezone,
     User,
 )
-from evidenceforge.models.exceptions import GenerationError, ScenarioIncludeError
+from evidenceforge.models.exceptions import (
+    ConfigurationError,
+    GenerationError,
+    ScenarioIncludeError,
+)
 from evidenceforge.utils import (
     ScenarioIncludeBudget,
     convert_to_output_timezone,
@@ -273,6 +277,21 @@ nested:
         )
 
         assert load_scenario_yaml(yaml_file) == load_yaml(yaml_file)
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "name: first\nname: second\n",
+            "environment:\n  description: first\n  description: second\n",
+        ],
+    )
+    def test_yaml_loader_rejects_duplicate_mapping_keys(self, tmp_path, content):
+        """Duplicate YAML keys must fail instead of silently changing scenario intent."""
+        yaml_file = tmp_path / "duplicate.yaml"
+        yaml_file.write_text(content, encoding="utf-8")
+
+        with pytest.raises(ConfigurationError, match="duplicate key"):
+            load_yaml(yaml_file)
 
     def test_load_scenario_yaml_accepts_single_include_alias(self, tmp_path):
         """The singular include alias should accept one path."""
@@ -715,6 +734,17 @@ includes:
             load_scenario_yaml(
                 scenario_file,
                 include_budget=ScenarioIncludeBudget(max_bytes=8),
+            )
+
+    def test_load_scenario_yaml_enforces_expanded_node_budget(self, tmp_path):
+        """Small YAML inputs cannot expand beyond the configured logical node budget."""
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text("values: [one, two, three]\n", encoding="utf-8")
+
+        with pytest.raises(ScenarioIncludeError, match="expanded node count exceeds limit 4"):
+            load_scenario_yaml(
+                scenario_file,
+                include_budget=ScenarioIncludeBudget(max_nodes=4),
             )
 
     def test_resolve_safe_child_path_accepts_one_filename(self, tmp_path):

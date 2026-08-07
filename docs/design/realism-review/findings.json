@@ -524,7 +524,13 @@
       "reproduction": "Run eforge validate on tests/fixtures/scenarios/full-coverage-apt.yaml and inspect the duplicate command_line mapping.",
       "sibling_risk": "Security-relevant intent, output filters, identity fields, and overlay keys can silently change.",
       "proposed_remediation": "Use a duplicate-rejecting safe YAML loader at every scenario/config boundary and validate all shipped fixtures in CI.",
-      "required_tests": ["duplicate mapping rejection", "all fixture validation", "include/overlay duplicate behavior"]
+      "required_tests": ["duplicate mapping rejection", "all fixture validation", "include/overlay duplicate behavior"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "All production YAML boundaries use a duplicate-rejecting SafeLoader, include expansion is node-bounded, the three shadowed shipped site-map entries were reconciled, and all nine shipped scenario fixtures pass semantic validation after built-in persona composition.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "REAL-014",
@@ -548,7 +554,13 @@
       "reproduction": "Review integrated_24h_matrix and repeat hashes in empirical-results.json.",
       "sibling_risk": "Misleading benchmarks, limited variance testing, global-stream coupling, and accidental sequence shifts.",
       "proposed_remediation": "Approve a GenerationSeed contract with named hierarchical RNG scopes and record it in manifests.",
-      "required_tests": ["same seed byte identity", "different seed distribution variance", "unrelated family insertion does not perturb other scopes"]
+      "required_tests": ["same seed byte identity", "different seed distribution variance", "unrelated family insertion does not perturb other scopes"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Scenario and CLI generation expose a uint64 seed, the run scope propagates through emitter worker contexts, seed 42 preserves legacy derivations, and collection metadata records the effective seed. Repeat and alternate-seed integration controls pass.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "REAL-015",
@@ -590,7 +602,13 @@
       "reproduction": "Use an artifact_id with parent traversal or an absolute path and enable storyline artifacts.",
       "sibling_risk": "Other artifact IDs, manifest paths, and target transformation outputs.",
       "proposed_remediation": "Validate opaque IDs and open only beneath a resolved symlink-safe artifact root.",
-      "required_tests": ["parent traversal", "absolute path", "symlink parent", "existing .eml overwrite rejection"]
+      "required_tests": ["parent traversal", "absolute path", "symlink parent", "existing .eml overwrite rejection"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Artifact names are validated as one relative filename and created exclusively through a no-follow descriptor beneath the artifact root; traversal, absolute paths, symlinks, and overwrite attempts are rejected before data escapes the boundary.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-002",
@@ -608,7 +626,13 @@
       "reproduction": "Construct the extreme values in the corresponding Pydantic models; do not execute the full workload.",
       "sibling_risk": "Baseline windows, beacons, DNS tunnels, sprays, scans, output disk growth, and datetime overflow.",
       "proposed_remediation": "Add preflight workload budgets with an explicit operator override.",
-      "required_tests": ["projected event cap", "byte cap", "duration overflow", "explicit force override"]
+      "required_tests": ["projected event cap", "byte cap", "duration overflow", "explicit force override"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Generation and validation share an allocation-free conservative workload estimate covering durations, baseline and explicit occurrences, periodic fan-out, rendered records, and email expansion. The named trusted override is explicit and recorded in collection metadata.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-003",
@@ -626,7 +650,13 @@
       "reproduction": "Call _email_attachment_payload_bytes with bounded sizes; model-validate an extreme size without allocating it.",
       "sibling_risk": "Literal content, corpus bodies, artifact manifest size, and multiple attachments.",
       "proposed_remediation": "Enforce per-attachment/per-message/run budgets and stream encoding.",
-      "required_tests": ["per-item maximum", "cumulative maximum", "OOXML linear memory", "streamed base64"]
+      "required_tests": ["per-item maximum", "cumulative maximum", "OOXML linear memory", "streamed base64"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "The workload contract bounds per-attachment, per-message, and expanded run payloads before allocation; deterministic byte generation is linear and MIME artifacts are streamed to exclusive bounded files.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-004",
@@ -644,7 +674,13 @@
       "reproduction": "Model-validate an IPv6 /64 target; inspect the eager list comprehension.",
       "sibling_risk": "Other CIDR enumeration, asset expansion, and evaluator address sets.",
       "proposed_remediation": "Sample integer host offsets without full enumeration and bound supported prefix sizes.",
-      "required_tests": ["IPv6 /64 with one target", "large IPv4 prefix", "sampling uniqueness"]
+      "required_tests": ["IPv6 /64 with one target", "large IPv4 prefix", "sampling uniqueness"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Port-scan planning samples integer host offsets without enumerating the CIDR, preserves ipaddress host semantics for IPv4 and IPv6, and performs work proportional to requested targets.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-005",
@@ -662,7 +698,13 @@
       "reproduction": "Construct a bounded acyclic include chain/fan-out and observe recursive work; avoid host-impacting sizes.",
       "sibling_risk": "Corpus/config recursive loading and large YAML node graphs.",
       "proposed_remediation": "Track and enforce depth, file count, aggregate source bytes, and expanded node count.",
-      "required_tests": ["depth limit", "fan-out limit", "aggregate byte limit", "cycle remains rejected"]
+      "required_tests": ["depth limit", "fan-out limit", "aggregate byte limit", "cycle remains rejected"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Scenario include loading enforces depth, distinct-file, aggregate-source-byte, and expanded-node budgets while preserving cycle rejection and explicit caller-supplied trusted limits.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-006",
@@ -680,7 +722,13 @@
       "reproduction": "Benchmark EXPANDED_FIELD_PATTERN.finditer over delimiter-free field-like tails.",
       "sibling_risk": "Other regex parsers and unlimited record lengths.",
       "proposed_remediation": "Use a linear delimiter parser and reject/clip oversized records with explicit diagnostics.",
-      "required_tests": ["linear scaling benchmark", "record byte limit", "native valid Snare fixtures"]
+      "required_tests": ["linear scaling benchmark", "record byte limit", "native valid Snare fixtures"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Snare expanded fields use a single-pass delimiter parser and every text parser shares a 16 MiB hard record cap; native controls and a 10,000-field adversarial record pass within the bounded contract.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-007",
@@ -698,7 +746,13 @@
       "reproduction": "Set corpus to an absolute out-of-root valid corpus YAML and validate.",
       "sibling_risk": "Other referenced scenario files, corpora, templates, and symlink targets.",
       "proposed_remediation": "Resolve against a declared scenario-package root, reject escapes/symlinks/nonregular files, and enforce size/schema budgets.",
-      "required_tests": ["absolute path", "parent traversal", "symlink escape", "valid in-root corpus"]
+      "required_tests": ["absolute path", "parent traversal", "symlink escape", "valid in-root corpus"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Validation and runtime share one corpus loader that opens a size-bounded regular file through a no-follow descriptor beneath the scenario root and rejects absolute, traversal, symlink, and duplicate-key inputs.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-008",
@@ -716,7 +770,13 @@
       "reproduction": "Place a supported-name symlink below source_root and call stage_splunk_logs.",
       "sibling_risk": "Special files such as /dev/zero, unsupported record counting, and race swaps.",
       "proposed_remediation": "lstat and reject symlinks/nonregular files; verify every resolved path remains under source_root.",
-      "required_tests": ["symlink file", "symlink directory", "special file", "TOCTOU-resistant open"]
+      "required_tests": ["symlink file", "symlink directory", "special file", "TOCTOU-resistant open"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Splunk log staging rejects symlinked paths and special files and copies supported logs from no-follow regular-file descriptors into exclusive staging files.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-009",
@@ -734,7 +794,13 @@
       "reproduction": "Inspect archive metadata for a bounded compressed fixture; no destructive bomb extraction is required.",
       "sibling_risk": "Disk fill, inode exhaustion, long extraction, and retained temp trees on interruption.",
       "proposed_remediation": "Preflight and stream-count member/byte/ratio budgets with cleanup on every failure.",
-      "required_tests": ["member cap", "expanded byte cap", "ratio cap", "cleanup after rejection"]
+      "required_tests": ["member cap", "expanded byte cap", "ratio cap", "cleanup after rejection"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "ZIP and TAR app packages are preflighted for path, type, duplicate member, member count, member size, total expanded size, and compression ratio, then streamed through counters with partial-tree cleanup.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-010",
@@ -752,7 +818,13 @@
       "reproduction": "Supply a bounded app tree containing a symlink to a benign out-of-root canary.",
       "sibling_risk": "Local file inclusion into runtime, special-file reads, and mounted container exposure.",
       "proposed_remediation": "Reject descendant symlinks and verify resolved regular-file containment before copying.",
-      "required_tests": ["embedded symlink", "nested directory symlink", "regular in-root app"]
+      "required_tests": ["embedded symlink", "nested directory symlink", "regular in-root app"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Supplied application directories are walked without following links; root and descendant symlinks and nonregular nodes are rejected, and regular files are copied from no-follow descriptors.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
     },
     {
       "id": "SEC-DEFER-001",
@@ -770,7 +842,13 @@
       "reproduction": "Pending a bounded RSS benchmark across realistic and adversarial corpora.",
       "sibling_risk": "Long lines, many small files, duplicate raw text, causality indexes, and report samples.",
       "proposed_remediation": "Benchmark first; then document capacity and add streaming/spill/budget behavior where the curve requires it.",
-      "required_tests": ["peak RSS benchmark", "record and byte limits", "many-file input", "graceful budget error"]
+      "required_tests": ["peak RSS benchmark", "record and byte limits", "many-file input", "graceful budget error"],
+      "remediation": {
+        "status": "closed_in_batch_6_as_bounded_capacity_contract",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "25k, 50k, and 100k retained-eCAR probes measured a worst 2,958.62 bytes of RSS growth per record. Evaluation now rejects more than 512 MiB, 10,000 files, or 500,000 parsed records by default, with an explicit trusted override.",
+        "results": "docs/design/realism-review/evaluator-capacity-results.json"
+      }
     }
   ],
   "security_candidates_not_in_final_findings": [

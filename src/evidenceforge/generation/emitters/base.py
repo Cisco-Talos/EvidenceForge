@@ -24,6 +24,7 @@
 
 import logging
 from abc import ABC, abstractmethod
+from contextvars import copy_context
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
@@ -104,7 +105,13 @@ class LogEmitter(ABC):
         if self.threaded:
             self._event_queue = Queue(maxsize=50000)  # Bounded queue for backpressure
             self._stop_event = Event()
-            self._thread = Thread(target=self._run, daemon=True, name=f"Emitter-{format_def.name}")
+            worker_context = copy_context()
+            self._thread = Thread(
+                target=worker_context.run,
+                args=(self._run,),
+                daemon=True,
+                name=f"Emitter-{format_def.name}",
+            )
             self._thread.start()
             logger.debug(f"Started emitter thread for {format_def.name}")
 

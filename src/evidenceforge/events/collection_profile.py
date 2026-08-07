@@ -35,6 +35,9 @@ class CollectionProfile(BaseModel):
     """Production-facing collection metadata safe for blind review packages."""
 
     schema_version: int = 1
+    generation_seed: int
+    workload_limits_overridden: bool = False
+    workload_estimate: dict[str, int] | None = None
     collection_window: dict[str, str | None]
     observation_profile: str
     output_target: str
@@ -46,10 +49,24 @@ class CollectionProfile(BaseModel):
 def build_collection_profile(
     scenario: Scenario,
     output_target: OutputTarget,
+    *,
+    workload_estimate: object | None = None,
+    workload_limits_overridden: bool = False,
 ) -> CollectionProfile:
     """Build blind-safe source collection metadata for generated evidence."""
     collection_window = _collection_window(scenario)
     return CollectionProfile(
+        generation_seed=scenario.generation_seed,
+        workload_limits_overridden=workload_limits_overridden,
+        workload_estimate=(
+            {
+                key: int(value)
+                for key, value in workload_estimate.model_dump().items()
+                if isinstance(value, int) and not isinstance(value, bool)
+            }
+            if hasattr(workload_estimate, "model_dump")
+            else None
+        ),
         collection_window=collection_window,
         observation_profile=scenario.observation_profile,
         output_target=output_target.value,
@@ -144,9 +161,17 @@ def write_collection_profile(
     output_dir: Path,
     scenario: Scenario,
     output_target: OutputTarget,
+    *,
+    workload_estimate: object | None = None,
+    workload_limits_overridden: bool = False,
 ) -> None:
     """Write COLLECTION_PROFILE.json alongside the run-level metadata."""
-    profile = build_collection_profile(scenario, output_target)
+    profile = build_collection_profile(
+        scenario,
+        output_target,
+        workload_estimate=workload_estimate,
+        workload_limits_overridden=workload_limits_overridden,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_write_text(
         output_dir / COLLECTION_PROFILE_FILENAME,

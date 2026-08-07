@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import LogParser, ParsedRecord, register_parser
+from . import LogParser, ParsedRecord, iter_bounded_text_lines, register_parser
 
 # ASA syslog header: <pri>Mon DD HH:MM:SS hostname %ASA-sev-msgid: message
 ASA_HEADER = re.compile(
@@ -140,12 +140,11 @@ class CiscoAsaParser(LogParser):
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         seed_year = _infer_seed_year(path, self.scenario)
-        with path.open(encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                yield self._parse_line(line, line_num, seed_year)
+        for line_num, line in iter_bounded_text_lines(path):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            yield self._parse_line(line, line_num, seed_year)
 
     def _parse_line(self, raw: str, line_num: int, seed_year: int) -> ParsedRecord:
         fields: dict = {}

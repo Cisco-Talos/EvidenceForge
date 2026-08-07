@@ -12,8 +12,9 @@ from datetime import datetime
 from pathlib import Path
 
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+from evidenceforge.models.exceptions import EvaluationLimitError
 
-from . import LogParser, ParsedRecord, register_parser
+from . import MAX_EVALUATION_RECORD_BYTES, LogParser, ParsedRecord, register_parser
 
 
 @register_parser
@@ -27,6 +28,10 @@ class EmailArtifactsParser(LogParser):
         return path.name in self._filenames
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        if path.stat().st_size > MAX_EVALUATION_RECORD_BYTES:
+            raise EvaluationLimitError(
+                f"Email artifact manifest exceeds {MAX_EVALUATION_RECORD_BYTES} bytes: {path}"
+            )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:

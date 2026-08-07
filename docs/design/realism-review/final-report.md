@@ -303,6 +303,14 @@ Batch 5 worklog.
 
 This addresses REAL-013, REAL-014, SEC-001 through SEC-010, and SEC-DEFER-001.
 
+**Implementation status (2026-08-07): complete on `codex/batch6-input-safety-budgets`.** All
+scenario/config YAML mappings reject duplicate keys; scenario-package assets and generated
+artifacts use no-follow contained file boundaries; generation, attachments, includes, evaluation,
+and Splunk archives have documented budgets with named trusted overrides; CIDR sampling is
+proportional to requested targets; and one public uint64 seed controls and is recorded for each
+run. A measured retained-record RSS curve closed the evaluator capacity proof gap. See
+`batch6-results.json`, `evaluator-capacity-results.json`, and the focused Batch 6 worklog.
+
 ### Batch 7 — Compatibility removal and documentation reconciliation
 
 - Remove legacy mutable/duplicate fields only after all consumers migrate.
@@ -316,9 +324,10 @@ The approved review completion criteria are met with the following explicit proo
 - no current production telemetry was available; official references and public exemplars were
   used instead;
 - optional external parsers could not run without Docker and licensed Splunk dependencies;
-- the project lacks a true public seed, so the requested seed campaign used documented
-  scenario-name variants;
-- the evaluator capacity security candidate needs a calibrated runtime benchmark;
+- at the frozen review baseline the project lacked a true public seed, so that campaign used
+  documented scenario-name variants; Batch 6 subsequently added a public seed contract;
+- at the frozen review baseline evaluator capacity lacked a calibrated runtime benchmark; Batch 6
+  subsequently measured and enforced a supported envelope;
 - generated outputs are intentionally untracked and reproducible through recorded hashes and
   commands rather than retained in Git.
 

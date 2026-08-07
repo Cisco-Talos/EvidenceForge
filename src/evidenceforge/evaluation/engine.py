@@ -32,6 +32,7 @@ from pathlib import Path
 
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
+from evidenceforge.evaluation.limits import EvaluationCapacity, EvaluationLimits
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
     EvaluationCategoryScore,
@@ -48,6 +49,7 @@ from evidenceforge.evaluation.pillars import (
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.events.observation_manifest import load_observation_manifest
+from evidenceforge.models.exceptions import EvaluationLimitError
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import read_output_target_marker
 
@@ -259,6 +261,8 @@ class EvaluationEngine:
         scenario: Scenario,
         verbose: bool = False,
         progress_callback: ProgressCallback = _noop_callback,
+        limits: EvaluationLimits | None = None,
+        allow_large_evaluation: bool = False,
     ):
         self.output_dir = output_dir
         self.scenario = scenario
@@ -266,6 +270,13 @@ class EvaluationEngine:
         self._progress = progress_callback
         self._thresholds = load_thresholds()
         self.output_target = read_output_target_marker(output_dir)
+        self.limits = limits or EvaluationLimits()
+        self.allow_large_evaluation = allow_large_evaluation
+        self.capacity = EvaluationCapacity(
+            files=0,
+            corpus_bytes=0,
+            limits_overridden=allow_large_evaluation,
+        )
 
     def _load_spillage_ground_truth(self) -> dict[str, dict]:
         """Load emitted spillage labels from GROUND_TRUTH.json, keyed by storyline id.
@@ -460,6 +471,7 @@ class EvaluationEngine:
         # 7. Merge pillar-level supplementary data into report supplementary
         supplementary: dict = {}
         supplementary["output_target"] = self.output_target.value
+        supplementary["evaluation_capacity"] = self.capacity.model_dump()
         for pillar in pillars:
             supplementary.update(pillar.supplementary)
         if observation_manifest is not None:
@@ -495,8 +507,25 @@ class EvaluationEngine:
     def _parse_all_logs(self) -> tuple[dict[str, list[ParsedRecord]], dict[str, int]]:
         """Discover and parse all log files in the output directory."""
         file_map = discover_log_files(self.output_dir, output_target=self.output_target)
+        unique_paths = {path for paths in file_map.values() for path in paths}
+        corpus_bytes = sum(path.stat().st_size for path in unique_paths)
+        self.capacity = EvaluationCapacity(
+            files=len(unique_paths),
+            corpus_bytes=corpus_bytes,
+            limits_overridden=self.allow_large_evaluation,
+        )
+        violations: list[str] = []
+        if len(unique_paths) > self.limits.max_files:
+            violations.append(f"{len(unique_paths)} files exceeds {self.limits.max_files}")
+        if corpus_bytes > self.limits.max_corpus_bytes:
+            violations.append(f"{corpus_bytes} corpus bytes exceeds {self.limits.max_corpus_bytes}")
+        if violations and not self.allow_large_evaluation:
+            raise EvaluationLimitError(
+                "Evaluation corpus exceeds the supported envelope: " + "; ".join(violations)
+            )
         records: dict[str, list[ParsedRecord]] = {}
         source_counts: dict[str, int] = {}
+        total_records = 0
 
         total_formats = len(file_map)
         for i, (format_name, paths) in enumerate(sorted(file_map.items()), 1):
@@ -515,13 +544,23 @@ class EvaluationEngine:
             for path in sorted(paths):
                 logger.info(f"Parsing {format_name}: {path.name}")
                 source_instance = self._source_instance(path)
-                parsed = list(parser.parse_file(path))
+                parsed: list[ParsedRecord] = []
+                for record in parser.parse_file(path):
+                    total_records += 1
+                    if total_records > self.limits.max_records and not self.allow_large_evaluation:
+                        raise EvaluationLimitError(
+                            "Evaluation parsed record count exceeds "
+                            f"{self.limits.max_records} at {path}"
+                        )
+                    parsed.append(record)
                 for record in parsed:
                     record.source_instance = source_instance
                 parsed.sort(key=lambda record: (record.line_number or 0, record.raw))
                 format_records.extend(parsed)
             records[format_name] = format_records
             source_counts[format_name] = len(format_records)
+
+        self.capacity = self.capacity.model_copy(update={"parsed_records": total_records})
 
         return records, source_counts
 

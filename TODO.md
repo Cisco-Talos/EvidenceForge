@@ -75,9 +75,11 @@ without turning `TODO.md` back into a high-conflict work journal.
   `REAL-010` and `REAL-011`, including the evaluator proof gaps recorded by Batch 4. See the
   [Batch 5 worklog](docs/worklog/2026-08-07-projection-evaluation-validity.md) and
   [empirical results](docs/design/realism-review/batch5-results.json).
-- [ ] **P1** Complete Batch 6 input-safety, workload-budget, authoring, and reproducibility work,
+- [x] **P1** Complete Batch 6 input-safety, workload-budget, authoring, and reproducibility work,
   including the deferred evaluator-memory capacity decision (`REAL-013`, `REAL-014`,
-  `SEC-001` through `SEC-010`, and `SEC-DEFER-001`).
+  `SEC-001` through `SEC-010`, and `SEC-DEFER-001`). See the
+  [Batch 6 worklog](docs/worklog/2026-08-07-input-safety-budgets.md) and
+  [empirical results](docs/design/realism-review/batch6-results.json).
 - [ ] **P2** Complete Batch 7 only after all canonical consumers migrate: remove legacy mutable or
   duplicate compatibility truth and reconcile architecture, scenario, source, and evaluation
   documentation. Treat public API/schema changes as separately approved migrations.

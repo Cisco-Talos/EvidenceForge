@@ -37,6 +37,32 @@ from pydantic import BaseModel, Field
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 
 logger = logging.getLogger(__name__)
+MAX_EVALUATION_RECORD_BYTES = 16 * 1024 * 1024
+
+
+def iter_bounded_text_lines(
+    path: Path,
+    *,
+    max_record_bytes: int = MAX_EVALUATION_RECORD_BYTES,
+) -> Iterator[tuple[int, str]]:
+    """Yield UTF-8 lines while rejecting an oversized record before parser work."""
+
+    from evidenceforge.models.exceptions import EvaluationLimitError
+
+    with path.open("rb") as handle:
+        line_number = 0
+        while raw := handle.readline(max_record_bytes + 1):
+            line_number += 1
+            if len(raw) > max_record_bytes:
+                raise EvaluationLimitError(
+                    f"Evaluation record exceeds {max_record_bytes} bytes: {path}:{line_number}"
+                )
+            try:
+                yield line_number, raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise EvaluationLimitError(
+                    f"Evaluation record is not valid UTF-8: {path}:{line_number}"
+                ) from exc
 
 
 class ParsedRecord(BaseModel):

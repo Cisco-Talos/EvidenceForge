@@ -45,6 +45,7 @@ from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.workload import WorkloadLimits, enforce_workload_limits
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
 from evidenceforge.output_targets import (
@@ -52,7 +53,12 @@ from evidenceforge.output_targets import (
     normalize_output_target,
     write_output_target_marker,
 )
-from evidenceforge.utils.rng import _stable_seed, reset_thread_rng
+from evidenceforge.utils.rng import (
+    MAX_GENERATION_SEED,
+    _stable_seed,
+    generation_seed_scope,
+    reset_thread_rng,
+)
 from evidenceforge.utils.time import parse_duration, resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
@@ -86,6 +92,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         scenario_root: Path | None = None,
         output_target: str | OutputTarget | None = None,
         oob_hosts: tuple[str, ...] = (),
+        generation_seed: int | None = None,
+        allow_large_workload: bool = False,
+        workload_limits: WorkloadLimits | None = None,
     ):
         """Initialize generation engine.
 
@@ -101,10 +110,21 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 out-of-band testing (off by default). When set, an adversarial payload's
                 {canary} resolves to the first and all are host-allowlisted.
         """
-        reset_thread_rng()
-        self.scenario = scenario
+        self.generation_seed = (
+            scenario.generation_seed if generation_seed is None else generation_seed
+        )
+        if not 0 <= self.generation_seed <= MAX_GENERATION_SEED:
+            raise ValueError(f"generation_seed must be between 0 and {MAX_GENERATION_SEED}")
+        self.scenario = scenario.model_copy(update={"generation_seed": self.generation_seed})
         self.output_dir = Path(output_dir)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
+        self.allow_large_workload = allow_large_workload
+        self.workload_estimate = enforce_workload_limits(
+            self.scenario,
+            scenario_root=self.scenario_root,
+            limits=workload_limits,
+            allow_large_workload=allow_large_workload,
+        )
         self.ground_truth_dir = (
             Path(ground_truth_dir) if ground_truth_dir is not None else self.output_dir
         )
@@ -145,6 +165,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.progress_callback(event_type, data)
 
     def generate(self) -> None:
+        """Generate one run inside its public deterministic seed namespace."""
+
+        with generation_seed_scope(self.generation_seed):
+            reset_thread_rng()
+            self._generate_scoped()
+
+    def _generate_scoped(self) -> None:
         """Main generation flow.
 
         Orchestrates the complete log generation process:
@@ -525,7 +552,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         from evidenceforge.events.collection_profile import write_collection_profile
 
-        write_collection_profile(self.ground_truth_dir, self.scenario, self.output_target)
+        write_collection_profile(
+            self.ground_truth_dir,
+            self.scenario,
+            self.output_target,
+            workload_estimate=self.workload_estimate,
+            workload_limits_overridden=self.allow_large_workload,
+        )
 
         logger.info("All emitters closed")
 

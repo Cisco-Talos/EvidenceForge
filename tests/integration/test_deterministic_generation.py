@@ -52,6 +52,23 @@ def test_minimal_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) 
     assert _snapshot_generated_files(first_dir) == _snapshot_generated_files(second_dir)
 
 
+def test_public_seed_is_repeatable_and_changes_generated_evidence(tmp_path: Path) -> None:
+    """One public seed controls deterministic substreams without hiding a global singleton."""
+    scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    scenario_data = load_yaml(scenario_path)
+    first_dir = tmp_path / "seed-7-first"
+    second_dir = tmp_path / "seed-7-second"
+    other_dir = tmp_path / "seed-8"
+
+    GenerationEngine(Scenario(**scenario_data), first_dir, generation_seed=7).generate()
+    GenerationEngine(Scenario(**scenario_data), second_dir, generation_seed=7).generate()
+    GenerationEngine(Scenario(**scenario_data), other_dir, generation_seed=8).generate()
+
+    first = _snapshot_generated_files(first_dir)
+    assert first == _snapshot_generated_files(second_dir)
+    assert first != _snapshot_generated_files(other_dir)
+
+
 def test_common_outputs_and_ground_truth_ignore_format_filter(tmp_path: Path) -> None:
     """Selecting fewer renderers must not change canonical planning or shared bytes."""
 

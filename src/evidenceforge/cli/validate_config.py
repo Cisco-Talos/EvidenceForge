@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import ValidationError
 
 from evidenceforge.config import (
@@ -182,8 +181,9 @@ def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict
 def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
     """Load YAML file, returning (data, error_message)."""
     try:
-        with open(path) as f:
-            data = yaml.safe_load(f)
+        from evidenceforge.utils.yaml_loader import load_yaml_file
+
+        data = load_yaml_file(path)
         return data, None
     except Exception as e:
         return None, str(e)

@@ -16,11 +16,10 @@ import re
 import shlex
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.yaml_loader import load_yaml_file
 
 _EDR_POOLS_PATH = get_activity_directory() / "edr_pools.yaml"
 _CACHED: dict[str, Any] | None = None
@@ -137,8 +136,7 @@ def load_edr_pools() -> dict[str, Any]:
     if _CACHED is not None:
         return _CACHED
 
-    with open(_EDR_POOLS_PATH) as f:
-        defaults = yaml.safe_load(f)
+    defaults = load_yaml_file(_EDR_POOLS_PATH)
 
     merged = load_with_overlay(
         _EDR_POOLS_PATH,

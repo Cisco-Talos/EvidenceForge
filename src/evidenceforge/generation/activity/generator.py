@@ -41,14 +41,12 @@ import re
 import shlex
 import uuid
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit
-
-import yaml
 
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
@@ -218,11 +216,11 @@ from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
-from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.exceptions import GenerationError, PathSafetyError, StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, ProxyAuthPolicyConfig, System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
-from evidenceforge.utils.files import resolve_safe_child_path
 from evidenceforge.utils.ids import generate_stable_zeek_uid
+from evidenceforge.utils.paths import write_exclusive_child_stream
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
@@ -13566,11 +13564,15 @@ class ActivityGenerator:
         if email_config is None or not email_config.corpus:
             self._email_corpus_cache = {}
             return {}
-        corpus_path = Path(email_config.corpus)
-        if not corpus_path.is_absolute():
-            corpus_path = Path(getattr(self, "_scenario_root", Path.cwd())) / corpus_path
-        with corpus_path.open("r", encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle) or {}
+        from evidenceforge.utils.assets import load_email_corpus_yaml
+
+        raw = (
+            load_email_corpus_yaml(
+                Path(getattr(self, "_scenario_root", Path.cwd())),
+                email_config.corpus,
+            )
+            or {}
+        )
         messages = raw.get("messages", raw if isinstance(raw, list) else [])
         if not isinstance(messages, list):
             raise ValueError("email_corpus.yaml must contain a top-level messages list")
@@ -16440,12 +16442,12 @@ class ActivityGenerator:
     @staticmethod
     def _deterministic_binary_bytes(seed: str, size: int) -> bytes:
         """Return deterministic binary-looking bytes for source-native container members."""
-        chunks: list[bytes] = []
+        payload = bytearray()
         counter = 0
-        while sum(len(chunk) for chunk in chunks) < size:
-            chunks.append(hashlib.sha256(f"{seed}:{counter}".encode()).digest())
+        while len(payload) < size:
+            payload.extend(hashlib.sha256(f"{seed}:{counter}".encode()).digest())
             counter += 1
-        return b"".join(chunks)[:size]
+        return bytes(payload[:size])
 
     def _maybe_generate_email_recipient_reads(
         self,
@@ -16756,17 +16758,24 @@ class ActivityGenerator:
         artifact_dir = getattr(self, "_email_artifact_dir", None)
         if artifact_dir is None:
             return ""
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        path = resolve_safe_child_path(
-            artifact_dir,
-            f"{email_ctx.artifact_id}.eml",
-            label="email artifact filename",
-        )
-        path.write_bytes(self._render_email_artifact(email_ctx).encode("utf-8"))
-        return path.relative_to(artifact_dir.parent.parent).as_posix()
+        try:
+            path = write_exclusive_child_stream(
+                artifact_dir,
+                f"{email_ctx.artifact_id}.eml",
+                self._iter_email_artifact_bytes(email_ctx),
+                label="email artifact filename",
+            )
+        except PathSafetyError as exc:
+            raise GenerationError(str(exc)) from exc
+        return path.relative_to(artifact_dir.parent.parent.absolute()).as_posix()
 
     def _render_email_artifact(self, email_ctx: EmailContext) -> str:
         """Render a deterministic MIME message with profile-specific header texture."""
+        return b"".join(self._iter_email_artifact_bytes(email_ctx)).decode("utf-8")
+
+    def _iter_email_artifact_bytes(self, email_ctx: EmailContext) -> Iterator[bytes]:
+        """Yield MIME bytes incrementally so base64 expansion never duplicates the message."""
+
         profile = self._email_mailer_profile(email_ctx.envelope_from, email_ctx.user_agent)
         has_attachments = bool(email_ctx.attachments)
         boundary = self._email_mime_boundary(email_ctx.artifact_id, profile)
@@ -16778,36 +16787,63 @@ class ActivityGenerator:
         )
         if not has_attachments:
             body = self._quoted_printable_text(email_ctx.body or "")
-            return "\r\n".join([*header_lines, "", body, ""])
+            yield from self._iter_crlf_email_lines([*header_lines, "", body, ""])
+            return
 
-        parts = [
-            f"--{boundary}",
-            'Content-Type: text/plain; charset="utf-8"',
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
-            self._quoted_printable_text(email_ctx.body or ""),
-            "",
-        ]
+        yield from self._iter_crlf_email_lines(
+            [
+                *header_lines,
+                "",
+                f"--{boundary}",
+                'Content-Type: text/plain; charset="utf-8"',
+                "Content-Transfer-Encoding: quoted-printable",
+                "",
+                self._quoted_printable_text(email_ctx.body or ""),
+                "",
+            ],
+            trailing_separator=True,
+        )
         for attachment in email_ctx.attachments:
             payload = self._email_attachment_payload_bytes(attachment, email_ctx.artifact_id)
             content_type = str(attachment.get("content_type") or "application/octet-stream")
             filename = self._sanitize_email_header_value(
                 str(attachment.get("filename") or "attachment.bin")
             )
-            parts.extend(
+            yield from self._iter_crlf_email_lines(
                 [
                     f"--{boundary}",
                     f'Content-Type: {content_type}; name="{filename}"',
                     "Content-Transfer-Encoding: base64",
                     f'Content-Disposition: attachment; filename="{filename}"',
                     "",
-                    *self._base64_mime_lines(payload),
-                    "",
-                ]
+                ],
+                trailing_separator=True,
             )
-        parts.append(f"--{boundary}--")
-        parts.append("")
-        return "\r\n".join([*header_lines, "", *parts])
+            if payload:
+                for index in range(0, len(payload), 57):
+                    yield base64.b64encode(payload[index : index + 57])
+                    yield b"\r\n"
+            else:
+                yield b"\r\n"
+            yield b"\r\n"
+        yield from self._iter_crlf_email_lines([f"--{boundary}--", ""])
+
+    @staticmethod
+    def _iter_crlf_email_lines(
+        lines: Iterable[str],
+        *,
+        trailing_separator: bool = False,
+    ) -> Iterator[bytes]:
+        """Yield the exact byte representation of CRLF-joined text lines."""
+
+        first = True
+        for line in lines:
+            if not first:
+                yield b"\r\n"
+            yield line.encode("utf-8")
+            first = False
+        if trailing_separator:
+            yield b"\r\n"
 
     def _email_artifact_header_lines(
         self,
@@ -17002,15 +17038,6 @@ class ActivityGenerator:
     def _quoted_printable_text(text: str) -> str:
         encoded = quopri.encodestring(text.encode("utf-8"), quotetabs=False).decode("ascii")
         return encoded.replace("\n", "\r\n").rstrip("\r\n")
-
-    @staticmethod
-    def _base64_mime_lines(payload: bytes) -> list[str]:
-        if not payload:
-            return [""]
-        return [
-            base64.b64encode(payload[index : index + 57]).decode("ascii")
-            for index in range(0, len(payload), 57)
-        ]
 
     def _record_email_artifact_manifest(
         self,
