@@ -833,7 +833,41 @@ def test_ecar_startup_modules_preserve_loader_order_after_process_create(tmp_pat
     second_time = emitter._after_process_create_timestamp(second_module, proc)
 
     assert process_time < first_time < second_time
-    assert second_time - process_time < timedelta(milliseconds=10)
+    assert second_time - process_time < timedelta(milliseconds=75)
+
+
+def test_startup_module_source_gaps_vary_within_one_process() -> None:
+    """Startup observations should be ordered without one fixed per-process cadence."""
+    planner = SourceTimingPlanner()
+    base = _base_time()
+    host = _host_context()
+    proc = _process_context(base)
+    source_times: list[datetime] = []
+    for order in range(1, 10):
+        event = SecurityEvent(
+            timestamp=base + timedelta(milliseconds=order),
+            event_type="image_load",
+            src_host=host,
+            process=proc,
+            image_load=ImageLoadContext(
+                image_loaded=rf"C:\Windows\System32\module{order}.dll",
+                load_phase="startup",
+                load_order=order,
+            ),
+        )
+        source_times.append(
+            planner.process_module_source_time(
+                event,
+                "ecar",
+                base + timedelta(milliseconds=1),
+            )
+        )
+
+    gaps = [current - prior for prior, current in zip(source_times, source_times[1:], strict=False)]
+    assert all(gap > timedelta(0) for gap in gaps)
+    assert len(set(gaps)) >= 5
+    assert max(gaps) > timedelta(milliseconds=2.5)
+    assert max(gaps) > min(gaps) * 3
 
 
 def test_sysmon_startup_module_renders_after_process_create(tmp_path: Path) -> None:

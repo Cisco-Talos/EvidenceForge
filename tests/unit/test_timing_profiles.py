@@ -17,6 +17,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     network_sensor_observation_timing,
     reset_timing_profiles_cache,
     sample_timing_delta,
+    startup_module_observation_timing,
     windows_collision_spacing_config,
 )
 from evidenceforge.generation.causal.engine import ExpandedEvent
@@ -307,6 +308,15 @@ def test_sample_timing_delta_is_deterministic_and_bounded():
 
     assert first == second
     assert timedelta(milliseconds=20) <= first <= timedelta(milliseconds=1500)
+
+
+def test_startup_module_observation_timing_is_bounded_and_heavy_tailed():
+    timing = startup_module_observation_timing()
+
+    assert 0 < timing.initial_delay_min_us < timing.initial_delay_max_us
+    assert timing.inter_load_gap_min_us < timing.inter_load_gap_median_us
+    assert timing.inter_load_gap_median_us < timing.inter_load_gap_max_us
+    assert 0.05 <= timing.inter_load_gap_sigma <= 3.0
 
 
 def test_windows_process_source_timing_respects_visible_parent_create():

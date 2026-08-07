@@ -373,6 +373,16 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"
     pe_metadata: dict[str, str] | None = None
+    load_phase: Literal["startup", "runtime"] | None = None
+    startup_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("startup_probability", mode="before")
+    @classmethod
+    def startup_probability_is_numeric(cls, value: Any) -> Any:
+        """Reject booleans masquerading as numeric probabilities."""
+        if isinstance(value, bool):
+            raise ValueError("startup_probability must be a number between 0 and 1")
+        return value
 
     @model_validator(mode="after")
     def known_vendor_modules_have_native_identity(self) -> Self:

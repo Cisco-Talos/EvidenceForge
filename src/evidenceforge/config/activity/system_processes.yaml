@@ -258,21 +258,31 @@ system_services:
         filter_id: ["804", "812", "820", "828"]
       parent: search_indexer
 
-# Common loaded modules — the OS loader chain loaded by every Windows process.
-# These DLLs are injected by the kernel/NTDLL during process initialization;
-# no user-mode process runs without them. All default to signed=true,
-# signature="Microsoft Windows", signature_status="Valid".
+# Common startup-module candidates. NTDLL is the required user-mode loader;
+# other imports vary with the executable, dependency graph, and process instance.
+# startup_probability models occurrence in a host/executable dependency profile,
+# not source-local collection loss.
+# All entries default to signed=true, signature="Microsoft Windows",
+# signature_status="Valid".
 common_loaded_modules:
   windows:
     - path: "C:\\Windows\\System32\\ntdll.dll"
     - path: "C:\\Windows\\System32\\kernel32.dll"
+      startup_probability: 0.98
     - path: "C:\\Windows\\System32\\kernelbase.dll"
+      startup_probability: 0.96
     - path: "C:\\Windows\\System32\\msvcrt.dll"
+      startup_probability: 0.38
     - path: "C:\\Windows\\System32\\ucrtbase.dll"
+      startup_probability: 0.71
     - path: "C:\\Windows\\System32\\advapi32.dll"
+      startup_probability: 0.66
     - path: "C:\\Windows\\System32\\sechost.dll"
+      startup_probability: 0.44
     - path: "C:\\Windows\\System32\\rpcrt4.dll"
+      startup_probability: 0.52
     - path: "C:\\Windows\\System32\\bcryptprimitives.dll"
+      startup_probability: 0.47
 
 # Per-process loaded modules for processes not defined in system_services
 # or scheduled_tasks above. Same schema as loaded_modules on service entries.

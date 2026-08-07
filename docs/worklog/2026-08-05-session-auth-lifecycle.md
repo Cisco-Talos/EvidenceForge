@@ -487,3 +487,110 @@ Classification: `sibling_defect`; intended fix classification: `family_level`.
   sandbox-only failure: the Splunk runtime unit test could not bind an ephemeral loopback port.
   Rerunning that exact test with loopback permission passed, yielding 5,124 effective passes and
   no code failures.
+
+## Gate-repair loop 5 contract: Windows startup-module diversity
+
+Classification: `sibling_defect`; intended fix classification: `family_level`.
+
+- **Owning abstractions:** the unified DLL catalog owns possible executable/module relationships,
+  startup phase, and per-module occurrence likelihood; the process-execution bundle selects one
+  canonical startup sequence from that catalog for each process instance. `ImageLoadContext` owns
+  the selected order. `SourceTimingPlanner` owns source-visible inter-load timing; eCAR and Sysmon
+  remain projection-only consumers.
+- **Family invariants:** `ntdll.dll` remains a required initialization dependency. Other common
+  imports vary by host/executable dependency profile according to validated catalog probabilities.
+  The selected sequence is stable for identical inputs, ordered after process creation, contains
+  no duplicate path, and preserves executable compatibility. Source-visible startup gaps are
+  positive, ordered, scoped per process, and heavy-tailed rather than one constant 1.5--3 ms
+  cadence.
+- **Entry paths:** every canonical Windows `generate_process()` call, startup modules from the
+  common pool, application catalog, inline service profiles, and future declared startup entries.
+  Baseline runtime sampling and explicit tool-owned runtime adapters remain outside this startup
+  selector but retain duplicate and owner checks.
+- **Consumers:** process lifecycle state, `ImageLoadContext`, eCAR `MODULE/LOAD`, Sysmon Event 7,
+  source timing, observation grouping, format filters, evaluators, profile/config validation, and
+  rendered probes.
+- **Layer rationale:** dropping modules in eCAR or Sysmon would make two observers disagree about
+  canonical occurrence and would put shared behavior in emitters. Varying the possible imports in
+  the catalog and selecting them once in the process bundle keeps one owner; timing texture belongs
+  in the shared source planner and its data-driven profile.
+- **Sibling coverage:** unknown executables, application-specific startup suffixes, common-only
+  processes, required modules, probability bounds, deterministic selection, multiple hosts and
+  PIDs, eCAR/Sysmon chronology, compact bursts, observation filters, runtime modules, and exact
+  repeat generation.
+
+### Gate-repair loop 5 validation strategy
+
+- Extend `LoadedModuleEntry` and direct common/process profile validation with a bounded
+  `startup_probability`; add a data-driven lognormal startup timing profile with safe parsing and
+  config validation.
+- Add unit tests for required-module retention, deterministic but profile-scoped subset diversity,
+  probability validation, positive heavy-tailed ordered gaps, and unchanged runtime behavior.
+- Extend the rendered probe to measure exact common-sequence concentration and repeated cadence
+  signatures. Reproduce the existing 38-of-48 common-only concentration on `WS-NKAPOOR-01`, then
+  require the repaired integrated output to fall below the declared high-confidence threshold.
+- Run config validation, Ruff, focused and complete non-slow tests, integrated generation,
+  identical-input comparison, probe, and evaluation. Only after those pass, run a new four-role
+  blind panel against a neutral copy.
+
+### Gate-repair loop 5 implementation and rendered evidence
+
+- Added validated `startup_probability` metadata to the unified module-entry schema and directly
+  schema-check the common and process-specific module pools. `ntdll.dll` remains required; other
+  common dependencies are selected once per host/OS/executable profile. Repeated launches of one
+  binary therefore keep a coherent dependency set while unrelated applications no longer inherit
+  one universal nine-DLL tuple.
+- The process bundle makes the deterministic subset choice before creating canonical image-load
+  events, so eCAR and Sysmon consume identical module occurrences. Runtime sampling and explicit
+  tool adapters retain their existing catalog/duplicate protections.
+- Added a data-driven `windows_startup_modules` timing profile. `SourceTimingPlanner` now derives
+  positive, ordered lognormal inter-load gaps per source-visible process rather than multiplying
+  every load order by one process-wide 1.5--3 ms constant.
+- The probe now verifies both template concentration across unrelated executable families and
+  exact compact cadence repetition. Against the frozen loop-4 output it reproduces 38 of 48
+  `WS-NKAPOOR-01` startup processes using the exact nine-module tuple across eight executables,
+  plus a cadence repeated three times with alternating 2/3 ms gaps. Both checks are zero after the
+  repair.
+- The final output has profile-coherent repetition rather than per-launch randomness. On
+  `WS-NKAPOOR-01`, 44 startup-bearing processes produce 22 signatures; the most common signature
+  occurs 19 times for one executable only, and no exact cadence repeats. Other Windows hosts show
+  the same executable-bounded pattern.
+- Focused module, activity, timing, source-timing, and config-validation tests pass with 490 tests.
+  Configuration validation passes all 87 files; repository-wide Ruff check and format check pass.
+- Integrated output:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop5b/branch-enterprise`; identical-input repeat:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop5b/branch-enterprise-repeat`. `diff -qr` returned
+  zero. The general probe retains only the 28 already-scheduled network findings and reports no
+  module, session, Windows field, record-ID, Linux PID, or SSH chronology regression.
+- Human-readable evaluation passes at 96/100 over 49,838 records. Parseability, cross-source field
+  agreement, causal ordering, temporal integrity, and rate plausibility remain 100.
+- The complete non-slow suite produced 5,129 passes and 41 skips in 219.02 seconds with only the
+  sandbox's loopback-bind restriction in the Splunk harness. The exact test passed with loopback
+  permission, yielding 5,130 effective passes and no code failures.
+- The final blind input is the data-only neutral copy at `/private/tmp/case-theta.CA1ojS`; it
+  contains no scenario, ground truth, code, or prior reports.
+
+### Final post-Batch-2 gate panel and disposition
+
+- Four fresh reviewers unanimously classified the overall corpus as synthetic. Threat Hunter,
+  Detection Engineer, Network Forensics, and Host/EDR synthetic-confidence scores were 96, 85, 96,
+  and 86 respectively (average 90.75); average verdict confidence was 91 and score spread was 11.
+  Deliberation did not trigger under the established thresholds.
+- The overall panel score is not used as a pre/post causal measure. The panel is stochastic and
+  identified strong defects outside the bounded gate scope. The decision instead uses the declared
+  executable invariants and verifies every claimed blocker against output or code.
+- No reviewer reproduced the repaired local-session opening, per-session winlogon owner, Event
+  4648 field, Linux PID chronology, SSH responder/flow ordering, Windows module lifetime,
+  EventRecordID, or universal cross-executable startup-module template/cadence defect. The general
+  rendered probe also reports zero findings for every one of those families.
+- Verified Batch 3 findings are dynamic PAT teardown before the owning SYN-timeout connection,
+  inbound ICMP static-NAT `laddr` projection, IDS signatures on incompatible HTTP/transport
+  evidence, provider-timestamp texture, and a primary-source proof check for services assigned to
+  payload-free bad-checksum Zeek rows.
+- Verified Batch 4 findings are arbitrary Windows process/file-family combinations, incoherent
+  software and application/destination placement, compact scanner populations, Linux daemon
+  message texture, web outcome distributions, and remote-administration demand collisions.
+- The authoritative gate therefore passes. These findings refine their already-approved batches;
+  they do not create another blind-review repair loop or replace the completed remediation roadmap.
+  Reports, scores, and dispositions are tracked under
+  `docs/design/realism-review/post-gate-loop5-blind/`.

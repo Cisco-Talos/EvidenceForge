@@ -1185,6 +1185,37 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_startup_module_timing(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        real_loader = timing_profiles.load_timing_profiles
+
+        def load_invalid_timing_profiles():
+            data = real_loader()
+            startup = dict(data.get("windows_startup_modules", {}))
+            gaps = dict(startup.get("inter_load_gap_us", {}))
+            gaps["sigma"] = 0
+            gaps["median"] = gaps.get("max", 1) + 1
+            startup["inter_load_gap_us"] = gaps
+            return {**data, "windows_startup_modules": startup}
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "inter_load_gap_us.sigma" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "inter_load_gap_us.median must be within min/max" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_edr_side_effect_profile(self, monkeypatch):
         from evidenceforge.generation.activity import edr_pools
 

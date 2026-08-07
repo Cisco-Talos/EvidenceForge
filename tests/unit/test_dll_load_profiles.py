@@ -13,6 +13,7 @@ from evidenceforge.generation.activity.dll_load_profiles import (
     get_startup_dlls_for_process,
     load_dll_profiles,
     module_is_compatible_with_process,
+    select_startup_dlls_for_process,
 )
 
 
@@ -111,6 +112,34 @@ class TestGetDllsForProcess:
         assert not any(path.endswith("\\7-zip.dll") for path in startup_paths)
         assert any(path.endswith("\\7-zip.dll") for path in runtime_paths)
 
+    def test_startup_selection_is_deterministic_and_keeps_required_ntdll(self):
+        first = select_startup_dlls_for_process(
+            "unknown.exe",
+            seed_parts=("WS-01", 4100, "2024-01-15T10:00:00Z"),
+        )
+        second = select_startup_dlls_for_process(
+            "unknown.exe",
+            seed_parts=("WS-01", 4100, "2024-01-15T10:00:00Z"),
+        )
+
+        assert first == second
+        assert first[0]["path"].lower().endswith("\\ntdll.dll")
+
+    def test_startup_selection_varies_by_host_executable_profile(self):
+        signatures = {
+            tuple(
+                module["path"].rsplit("\\", 1)[-1].lower()
+                for module in select_startup_dlls_for_process(
+                    "unknown.exe",
+                    seed_parts=(f"WS-{profile_id:02d}", "Windows 11"),
+                )
+            )
+            for profile_id in range(64)
+        }
+
+        assert len(signatures) >= 12
+        assert all(signature[0] == "ntdll.dll" for signature in signatures)
+
     def test_known_third_party_module_is_owner_restricted(self):
         module = r"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnapi.dll"
 
@@ -142,6 +171,7 @@ class TestApplyDefaults:
         result = _apply_defaults(entry, default_load_phase="startup")
 
         assert result["load_phase"] == "startup"
+        assert result["startup_probability"] == 1.0
 
     def test_explicit_values_preserved(self):
         entry = {
@@ -188,6 +218,15 @@ class TestValidation:
             )
         assert result is False
         assert "invalid load_phase" in caplog.text
+
+    def test_invalid_startup_probability_fails(self, caplog):
+        with caplog.at_level(logging.ERROR):
+            result = _validate_entry(
+                {"path": r"C:\test.dll", "startup_probability": 1.2},
+                "test",
+            )
+        assert result is False
+        assert "invalid startup_probability" in caplog.text
 
     def test_valid_signature_statuses_pass(self):
         for status in ["Valid", "Expired", "Revoked", "Unavailable"]:

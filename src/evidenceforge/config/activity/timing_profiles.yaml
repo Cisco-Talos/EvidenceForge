@@ -407,6 +407,19 @@ firewall_observation:
       tcp_embryonic_timeout_seconds: 30
       tcp_idle_timeout_seconds: 3600
 
+windows_startup_modules:
+  # Source-visible loader telemetry commonly arrives in a tight burst, but
+  # dependency work and collector batching produce a heavy tail rather than
+  # one fixed per-process cadence.
+  initial_delay_us:
+    min: 250
+    max: 6500
+  inter_load_gap_us:
+    median: 1900
+    sigma: 0.95
+    min: 120
+    max: 65000
+
 windows_event_time:
   collision_spacing:
     # For small tied clusters, near-zero remains realistic.

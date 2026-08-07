@@ -36,6 +36,18 @@ class TimingWindow:
 
 
 @dataclass(frozen=True, slots=True)
+class StartupModuleObservationTiming:
+    """Source-visible Windows process initialization timing parameters."""
+
+    initial_delay_min_us: int
+    initial_delay_max_us: int
+    inter_load_gap_median_us: int
+    inter_load_gap_sigma: float
+    inter_load_gap_min_us: int
+    inter_load_gap_max_us: int
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkSensorObservationTiming:
     """Per-sensor clock, route, jitter, and capture-loss bounds."""
 
@@ -216,6 +228,57 @@ def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) ->
     seed = "packet_timing_delta:" + key + ":" + ":".join(str(part) for part in seed_parts)
     rng = random.Random(_stable_seed(seed))
     return base_delta + timedelta(microseconds=rng.randint(37, 997))
+
+
+def startup_module_observation_timing() -> StartupModuleObservationTiming:
+    """Return safe data-driven timing for source-visible startup module bursts."""
+    data = load_timing_profiles().get("windows_startup_modules", {})
+    if not isinstance(data, dict):
+        data = {}
+    initial_min, initial_max = _safe_int_range(
+        data.get("initial_delay_us"),
+        fallback_min=250,
+        fallback_max=6_500,
+        minimum=1,
+        maximum=1_000_000,
+    )
+    gap_data = data.get("inter_load_gap_us", {})
+    if not isinstance(gap_data, dict):
+        gap_data = {}
+    gap_min = _safe_int(
+        gap_data.get("min"),
+        120,
+        minimum=1,
+        maximum=1_000_000,
+    )
+    gap_max = _safe_int(
+        gap_data.get("max"),
+        65_000,
+        minimum=1,
+        maximum=1_000_000,
+    )
+    if gap_max < gap_min:
+        gap_min, gap_max = 120, 65_000
+    gap_median = _safe_int(
+        gap_data.get("median"),
+        1_900,
+        minimum=gap_min,
+        maximum=gap_max,
+    )
+    gap_sigma = _safe_float(
+        gap_data.get("sigma"),
+        0.95,
+        minimum=0.05,
+        maximum=3.0,
+    )
+    return StartupModuleObservationTiming(
+        initial_delay_min_us=initial_min,
+        initial_delay_max_us=initial_max,
+        inter_load_gap_median_us=gap_median,
+        inter_load_gap_sigma=gap_sigma,
+        inter_load_gap_min_us=gap_min,
+        inter_load_gap_max_us=gap_max,
+    )
 
 
 def network_sensor_observation_timing(

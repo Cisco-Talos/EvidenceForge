@@ -23209,11 +23209,14 @@ class ActivityGenerator:
     ) -> None:
         """Emit the configured Windows loader chain during process initialization."""
         from evidenceforge.generation.activity.dll_load_profiles import (
-            get_startup_dlls_for_process,
+            select_startup_dlls_for_process,
         )
 
         exe_basename = ntpath.basename(process_name).lower()
-        startup_modules = get_startup_dlls_for_process(exe_basename)
+        startup_modules = select_startup_dlls_for_process(
+            exe_basename,
+            seed_parts=(system.hostname, system.os),
+        )
         elapsed_ms = 1 + (
             _stable_seed(f"windows-startup-modules:{system.hostname}:{pid}:{time.isoformat()}") % 4
         )

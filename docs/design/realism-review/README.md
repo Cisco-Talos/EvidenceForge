@@ -37,6 +37,8 @@ only as bounded, separately reviewed feature-branch batches.
 - `probe-*.json`: durable results from the generated-output invariant probe.
 - `blind-*.md` and `historical-blind-evidence.json`: isolated current expert reviews and separately
   labeled historical recurrence evidence.
+- `post-gate-loop5-blind/`: final isolated post-Batch-2 gate panel, scores, and verified finding
+  dispositions after the five bounded lifecycle/module repair loops.
 - `security-review.md`: sealed security-scan summary, threat model, findings, and limitations.
 - `findings.json`: normalized 34-row validated finding register.
 - `contract-proposals.md`: proposal-only canonical contracts behind a separate approval gate.

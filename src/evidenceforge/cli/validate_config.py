@@ -562,6 +562,7 @@ def validate_config() -> ValidationResult:
             "dict_fields": {
                 "relationships",
                 "endpoint_clock",
+                "windows_startup_modules",
                 "windows_event_time",
                 "network_sensor_observation",
             },
@@ -1316,6 +1317,106 @@ def validate_config() -> ValidationResult:
                         "ERROR",
                         "timing_profiles.yaml",
                         f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
+                    )
+                )
+
+    startup_module_timing = timing_profiles_data.get("windows_startup_modules", {})
+    if not isinstance(startup_module_timing, dict):
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "timing_profiles.yaml",
+                "windows_startup_modules must be a mapping",
+            )
+        )
+    else:
+        initial_delay = startup_module_timing.get("initial_delay_us")
+        inter_load_gap = startup_module_timing.get("inter_load_gap_us")
+        for field_name, bounds in (
+            ("initial_delay_us", initial_delay),
+            ("inter_load_gap_us", inter_load_gap),
+        ):
+            if not isinstance(bounds, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name} must be a mapping",
+                    )
+                )
+                continue
+            min_value = bounds.get("min")
+            max_value = bounds.get("max")
+            if not isinstance(min_value, int) or isinstance(min_value, bool) or min_value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.min must be a positive integer",
+                    )
+                )
+            if not isinstance(max_value, int) or isinstance(max_value, bool) or max_value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.max must be a positive integer",
+                    )
+                )
+            if (
+                isinstance(min_value, int)
+                and not isinstance(min_value, bool)
+                and isinstance(max_value, int)
+                and not isinstance(max_value, bool)
+                and max_value < min_value
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.max must be >= min",
+                    )
+                )
+        if isinstance(inter_load_gap, dict):
+            median = inter_load_gap.get("median")
+            sigma = inter_load_gap.get("sigma")
+            if not isinstance(median, int) or isinstance(median, bool) or median <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.median must be a positive integer",
+                    )
+                )
+            if (
+                not isinstance(sigma, int | float)
+                or isinstance(sigma, bool)
+                or not math.isfinite(float(sigma))
+                or not 0.05 <= float(sigma) <= 3.0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.sigma must be finite and between 0.05 and 3.0",
+                    )
+                )
+            gap_min = inter_load_gap.get("min")
+            gap_max = inter_load_gap.get("max")
+            if (
+                isinstance(median, int)
+                and not isinstance(median, bool)
+                and isinstance(gap_min, int)
+                and not isinstance(gap_min, bool)
+                and isinstance(gap_max, int)
+                and not isinstance(gap_max, bool)
+                and not gap_min <= median <= gap_max
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.median must be within min/max",
                     )
                 )
 
@@ -2494,6 +2595,7 @@ def validate_config() -> ValidationResult:
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
         KerberosRealismConfig,
+        LoadedModuleEntry,
         MailPublicIdentitiesConfig,
         ObservationProfilesConfig,
         OuiEntry,
@@ -2546,6 +2648,24 @@ def validate_config() -> ValidationResult:
                 "system_processes.yaml (scheduled_tasks)",
             )
         )
+        common_modules = (sys_proc_data.get("common_loaded_modules") or {}).get("windows", [])
+        if isinstance(common_modules, list):
+            _SCHEMA_CHECKS.append(
+                (
+                    common_modules,
+                    LoadedModuleEntry,
+                    "system_processes.yaml (common_loaded_modules.windows)",
+                )
+            )
+        for exe_name, modules in (sys_proc_data.get("process_loaded_modules") or {}).items():
+            if isinstance(modules, list):
+                _SCHEMA_CHECKS.append(
+                    (
+                        modules,
+                        LoadedModuleEntry,
+                        f"system_processes.yaml (process_loaded_modules.{exe_name})",
+                    )
+                )
         for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
             if isinstance(role_entries, list):
                 _SCHEMA_CHECKS.append(

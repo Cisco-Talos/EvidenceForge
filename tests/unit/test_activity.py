@@ -6634,7 +6634,9 @@ class TestActivityGenerator:
         )
 
         profile_paths = {entry["path"] for entry in get_startup_dlls_for_process("firefox.exe")}
-        assert {event.image_load.image_loaded for event in module_events} == profile_paths
+        emitted_paths = {event.image_load.image_loaded for event in module_events}
+        assert emitted_paths <= profile_paths
+        assert any(path.lower().endswith("\\ntdll.dll") for path in emitted_paths)
         assert [event.image_load.load_order for event in module_events] == list(
             range(1, len(module_events) + 1)
         )

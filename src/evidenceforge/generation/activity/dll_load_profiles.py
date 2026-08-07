@@ -14,7 +14,10 @@ Provides a single lookup: exe basename → list of DLL dicts with defaults appli
 from __future__ import annotations
 
 import logging
+import random
 from typing import Any
+
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,7 @@ def _apply_defaults(
         "signature_status": entry.get("signature_status", "Valid"),
         "pe_metadata": entry.get("pe_metadata"),
         "load_phase": entry.get("load_phase", default_load_phase),
+        "startup_probability": entry.get("startup_probability", 1.0),
     }
 
 
@@ -73,6 +77,20 @@ def _validate_entry(entry: dict[str, Any], source: str) -> bool:
             source,
             load_phase,
             _VALID_LOAD_PHASES,
+        )
+        return False
+    startup_probability = entry.get("startup_probability", 1.0)
+    if (
+        not isinstance(startup_probability, int | float)
+        or isinstance(startup_probability, bool)
+        or not 0.0 <= float(startup_probability) <= 1.0
+    ):
+        logger.error(
+            "DLL profile path %r in %s has invalid startup_probability %r "
+            "(must be between 0 and 1) — skipping",
+            path,
+            source,
+            startup_probability,
         )
         return False
     return True
@@ -315,6 +333,42 @@ def get_startup_dlls_for_process(exe_basename: str) -> list[dict[str, Any]]:
     return [
         module for module in get_dlls_for_process(exe_basename) if module["load_phase"] == "startup"
     ]
+
+
+def select_startup_dlls_for_process(
+    exe_basename: str,
+    *,
+    seed_parts: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """Select one deterministic scoped startup dependency sequence.
+
+    The catalog declares possible imports and their occurrence likelihood. This
+    function makes the canonical profile choice once so every process using that
+    scope, and every source observing it, sees the same dependency set.
+    """
+    selected: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for module in get_startup_dlls_for_process(exe_basename):
+        normalized_path = str(module["path"]).replace("/", "\\").lower()
+        if normalized_path in seen_paths:
+            continue
+        probability = float(module.get("startup_probability", 1.0))
+        if probability <= 0.0:
+            continue
+        if probability < 1.0:
+            seed = ":".join(
+                (
+                    "startup-module-selection",
+                    exe_basename.lower(),
+                    *(str(part) for part in seed_parts),
+                    normalized_path,
+                )
+            )
+            if random.Random(_stable_seed(seed)).random() >= probability:
+                continue
+        selected.append(module)
+        seen_paths.add(normalized_path)
+    return selected
 
 
 def get_runtime_dlls_for_process(exe_basename: str) -> list[dict[str, Any]]:

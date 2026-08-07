@@ -586,6 +586,7 @@ def _check_ecar_lifecycles(
     startup_names = {"ntdll.dll", "kernel32.dll", "kernelbase.dll"}
     late_startup_modules: list[dict[str, Any]] = []
     incompatible_modules: list[dict[str, Any]] = []
+    startup_modules_by_actor: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         if record.get("object") != "MODULE" or record.get("action") != "LOAD":
             continue
@@ -596,13 +597,11 @@ def _check_ecar_lifecycles(
         create = process_creates.get(actor_id)
         module_timestamp = record.get("timestamp_ms")
         module_name = module_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if (
-            create is not None
-            and module_name in startup_names
-            and isinstance(module_timestamp, int | float)
-        ):
+        if create is not None and isinstance(module_timestamp, int | float):
             delay_ms = float(module_timestamp) - float(create["timestamp_ms"])
-            if delay_ms > 5_000:
+            if 0 <= delay_ms <= 5_000:
+                startup_modules_by_actor[actor_id].append(record)
+            if module_name in startup_names and delay_ms > 5_000:
                 late_startup_modules.append(
                     {
                         "actor_id": actor_id,
@@ -628,6 +627,92 @@ def _check_ecar_lifecycles(
                     "module_path": module_path,
                     "module_record_id": record.get("id"),
                 }
+            )
+
+    common_startup_signature = (
+        "ntdll.dll",
+        "kernel32.dll",
+        "kernelbase.dll",
+        "msvcrt.dll",
+        "ucrtbase.dll",
+        "advapi32.dll",
+        "sechost.dll",
+        "rpcrt4.dll",
+        "bcryptprimitives.dll",
+    )
+    startup_signatures: list[tuple[str, ...]] = []
+    startup_executables_by_signature: dict[tuple[str, ...], set[str]] = defaultdict(set)
+    cadence_signatures: Counter[tuple[tuple[str, ...], tuple[float, ...]]] = Counter()
+    for actor_id, module_records in startup_modules_by_actor.items():
+        ordered = sorted(
+            module_records,
+            key=lambda record: (float(record["timestamp_ms"]), str(record.get("id") or "")),
+        )
+        names = tuple(
+            str((record.get("properties") or {}).get("file_path") or "")
+            .replace("/", "\\")
+            .rsplit("\\", 1)[-1]
+            .lower()
+            for record in ordered
+        )
+        if not names or names[0] != "ntdll.dll":
+            continue
+        startup_signatures.append(names)
+        create = process_creates.get(actor_id)
+        if create is not None:
+            executable = str((create.get("properties") or {}).get("image_path") or "")
+            if executable:
+                startup_executables_by_signature[names].add(executable.lower())
+        if len(ordered) >= 5:
+            gaps = tuple(
+                round(
+                    float(current["timestamp_ms"]) - float(prior["timestamp_ms"]),
+                    3,
+                )
+                for prior, current in zip(ordered, ordered[1:], strict=False)
+            )
+            cadence_signatures[(names, gaps)] += 1
+
+    exact_common_count = sum(
+        signature == common_startup_signature for signature in startup_signatures
+    )
+    exact_common_executables = startup_executables_by_signature[common_startup_signature]
+    if (
+        len(startup_signatures) >= 10
+        and exact_common_count >= 10
+        and exact_common_count / len(startup_signatures) >= 0.5
+        and len(exact_common_executables) >= 3
+    ):
+        findings.append(
+            Finding(
+                check="ecar_startup_module_template_concentration",
+                severity="error",
+                path=str(path),
+                message="One exact nine-module startup template dominates a host process population",
+                evidence={
+                    "startup_processes": len(startup_signatures),
+                    "exact_common_signature_count": exact_common_count,
+                    "share": exact_common_count / len(startup_signatures),
+                    "executable_count": len(exact_common_executables),
+                    "executables": sorted(exact_common_executables),
+                },
+            )
+        )
+    if cadence_signatures:
+        (names, gaps), cadence_count = cadence_signatures.most_common(1)[0]
+        if cadence_count >= 3 and gaps and max(gaps) <= 5:
+            findings.append(
+                Finding(
+                    check="ecar_startup_module_cadence_repetition",
+                    severity="error",
+                    path=str(path),
+                    message="An exact compact startup-module cadence repeats across processes",
+                    evidence={
+                        "count": cadence_count,
+                        "module_names": names,
+                        "gaps_ms": gaps,
+                    },
+                )
             )
 
     if late_startup_modules:

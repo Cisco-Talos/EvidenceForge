@@ -10,6 +10,8 @@ profiles and explicit constraints instead of independent emitter-local jitter.
 
 from __future__ import annotations
 
+import math
+import random
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -21,6 +23,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     network_sensor_observation_timing,
     sample_timing_delta,
+    startup_module_observation_timing,
 )
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.exceptions import StateError
@@ -1262,14 +1265,30 @@ class SourceTimingPlanner:
         )
         if image_load.load_phase == "startup":
             order = max(1, image_load.load_order)
+            timing = startup_module_observation_timing()
             spacing_seed = (
                 format_name,
                 getattr(event.src_host, "hostname", ""),
                 process.pid,
                 process.start_time,
             )
-            spacing_us = 1_500 + (_stable_seed(f"startup-module-source:{spacing_seed}") % 1_501)
-            return process_create_time + timedelta(microseconds=order * spacing_us)
+            rng = random.Random(_stable_seed(f"startup-module-source:{spacing_seed}"))
+            elapsed_us = rng.randint(
+                timing.initial_delay_min_us,
+                timing.initial_delay_max_us,
+            )
+            for _module_index in range(1, order):
+                sampled_gap = round(
+                    rng.lognormvariate(
+                        math.log(timing.inter_load_gap_median_us),
+                        timing.inter_load_gap_sigma,
+                    )
+                )
+                elapsed_us += max(
+                    timing.inter_load_gap_min_us,
+                    min(sampled_gap, timing.inter_load_gap_max_us),
+                )
+            return process_create_time + timedelta(microseconds=elapsed_us)
 
         source_key = (
             "source.ecar_dependent_after_process_create"
