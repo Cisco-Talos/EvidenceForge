@@ -223,7 +223,14 @@ log entries for that connection. A topology may omit sensors entirely; canonical
 connection activity, endpoint evidence, proxy logs, and application logs still
 model the activity, but no sensor-backed network logs are written.
 
-**Network Address Translation:** When firewall sensors have `nat_rules`, the dispatcher computes NAT translations for permitted cross-boundary connections. The `NatContext` on `SecurityEvent` carries mapped IPs. The ASA emitter renders both real and mapped addresses (305011/305012 + parenthesized IPs in Built messages). Zeek emitters swap IPs for post-NAT sensors via `_nat_swaps_by_sensor`, so inside sensors see real IPs while outside sensors see translated IPs.
+**Network Address Translation:** When firewall sensors have `nat_rules`, the dispatcher computes
+NAT translations for permitted cross-boundary connections. `NatContext` owns the translation and
+the finalized network transaction owns the canonical tuple. `NetworkObservationPlanner` combines
+those facts with sensor topology and freezes one `NetworkSensorObservation` tuple/locality view per
+sensor. The ASA emitter renders both real and mapped addresses (305011/305012 plus parenthesized
+addresses in Built messages); Zeek and IDS emitters consume the frozen sensor views, so inside
+sensors see real addresses while outside sensors see translated addresses. No mutable per-emitter
+NAT swap map is retained on the event.
 
 ---
 
@@ -236,7 +243,7 @@ The `SecurityEvent` dataclass (`src/evidenceforge/events/base.py`) is the centra
 ```
 SecurityEvent
 ├── timestamp: datetime (UTC)
-├── event_type: str (compatibility field checked against EventKind during shadow sealing)
+├── event_type: str (compatibility carrier checked against the closed EventKind registry)
 ├── src_host: HostContext (originating system — hostname, IP, OS, domain, FQDN)
 ├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
@@ -253,7 +260,7 @@ SecurityEvent
 ├── shell: ShellContext (command)
 ├── ... (typed semantic context fields plus immutable plans)
 ├── occurrence_key: SemanticOccurrenceKey (optional migration identity)
-├── contract_seal: ShadowSealResult (immutable diagnostic snapshot)
+├── contract_seal: ShadowSealResult (immutable dispatch-admission snapshot)
 ├── source_timing: SourceTimingPlan (planned source-native timestamps)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```
@@ -267,19 +274,24 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
   whole multi-phase activity into one event. If connection, auth, session open,
   process creation, command execution, and session close are distinct occurrences,
   coordinate them with an action bundle and emit distinct `SecurityEvent`s.
-- All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
+- The mutable carrier can be constructed with only `timestamp` and `event_type`, but dispatch is a
+  closed admission boundary: unknown event kinds, missing required contexts, forbidden contexts,
+  and missing required identity plans are rejected before state or emitters can observe the event.
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
 - `RawLogEntry` and the compatibility `RawContext` pipeline adapter serve the explicit user-facing
   `raw` event type. They remain outside canonical cross-source consistency guarantees.
 
 `src/evidenceforge/events/contracts.py` defines the closed `EventKind`, `ContextKind`, and
 `FormatKind` domains plus one `EventKindContract` per currently produced canonical kind. The
-dispatcher captures an immutable `CanonicalOccurrenceSnapshot` after identity planning and records
-missing/forbidden context and identity discrepancies. This is intentionally shadow-only in the
-foundation batch: violations are diagnostic and do not block state application, routing,
-observation, or projection. The user-facing `raw` path remains outside the registry, and the two
-legacy consumer-only names (`module_load` and `special_privileges`) are not advertised as produced
-canonical kinds.
+dispatcher captures an immutable `CanonicalOccurrenceSnapshot` after identity/lifecycle planning
+and enforces missing/forbidden context and identity rules before assigning an event ID, applying
+state, or routing to observation and projection. `shadow_seal()` remains available as the
+table-driven contract diagnostic used by inventory and tests, but dispatch no longer accepts a
+seal with violations. The user-facing `raw` path remains outside the registry and outside
+cross-source consistency guarantees. The unreachable emitter aliases `module_load` and
+`special_privileges` were removed; the canonical image-load kind is `image_load`, while Windows
+Event 4672 is a source-native fan-out of its owning elevated logon rather than a second canonical
+occurrence.
 
 `ActionAnchor.action_id` and `SemanticOccurrenceKey` provide stable action-relative identity
 without replacing existing event IDs yet. Instance keys should be domain identities such as a

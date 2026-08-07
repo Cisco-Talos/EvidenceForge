@@ -135,12 +135,6 @@
       "assessment": "These occurrences have one production contract per semantic variant. They are source-local or dependent evidence and do not independently own cross-source transport or session facts."
     },
     {
-      "names": ["module_load", "special_privileges"],
-      "classification": "unsupported_escape_hatch",
-      "owner": "none",
-      "assessment": "These names remain in emitter support tables but have no production SecurityEvent producer. Image loads use image_load; privilege event 4672 is emitted as renderer-side fan-out from logon."
-    },
-    {
       "names": ["raw"],
       "classification": "unsupported_escape_hatch",
       "owner": "RawContext and EventDispatcher.dispatch_raw",
@@ -417,9 +411,9 @@
     },
     {
       "names": ["windows_event_security"],
-      "classification": "duplicate_owner",
-      "owner": "Windows Security emitter plus upstream logon occurrence",
-      "assessment": "The emitter projects most events but also creates 4672 fan-out from logon while retaining unreachable special_privileges support, so occurrence versus source-record ownership is mixed."
+      "classification": "intentional_adapter",
+      "owner": "upstream canonical occurrence plus Windows Security source-native projection",
+      "assessment": "The emitter projects canonical occurrences and source-native companion records such as Event 4672 from the owning elevated logon. The unreachable special_privileges canonical alias has been removed."
     },
     {
       "names": ["windows_event_sysmon"],

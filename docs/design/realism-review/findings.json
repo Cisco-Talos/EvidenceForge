@@ -32,7 +32,13 @@
       "reproduction": "Run the missing-canonical-event-contract probe in architecture-object-model.md.",
       "sibling_risk": "Silent drops, illegal host direction, unsupported context combinations, unreviewed future event strings, and incompatible alternate constructors.",
       "proposed_remediation": "Approve and introduce EventKindContract plus a sealed occurrence builder; make dispatch reject incomplete or unknown canonical events.",
-      "required_tests": ["table-driven contract test for every event kind", "negative tests for every missing/forbidden context", "inventory test proving producer and consumer closure"]
+      "required_tests": ["table-driven contract test for every event kind", "negative tests for every missing/forbidden context", "inventory test proving producer and consumer closure"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "A closed registry, table-driven required/forbidden context checks, identity requirements, and dispatch-time rejection now prevent unknown or incomplete canonical occurrences from reaching state or emitters. Construction remains a mutable compatibility carrier and producer/host-direction permissions are not yet a sealed builder contract.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
     },
     {
       "id": "ARCH-002",
@@ -56,7 +62,13 @@
       "reproduction": "Run the named dispatcher unit test and inspect the state timestamp after dispatch.",
       "sibling_risk": "Artificial lifetime extension, PID reuse suppression, action attribution after canonical termination, and format-dependent state.",
       "proposed_remediation": "Adopt explicit CanonicalTime and ObservedTime types and prohibit observation code from issuing state commands.",
-      "required_tests": ["state equality across observation profiles", "process reuse invariance under source delay", "no observed-time StateManager calls"]
+      "required_tests": ["state equality across observation profiles", "process reuse invariance under source delay", "no observed-time StateManager calls"],
+      "remediation": {
+        "status": "resolved_in_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "Dispatcher source-delay copies no longer update canonical process activity; StateManager consumes the canonical event once before observation and source-local delay remains projection-only.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
     },
     {
       "id": "ARCH-003",
@@ -80,7 +92,13 @@
       "reproduction": "Inspect the duplicate fields in event-context-paths.json and Sysmon projection paths in event-context-path-census.md.",
       "sibling_risk": "Per-source hostname, identity, accounting, timing, or certificate drift after shallow event copies.",
       "proposed_remediation": "Use private mutable builders followed by one freeze/seal step; remove renderer access to mutable compatibility truth after sealing.",
-      "required_tests": ["mutation-after-seal rejection", "plan/context projection equality", "cross-format shared-fact equality"]
+      "required_tests": ["mutation-after-seal rejection", "plan/context projection equality", "cross-format shared-fact equality"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "Identity, network, protocol, proxy, TLS, OCSP, ground-truth, and observation slices gained immutable plans across earlier batches; Batch 7 removed the duplicate mutable per-sensor NAT map. Public mutable context views remain migration debt while live consumers exist.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
     },
     {
       "id": "ARCH-004",
@@ -104,7 +122,12 @@
       "reproduction": "Use generator_methods and action_bundles rows in event-context-paths.json.",
       "sibling_risk": "New entry paths bypass lifecycle, timing, identity, or observation rules while appearing architecturally compliant.",
       "proposed_remediation": "Extract vertical slices in dependency order and make legacy generator methods private adapters into bundle-owned planners.",
-      "required_tests": ["entry-path equivalence by action family", "bundle owns every emitted occurrence role", "no direct stateful constructor outside owner"]
+      "required_tests": ["entry-path equivalence by action family", "bundle owns every emitted occurrence role", "no direct stateful constructor outside owner"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_6",
+        "evidence": "Session/authentication, network/protocol/IDS, world-capability, projection, and input-boundary vertical slices now use canonical owners, but legacy _execute adapters and direct constructors remain in unextracted families.",
+        "results": "docs/design/realism-review/final-report.md"
+      }
     },
     {
       "id": "ARCH-005",
@@ -128,7 +151,12 @@
       "reproduction": "Run realism_review_probe.py against branch-enterprise and inspect ecar_rdp_transport_before_auth and zeek_file_interval.",
       "sibling_risk": "Transport/auth inversion, orphaned lifecycle evidence, closure outside collection windows, and source-specific impossible sequences.",
       "proposed_remediation": "Approve an ActionTimeline contract with typed nodes/edges, then derive every source time from its frozen solution.",
-      "required_tests": ["constraint property tests", "cross-source interval containment", "all source times derived from sealed timeline"]
+      "required_tests": ["constraint property tests", "cross-source interval containment", "all source times derived from sealed timeline"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_3",
+        "evidence": "SSH, RDP, process/session, network, protocol, file, and IDS timing contradictions were repaired with bundle graphs and authoritative intervals. A single universal sealed ActionTimeline has not replaced all distributed clamps.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
     },
     {
       "id": "ARCH-006",
@@ -176,7 +204,13 @@
       "reproduction": "Run the sequence-sensitive event identity probe in architecture-object-model.md.",
       "sibling_risk": "Unrelated feature changes invalidate joins, golden fixtures, truth references, and evaluation baselines.",
       "proposed_remediation": "Adopt ActionId plus OccurrenceRole-derived IDs and make truth/observation ledgers projections of the sealed action graph.",
-      "required_tests": ["prefix-insertion ID stability", "truth-to-occurrence referential integrity", "repeat and format-filter truth equivalence"]
+      "required_tests": ["prefix-insertion ID stability", "truth-to-occurrence referential integrity", "repeat and format-filter truth equivalence"],
+      "remediation": {
+        "status": "partially_resolved_in_batch_5",
+        "branch": "codex/batch5-projection-evaluation",
+        "evidence": "Authored intent, execution occurrences, and source observations now reconcile into ground truth with non-vacuous evaluation. Legacy event IDs remain sequence-sensitive where no semantic occurrence key exists.",
+        "results": "docs/design/realism-review/batch5-results.json"
+      }
     },
     {
       "id": "ARCH-008",
@@ -200,7 +234,13 @@
       "reproduction": "Run realism_review_inventory.py and inspect unresolved_static_inventory.",
       "sibling_risk": "Users enable formats that never emit, reviewers assume owners that are adapters, and new code copies stale patterns.",
       "proposed_remediation": "After contracts are approved, remove dead registrations or add real producers and update architecture status to measured conformance.",
-      "required_tests": ["production reachability test per format", "bundle protocol conformance", "docs inventory generated from registry"]
+      "required_tests": ["production reachability test per format", "bundle protocol conformance", "docs inventory generated from registry"],
+      "remediation": {
+        "status": "partially_resolved_in_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "The unreachable module_load and special_privileges registrations were removed and architecture/scenario/evaluation/security status was reconciled. Weird/email reachability and remaining bundle protocol gaps stay explicit in the static inventory.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
     },
     {
       "id": "REAL-001",
@@ -224,7 +264,13 @@
       "reproduction": "Run realism_review_probe.py and inspect ecar_ssh_actor_overlapping_connections and ecar_process_after_session_logout.",
       "sibling_risk": "Browser/proxy reuse, scp/sftp clients, remote admin tools, stale parentage, and PID retention across interactive logons.",
       "proposed_remediation": "Make ProcessIdentity carry immutable SessionIdentity and require session match for reuse; create one-shot SSH clients per transport unless multiplexing is explicit.",
-      "required_tests": ["no actor use after logout", "no session-crossing reuse", "SSH overlap only with explicit multiplexing", "proxy/browser sibling tests"]
+      "required_tests": ["no actor use after logout", "no session-crossing reuse", "SSH overlap only with explicit multiplexing", "proxy/browser sibling tests"],
+      "remediation": {
+        "status": "resolved_in_batch_2_and_gate_repairs",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Session-scoped process reuse, SSH client ownership, owner-end containment, and source-observation lifecycle checks were centralized and survived the bounded post-Batch-2 blind gate.",
+        "results": "docs/design/realism-review/post-gate-loop5-blind/summary.md"
+      }
     },
     {
       "id": "REAL-002",
@@ -248,7 +294,13 @@
       "reproduction": "Run the probe and inspect sysmon_logon_guid_immutable.",
       "sibling_risk": "Token, session, ProcessGuid, and ground-truth joins can split one session into multiple identities.",
       "proposed_remediation": "Allocate final SessionIdentity, including GUID nullability, before the first dependent occurrence and prohibit later metadata replacement.",
-      "required_tests": ["GUID immutability for every auth-package order", "zero/nonzero policy tests", "Sysmon/eCAR/Windows agreement"]
+      "required_tests": ["GUID immutability for every auth-package order", "zero/nonzero policy tests", "Sysmon/eCAR/Windows agreement"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Session identity owns final LogonGuid nullability before dependent evidence and cross-source tests reject mutation for one LogonID.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
     },
     {
       "id": "REAL-003",
@@ -272,7 +324,13 @@
       "reproduction": "Run the probe on the ten branch-24h outputs and inspect ecar_failed_attempt_identity_unique.",
       "sibling_risk": "Same-millisecond process/file/network events and retry loops may collapse if identity inputs omit occurrence role/ordinal.",
       "proposed_remediation": "Derive occurrence identity from ActionId, explicit attempt ordinal, and occurrence role.",
-      "required_tests": ["same-timestamp retry uniqueness", "repeat determinism", "ground-truth attempt joins"]
+      "required_tests": ["same-timestamp retry uniqueness", "repeat determinism", "ground-truth attempt joins"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Authentication-attempt identity now includes deterministic attempt scope so coincident retries retain distinct object identities.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
     },
     {
       "id": "REAL-004",
@@ -296,7 +354,13 @@
       "reproduction": "Inspect ecar_linux_login_parentage in probe-branch-enterprise.json.",
       "sibling_risk": "Gnome terminal, sshd/PAM, sudo, su, tmux/screen, and shell-history ownership.",
       "proposed_remediation": "Make LinuxLocalSessionActionBundle own an OS-specific bootstrap graph with explicit parent roles.",
-      "required_tests": ["server console tree", "desktop terminal tree", "SSH tree", "process timestamps and principals"]
+      "required_tests": ["server console tree", "desktop terminal tree", "SSH tree", "process timestamps and principals"],
+      "remediation": {
+        "status": "resolved_in_batch_2_and_gate_repairs",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Linux local, desktop, and SSH session bootstrap paths use typed parent ownership; host-scoped PID and responder ordering siblings were closed before the blind gate passed.",
+        "results": "docs/design/realism-review/post-gate-loop5-blind/summary.md"
+      }
     },
     {
       "id": "REAL-005",
@@ -320,7 +384,13 @@
       "reproduction": "Run the probe and inspect ids_transport_semantics; join the recorded tuple across snort_alert.log, conn.json, and cisco_asa.log.",
       "sibling_risk": "Status-code, exploit-success, server-response, TLS-decryption, DNS-answer, and file-content signatures.",
       "proposed_remediation": "Represent signature preconditions as structured direction/phase/payload/inspection predicates evaluated after the network outcome is planned.",
-      "required_tests": ["signature matrix over S0/REJ/SF", "response signatures require response bytes", "HTTP semantic agreement", "encrypted visibility tests"]
+      "required_tests": ["signature matrix over S0/REJ/SF", "response signatures require response bytes", "HTTP semantic agreement", "encrypted visibility tests"],
+      "remediation": {
+        "status": "resolved_in_batch_3",
+        "branch": "codex/batch3-network-protocol-ids",
+        "evidence": "IDS eligibility is evaluated against the finalized transport/protocol outcome and signature-specific predicates after accounting is frozen.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
     },
     {
       "id": "REAL-006",
@@ -344,7 +414,13 @@
       "reproduction": "Inspect ecar_rdp_transport_before_auth in probe-branch-enterprise.json.",
       "sibling_risk": "SSH, remote service, explicit credentials, Kerberos preauth, and source-process visibility ordering.",
       "proposed_remediation": "Bind auth readiness to the final admitted endpoint-flow time or omit actor identity when process visibility cannot fit before auth.",
-      "required_tests": ["source FLOW < target auth across profiles", "short-transport actor omission", "RDP process lifetime through close"]
+      "required_tests": ["source FLOW < target auth across profiles", "short-transport actor omission", "RDP process lifetime through close"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "The RDP bundle anchors authentication to the source-visible transport interval and omits late endpoint actor attribution instead of moving FLOW after authentication.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
     },
     {
       "id": "REAL-007",
@@ -368,7 +444,13 @@
       "reproduction": "Run the probe and inspect zeek_file_interval.",
       "sibling_risk": "X.509/OCSP/PE child records, SMTP attachments, HTTP request/response timing, and collection-window tails.",
       "proposed_remediation": "Put the final source-visible sensor interval in NetworkSensorObservation and require child analyzers to consume it.",
-      "required_tests": ["file interval contained for every source", "multi-file connections", "observation jitter/profile variants"]
+      "required_tests": ["file interval contained for every source", "multi-file connections", "observation jitter/profile variants"],
+      "remediation": {
+        "status": "resolved_in_batch_3",
+        "branch": "codex/batch3-network-protocol-ids",
+        "evidence": "Network transactions now own protocol/file child timing and constrain every source-visible file interval to its admitted parent connection.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
     },
     {
       "id": "REAL-008",
@@ -392,7 +474,13 @@
       "reproduction": "Run the probe on minimal and minimal-30d outputs.",
       "sibling_risk": "DNS, NTP, DC, gateway, NAT, and hostile-scanner pool role collisions.",
       "proposed_remediation": "Compile required infrastructure capabilities explicitly and fail validation or synthesize distinct reserved infrastructure identities before baseline generation.",
-      "required_tests": ["one-host topology", "distinct DHCP roles", "infrastructure role collision property test"]
+      "required_tests": ["one-host topology", "distinct DHCP roles", "infrastructure role collision property test"],
+      "remediation": {
+        "status": "resolved_in_batch_4",
+        "branch": "codex/batch4-world-capability-distribution-state",
+        "evidence": "Typed world capabilities and distinct-role validation prevent DHCP client/server/lease collapse while preserving explicitly supported small-world synthesis.",
+        "results": "docs/design/realism-review/batch4-results.json"
+      }
     },
     {
       "id": "REAL-009",
@@ -416,7 +504,13 @@
       "reproduction": "Use format_filter_equivalence commands and hashes in empirical-results.json.",
       "sibling_risk": "Ground truth, RNG consumption, state lifetimes, evaluator scores, and parallel-output equivalence.",
       "proposed_remediation": "Plan canonical actions independently of emitters; apply output selection only after observation/source projection.",
-      "required_tests": ["full-versus-filtered canonical ledger hash", "per-format byte equality", "parallel emitter equality", "ground-truth equality"]
+      "required_tests": ["full-versus-filtered canonical ledger hash", "per-format byte equality", "parallel emitter equality", "ground-truth equality"],
+      "remediation": {
+        "status": "resolved_in_batch_3",
+        "branch": "codex/batch3-network-protocol-ids",
+        "evidence": "Format selection is projection-only for the migrated network slice; full, filtered, and parallel runs preserve canonical ledgers and common-format bytes.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
     },
     {
       "id": "REAL-010",
@@ -500,7 +594,13 @@
       "reproduction": "Inspect zeek_ocsp_duration_distribution and zeek_aaaa_success_distribution plus the cited config/baseline paths.",
       "sibling_risk": "TLS optionality, public-client personas, service churn, cron schedules, and exact-hour activity.",
       "proposed_remediation": "Move each enumerable to validated data and each recurring behavior to durable per-entity state with coherent jitter and failure probability.",
-      "required_tests": ["minimum entropy/distribution tests", "state-coherent IRQ/device pairing", "stable DHCP lease schedule", "negative AAAA outcomes"]
+      "required_tests": ["minimum entropy/distribution tests", "state-coherent IRQ/device pairing", "stable DHCP lease schedule", "negative AAAA outcomes"],
+      "remediation": {
+        "status": "resolved_in_batch_4",
+        "branch": "codex/batch4-world-capability-distribution-state",
+        "evidence": "Lifecycle-scoped distribution state replaced the reviewed fixed and independently sampled fingerprints, including coherent journald tuples, DHCP schedules, AAAA outcomes, and OCSP durations.",
+        "results": "docs/design/realism-review/batch4-results.json"
+      }
     },
     {
       "id": "REAL-013",
@@ -584,7 +684,13 @@
       "reproduction": "Inspect ecar_explorer_parentage in probe-branch-enterprise.json.",
       "sibling_risk": "Userinit/winlogon, service-launched UI, scheduled tasks, and parent-chain repair.",
       "proposed_remediation": "Add typed process roles and allowed parent-role edges to the process execution contract.",
-      "required_tests": ["Windows interactive bootstrap tree", "service process tree", "no repair across incompatible roles"]
+      "required_tests": ["Windows interactive bootstrap tree", "service process tree", "no repair across incompatible roles"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Interactive Explorer bootstrap and parent repair are session-scoped and constrained to the logon chain; service ownership remains a separate parent family.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
     },
     {
       "id": "SEC-001",

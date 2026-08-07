@@ -60,6 +60,7 @@ from evidenceforge.generation.activity.timing_profiles import (
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.zeek_files import _bounded_file_transfer_observation
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _thread_local
 
@@ -535,7 +536,6 @@ class TestSslContextPopulation:
             time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             source_ip="10.0.10.50",
             source_port=51111,
-            logon_id="0xabc",
         )
 
         uid = SshSessionActionBundle(request=request, executor=gen).execute()
@@ -601,7 +601,6 @@ class TestSslContextPopulation:
             time=base_time,
             source_ip="10.0.10.50",
             source_port=51111,
-            logon_id="0xabc",
         )
 
         SshSessionActionBundle(request=request, executor=gen).execute()
@@ -961,8 +960,6 @@ class TestSslContextPopulation:
                 source_ip="10.0.10.50",
                 source_port=51111,
                 sshd_pid=sshd_pid,
-                logon_id="0xabc",
-                session_obj_id="session-obj-stable",
             )
 
             SshSessionActionBundle(request=request, executor=gen).execute()
@@ -974,6 +971,28 @@ class TestSslContextPopulation:
             ]
 
         assert run_bundle_once() == run_bundle_once()
+
+    def test_ssh_session_bundle_rejects_unowned_supplied_identity(self, activity_gen):
+        """Caller-supplied SSH IDs must resolve to canonical session state."""
+
+        gen, _events = activity_gen
+        request = SshSessionRequest(
+            user=User(username="admin", full_name="Admin User", email="admin@example.com"),
+            target_system=System(
+                hostname="linux01",
+                ip="10.0.20.10",
+                os="Ubuntu 24.04",
+                type="server",
+                roles=["web_server"],
+            ),
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id="0xabc",
+        )
+
+        with pytest.raises(StateError, match="StateManager-owned session"):
+            SshSessionActionBundle(request=request, executor=gen).execute()
 
     def test_ssh_session_bundle_records_session_lifecycle_bounds(self, activity_gen):
         gen, events = activity_gen

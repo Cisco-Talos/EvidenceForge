@@ -30,6 +30,7 @@ from evidenceforge.utils.rng import _stable_seed
 if TYPE_CHECKING:
     from evidenceforge.events.base import SecurityEvent
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+    from evidenceforge.models.scenario import NetworkSensor
 
 
 def derive_sensor_identifier(canonical_id: str, sensor_identity: str) -> str:
@@ -89,7 +90,7 @@ class NetworkObservationPlanner:
                 if self.visibility_engine is not None
                 else "unspecified"
             )
-            tuple_view = self._tuple_view(event, sensor_identity)
+            tuple_view, local_orig, local_resp = self._sensor_view(event, sensor)
             observed_start = self._observed_time(
                 transaction.started_at,
                 timing,
@@ -139,18 +140,8 @@ class NetworkObservationPlanner:
                         (file_id, derive_sensor_identifier(file_id, sensor_identity))
                         for file_id in canonical_file_ids
                     ),
-                    local_orig=bool(
-                        event._nat_swaps_by_sensor.get(sensor_identity, {}).get(
-                            "local_orig",
-                            network.local_orig,
-                        )
-                    ),
-                    local_resp=bool(
-                        event._nat_swaps_by_sensor.get(sensor_identity, {}).get(
-                            "local_resp",
-                            network.local_resp,
-                        )
-                    ),
+                    local_orig=local_orig,
+                    local_resp=local_resp,
                     observed_start_time=observed_start,
                     observed_close_time=observed_close,
                     traffic=self._observed_traffic(
@@ -280,17 +271,64 @@ class NetworkObservationPlanner:
                 sensor_formats.setdefault(sensor_identity, set()).add(format_name)
         return sensor_formats
 
-    @staticmethod
-    def _tuple_view(event: SecurityEvent, sensor_identity: str) -> NetworkTuple:
+    def _sensor_view(
+        self,
+        event: SecurityEvent,
+        sensor: NetworkSensor | None,
+    ) -> tuple[NetworkTuple, bool, bool]:
+        """Derive one sensor's tuple and locality directly from topology and NAT truth."""
+
+        network = event.network
         transaction = event.network.transaction
-        swaps = event._nat_swaps_by_sensor.get(sensor_identity, {})
-        return NetworkTuple(
-            src_ip=str(swaps.get("src_ip", transaction.src_ip)),
-            src_port=int(swaps.get("src_port", transaction.src_port)),
-            dst_ip=str(swaps.get("dst_ip", transaction.dst_ip)),
-            dst_port=int(swaps.get("dst_port", transaction.dst_port)),
+        tuple_view = NetworkTuple(
+            src_ip=transaction.src_ip,
+            src_port=transaction.src_port,
+            dst_ip=transaction.dst_ip,
+            dst_port=transaction.dst_port,
             protocol=transaction.protocol,
         )
+        local_orig = network.local_orig
+        local_resp = network.local_resp
+        nat = event.nat
+        if (
+            nat is None
+            or sensor is None
+            or sensor.type == "firewall"
+            or self.visibility_engine is None
+        ):
+            return tuple_view, local_orig, local_resp
+
+        sensor_segments = set(sensor.monitoring_segments)
+        inbound = nat.nat_type == "static" and bool(
+            nat.pre_nat_dst_ip or (nat.mapped_dst_ip and nat.mapped_dst_ip != transaction.dst_ip)
+        )
+        if inbound:
+            local_dst_ip = nat.mapped_dst_ip or transaction.dst_ip
+            local_dst_port = nat.mapped_dst_port or transaction.dst_port
+            global_dst_ip = nat.pre_nat_dst_ip or transaction.dst_ip
+            global_dst_port = nat.pre_nat_dst_port or transaction.dst_port
+            local_segments = self.visibility_engine._resolve_ip_segments(local_dst_ip)
+            inside = bool(sensor_segments & local_segments)
+            tuple_view = NetworkTuple(
+                src_ip=transaction.src_ip,
+                src_port=transaction.src_port,
+                dst_ip=local_dst_ip if inside else global_dst_ip,
+                dst_port=local_dst_port if inside else global_dst_port,
+                protocol=transaction.protocol,
+            )
+            return tuple_view, local_orig, local_resp or inside
+
+        source_segments = self.visibility_engine._resolve_ip_segments(transaction.src_ip)
+        if sensor_segments & source_segments:
+            return tuple_view, local_orig, local_resp
+        tuple_view = NetworkTuple(
+            src_ip=nat.mapped_src_ip or transaction.src_ip,
+            src_port=nat.mapped_src_port or transaction.src_port,
+            dst_ip=nat.mapped_dst_ip or transaction.dst_ip,
+            dst_port=nat.mapped_dst_port or transaction.dst_port,
+            protocol=transaction.protocol,
+        )
+        return tuple_view, local_orig, local_resp
 
     @staticmethod
     def _canonical_file_ids(event: SecurityEvent) -> tuple[str, ...]:

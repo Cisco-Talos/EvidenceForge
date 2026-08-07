@@ -38,6 +38,12 @@ from evidenceforge.events.contexts import (
     SslContext,
     X509Context,
 )
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+    NetworkTuple,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -364,7 +370,33 @@ class TestSslUidCorrelation:
                 ),
             )
             event._sensor_hostnames_by_format = {"zeek_files": ["zeek-dmz"]}
-            event._nat_swaps_by_sensor = {"zeek-dmz": {"dst_ip": "10.10.3.10"}}
+            event.network_observations = (
+                NetworkSensorObservation(
+                    sensor_identity="zeek-dmz",
+                    path_role="destination_side",
+                    capture_profile="well_synced",
+                    tuple_view=NetworkTuple(
+                        src_ip="185.70.41.45",
+                        src_port=50000,
+                        dst_ip="10.10.3.10",
+                        dst_port=443,
+                        protocol="tcp",
+                    ),
+                    connection_uid="CMySpecificUID123",
+                    connection_ids=(),
+                    file_ids=(),
+                    local_orig=False,
+                    local_resp=True,
+                    observed_start_time=event.timestamp,
+                    observed_close_time=None,
+                    traffic=NetworkTrafficLedger(
+                        orig=DirectionalTrafficLedger(0, 0, 0),
+                        resp=DirectionalTrafficLedger(0, 0, 0),
+                    ),
+                    visible_formats=frozenset({"zeek_files"}),
+                ),
+            )
+            event.network_observations_planned = True
 
             files_emitter.emit(event)
             files_emitter.close()

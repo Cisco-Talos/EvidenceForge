@@ -13,7 +13,11 @@ For background on the project and why we built it, read our announcement:
 
 Most synthetic log generators produce isolated, single-format data that experienced analysts identify as fake within seconds. EvidenceForge takes a fundamentally different approach:
 
-- **Consistency by construction.** A canonical `SecurityEvent` model feeds all log formats from a single source of truth. Two emitters cannot disagree about a port number, timestamp, or LogonID because there is only one value — on the event object. This eliminates the cross-source inconsistencies that are the #1 tell of synthetic data.
+- **Consistency by construction.** Canonical events and immutable plans own shared connection,
+  identity, lifecycle, and protocol facts for migrated action families; emitters perform only
+  source-native projection. Dispatch rejects unknown or incomplete canonical occurrences. Some
+  mutable compatibility views remain during the approved migration, and the explicit `raw` path
+  is outside cross-source consistency guarantees.
 
 - **Causal event ordering.** Events respect real-world dependencies — DNS queries precede connections, Kerberos TGT/TGS precede domain logons, audit events follow administrative commands. A composable rule engine auto-generates prerequisites with realistic timing offsets, so the data tells a coherent causal story across log sources.
 
@@ -25,7 +29,9 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 - **Deterministic engine, LLM-assisted authoring.** Scenario creation uses Claude Code Skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
 
-- **Built-in quality evaluation.** A 4-pillar scoring framework (21 sub-scores) measures parseability, plausibility, causality, and timing. Know exactly how good your data is before using it.
+- **Built-in quality evaluation.** A 4-pillar scoring framework (22 sub-scores) measures
+  parseability, plausibility, causality, and timing, with additional concern-oriented views for
+  source schema, canonical invariants, scenario completeness, and distribution realism.
 
 ## Quick Start
 
@@ -80,9 +86,9 @@ For scripted or non-interactive use:
 
 | Command | Description |
 |---------|-------------|
-| `eforge generate <scenario.yaml> -o <dir>` | Generate logs from a scenario file |
-| `eforge validate <scenario.yaml>` | Validate scenario schema and cross-references |
-| `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (4 pillars, 21 sub-scores) |
+| `eforge generate <scenario.yaml> -o <dir> [--seed N] [--allow-large-workload]` | Generate logs; `--seed` overrides the scenario seed and the trusted workload override bypasses resource limits, not path safety |
+| `eforge validate <scenario.yaml> [--allow-large-workload]` | Validate schema, cross-references, and the default workload envelope |
+| `eforge eval <output_dir> -s <scenario.yaml> [--allow-large-evaluation]` | Evaluate quality (4 pillars, 22 sub-scores); the trusted override bypasses evaluator corpus limits |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
 | `eforge install-skills [--agent all\|claude\|chatgpt\|codex] [--global]` | Install project-local or user-wide agent skills; defaults to all agents (`codex` aliases `chatgpt`) |
@@ -128,7 +134,8 @@ Every generated scenario includes a `GROUND_TRUTH.md` file. Attack scenarios doc
 - **Ground truth documentation** — Every run generates a GROUND_TRUTH.md; attack scenarios include narrative, timeline, and IOCs
 - **Parallel generation** — Threaded emitters write all formats simultaneously with temporal consistency
 - **Scenario validation** — Cross-reference checking, uniqueness constraints, and network topology validation
-- **Data quality evaluation** — 4-pillar scoring framework (21 sub-scores) with acceptance criteria
+- **Data quality evaluation** — 4-pillar scoring framework (22 sub-scores), concern-oriented
+  diagnostic categories, non-vacuous applicability, and acceptance criteria
 - **Multi-timezone support** — Pattern-based timezone overrides per system hostname
 
 ## Supported Log Formats
@@ -214,7 +221,19 @@ EvidenceForge includes a built-in evaluation framework that scores generated dat
 | Causality | 25% | Causal ordering, event presence, indicator accuracy, pivot linkability |
 | Timing | 20% | Attack-chain timing, burstiness, diurnal patterns, volume adequacy |
 
-**Two-tier acceptance**: hard gates (minimum, must pass) + aspirational targets (stretch goals, informational). Hard gates: Spec Conformance ≥ 95%, Value Plausibility ≥ 95%, Causal Ordering ≥ 90%, Event Presence ≥ 85%. Thresholds are configurable in `src/evidenceforge/config/evaluation/thresholds.yaml`.
+**Two-tier acceptance**: applicable hard gates must pass, while aspirational targets remain
+informational. Gates cover source conformance, value and field consistency, exact IDS integrity,
+causal/scenario reconciliation, and linkability. The authoritative thresholds are configurable in
+`src/evidenceforge/config/evaluation/thresholds.yaml`.
+
+The compatibility pillars remain the weighted public score. The report also groups the same
+applicable measures by review concern: source/schema fidelity, canonical cross-source invariants,
+declared-scenario completeness, and distribution realism. Required measures with no applicable
+denominator are reported as unavailable instead of receiving a vacuous perfect score.
+
+By default, evaluation accepts at most 512 MiB of input, 10,000 files, and 500,000 parsed records.
+Use `--allow-large-evaluation` only for a trusted corpus after reviewing available memory. The
+override does not relax file or parser safety checks.
 
 ```bash
 uv run eforge eval ./output -s scenario.yaml

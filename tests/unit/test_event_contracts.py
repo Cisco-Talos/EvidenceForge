@@ -9,11 +9,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from evidenceforge.events import NetworkContext, SecurityEvent
 from evidenceforge.events.contexts import RawContext
 from evidenceforge.events.contracts import (
     EVENT_KIND_CONTRACTS,
-    LEGACY_CONSUMER_ONLY_EVENT_TYPES,
     RAW_EVENT_TYPE,
     ContextKind,
     ContractViolationCode,
@@ -25,7 +26,10 @@ from evidenceforge.events.contracts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import EventContractError
 
 
 def _timestamp() -> datetime:
@@ -47,7 +51,15 @@ def test_registry_is_closed_over_every_event_kind() -> None:
 
     assert set(EVENT_KIND_CONTRACTS) == set(EventKind)
     assert RAW_EVENT_TYPE not in {kind.value for kind in EventKind}
-    assert LEGACY_CONSUMER_ONLY_EVENT_TYPES.isdisjoint(kind.value for kind in EventKind)
+
+
+def test_emitters_do_not_admit_unreachable_legacy_event_aliases() -> None:
+    """Dead consumer-only names cannot regain a parallel projection path."""
+
+    aliases = {"module_load", "special_privileges"}
+
+    assert aliases.isdisjoint(EcarEmitter._supported_types)
+    assert aliases.isdisjoint(WindowsEventEmitter._supported_types)
 
 
 def test_ssh_contract_allows_unmodeled_external_transport_source() -> None:
@@ -60,7 +72,7 @@ def test_ssh_contract_allows_unmodeled_external_transport_source() -> None:
 
 
 def test_registry_matches_reviewed_constructor_context_and_format_inventory() -> None:
-    """The approved path census seeds an exact closure gate for the foundation registry."""
+    """The refreshed reviewed path census is an exact current registry closure gate."""
 
     root = Path(__file__).resolve().parents[2]
     inventory = json.loads(
@@ -79,7 +91,7 @@ def test_registry_matches_reviewed_constructor_context_and_format_inventory() ->
     }
 
     assert produced == {kind.value for kind in EventKind} | {RAW_EVENT_TYPE}
-    assert consumer_only == LEGACY_CONSUMER_ONLY_EVENT_TYPES
+    assert consumer_only == set()
     assert context_fields == {context.value for context in ContextKind}
     assert {row["format"] for row in inventory["formats"]} == {
         format_kind.value for format_kind in FormatKind
@@ -193,16 +205,17 @@ def test_semantic_occurrence_id_ignores_unrelated_dispatch_position() -> None:
     assert repeated.occurrence_id == first.occurrence_id
 
 
-def test_dispatcher_records_shadow_violations_without_blocking() -> None:
-    """Dispatch preserves compatibility while exposing aggregate shadow debt."""
+def test_dispatcher_rejects_contract_violations_before_state_application() -> None:
+    """Unknown canonical kinds cannot reach state or projection paths."""
 
     state_manager = MagicMock(spec=StateManager)
     dispatcher = EventDispatcher(state_manager=state_manager, emitters={})
     event = SecurityEvent(timestamp=_timestamp(), event_type="future_event")
 
-    assert dispatcher.dispatch(event) == {}
+    with pytest.raises(EventContractError, match="Unknown canonical event kind"):
+        dispatcher.dispatch(event)
 
-    state_manager.apply.assert_called_once_with(event)
+    state_manager.apply.assert_not_called()
     assert event.contract_seal is not None
     assert dispatcher.contract_violation_counts == {"unknown_event_kind": 1}
     assert dispatcher.contract_violations_by_event == {"future_event": {"unknown_event_kind": 1}}

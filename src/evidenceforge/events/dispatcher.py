@@ -45,6 +45,7 @@ from evidenceforge.events.observation import (
     ObservationSummary,
     source_family_for_format,
 )
+from evidenceforge.models.exceptions import EventContractError
 from evidenceforge.utils.rng import stable_uuid
 
 if TYPE_CHECKING:
@@ -245,7 +246,9 @@ class EventDispatcher:
         for violation in event.contract_seal.violations:
             self._contract_violation_counts[violation.code.value] += 1
             self._contract_violations_by_event[(event.event_type, violation.code.value)] += 1
-            logger.debug("Shadow event-contract violation: %s", violation.message)
+        if event.contract_seal.violations:
+            details = "; ".join(violation.message for violation in event.contract_seal.violations)
+            raise EventContractError(f"Cannot dispatch invalid canonical event: {details}")
         if not event.event_id:
             event.event_id = stable_uuid(
                 "security-event",
@@ -323,16 +326,6 @@ class EventDispatcher:
                 format_name,
                 network_identifiers_by_format,
             )
-            if (
-                event_to_emit.event_type != "process_terminate"
-                and event_to_emit.process is not None
-                and event_to_emit.src_host is not None
-            ):
-                self.state_manager.update_process_activity_time(
-                    event_to_emit.src_host.hostname,
-                    event_to_emit.process.pid,
-                    event_to_emit.timestamp,
-                )
             self._record_observation(event, format_name, status)
             event_to_emit._source_observation_status = status
             if event.raw is not None:
@@ -631,48 +624,6 @@ class EventDispatcher:
                 )
                 if nat_ctx:
                     event.nat = nat_ctx
-                    src_segments = self.visibility_engine._resolve_ip_segments(event.network.src_ip)
-                    # Detect NAT direction: inbound static NAT translates
-                    # dst from VIP to real_ip; outbound PAT translates src.
-                    is_inbound_nat = (
-                        nat_ctx.nat_type == "static"
-                        and nat_ctx.mapped_dst_ip
-                        and nat_ctx.mapped_dst_ip != event.network.dst_ip
-                    )
-                    nat_swaps: dict[str, dict[str, str | int]] = {}
-                    for sensor in sensors:
-                        if sensor.type == "firewall":
-                            continue  # ASA handles NAT via NatContext directly
-                        sensor_segs = set(sensor.monitoring_segments)
-                        hostname = sensor.hostname or sensor.name
-                        swaps: dict[str, str | int] = {}
-
-                        if is_inbound_nat:
-                            # Inbound NAT: inside sensors (monitoring the
-                            # real_ip's segment) see the translated real_ip;
-                            # outside sensors keep the VIP (no swap).
-                            real_ip_segs = self.visibility_engine._resolve_ip_segments(
-                                nat_ctx.mapped_dst_ip
-                            )
-                            if sensor_segs & real_ip_segs:
-                                swaps["dst_ip"] = nat_ctx.mapped_dst_ip
-                                swaps["dst_port"] = nat_ctx.mapped_dst_port
-                                swaps["local_resp"] = True
-                        else:
-                            # Outbound NAT: outside sensors (NOT on source
-                            # segment) see post-NAT translated IPs.
-                            if not (sensor_segs & src_segments):
-                                if nat_ctx.mapped_src_ip != event.network.src_ip:
-                                    swaps["src_ip"] = nat_ctx.mapped_src_ip
-                                    swaps["src_port"] = nat_ctx.mapped_src_port
-                                if nat_ctx.mapped_dst_ip != event.network.dst_ip:
-                                    swaps["dst_ip"] = nat_ctx.mapped_dst_ip
-                                    swaps["dst_port"] = nat_ctx.mapped_dst_port
-
-                        if swaps:
-                            nat_swaps[hostname] = swaps
-                    if nat_swaps:
-                        event._nat_swaps_by_sensor = nat_swaps
 
         matched = []
         for format_name, emitter in self.emitters.items():

@@ -14,6 +14,7 @@ Scenario files are YAML documents that define the environment, users, systems, p
 
 ```yaml
 version: "1.0"
+generation_seed: 42          # Optional uint64 (default: 42); controls deterministic substreams
 name: scenario-name          # Alphanumeric, dash, underscore
 description: |
   Multi-line scenario description
@@ -67,6 +68,10 @@ EvidenceForge reports a validation-time input error that names the conflicting
 field and source files. Lists such as `storyline`, `users`, and `systems` are
 owned as whole fields and are not automatically concatenated.
 
+Duplicate mapping keys within any YAML file are rejected before composition. A scenario must
+express one unambiguous value for each field; duplicate keys are never treated as last-value-wins
+overrides.
+
 Nested includes are allowed and are resolved relative to the file that declares
 them:
 
@@ -82,6 +87,10 @@ environment:
 
 The singular `include` key is accepted as a convenience for one file, but
 `includes` is the preferred form for new scenarios.
+
+Scenario composition is bounded to 32 levels, 256 files, 16 MiB of source YAML, and 1,000,000
+expanded nodes. These parsing limits are always enforced; the trusted large-workload override
+does not disable them.
 
 For larger exercise families, keep reusable organization context separate from
 scenario-specific narrative files:
@@ -111,6 +120,31 @@ change a shared organization section, copy that organization include into the
 scenario's local `includes/` directory and include the local copy instead of the
 shared one. Do not include both copies of the same section, because duplicate
 fields are validation errors rather than overrides.
+
+## Deterministic Seed and Workload Envelope
+
+`generation_seed` is a public unsigned 64-bit integer. Identical scenario content, seed, selected
+formats, and generator version reproduce the same deterministic substreams. The CLI can override
+the scenario value for one run:
+
+```bash
+uv run eforge generate scenario.yaml --seed 8675309 -o output
+```
+
+The effective seed is recorded in `collection_profile.json`. Use explicit seed matrices instead
+of changing the scenario name or unrelated content to obtain independent deterministic runs.
+
+Before validation or generation allocates the workload, EvidenceForge estimates the primary
+duration, warm-up, periodic and explicit occurrences, canonical fan-out, rendered records, and
+attachment/email expansion. The default supported envelope is 31 days of primary activity, 7 days
+of warm-up, 1,000,000 periodic occurrences, 5,000,000 explicit occurrences, 20,000,000 canonical
+occurrences, and 200,000,000 rendered records. Per-attachment and aggregate email payload limits
+are also enforced.
+
+`eforge validate` and `eforge generate` reject an estimated overrun. For a reviewed, trusted run
+with adequate resources, pass `--allow-large-workload`; this bypasses the workload estimate only.
+It does not relax YAML ambiguity, include budgets, path containment, regular-file, symlink, or
+archive safety checks.
 
 ## Environment
 

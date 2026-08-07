@@ -514,7 +514,15 @@ class SshSessionActionBundle:
 
         request = self.request
         executor = self.executor
-        if not state.logon_id:
+        session_identity = (
+            executor.state_manager.get_session_identity(state.logon_id) if state.logon_id else None
+        )
+        if state.logon_id and session_identity is None:
+            raise StateError(
+                "SSH bundle logon_id must reference a StateManager-owned session: "
+                f"{request.target_system.hostname} {state.logon_id}"
+            )
+        if session_identity is None:
             state.logon_id = executor.state_manager.create_session(
                 username=request.user.username,
                 system=request.target_system.hostname,
@@ -529,8 +537,18 @@ class SshSessionActionBundle:
                     else request.stable_id
                 ),
             )
-        if not state.session_obj_id:
-            state.session_obj_id = executor.state_manager.get_session_object_id(state.logon_id)
+            session_identity = executor.state_manager.get_session_identity(state.logon_id)
+        if session_identity is None:
+            raise StateError(
+                "SSH bundle could not resolve the session identity it created: "
+                f"{request.target_system.hostname} {state.logon_id}"
+            )
+        if state.session_obj_id and state.session_obj_id != session_identity.object_id:
+            raise StateError(
+                "SSH bundle session_obj_id contradicts the StateManager-owned session: "
+                f"{request.target_system.hostname} {state.logon_id}"
+            )
+        state.session_obj_id = session_identity.object_id
         if request.session_end_plan is not None:
             executor.state_manager.plan_session_end(state.logon_id, request.session_end_plan)
 

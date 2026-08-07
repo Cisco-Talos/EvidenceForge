@@ -666,6 +666,8 @@ def _build_inventory(
             "storyline_origin",
             "storyline_cluster_id",
             "event_id",
+            "occurrence_key",
+            "contract_seal",
             "network_observations_planned",
         }
         and not field["name"].startswith("_")

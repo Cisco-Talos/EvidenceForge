@@ -64,6 +64,47 @@ def _make_mock_emitter(name: str, handles: bool = False):
     return emitter
 
 
+def _host() -> HostContext:
+    """Return a complete local host context for dispatcher contract tests."""
+
+    return HostContext(
+        hostname="HOST-01",
+        ip="10.0.0.10",
+        os="Ubuntu 22.04",
+        os_category="linux",
+        system_type="server",
+    )
+
+
+def _syslog_event(timestamp: datetime | None = None) -> SecurityEvent:
+    """Return a minimal valid source-local occurrence."""
+
+    return SecurityEvent(
+        timestamp=timestamp or _make_ts(),
+        event_type="syslog",
+        src_host=_host(),
+        syslog=SyslogContext(
+            app_name="systemd",
+            pid=1,
+            facility=3,
+            severity=6,
+            message="dispatcher contract test",
+        ),
+    )
+
+
+def _network() -> NetworkContext:
+    """Return a minimal valid connection context."""
+
+    return NetworkContext(
+        src_ip="10.0.0.10",
+        src_port=51000,
+        dst_ip="198.51.100.20",
+        dst_port=443,
+        protocol="tcp",
+    )
+
+
 class TestDispatchRouting:
     """Tests for EventDispatcher event routing."""
 
@@ -73,7 +114,7 @@ class TestDispatchRouting:
         emitter = _make_mock_emitter("windows", handles=True)
         dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="logon")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -89,7 +130,7 @@ class TestDispatchRouting:
             emitters={"windows": matching, "zeek_conn": non_matching},
         )
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="logon")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         matching.emit.assert_called_once_with(event)
@@ -101,7 +142,7 @@ class TestDispatchRouting:
         emitter = _make_mock_emitter("windows", handles=False)
         dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="logon")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -133,14 +174,26 @@ class TestDispatchRouting:
         """Distinct occurrences receive stable IDs before state application and rendering."""
         first_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
         first_events = [
-            SecurityEvent(timestamp=_make_ts(), event_type="failed_logon") for _ in range(2)
+            SecurityEvent(
+                timestamp=_make_ts(),
+                event_type="failed_logon",
+                dst_host=_host(),
+                auth=AuthContext(username="alice", result="failure"),
+            )
+            for _ in range(2)
         ]
         for event in first_events:
             first_dispatcher.dispatch(event)
 
         second_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
         second_events = [
-            SecurityEvent(timestamp=_make_ts(), event_type="failed_logon") for _ in range(2)
+            SecurityEvent(
+                timestamp=_make_ts(),
+                event_type="failed_logon",
+                dst_host=_host(),
+                auth=AuthContext(username="alice", result="failure"),
+            )
+            for _ in range(2)
         ]
         for event in second_events:
             second_dispatcher.dispatch(event)
@@ -157,7 +210,7 @@ class TestDispatchRouting:
         dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         assert event.storyline_cluster_id == "story-001"
@@ -177,7 +230,7 @@ class TestObservationProfiles:
         )
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         emitter.emit.assert_called_once_with(event)
@@ -257,7 +310,7 @@ class TestObservationProfiles:
         )
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -291,7 +344,7 @@ class TestObservationProfiles:
         )
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        event = _syslog_event()
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -423,11 +476,11 @@ class TestObservationProfiles:
 
         assert len(delays) == 1
 
-    def test_delayed_process_source_observation_extends_process_activity(
+    def test_delayed_process_source_observation_does_not_mutate_canonical_activity(
         self,
         monkeypatch,
     ):
-        """Delayed endpoint source rows should keep process lifetimes behind visible activity."""
+        """Source collection delay must not feed observed time back into world state."""
         monkeypatch.setattr(
             "evidenceforge.events.observation.get_observation_profile",
             lambda _name: {
@@ -497,7 +550,9 @@ class TestObservationProfiles:
 
         running = sm.get_process("WS-01", pid)
         assert running is not None
-        assert running.last_activity_time == event.timestamp + timedelta(milliseconds=900000)
+        assert running.last_activity_time == event.timestamp
+        emitted_event = emitter.emit.call_args.args[0]
+        assert emitted_event.timestamp == event.timestamp + timedelta(milliseconds=900000)
 
     def test_zeek_observation_delay_is_coherent_per_uid(self, monkeypatch):
         """Zeek protocol rows for one UID should share source collection delay."""
@@ -673,7 +728,11 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("zeek_x509_parent_test"),
         )
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="connection")
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=_network(),
+        )
         dispatcher.dispatch(event)
 
         files.emit.assert_called_once()
@@ -798,6 +857,7 @@ class TestObservationProfiles:
         event = SecurityEvent(
             timestamp=_make_ts(),
             event_type="connection",
+            network=_network(),
             http=HttpContext(
                 host="ocsp.example.test",
                 resp_fuids=["Focspcompanion01"],
@@ -1784,7 +1844,7 @@ class TestNetworkVisibilityFiltering:
 
         event = SecurityEvent(
             timestamp=_make_ts(),
-            event_type="logon",
+            event_type="workstation_locked",
             dst_host=HostContext(
                 hostname="WS-01",
                 ip="10.0.1.50",
@@ -1792,6 +1852,7 @@ class TestNetworkVisibilityFiltering:
                 os_category="windows",
                 system_type="workstation",
             ),
+            auth=AuthContext(username="alice", logon_id="0x100"),
         )
         dispatcher.dispatch(event)
 
@@ -2625,10 +2686,7 @@ class TestWarmUpSuppression:
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
 
         # Event 1 hour before output start
-        event = SecurityEvent(
-            timestamp=datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC),
-            event_type="logon",
-        )
+        event = _syslog_event(datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC))
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -2639,10 +2697,7 @@ class TestWarmUpSuppression:
         output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
 
-        event = SecurityEvent(
-            timestamp=datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC),
-            event_type="logon",
-        )
+        event = _syslog_event(datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC))
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -2653,10 +2708,7 @@ class TestWarmUpSuppression:
         output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
 
-        event = SecurityEvent(
-            timestamp=datetime(2026, 3, 19, 11, 0, 0, tzinfo=UTC),
-            event_type="logon",
-        )
+        event = _syslog_event(datetime(2026, 3, 19, 11, 0, 0, tzinfo=UTC))
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)
@@ -2666,10 +2718,7 @@ class TestWarmUpSuppression:
         """Without output_start_time, all events are emitted (default behavior)."""
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=None)
 
-        event = SecurityEvent(
-            timestamp=datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC),
-            event_type="logon",
-        )
+        event = _syslog_event(datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC))
         dispatcher.dispatch(event)
 
         sm.apply.assert_called_once_with(event)

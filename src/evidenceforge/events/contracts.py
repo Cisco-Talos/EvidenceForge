@@ -743,7 +743,6 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
 
 
 RAW_EVENT_TYPE = "raw"
-LEGACY_CONSUMER_ONLY_EVENT_TYPES = frozenset({"module_load", "special_privileges"})
 
 
 def contract_for(event_type: str) -> EventKindContract | None:

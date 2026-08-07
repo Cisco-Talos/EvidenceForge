@@ -80,9 +80,15 @@ without turning `TODO.md` back into a high-conflict work journal.
   `SEC-001` through `SEC-010`, and `SEC-DEFER-001`). See the
   [Batch 6 worklog](docs/worklog/2026-08-07-input-safety-budgets.md) and
   [empirical results](docs/design/realism-review/batch6-results.json).
-- [ ] **P2** Complete Batch 7 only after all canonical consumers migrate: remove legacy mutable or
-  duplicate compatibility truth and reconcile architecture, scenario, source, and evaluation
-  documentation. Treat public API/schema changes as separately approved migrations.
+- [x] **P2** Complete behavior-preserving Batch 7a compatibility cleanup: enforce closed dispatch
+  admission, remove observed-time state feedback and duplicate sensor NAT maps, delete unreachable
+  event aliases, refresh the path census, and reconcile architecture/scenario/evaluation/security
+  documentation. See the [Batch 7 worklog](docs/worklog/2026-08-07-compatibility-documentation.md)
+  and [results](docs/design/realism-review/batch7-results.json).
+- [ ] **P2** Plan and separately approve Batch 7b migrations before removing live mutable carrier
+  and context compatibility views (`SecurityEvent.event_type`, flat `NetworkContext`,
+  `EdrContext`, TLS/X.509/OCSP/proxy/file views, and singular/list IDS inputs). These changes affect
+  live consumers or public/internal construction contracts and are not behavior-preserving cleanup.
 - The complete dependency order and acceptance boundaries remain in the
   [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
   exact evidence, owners, remediation, and tests remain in

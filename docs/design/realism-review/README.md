@@ -17,6 +17,7 @@ realism review frozen at `dev` commit `0a035e97d94cd2a35ebd1498cc4e133336fe14a4`
 | Final synthesis and remediation roadmap | Complete | `final-report.md` |
 | Contract proposal approval | Approved with amendments 2026-08-05 | `contract-proposals.md` |
 | Remediation Batches 0–6 | Complete | `batch3-results.json` through `batch6-results.json`, linked worklogs |
+| Remediation Batch 7a | Complete; public compatibility migrations remain approval-gated | `batch7-results.json` |
 
 The review paused after the architecture assessment and resumed after user acceptance. No
 generator fix, public API change, schema migration, or version bump was made during the campaign.
@@ -43,6 +44,8 @@ only as bounded, separately reviewed feature-branch batches.
   observation-profile, source-native projection, and validation evidence for Batch 5.
 - `batch6-results.json`: duplicate-input, safe-path, workload, seed, parser-capacity, archive, and
   fixture-validation evidence for Batch 6.
+- `batch7-results.json`: dispatch-admission, canonical-time, NAT-view, dead-alias, refreshed-census,
+  rendered-equivalence, retained-migration, and documentation evidence for Batch 7a.
 - `evaluator-capacity-results.json`: bounded retained-record RSS measurements supporting the
   evaluator's default capacity contract.
 - `probe-*.json`: durable results from the generated-output invariant probe.

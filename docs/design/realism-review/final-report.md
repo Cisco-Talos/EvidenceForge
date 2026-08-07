@@ -103,6 +103,11 @@ duplicate owners, or unsupported escape hatches. The most important structural r
 The machine-readable inventory is in `event-context-paths.json`; reviewed classifications and
 closure accounting are in `path-classifications.json` and `coverage-summary.json`.
 
+**Post-remediation inventory (Batch 7a, 2026-08-07):** the tracked matrix was regenerated after
+removing the two dead aliases and now contains 64 discovered event types, 67 constructors, 56
+carrier fields, no emitter contract without a producer, and no classification gap. Historical
+counts above describe the frozen audit baseline; `batch7-results.json` records the current delta.
+
 ## Validated finding register
 
 The root-collapsed register contains 34 findings:
@@ -223,9 +228,10 @@ attachment, CIDR, and include amplification, adversarial Snare parser complexity
 staging symlinks. The low findings cover Splunk archive quotas and application-tree symlinks. No
 critical or high finding survived calibration to the local CLI boundary.
 
-One evaluator full-corpus memory concern remains explicitly deferred pending a supported RSS and
-corpus-size contract. See `security-review.md` for threat model, dispositions, controls, scan
-identity, and limitations.
+At the frozen baseline, one evaluator full-corpus memory concern remained deferred. Batch 6
+subsequently measured retained-record RSS and closed it with default 512 MiB, 10,000-file, and
+500,000-record limits plus an explicit trusted override. See `security-review.md` for threat model,
+dispositions, controls, scan identity, and limitations.
 
 ## Dependency-ordered remediation roadmap
 
@@ -316,6 +322,14 @@ run. A measured retained-record RSS curve closed the evaluator capacity proof ga
 - Remove legacy mutable/duplicate fields only after all consumers migrate.
 - Reconcile architecture, scenario, source, and evaluation documentation with enforced behavior.
 - Treat any public API or schema change as its own approved migration and release decision.
+
+**Implementation status (2026-08-07): behavior-preserving Batch 7a complete on
+`codex/batch7-compatibility-docs`.** Dispatch now rejects invalid canonical occurrences; delayed
+source observations cannot mutate canonical process state; sensor NAT views are frozen directly
+from transaction/NAT/topology truth; and the unreachable `module_load`/`special_privileges`
+admissions are gone. The remaining mutable carrier/context removals are Batch 7b migrations because
+they affect live consumers or public/internal construction contracts. See `batch7-results.json`
+and the focused Batch 7 worklog.
 
 ## Completion and limitations
 

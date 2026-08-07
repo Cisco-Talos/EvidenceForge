@@ -501,7 +501,6 @@ class WindowsEventEmitter(LogEmitter):
         "account_changed",
         "password_change",
         "password_reset",
-        "special_privileges",
         "workstation_locked",
         "workstation_unlocked",
     }
@@ -571,7 +570,6 @@ class WindowsEventEmitter(LogEmitter):
         "logoff",
         "failed_logon",
         "machine_logon",
-        "special_privileges",
         "kerberos_tgt",
         "kerberos_tgt_renewal",
         "kerberos_service",
@@ -645,7 +643,6 @@ class WindowsEventEmitter(LogEmitter):
             "account_changed": self._render_account_changed,
             "password_change": self._render_password_change,
             "password_reset": self._render_password_reset,
-            "special_privileges": self._render_special_privileges,
             "workstation_locked": self._render_workstation_lock,
             "workstation_unlocked": self._render_workstation_unlock,
         }.get(event.event_type)
@@ -745,35 +742,6 @@ class WindowsEventEmitter(LogEmitter):
         )
         sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
         return int(sys_pids.get(role, default_pid)), process_name
-
-    def _render_special_privileges(self, event: SecurityEvent) -> None:
-        """Render standalone Windows 4672 (Special Privileges Assigned).
-
-        Used for explicit standalone 4672 events. Normal elevated logons render
-        4672 from _render_logon() so the privilege event shares the target
-        host and LogonID with its 4624.
-        """
-        rng = self._event_rng(event)
-        auth = event.auth
-        host = self._get_host(event)
-
-        privs = auth.privilege_list or _special_privilege_fallback(auth.username)
-
-        priv_data = {
-            "EventID": 4672,
-            "TimeCreated": event.timestamp,
-            "Computer": host.fqdn,
-            "Channel": "Security",
-            "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
-            "ExecutionThreadID": rng.randint(100, 500),
-            "SubjectUserSid": auth.user_sid,
-            "SubjectUserName": auth.username,
-            "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
-            "SubjectLogonId": auth.logon_id or "0x0",
-            "PrivilegeList": privs,
-        }
-        self.emit_event(priv_data)
 
     def _render_workstation_lock(self, event: SecurityEvent) -> None:
         """Render Windows 4800 (workstation locked)."""

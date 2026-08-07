@@ -102,6 +102,11 @@ output-file occurrence. This is an alternate file entry, not a second process ow
 7. **`zeek_weird` is registered but not generated.** `WeirdContext` has no production constructor,
    automatic weird generation is disabled, and only direct emitter tests exercise the format.
 
+**Post-remediation note (Batch 7a, 2026-08-07):** the unreachable `module_load` and
+`special_privileges` emitter admissions were removed. The regenerated matrix now has 64 discovered
+event types, no emitter contract type without a producer, and no manual classification gap. The
+remaining Weird/email/bundle gaps stay explicit in `coverage-summary.json`.
+
 ### Intentional exclusions and adapters
 
 - `raw` is an explicit escape hatch. `RawContext` is consumed by `EventDispatcher.dispatch_raw`,
@@ -134,8 +139,9 @@ Twenty-one formats appear projection-only in the static trace. Two need explicit
 
 - `windows_event_sysmon` recomputes destination hostname from a global reverse-DNS registry and
   creates a synthetic canonical event to obtain process-create timing.
-- `windows_event_security` projects most occurrences but also owns 4672 record fan-out from a logon
-  while advertising an otherwise unreachable `special_privileges` input type.
+- At the frozen baseline, `windows_event_security` also advertised an unreachable
+  `special_privileges` input. Batch 7a removed that alias; Event 4672 remains an intentional
+  source-native companion projection from the owning elevated logon.
 
 This does not complete source-native fidelity assessment. Field morphology, nullability, native
 time semantics, ordering, parser behavior, and target-specific transformations are evaluated in the

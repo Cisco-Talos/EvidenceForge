@@ -214,7 +214,11 @@ class IdentityLifecyclePlanner:
         if host is None:
             return None
         if event.process is not None and event.process.pid >= 0:
-            return self._state_manager.get_process_identity(host.hostname, event.process.pid)
+            process = self._state_manager.get_process_identity(host.hostname, event.process.pid)
+            if process is not None:
+                return process
+            if event.edr is not None and event.edr.object_id:
+                return self._state_manager.get_process_identity_by_object_id(event.edr.object_id)
         if event.network is not None and event.network.initiating_pid >= 0 and event.src_host:
             return self._state_manager.get_process_identity(
                 event.src_host.hostname,

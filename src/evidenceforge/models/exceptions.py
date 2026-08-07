@@ -93,6 +93,10 @@ class GenerationError(EvidenceForgeError):
     """
 
 
+class EventContractError(GenerationError):
+    """A canonical occurrence violated its registered dispatch contract."""
+
+
 class WorkloadLimitError(GenerationError):
     """Projected generation or evaluation work exceeds the supported envelope."""
 

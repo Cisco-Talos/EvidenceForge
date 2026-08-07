@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from evidenceforge.events import HostContext
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.events.contexts import (
     DnsContext,
@@ -18,6 +19,7 @@ from evidenceforge.events.contexts import (
     IdsContext,
     NatContext,
     NetworkContext,
+    SyslogContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
@@ -153,13 +155,13 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
     """Lossless mirrors may change tuple view and identity, never traffic truth."""
 
     event = _network_event()
-    event._nat_swaps_by_sensor = {
-        "destination-tap": {
-            "src_ip": "198.51.100.25",
-            "src_port": 62000,
-            "local_orig": False,
-        }
-    }
+    event.nat = NatContext(
+        nat_type="dynamic_pat",
+        mapped_src_ip="198.51.100.25",
+        mapped_src_port=62000,
+        mapped_dst_ip=event.network.dst_ip,
+        mapped_dst_port=event.network.dst_port,
+    )
     planner = NetworkObservationPlanner(
         _visibility_engine(source_profile="well_synced", destination_profile="well_synced")
     )
@@ -185,6 +187,86 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
         assert observation.connection_id(event.network.zeek_uid) == observation.connection_uid
         assert observation.traffic.missed_bytes == 0
         assert observation.observed_duration >= event.network.duration
+
+
+def test_inbound_static_nat_sensor_views_come_from_topology_and_nat_context() -> None:
+    """Inside and outside tuple views need no mutable event-side swap map."""
+
+    config = NetworkConfig(
+        segments=[
+            NetworkSegment(name="outside", cidr="198.51.100.0/24", exposure="external"),
+            NetworkSegment(name="servers", cidr="10.0.2.0/24", exposure="internal"),
+        ],
+        sensors=[
+            NetworkSensor(
+                type="network",
+                name="outside-tap",
+                monitoring_segments=["outside"],
+                log_formats=["zeek"],
+            ),
+            NetworkSensor(
+                type="network",
+                name="inside-tap",
+                monitoring_segments=["servers"],
+                log_formats=["zeek"],
+            ),
+        ],
+    )
+    network = NetworkContext(
+        src_ip="198.51.100.25",
+        src_port=51000,
+        dst_ip="203.0.113.80",
+        dst_port=443,
+        protocol="tcp",
+        zeek_uid="CInboundNatView1",
+        conn_id="conn-inbound-nat-view",
+        duration=2.0,
+        source_visible_start_time=T0,
+        source_visible_close_time=T0 + timedelta(seconds=2),
+        orig_bytes=200,
+        resp_bytes=800,
+        orig_pkts=3,
+        resp_pkts=4,
+        orig_ip_bytes=320,
+        resp_ip_bytes=960,
+        conn_state="SF",
+        history="ShADadFf",
+        local_orig=False,
+        local_resp=True,
+    )
+    network.finalize_transaction(
+        "network:inbound-nat-view",
+        hostname="web.corp.local",
+        phase_times=(("transport_start", T0), ("transport_close", T0 + timedelta(seconds=2))),
+    )
+    event = SecurityEvent(
+        timestamp=T0,
+        event_type="connection",
+        network=network,
+        nat=NatContext(
+            nat_type="static",
+            mapped_src_ip="198.51.100.25",
+            mapped_src_port=51000,
+            mapped_dst_ip="10.0.2.40",
+            mapped_dst_port=443,
+        ),
+    )
+    event._sensor_hostnames_by_format = {
+        "zeek_conn": ["outside-tap", "inside-tap"],
+    }
+
+    observations = _observation_by_sensor(
+        NetworkObservationPlanner(NetworkVisibilityEngine(config, systems=[])).plan(
+            event,
+            {"zeek_conn"},
+        )
+    )
+
+    assert observations["outside-tap"].tuple_view.dst_ip == "203.0.113.80"
+    assert observations["outside-tap"].tuple_view.dst_port == 443
+    assert observations["inside-tap"].tuple_view.dst_ip == "10.0.2.40"
+    assert observations["inside-tap"].tuple_view.dst_port == 443
+    assert observations["inside-tap"].local_resp is True
 
 
 def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> None:
@@ -337,7 +419,13 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
     """conn.log and dns.log consume the same frozen observation projection."""
 
     event = _network_event()
-    event._nat_swaps_by_sensor = {"destination-tap": {"src_ip": "198.51.100.25", "src_port": 62000}}
+    event.nat = NatContext(
+        nat_type="dynamic_pat",
+        mapped_src_ip="198.51.100.25",
+        mapped_src_port=62000,
+        mapped_dst_ip=event.network.dst_ip,
+        mapped_dst_port=event.network.dst_port,
+    )
     event.network_observations = NetworkObservationPlanner(
         _visibility_engine(source_profile="well_synced", destination_profile="well_synced")
     ).plan(event, {"zeek_conn", "zeek_dns"})
@@ -492,8 +580,14 @@ def test_snort_consumes_planned_sensor_timestamp_and_tuple(tmp_path) -> None:
         message="Planned observation alert",
         classification="Attempted Information Leak",
     )
-    event._sensor_hostnames_by_format = {"snort_alert": ["source-tap"]}
-    event._nat_swaps_by_sensor = {"source-tap": {"src_ip": "198.51.100.25", "src_port": 62000}}
+    event._sensor_hostnames_by_format = {"snort_alert": ["destination-tap"]}
+    event.nat = NatContext(
+        nat_type="dynamic_pat",
+        mapped_src_ip="198.51.100.25",
+        mapped_src_port=62000,
+        mapped_dst_ip=event.network.dst_ip,
+        mapped_dst_port=event.network.dst_port,
+    )
     event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
         event,
         {"snort_alert"},
@@ -503,13 +597,13 @@ def test_snort_consumes_planned_sensor_timestamp_and_tuple(tmp_path) -> None:
     emitter = SnortEmitter(
         load_format("snort_alert"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["destination-tap"],
     )
 
     emitter.emit(event)
     emitter.close()
 
-    line = (tmp_path / "source-tap" / "snort_alert.log").read_text()
+    line = (tmp_path / "destination-tap" / "snort_alert.log").read_text()
     expected_timestamp = observation.observed_start_time.strftime("%m/%d-%H:%M:%S.%f")
     assert line.startswith(expected_timestamp)
     assert "198.51.100.25:62000 -> 10.0.2.40:53" in line
@@ -762,6 +856,42 @@ def _mock_emitter() -> MagicMock:
     return emitter
 
 
+def _lifecycle_event(
+    *,
+    timestamp: datetime,
+    group_id: str,
+    canonical_start: datetime,
+    phase: str,
+    parent_group_id: str | None = None,
+) -> SecurityEvent:
+    """Return a contract-valid source-local event for admission-boundary tests."""
+
+    return SecurityEvent(
+        timestamp=timestamp,
+        event_type="syslog",
+        src_host=HostContext(
+            hostname="server-01",
+            ip="10.0.2.40",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        ),
+        syslog=SyslogContext(
+            app_name="systemd",
+            pid=1,
+            facility=3,
+            severity=6,
+            message="lifecycle admission test",
+        ),
+        lifecycle=ActionLifecycleContext(
+            group_id=group_id,
+            canonical_start=canonical_start,
+            phase=phase,
+            parent_group_id=parent_group_id,
+        ),
+    )
+
+
 def test_half_open_end_suppresses_group_start_and_dependents_but_updates_state() -> None:
     """Source-visible starts and dependent rows at ``end`` are excluded."""
 
@@ -773,23 +903,17 @@ def test_half_open_end_suppresses_group_start_and_dependents_but_updates_state()
         emitters={"windows_event_security": emitter},
         output_end_time=output_end,
     )
-    start = SecurityEvent(
+    start = _lifecycle_event(
         timestamp=output_end,
-        event_type="logon",
-        lifecycle=ActionLifecycleContext(
-            group_id="session-at-end",
-            canonical_start=output_end,
-            phase="start",
-        ),
+        group_id="session-at-end",
+        canonical_start=output_end,
+        phase="start",
     )
-    dependent = SecurityEvent(
+    dependent = _lifecycle_event(
         timestamp=output_end + timedelta(seconds=1),
-        event_type="process_create",
-        lifecycle=ActionLifecycleContext(
-            group_id="session-before-end",
-            canonical_start=output_end - timedelta(seconds=10),
-            phase="dependent",
-        ),
+        group_id="session-before-end",
+        canonical_start=output_end - timedelta(seconds=10),
+        phase="dependent",
     )
 
     dispatcher.dispatch(start)
@@ -810,23 +934,17 @@ def test_closure_tail_is_admitted_only_when_group_started_before_end() -> None:
         emitters={"windows_event_security": emitter},
         output_end_time=output_end,
     )
-    admitted = SecurityEvent(
+    admitted = _lifecycle_event(
         timestamp=output_end + timedelta(seconds=30),
-        event_type="logoff",
-        lifecycle=ActionLifecycleContext(
-            group_id="session-before-end",
-            canonical_start=output_end - timedelta(minutes=1),
-            phase="closure",
-        ),
+        group_id="session-before-end",
+        canonical_start=output_end - timedelta(minutes=1),
+        phase="closure",
     )
-    suppressed = SecurityEvent(
+    suppressed = _lifecycle_event(
         timestamp=output_end + timedelta(seconds=30),
-        event_type="logoff",
-        lifecycle=ActionLifecycleContext(
-            group_id="session-at-end",
-            canonical_start=output_end,
-            phase="closure",
-        ),
+        group_id="session-at-end",
+        canonical_start=output_end,
+        phase="closure",
     )
 
     dispatcher.dispatch(admitted)
@@ -847,24 +965,18 @@ def test_nested_child_action_has_independent_admission() -> None:
         emitters={"windows_event_security": emitter},
         output_end_time=output_end,
     )
-    parent_closure = SecurityEvent(
+    parent_closure = _lifecycle_event(
         timestamp=output_end + timedelta(seconds=2),
-        event_type="logoff",
-        lifecycle=ActionLifecycleContext(
-            group_id="proxy-parent",
-            canonical_start=output_end - timedelta(seconds=10),
-            phase="closure",
-        ),
+        group_id="proxy-parent",
+        canonical_start=output_end - timedelta(seconds=10),
+        phase="closure",
     )
-    child_start = SecurityEvent(
+    child_start = _lifecycle_event(
         timestamp=output_end,
-        event_type="connection",
-        lifecycle=ActionLifecycleContext(
-            group_id="origin-child",
-            canonical_start=output_end,
-            phase="start",
-            parent_group_id="proxy-parent",
-        ),
+        group_id="origin-child",
+        canonical_start=output_end,
+        phase="start",
+        parent_group_id="proxy-parent",
     )
 
     dispatcher.dispatch(parent_closure)

@@ -15,8 +15,8 @@ Remediation status: **SEC-001 through SEC-010 resolved and SEC-DEFER-001 closed 
 
 The standard repository scan produced ten validated findings: eight medium-severity and two
 low-severity. No critical or high finding survived attack-path calibration for the current local,
-operator-invoked CLI boundary. One evaluator-capacity candidate is explicitly deferred pending a
-calibrated resident-memory benchmark.
+operator-invoked CLI boundary. The baseline scan deferred one evaluator-capacity candidate;
+Batch 6 subsequently measured the memory curve and closed it with a bounded default contract.
 
 All 1,127 repository files in scope were accounted for. The review closed 664 authoritative
 worklist receipts, validated 14 discovery candidates, and completed attack-path analysis for the
@@ -85,9 +85,10 @@ safety. Exact contracts, commands, capacity measurements, and validation results
 
 ## Candidate dispositions
 
-- **Deferred:** the evaluator retains a full parsed corpus in memory. Static evidence establishes
-  the capacity risk, but the review did not define or measure a supported maximum-corpus RSS
-  envelope. This remains `SEC-DEFER-001` rather than a completed security finding.
+- **Closed after measurement:** the evaluator still retains its bounded parsed corpus in memory.
+  Batch 6 measured retained-record RSS and now rejects inputs above 512 MiB, 10,000 files, or
+  500,000 parsed records by default. `--allow-large-evaluation` is an explicit trusted-corpus
+  override; this is the final disposition of `SEC-DEFER-001`.
 - **Suppressed:** out-of-root scenario includes are intentional composition semantics at this
   baseline; no scenario-package confinement promise currently exists.
 - **Ignored after attack-path analysis:** the secret-family overlay regex is written only by the
@@ -110,8 +111,8 @@ safety. Exact contracts, commands, capacity measurements, and validation results
 - Docker/Podman Compose was unavailable, and Splunk checks additionally require a locally accepted
   license. The three Splunk findings therefore have complete static traces but no runtime parser
   reproduction in this environment.
-- The evaluator capacity candidate needs an approved corpus-size/RSS contract and a calibrated
-  benchmark before final disposition.
+- At the sealed scan baseline, evaluator capacity lacked an approved corpus-size/RSS contract and
+  calibrated benchmark. Batch 6 supplied both; this is no longer an open limitation.
 - Phase 1 authoring skills were excluded except where they define or consume the scenario-schema
   contract.
 

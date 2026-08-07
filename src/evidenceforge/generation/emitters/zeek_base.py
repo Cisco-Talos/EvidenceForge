@@ -350,7 +350,6 @@ class SensorMultiplexEmitter(LogEmitter):
                 "network_observations_planned",
                 False,
             ),
-            "_nat_swaps_by_sensor": getattr(event, "_nat_swaps_by_sensor", {}),
             "_canonical_network_start": canonical_start,
         }
 
@@ -505,7 +504,6 @@ class SensorMultiplexEmitter(LogEmitter):
         observations = event_data.pop("_network_sensor_observations", {})
         observations_planned = event_data.pop("_network_observations_planned", False)
         canonical_start = event_data.pop("_canonical_network_start", None)
-        compatibility_nat_swaps = event_data.pop("_nat_swaps_by_sensor", None)
         event_data.pop("_allow_sensor_observation_variance", None)
         targets = (
             sensor_hostnames if observations_planned else sensor_hostnames or self._sensor_hostnames
@@ -536,45 +534,6 @@ class SensorMultiplexEmitter(LogEmitter):
                         observation,
                         canonical_start,
                     )
-                elif compatibility_nat_swaps and hostname in compatibility_nat_swaps:
-                    swaps = compatibility_nat_swaps[hostname]
-                    original_src_ip = render_data.get(
-                        "id.orig_h",
-                        render_data.get("_id.orig_h"),
-                    )
-                    original_dst_ip = render_data.get(
-                        "id.resp_h",
-                        render_data.get("_id.resp_h"),
-                    )
-                    for field, rendered_field in {
-                        "src_ip": "id.orig_h",
-                        "src_port": "id.orig_p",
-                        "dst_ip": "id.resp_h",
-                        "dst_port": "id.resp_p",
-                        "local_orig": "local_orig",
-                        "local_resp": "local_resp",
-                    }.items():
-                        if field in swaps and (
-                            not field.startswith("local_") or rendered_field in render_data
-                        ):
-                            internal_field = f"_{rendered_field}"
-                            target_field = (
-                                internal_field if internal_field in render_data else rendered_field
-                            )
-                            render_data[target_field] = swaps[field]
-                    for hosts_field in ("tx_hosts", "rx_hosts"):
-                        if hosts_field not in render_data:
-                            continue
-                        render_data[hosts_field] = _swap_host_list_value(
-                            render_data.get(hosts_field),
-                            original_src_ip,
-                            swaps.get("src_ip"),
-                        )
-                        render_data[hosts_field] = _swap_host_list_value(
-                            render_data.get(hosts_field),
-                            original_dst_ip,
-                            swaps.get("dst_ip"),
-                        )
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)
                 rendered = self._render_event(render_data)
