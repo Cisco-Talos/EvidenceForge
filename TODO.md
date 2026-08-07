@@ -53,9 +53,13 @@ without turning `TODO.md` back into a high-conflict work journal.
   vertical slice. See the [approved contracts](docs/design/realism-review/contract-proposals.md),
   [foundation worklog](docs/worklog/2026-08-05-canonical-contract-foundation.md), and
   [session/authentication worklog](docs/worklog/2026-08-05-session-auth-lifecycle.md).
-- [ ] **P1** Run the isolated four-specialty blind panel against the post-Batch-2 integrated
-  output, verify material findings against rendered evidence or code, then use that result as the
-  gate into Batch 3.
+- [x] **P1** Run the isolated four-specialty blind panel against the post-Batch-2 integrated
+  output and verify material findings. The six originally targeted contradictions remain cleared,
+  but the panel exposed validated sibling lifecycle defects; see the
+  [panel summary](docs/design/realism-review/post-batch-2-blind/summary.md).
+- [ ] **P1** Close the failed post-Batch-2 blind gate before Batch 3: repair host-scoped Linux PID
+  allocation, SSH responder process-observation ordering, Windows module startup/compatibility
+  timing, and Windows EventRecordID rate modeling, then regenerate and repeat the isolated panel.
 - [ ] **P1** Implement Batch 3, the network/protocol/IDS vertical slice: make the network plan
   authoritative for source-visible intervals, protocol/file children, and IDS eligibility, with
   full/filter/parallel projection-equivalence tests. This targets `REAL-005`, `REAL-007`, and

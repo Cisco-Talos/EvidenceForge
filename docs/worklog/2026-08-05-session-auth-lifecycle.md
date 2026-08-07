@@ -113,3 +113,43 @@ boundary for this slice.
 - `uv run pytest --no-cov --include-slow -q tests/integration/test_parallel_generation.py`:
   5 passed in 3.36 seconds, covering threaded temporal consistency, cross-log identity,
   corruption checks, storyline generation, and performance.
+
+## Post-fix blind gate (2026-08-07)
+
+Four fresh reviewers assessed a neutral copy of the final integrated output without the scenario,
+ground truth, code, prior reports, or each other's conclusions. The exact reports and verified
+dispositions are under
+[`docs/design/realism-review/post-batch-2-blind/`](../design/realism-review/post-batch-2-blind/summary.md).
+
+| Specialty | Verdict | Verdict confidence | Synthetic-confidence score |
+|---|---|---:|---:|
+| Threat Hunter | Synthetic | 99 | 98 |
+| Detection Engineer | Synthetic | 97 | 95 |
+| Network Forensics | Synthetic | 96 | 94 |
+| Host/EDR | Synthetic | 99 | 99 |
+
+The average verdict confidence was 97.75, the average synthetic-confidence score was 96.5, and
+the score spread was 5. Deliberation was not triggered because the verdicts were unanimous, the
+average verdict confidence exceeded 60, and the score spread was below 30.
+
+All six targeted rendered-invariant checks remain at zero, and those original contradictions did
+not recur in the panel. The panel nevertheless failed the broader family gate by identifying
+independently reproducible sibling defects:
+
+- host-local Linux process creation uses interleaved/backward PID allocation;
+- SSH target syslog can precede the same PID's eCAR process creation;
+- mandatory Windows startup modules can first load minutes or hours after process creation, while
+  narrow third-party modules are assigned to incompatible processes;
+- Windows channel record IDs can jump by hundreds or thousands inside milliseconds.
+
+The panel also validated later-batch defects in Kerberos transport ordering and cache behavior,
+HTTP `HEAD` bodies, DNS cache TTL state, TCP state/history derivation, sensor-clock stability,
+DHCP lease state, OCSP object stability, Linux daemon/hardware state, and Snort classification
+projection. Weak TEST-NET RDP and unobserved `kubectl` signals were rejected or left unproven.
+
+The original pre-fix panel averaged 91.75 synthetic confidence (88, 96, 86, 97). The post-fix
+panel averaged 96.5 (98, 95, 94, 99), but this is not evidence that the implemented fixes reduced
+realism: the panels were independent and evaluated a broadly changed output. The supported
+conclusion is narrower: the intended defects are gone, while previously unprioritized sibling
+and downstream contradictions are now decisive. Batch 3 remains gated until the four lifecycle
+and source-sequence families above are remediated and reassessed.
