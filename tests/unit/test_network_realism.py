@@ -28,8 +28,10 @@ from evidenceforge.generation.activity.generator import (
     _choose_ssl_history,
 )
 from evidenceforge.generation.activity.network_params import (
+    activity_dns_resolver_ips,
     external_scanner_port_profile_for_source,
     external_scanner_port_profiles,
+    public_dns_resolver_ips,
 )
 from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
 
@@ -137,6 +139,36 @@ class TestExternalScannerProfiles:
 
         assert len(profiles) == 1
         assert profiles[0]["name"] == "good_ports"
+
+
+class TestPublicResolverProfiles:
+    """Public recursive resolver policy should be stable and operator-coherent per client."""
+
+    def test_public_resolver_pool_is_stable_per_client_operator(self):
+        configured_operators = {
+            "1.1.1.1": "cloudflare",
+            "1.0.0.1": "cloudflare",
+            "8.8.8.8": "google",
+            "8.8.4.4": "google",
+            "9.9.9.9": "quad9",
+            "208.67.222.222": "opendns",
+        }
+
+        first = public_dns_resolver_ips("10.10.10.25")
+
+        assert first == public_dns_resolver_ips("10.10.10.25")
+        assert first
+        assert len({configured_operators[ip] for ip in first}) == 1
+
+    def test_public_resolver_assignment_varies_across_clients(self):
+        pools = {tuple(public_dns_resolver_ips(f"10.10.10.{index}")) for index in range(1, 65)}
+
+        assert len(pools) >= 3
+
+    def test_resolver_adapter_accepts_legacy_attribute_only_generator(self):
+        generator = type("LegacyGenerator", (), {"_dns_server_ips": ["10.0.0.53"]})()
+
+        assert activity_dns_resolver_ips(generator, "10.0.0.8") == ["10.0.0.53"]
 
 
 class TestNtpTiming:

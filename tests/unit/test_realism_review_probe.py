@@ -95,3 +95,121 @@ def test_probe_rejects_service_without_analyzer_payload(tmp_path: Path) -> None:
     )
 
     assert [finding.check for finding in findings] == ["zeek_unconfirmed_service"]
+
+
+def test_probe_detects_ocsp_http_without_response_companion(tmp_path: Path) -> None:
+    findings: list[Finding] = []
+    _check_zeek_sensor(
+        tmp_path,
+        {
+            "conn": [
+                {
+                    "ts": 1.0,
+                    "uid": "CocspMissing",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "198.51.100.20",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "service": "http",
+                    "orig_bytes": 500,
+                    "resp_bytes": 1000,
+                    "orig_ip_bytes": 700,
+                    "resp_ip_bytes": 1200,
+                    "orig_pkts": 5,
+                    "resp_pkts": 6,
+                    "conn_state": "SF",
+                    "duration": 1.0,
+                }
+            ],
+            "http": [
+                {
+                    "ts": 1.0,
+                    "uid": "CocspMissing",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "198.51.100.20",
+                    "id.resp_p": 80,
+                    "resp_fuids": ["FocspMissing"],
+                    "resp_mime_types": ["application/ocsp-response"],
+                }
+            ],
+            "files": [
+                {
+                    "ts": 1.1,
+                    "fuid": "FocspMissing",
+                    "source": "HTTP",
+                    "mime_type": "application/ocsp-response",
+                }
+            ],
+        },
+        findings,
+    )
+
+    assert [finding.check for finding in findings] == ["zeek_ocsp_companion_reference"]
+
+
+def test_probe_detects_one_client_using_unrelated_public_dns_operators(tmp_path: Path) -> None:
+    findings: list[Finding] = []
+    _check_zeek_sensor(
+        tmp_path,
+        {
+            "conn": [
+                {
+                    "ts": 1.0,
+                    "uid": "CdnsCloudflare",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "1.1.1.1",
+                    "id.resp_p": 53,
+                    "proto": "udp",
+                    "service": "dns",
+                    "orig_bytes": 50,
+                    "resp_bytes": 100,
+                    "orig_ip_bytes": 78,
+                    "resp_ip_bytes": 128,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "conn_state": "SF",
+                },
+                {
+                    "ts": 2.0,
+                    "uid": "CdnsGoogle",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51001,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 53,
+                    "proto": "udp",
+                    "service": "dns",
+                    "orig_bytes": 50,
+                    "resp_bytes": 100,
+                    "orig_ip_bytes": 78,
+                    "resp_ip_bytes": 128,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "conn_state": "SF",
+                },
+            ],
+            "dns": [
+                {
+                    "ts": 1.0,
+                    "uid": "CdnsCloudflare",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "1.1.1.1",
+                    "id.resp_p": 53,
+                },
+                {
+                    "ts": 2.0,
+                    "uid": "CdnsGoogle",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51001,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 53,
+                },
+            ],
+        },
+        findings,
+    )
+
+    assert [finding.check for finding in findings] == ["dns_public_resolver_operator_coherence"]

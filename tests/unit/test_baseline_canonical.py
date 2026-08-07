@@ -55,6 +55,8 @@ from evidenceforge.generation.engine.baseline import (
     _baseline_inbound_ids_probe_profile,
     _dhcp_renewal_epochs_for_hour,
     _extra_syslog_service_values,
+    _gpo_refresh_command_line,
+    _gpo_refresh_occurrences_for_hour,
     _linux_ambient_logind_probability,
     _linux_baseline_pam_close_lead,
     _linux_baseline_pam_open_lead,
@@ -73,6 +75,7 @@ from evidenceforge.generation.engine.baseline import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+from evidenceforge.models.exceptions import StateError
 
 
 @pytest.fixture
@@ -113,6 +116,35 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
     assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
     assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
     assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
+
+
+def test_gpo_refresh_schedule_is_host_scoped_and_nonuniform() -> None:
+    """GPO refresh recurrence should persist across hours without exact three-hour ticks."""
+    state: dict[str, float | int] = {"scheduled_second": 317.25, "sequence": 0}
+    repeat_state = dict(state)
+    occurrences: list[tuple[float, int]] = []
+    repeated: list[tuple[float, int]] = []
+    for hour in range(24):
+        occurrences.extend(_gpo_refresh_occurrences_for_hour("WKS-01", hour * 3600, state))
+        repeated.extend(_gpo_refresh_occurrences_for_hour("WKS-01", hour * 3600, repeat_state))
+
+    assert occurrences == repeated
+    assert len(occurrences) >= 12
+    gaps = [
+        later[0] - earlier[0]
+        for earlier, later in zip(occurrences[:-1], occurrences[1:], strict=True)
+    ]
+    assert all(60 * 60 <= gap <= 120 * 60 for gap in gaps)
+    assert len({round(gap, 3) for gap in gaps}) >= 8
+
+
+def test_gpo_refresh_commands_are_data_driven_and_force_is_rare() -> None:
+    """Ordinary gpupdate invocations should dominate forced refresh morphologies."""
+    commands = [_gpo_refresh_command_line("WKS-01", sequence) for sequence in range(500)]
+
+    assert len(set(commands)) == 4
+    assert commands.count("gpupdate.exe") > 300
+    assert sum("/force" in command for command in commands) < 80
 
 
 def test_interactive_startup_activity_pacing_spreads_early_baseline_events():
@@ -1752,9 +1784,8 @@ class TestDhcpLease:
 
         due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
             last_renewal=warmup_lease_epoch,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour,
-            rng=random.Random(7),
         )
 
         hour_start = current_hour.timestamp()
@@ -1771,9 +1802,8 @@ class TestDhcpLease:
 
         due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
             last_renewal=recent_renewal_epoch,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour,
-            rng=random.Random(11),
         )
 
         assert len(due) == 2
@@ -1791,9 +1821,8 @@ class TestDhcpLease:
 
         due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
             last_renewal=recent_renewal_epoch,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour,
-            rng=random.Random(11),
         )
 
         assert due
@@ -1805,15 +1834,39 @@ class TestDhcpLease:
 
         next_due, next_updated, next_pending = _dhcp_renewal_epochs_for_hour(
             last_renewal=updated_last,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour + timedelta(hours=1),
-            rng=random.Random(12),
             next_renewal=pending_next,
         )
 
         assert next_due[0][0] == pending_next
         assert next_updated >= next_due[-1][0]
         assert next_pending is not None
+
+    def test_dhcp_renewal_schedule_keeps_one_lease_scoped_t1(self):
+        """Every renewal in one lease lifecycle should retain its selected T1."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        last_renewal = datetime(2024, 3, 15, 12, 53, 0, tzinfo=UTC).timestamp()
+
+        due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
+            last_renewal=last_renewal,
+            renewal_interval=1627.5,
+            current_hour=current_hour,
+        )
+        next_due, _next_last, _next_pending = _dhcp_renewal_epochs_for_hour(
+            last_renewal=updated_last,
+            renewal_interval=1627.5,
+            current_hour=current_hour + timedelta(hours=1),
+            next_renewal=pending_next,
+        )
+
+        epochs = [epoch for epoch, _interval in due + next_due]
+        assert len(epochs) >= 3
+        assert all(interval == pytest.approx(1627.5) for _epoch, interval in due + next_due)
+        assert all(
+            later - earlier == pytest.approx(1627.5)
+            for earlier, later in zip(epochs[:-1], epochs[1:], strict=True)
+        )
 
     def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
         """DHCP lease requests should expose durable deterministic anchors."""
@@ -1843,6 +1896,7 @@ class TestDhcpLease:
             system=linux,
             time=timestamp,
             mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
         )
         executor = Mock()
 
@@ -1860,6 +1914,7 @@ class TestDhcpLease:
             system=linux,
             time=timestamp,
             mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
             uid="CTest123456789ab",
         )
 
@@ -1882,6 +1937,24 @@ class TestDhcpLease:
         assert dhcp_events[0].network.orig_bytes != 300
         assert dhcp_events[0].network.resp_bytes != 300
 
+    def test_dhcp_lease_bundle_rejects_self_server(self, activity_gen, state_manager, timestamp):
+        """The canonical bundle must reject a client/server self-edge."""
+        client = System(
+            hostname="WKS-01",
+            ip="10.0.0.1",
+            os="Windows 11",
+            type="workstation",
+        )
+        state_manager.set_current_time(timestamp)
+
+        with pytest.raises(StateError, match="distinct server address"):
+            activity_gen.generate_dhcp_lease(
+                system=client,
+                time=timestamp,
+                mac="00:50:56:ab:cd:ef",
+                server_addr=client.ip,
+            )
+
     def test_dhcp_lease_payload_sizes_vary_by_client(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -1898,6 +1971,7 @@ class TestDhcpLease:
                 system=system,
                 time=timestamp,
                 mac=mac,
+                server_addr="10.0.0.1",
                 uid=f"C{system.hostname.replace('-', '')}",
                 msg_types=["REQUEST", "ACK"],
             )
@@ -1931,6 +2005,7 @@ class TestDhcpLease:
             system=linux,
             time=timestamp,
             mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
             uid="CTest123456789ab",
         )
 

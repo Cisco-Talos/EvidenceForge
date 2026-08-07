@@ -67,9 +67,12 @@ without turning `TODO.md` back into a high-conflict work journal.
   full/filter/parallel projection-equivalence tests. This targets `REAL-005`, `REAL-007`, and
   `REAL-009`. See the [Batch 3 worklog](docs/worklog/2026-08-07-network-protocol-ids.md) and
   [empirical results](docs/design/realism-review/batch3-results.json).
-- [ ] **P1** Implement Batch 4 world-capability and distribution-state contracts, followed by
-  Batch 5 source-native projection and evaluator-validity work. This includes `REAL-008`,
-  `REAL-010` through `REAL-012`, and the remaining AAAA and OCSP findings.
+- [x] **P1** Implement Batch 4 world-capability and distribution-state contracts for `REAL-008`
+  and `REAL-012`, including the remaining AAAA and OCSP distribution findings. See the
+  [Batch 4 worklog](docs/worklog/2026-08-07-world-capability-distribution-state.md) and empirical
+  results package.
+- [ ] **P1** Implement Batch 5 source-native projection and evaluator-validity work for
+  `REAL-010` and `REAL-011`, including the evaluator proof gaps recorded by Batch 4.
 - [ ] **P1** Complete Batch 6 input-safety, workload-budget, authoring, and reproducibility work,
   including the deferred evaluator-memory capacity decision (`REAL-013`, `REAL-014`,
   `SEC-001` through `SEC-010`, and `SEC-DEFER-001`).

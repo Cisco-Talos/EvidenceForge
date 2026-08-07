@@ -1070,7 +1070,7 @@ class TestSslContextPopulation:
         )
 
         assert len(events) > 0
-        event = events[-1]
+        event = next(event for event in reversed(events) if event.ssl is not None)
         # SF connections with ssl service should have SslContext
         if event.network.conn_state == "SF":
             assert event.ssl is not None
@@ -1107,7 +1107,7 @@ class TestSslContextPopulation:
             conn_state="SF",
         )
 
-        event = events[-1]
+        event = next(event for event in reversed(events) if event.ssl is not None)
         assert event.ssl is not None
         assert event.ssl.version == "TLSv13"
         assert event.x509 is None
@@ -1132,7 +1132,7 @@ class TestSslContextPopulation:
             conn_state="SF",
         )
 
-        event = events[-1]
+        event = next(event for event in reversed(events) if event.ssl is not None)
         assert event.ssl is not None
         assert event.ssl.version == "TLSv12"
         assert event.x509 is not None
@@ -3017,7 +3017,7 @@ class TestSslContextPopulation:
             conn_state="SF",
         )
 
-        event = events[-1]
+        event = next(event for event in reversed(events) if event.ssl is not None)
         assert event.ssl is not None
         assert event.x509 is not None
         if event.ssl.version == "TLSv12":
@@ -3068,7 +3068,7 @@ class TestSslContextPopulation:
             conn_state="SF",
         )
 
-        event = events[-1]
+        event = next(event for event in reversed(events) if event.ssl is not None)
         assert event.ssl is not None
         assert event.x509 is not None
         assert event.ssl.server_name == "pypi.org"

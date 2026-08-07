@@ -573,9 +573,23 @@ does not need cross-source lifecycle, timing, state, or identity ownership.
 The compiled world-model layer (`src/evidenceforge/generation/world_model.py`) sits above the canonical event model and answers the realism question the event model does not: "why would this user/system do this here?"
 
 - `WorldModel` compiles canonical host capabilities and user placement from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
+- Capabilities are typed and compiled once for DHCP servers, DNS resolvers, domain controllers,
+  forward proxies, SSH receivers, and RDP receivers; baseline and storyline consumers do not
+  independently reinterpret roles or services
+- Distinct-peer requests exclude the requesting host. Missing capability remains explicit:
+  optional baseline families skip, authored DHCP intent fails validation, and neither path invents
+  a hostname, address, or role
+- Validated public DNS/NTP configuration represents explicit external infrastructure for eligible
+  traffic; it does not turn into a synthetic scenario host
 - `WorldPlanner` centralizes session bootstrap for interactive, network, SSH, and RDP access, including remote source-host selection and planner-owned session allocation
 - Baseline and storyline call this shared layer instead of maintaining separate SSH/RDP/logon heuristics
 - `ActivityGenerator` then emits host/network evidence against that precomputed state using the canonical `SecurityEvent` pipeline
+
+Distribution choices that must persist across a lifecycle live with their owner rather than being
+resampled by renderers. For example, the DHCP bundle selects T1 once per lease, the OCSP bundle
+plans response duration once per transaction, and observation applies one coherent decision to an
+OCSP transaction's Zeek HTTP/file/OCSP companions. Stable per-name DNS capability and host-scoped
+GPO/device profiles similarly prevent independently sampled source fingerprints.
 
 ### EventDispatcher
 

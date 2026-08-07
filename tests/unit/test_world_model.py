@@ -34,17 +34,19 @@ from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle,
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.world_model import WorldModel, WorldPlanner
+from evidenceforge.generation.world_model import HostCapability, WorldModel, WorldPlanner
 from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
     Group,
     OutputSpec,
     Scenario,
+    StorylineEvent,
     System,
     TimeWindow,
     User,
 )
+from evidenceforge.validation import ScenarioValidator
 
 
 def _make_scenario() -> Scenario:
@@ -113,6 +115,7 @@ def _make_scenario() -> Scenario:
                     ip="10.10.100.10",
                     os="Windows Server 2019",
                     type="domain_controller",
+                    services=["dns", "dhcp", "kerberos", "ldap"],
                 ),
             ],
         ),
@@ -208,13 +211,91 @@ def test_world_model_compiles_roles_and_infrastructure(
     assert db_host.supports_ssh is True
     assert "forward_proxy" in proxy_host.canonical_roles
     assert "dns_server" in dc_host.canonical_roles
+    assert dc_host.supports(HostCapability.DNS_RESOLVER)
+    assert dc_host.supports(HostCapability.DHCP_SERVER)
+    assert dc_host.supports(HostCapability.DOMAIN_CONTROLLER)
+    assert dc_host.supports(HostCapability.RDP_RECEIVER)
 
     infra = world_model.to_infrastructure_ips()
     assert infra["dc"] == [systems["DC-01"].ip]
+    assert infra["dhcp"] == [systems["DC-01"].ip]
     assert infra["db_servers"] == [
         {"ip": systems["DB-01"].ip, "port": 5432, "service": "postgresql"}
     ]
     assert world_model.proxy_routes[systems["WKS-01"].ip][0].hostname == "PROXY-01"
+
+
+def test_world_model_does_not_collapse_missing_infrastructure_onto_only_host() -> None:
+    """A one-host world must keep absent local capabilities empty and use public DNS."""
+    scenario = _make_scenario()
+    only_host = scenario.environment.systems[0]
+    scenario.environment.systems = [only_host]
+    model = WorldModel(scenario, "corp.local")
+
+    infra = model.to_infrastructure_ips()
+
+    assert infra["dhcp"] == []
+    assert infra["dc"] == []
+    assert infra["dc_hostnames"] == []
+    assert infra["dns"]
+    assert only_host.ip not in infra["dns"]
+
+
+def test_authored_dhcp_requires_distinct_modeled_server() -> None:
+    """Validation should reject DHCP intent when no distinct server owns the action."""
+    scenario = _make_scenario()
+    target = scenario.environment.systems[0]
+    scenario.environment.systems = [target]
+    scenario.storyline = [
+        StorylineEvent(
+            id="dhcp-no-server",
+            time="2024-01-15T10:30:00Z",
+            actor="alice.admin",
+            system=target.hostname,
+            activity="Renew a lease",
+            events=[{"type": "dhcp_lease"}],
+        )
+    ]
+
+    issues = ScenarioValidator(scenario).validate()
+
+    assert any(
+        issue.severity == "error"
+        and issue.field_path == "storyline.0.events.0"
+        and "no distinct modeled DHCP server" in issue.message
+        for issue in issues
+    )
+
+
+def test_authored_dhcp_accepts_explicit_distinct_server() -> None:
+    """A dedicated DHCP capability should satisfy authored lease preflight."""
+    scenario = _make_scenario()
+    target = scenario.environment.systems[0]
+    scenario.environment.systems = [
+        target,
+        System(
+            hostname="DHCP-01",
+            ip="10.10.100.20",
+            os="Windows Server 2022",
+            type="server",
+            roles=["dhcp_server"],
+            services=["windows-dhcp-server"],
+        ),
+    ]
+    scenario.storyline = [
+        StorylineEvent(
+            id="dhcp-with-server",
+            time="2024-01-15T10:30:00Z",
+            actor="alice.admin",
+            system=target.hostname,
+            activity="Renew a lease",
+            events=[{"type": "dhcp_lease"}],
+        )
+    ]
+
+    issues = ScenarioValidator(scenario).validate()
+
+    assert not any("DHCP lease" in issue.message for issue in issues)
 
 
 def test_world_model_plan_session_selects_interactive_ssh_and_rdp(
@@ -508,7 +589,15 @@ def test_world_planner_bootstraps_ssh_session(
         for event in process_events
         if event.process is not None and event.process.pid == session.session_shell_pid
     ]
-    assert bash_events
+    session_bash_events = [
+        event
+        for event in process_events
+        if event.process is not None
+        and event.process.image == "/bin/bash"
+        and event.process.logon_id == session.logon_id
+    ]
+    assert len(session_bash_events) == 1
+    assert bash_events == session_bash_events
     sshd_events = [
         event
         for event in process_events

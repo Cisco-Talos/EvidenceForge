@@ -2574,6 +2574,8 @@ class TestValidateConfig:
             if app == "irqbalance":
                 assert all("{}" not in message and "{0}" not in message for message in messages)
                 assert all("from CPU" not in message for message in messages)
+                assert entry.get("parameter_profiles")
+                assert not {"irq", "device", "cpu"}.intersection(entry.get("params") or {})
             if app == "polkitd":
                 assert any("action {action_id}" in message for message in messages)
                 assert all(
@@ -2593,6 +2595,21 @@ class TestValidateConfig:
                     assert "UDP+EDNS0 instead of UDP+EDNS0" not in rendered
 
         assert checked_apps == high_volume_apps
+
+    def test_irqbalance_uses_atomic_irq_device_cpu_profiles(self):
+        """IRQ/device/CPU values should be selected as one coherent configured unit."""
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        irqbalance = next(
+            entry for entry in load_extra_syslog_messages() if entry["app"] == "irqbalance"
+        )
+        profiles = irqbalance["parameter_profiles"]
+
+        assert profiles
+        assert all(set(profile) == {"irq", "device", "cpu"} for profile in profiles)
+        irq_to_device = {profile["irq"]: profile["device"] for profile in profiles}
+        assert len(irq_to_device) == len(profiles)
+        assert len(set(irq_to_device.values())) == len(profiles)
 
     def test_extra_syslog_linux_maintenance_texture_excludes_schedule_native_cron(self):
         from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages

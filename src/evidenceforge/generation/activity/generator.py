@@ -188,6 +188,7 @@ from evidenceforge.generation.activity.mail_public_identities import (
     public_mail_ptr_name,
     public_safe_mail_hostname,
 )
+from evidenceforge.generation.activity.network_params import public_dns_resolver_ips
 from evidenceforge.generation.activity.proxy_uri import (
     get_proxy_domain_class,
     is_browser_like_proxy_domain,
@@ -3054,7 +3055,7 @@ def _public_dns_aaaa_answers(hostname: str, dst_ip: str, *, is_internal: bool = 
         ipv6_answer = _IPV6_MAP.get(dst_ip)
         if ipv6_answer is not None:
             return [ipv6_answer]
-        return [_ipv4_to_fake_ipv6(dst_ip)]
+        return []
 
     owner = _dns_registrable_domain(hostname)
     profile = _public_dns_matched_profile("aaaa_profiles", hostname) or _public_dns_matched_profile(
@@ -3076,6 +3077,16 @@ def _public_dns_aaaa_answers(hostname: str, dst_ip: str, *, is_internal: bool = 
     ipv6_answer = _IPV6_MAP.get(dst_ip)
     if ipv6_answer is not None:
         return [ipv6_answer]
+
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+
+    availability = float(load_public_dns_profiles().get("generic_aaaa_probability", 0.62))
+    availability = max(0.0, min(1.0, availability))
+    availability_rng = random.Random(
+        _stable_seed(f"public_dns_aaaa_availability:{hostname.lower()}:{dst_ip}")
+    )
+    if availability_rng.random() >= availability:
+        return []
 
     return [_ipv4_to_fake_ipv6(dst_ip)]
 
@@ -8647,7 +8658,9 @@ class ActivityGenerator:
         **kwargs: Any,
     ) -> ExpansionContext:
         """Build an ExpansionContext from event parameters and engine state."""
-        dns_server_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
+        source_system = kwargs.get("source_system")
+        src_ip = kwargs.get("src_ip") or getattr(source_system, "ip", "")
+        dns_server_ips = self._dns_resolver_ips_for_source(str(src_ip))
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
@@ -8691,6 +8704,14 @@ class ActivityGenerator:
             sid_registry=self.sid_registry,
             created_account_sids=self._created_account_sids,
         )
+
+    def _dns_resolver_ips_for_source(self, source_ip: str) -> list[str]:
+        """Return modeled resolvers or one stable public-operator pool for a source."""
+
+        configured = list(getattr(self, "_dns_server_ips", None) or [])
+        if configured and not getattr(self, "_dns_server_ips_are_public_fallback", False):
+            return configured
+        return public_dns_resolver_ips(source_ip) or configured
 
     def _expand_and_emit(
         self,
@@ -16143,12 +16164,14 @@ class ActivityGenerator:
         route: list[dict[str, Any]],
         time: datetime,
     ) -> None:
-        resolver_ips = getattr(self, "_dns_server_ips", []) or ["10.0.0.1"]
-        resolver_ip = resolver_ips[0]
         for index, hop in enumerate(route):
             source_system = hop["src_system"]
             if not _is_modeled_local_ip(self, source_system.ip):
                 continue
+            resolver_ips = self._dns_resolver_ips_for_source(source_system.ip)
+            if not resolver_ips:
+                continue
+            resolver_ip = resolver_ips[0]
             dst_host = hop.get("external_hostname") or self._email_server_fqdn(
                 hop["dst_system"].hostname
             )
@@ -17223,18 +17246,24 @@ class ActivityGenerator:
                 target_system.hostname,
                 session.session_shell_pid,
             )
-            if shell_proc is not None and self._is_pid_active_at(
-                target_system,
-                session.session_shell_pid,
-                activity_time,
-            ):
+            if shell_proc is not None:
                 shell_start = ensure_utc(shell_proc.start_time)
                 source_ready_time = _session_source_ready_time(session)
                 if (
-                    scenario_start is None
-                    or activity_time < scenario_start
-                    or shell_start >= scenario_start
-                ) and (source_ready_time is None or shell_start >= source_ready_time):
+                    (
+                        scenario_start is None
+                        or activity_time < scenario_start
+                        or shell_start >= scenario_start
+                    )
+                    and (source_ready_time is None or shell_start >= source_ready_time)
+                    and shell_proc.logon_id == logon_id
+                ):
+                    # Parent selection and parent sanitization can both request
+                    # the SSH shell while its canonical start is being fitted
+                    # just after the requested activity anchor. The caller will
+                    # clamp dependent process evidence after that start; retain
+                    # the one session-owned shell instead of materializing a
+                    # second identical bash process at the same source time.
                     return session.session_shell_pid
 
         sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
@@ -19036,14 +19065,12 @@ class ActivityGenerator:
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies use a sticky configured resolver policy instead of rotating
         # evenly across unrelated public DNS providers.
-        dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
         src_system = request.source_system or getattr(self, "_ip_to_system", {}).get(src_ip)
+        dns_ips = self._dns_resolver_ips_for_source(src_ip)
+        if is_internal and getattr(self, "_dns_server_ips_are_public_fallback", False):
+            return
         if src_system and "forward_proxy" in (src_system.roles or []) and not is_internal:
-            resolver_pool = [ip for ip in dns_ips if _is_private_ip(ip)] or [
-                "1.1.1.1",
-                "8.8.8.8",
-                "9.9.9.9",
-            ]
+            resolver_pool = [ip for ip in dns_ips if _is_private_ip(ip)] or dns_ips
             resolver_rng = random.Random(_stable_seed(f"proxy_dns_policy:{src_ip}"))
             primary_index = resolver_rng.randrange(len(resolver_pool))
             secondary_index = (
@@ -19148,22 +19175,23 @@ class ActivityGenerator:
             else:
                 answers = [_generate_rdns_name(rng, dst_ip, hostname)]
         elif qtype_roll < 0.98:
-            # SRV record: AD service discovery — must resolve to DCs only
-            qtype, qtype_name = 33, "SRV"
-            domain = ad_domain
-            query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
+            # SRV record: AD service discovery — only when the world owns a DC.
             dc_systems = getattr(self, "_dc_systems", [])
             if dc_systems:
+                qtype, qtype_name = 33, "SRV"
+                domain = ad_domain
+                query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
                 dc_sys = _get_rng().choice(dc_systems)
                 dc_ip = dc_sys.ip
+                dc_hostname = REVERSE_DNS.get(dc_ip, f"{dc_sys.hostname}.{domain}")
+                svc_prefix = query.split(".")[0]
+                port = _SRV_PORT_MAP.get(svc_prefix, 389)
+                answers = [f"0 100 {port} {dc_hostname}"]
+                is_internal = True
             else:
-                dc_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-                dc_ip = _get_rng().choice(dc_ips)
-            dc_hostname = REVERSE_DNS.get(dc_ip, f"dc-01.{domain}")
-            svc_prefix = query.split(".")[0]
-            port = _SRV_PORT_MAP.get(svc_prefix, 389)
-            answers = [f"0 100 {port} {dc_hostname}"]
-            is_internal = True
+                qtype, qtype_name = 6, "SOA"
+                query = _dns_registrable_domain(hostname)
+                answers = _public_dns_soa_answers(query)
         elif qtype_roll < 0.995:
             # TXT record: SPF/DKIM/DMARC-style mail/authentication lookups.
             qtype, qtype_name = 16, "TXT"
@@ -23354,7 +23382,7 @@ class ActivityGenerator:
         system: "System",
         time: datetime,
         mac: str,
-        server_addr: str = "10.0.0.1",
+        server_addr: str,
         lease_time: float = 3600.0,
         uid: str = "",
         msg_types: list[str] | None = None,
@@ -23383,6 +23411,8 @@ class ActivityGenerator:
         time = request.time
         mac = request.mac
         server_addr = request.server_addr
+        if server_addr == system.ip:
+            raise StateError(f"DHCP lease for {system.hostname} requires a distinct server address")
         lease_time = request.lease_time
         uid = request.uid
         msg_types = request.msg_types
@@ -24257,7 +24287,7 @@ class ActivityGenerator:
             # sensor observes the lookup, nothing lands and the payload is not_emitted —
             # never a ground-truth label without bytes on disk.
             qname = render.dns_query or render.encoded_value
-            dns_server_ips = getattr(self, "_dns_server_ips", None) or ["10.0.0.1"]
+            dns_server_ips = self._dns_resolver_ips_for_source(system.ip)
             dns_rng = random.Random(_stable_seed(f"{seed_key}:dns"))
             dns_server_ip = dns_rng.choice(sorted(dns_server_ips))
             dns_ctx = DnsContext(

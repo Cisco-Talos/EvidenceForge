@@ -49,7 +49,7 @@ class DhcpLeaseRequest:
     system: System
     time: datetime
     mac: str
-    server_addr: str = "10.0.0.1"
+    server_addr: str
     lease_time: float = 3600.0
     uid: str = ""
     msg_types: list[str] | None = None

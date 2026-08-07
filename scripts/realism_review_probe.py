@@ -23,6 +23,7 @@ from typing import Any
 from evidenceforge.generation.activity.dll_load_profiles import (
     module_is_compatible_with_process,
 )
+from evidenceforge.generation.activity.network_params import public_dns_resolvers
 
 _ZEEK_UID_FILES = {"dns", "http", "ntp", "smtp", "ssl"}
 _TUPLE_FIELDS = ("id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p")
@@ -393,6 +394,46 @@ def _check_zeek_sensor(
                     )
                 )
 
+    ocsp_ids = {str(record["id"]) for record in records_by_name.get("ocsp", []) if record.get("id")}
+    for record in records_by_name.get("http", []):
+        if "application/ocsp-response" not in (record.get("resp_mime_types") or []):
+            continue
+        for fuid in record.get("resp_fuids") or []:
+            if str(fuid) not in ocsp_ids:
+                findings.append(
+                    Finding(
+                        check="zeek_ocsp_companion_reference",
+                        severity="error",
+                        path=str(directory / "http.json"),
+                        message="OCSP HTTP response references a file absent from ocsp.log",
+                        evidence={"uid": record.get("uid"), "fuid": fuid},
+                    )
+                )
+
+    public_dns_operator_by_ip = {
+        str(resolver["ip"]): str(resolver.get("operator") or resolver.get("name"))
+        for resolver in public_dns_resolvers()
+        if resolver.get("ip")
+    }
+    public_operators_by_client: dict[str, set[str]] = defaultdict(set)
+    for record in records_by_name.get("dns", []):
+        client_ip = record.get("id.orig_h")
+        resolver_ip = record.get("id.resp_h")
+        operator = public_dns_operator_by_ip.get(str(resolver_ip))
+        if client_ip and operator:
+            public_operators_by_client[str(client_ip)].add(operator)
+    for client_ip, operators in sorted(public_operators_by_client.items()):
+        if len(operators) > 1:
+            findings.append(
+                Finding(
+                    check="dns_public_resolver_operator_coherence",
+                    severity="error",
+                    path=str(directory / "dns.json"),
+                    message="One client rotates across unrelated public recursive DNS operators",
+                    evidence={"client_ip": client_ip, "operators": sorted(operators)},
+                )
+            )
+
     for record in records_by_name.get("dhcp", []):
         addresses = (
             record.get("client_addr"),
@@ -408,6 +449,27 @@ def _check_zeek_sensor(
                     path=str(directory / "dhcp.json"),
                     message="DHCP client, server, and assigned address are identical",
                     evidence={"address": populated[0], "uids": record.get("uids")},
+                )
+            )
+        client_addr, server_addr, assigned_addr = addresses
+        if server_addr is not None and server_addr == assigned_addr:
+            findings.append(
+                Finding(
+                    check="dhcp_role_separation",
+                    severity="error",
+                    path=str(directory / "dhcp.json"),
+                    message="DHCP server and assigned client address are identical",
+                    evidence={"address": server_addr, "uids": record.get("uids")},
+                )
+            )
+        if client_addr not in (None, "0.0.0.0") and client_addr == server_addr:
+            findings.append(
+                Finding(
+                    check="dhcp_role_separation",
+                    severity="error",
+                    path=str(directory / "dhcp.json"),
+                    message="DHCP client and server address are identical",
+                    evidence={"address": server_addr, "uids": record.get("uids")},
                 )
             )
         for uid in record.get("uids") or []:

@@ -729,6 +729,10 @@ class TestStorylineCommandNetworks:
             _dns_server_ips = ["10.0.0.1"]
 
             @staticmethod
+            def _dns_resolver_ips_for_source(_source_ip: str) -> list[str]:
+                return ["10.0.0.1"]
+
+            @staticmethod
             def generate_connection(**kwargs: Any) -> None:
                 captured.update(kwargs)
 
@@ -3309,6 +3313,19 @@ class TestStorylineCommandSideEffects:
         )
         engine = object.__new__(StorylineMixin)
         engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[source]))
+        dhcp_server = System(
+            hostname="DHCP-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="server",
+            roles=["dhcp_server"],
+            services=["windows-dhcp-server"],
+        )
+        engine.world_model = SimpleNamespace(
+            systems_with_capability=lambda _capability, distinct_from: (
+                [dhcp_server] if distinct_from is source else []
+            )
+        )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
         engine.dispatcher = SimpleNamespace(visibility_engine=None)
@@ -3317,6 +3334,7 @@ class TestStorylineCommandSideEffects:
             "ROGUE-LAPTOP": {
                 "mac": "f0:1f:af:b7:35:b2",
                 "lease_time": 7200.0,
+                "renewal_interval": 3511.25,
                 "last_renewal": 1710763200.0,
                 "system": source,
             }
@@ -3337,6 +3355,7 @@ class TestStorylineCommandSideEffects:
         assert lease["lease_time"] == 7200.0
         assert lease["msg_types"] == ["REQUEST", "ACK"]
         assert lease["renewal_interval"] > 0
+        assert lease["renewal_interval"] == 3511.25
         assert [context.sid for context in lease["ids_alerts"]] == [2002911]
         assert "ids_alerts" not in engine._dhcp_lease_state["ROGUE-LAPTOP"]
         assert (

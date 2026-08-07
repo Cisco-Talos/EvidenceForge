@@ -454,8 +454,25 @@ class EventDispatcher:
         self._promote_zeek_parent(decisions, "zeek_conn", _ZEEK_CONN_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_files", _ZEEK_FILES_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
+        self._preserve_zeek_ocsp_transaction_companions(event, decisions)
         self._preserve_zeek_tls_certificate_companions(event, decisions)
         self._preserve_remote_interactive_transport_companions(event, decisions)
+
+    @staticmethod
+    def _preserve_zeek_ocsp_transaction_companions(
+        event: SecurityEvent,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Apply one Zeek observation decision to an OCSP HTTP/file/response group."""
+        if event.ocsp is None or event.http is None or event.file_transfer is None:
+            return
+        formats = ("zeek_http", "zeek_files", "zeek_ocsp")
+        anchor = next((decisions[name] for name in formats if name in decisions), None)
+        if anchor is None:
+            return
+        for format_name in formats:
+            if format_name in decisions:
+                decisions[format_name] = anchor
 
     @staticmethod
     def _preserve_remote_interactive_transport_companions(

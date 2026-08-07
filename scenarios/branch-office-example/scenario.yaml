@@ -117,8 +117,8 @@ environment:
       ip: "10.44.20.10"
       os: "Windows Server 2022"
       type: domain_controller
-      services: ["kerberos", "ldap", "dns"]
-      roles: ["domain_controller", "dns_server"]
+      services: ["kerberos", "ldap", "dns", "windows-dhcp-server"]
+      roles: ["domain_controller", "dns_server", "dhcp_server"]
 
     - hostname: FILE-BO-01
       ip: "10.44.20.20"

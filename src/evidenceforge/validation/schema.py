@@ -226,6 +226,7 @@ class ScenarioValidator:
         self._validate_user_primary_system_references()
         self._validate_group_member_references()
         self._validate_storyline_references()
+        self._validate_action_capabilities()
         self._validate_ids_alert_attachments()
         self._validate_uniqueness()
         self._validate_expanded_activities()
@@ -790,6 +791,67 @@ class ScenarioValidator:
                         suggestion="Provide exactly one offset per child event",
                     )
                 )
+
+    def _validate_action_capabilities(self) -> None:
+        """Reject authored actions whose target world lacks a required capability."""
+
+        from evidenceforge.generation.world_model import HostCapability, WorldModel
+
+        world = WorldModel(self.scenario, self.scenario.environment.domain or "corp.local")
+        requirements = {
+            "ssh_session": HostCapability.SSH_RECEIVER,
+            "rdp_session": HostCapability.RDP_RECEIVER,
+        }
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            for event_idx, event in enumerate(events):
+                target = world.systems_by_hostname.get(event.system)
+                if target is None:
+                    continue
+                for spec_idx, spec in enumerate(event.events):
+                    field_path = f"{section_name}.{event_idx}.events.{spec_idx}"
+                    if spec.type == "dhcp_lease":
+                        owners = world.systems_with_capability(
+                            HostCapability.DHCP_SERVER,
+                            distinct_from=target,
+                        )
+                        if owners:
+                            continue
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] DHCP lease for '{target.hostname}' has no "
+                                    "distinct modeled DHCP server"
+                                ),
+                                suggestion=(
+                                    "Add a different system with role 'dhcp_server' or a DHCP "
+                                    "server service such as 'dhcpd'"
+                                ),
+                            )
+                        )
+                        continue
+
+                    required = requirements.get(spec.type)
+                    if required is None or world.hosts[target.hostname].supports(required):
+                        continue
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Event type '{spec.type}' targets "
+                                f"'{target.hostname}', which lacks capability '{required.value}'"
+                            ),
+                            suggestion=(
+                                "Declare a compatible target OS/type or add the corresponding "
+                                "server service explicitly"
+                            ),
+                        )
+                    )
 
     def _validate_uniqueness(self) -> None:
         """Check for duplicate usernames, hostnames, and IPs."""

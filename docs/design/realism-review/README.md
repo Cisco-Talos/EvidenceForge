@@ -16,7 +16,7 @@ realism review frozen at `dev` commit `0a035e97d94cd2a35ebd1498cc4e133336fe14a4`
 | Security review | Complete; one deferred capacity question | `security-review.md` |
 | Final synthesis and remediation roadmap | Complete | `final-report.md` |
 | Contract proposal approval | Approved with amendments 2026-08-05 | `contract-proposals.md` |
-| Remediation Batches 0–3 | Complete | `batch3-results.json`, linked worklogs |
+| Remediation Batches 0–4 | Complete | `batch3-results.json`, `batch4-results.json`, linked worklogs |
 
 The review paused after the architecture assessment and resumed after user acceptance. No
 generator fix, public API change, schema migration, or version bump was made during the campaign.
@@ -37,6 +37,8 @@ only as bounded, separately reviewed feature-branch batches.
 - `empirical-results.json`: reproducible scenario, profile, parser, stress, and invariant results.
 - `batch3-results.json`: reproducible post-review evidence for the network/protocol/IDS remediation
   slice, including old/new probe counts, deterministic hashes, and validation gates.
+- `batch4-results.json`: reproducible post-review evidence for typed world capabilities and
+  lifecycle/scoped distribution state, including empirical distributions and validation gates.
 - `probe-*.json`: durable results from the generated-output invariant probe.
 - `blind-*.md` and `historical-blind-evidence.json`: isolated current expert reviews and separately
   labeled historical recurrence evidence.

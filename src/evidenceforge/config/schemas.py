@@ -17,7 +17,14 @@ import re
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    IPvAnyAddress,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 
@@ -211,6 +218,7 @@ class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
     nameserver_profiles: list[PublicDnsAnswerProfile]
     mail_profiles: list[PublicDnsAnswerProfile]
     aaaa_profiles: list[PublicDnsAnswerProfile]
+    generic_aaaa_probability: float = Field(default=0.62, ge=0.0, le=1.0)
 
     @field_validator("nameserver_profiles", "mail_profiles")
     @classmethod
@@ -565,6 +573,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     app: str
     messages: list[str]
     params: dict[str, list[str]] | None = None
+    parameter_profiles: list[dict[str, str]] | None = None
     distro: str | None = None
     roles: list[str] | None = None
     exclude_roles: list[str] | None = None
@@ -750,6 +759,32 @@ class TlsOcspStatusProfile(BaseModel, extra="forbid"):
         return self
 
 
+class TlsOcspResponseConfig(BaseModel, extra="forbid"):
+    """OCSP response size and responder-scoped transfer timing bounds."""
+
+    size_bytes_min: int = Field(gt=0)
+    size_bytes_max: int = Field(gt=0)
+    latency_ms_min: float = Field(gt=0)
+    latency_ms_max: float = Field(gt=0)
+    throughput_bytes_per_second_min: float = Field(gt=0)
+    throughput_bytes_per_second_max: float = Field(gt=0)
+    file_duration_floor_ms: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def ranges_are_ordered(self) -> Self:
+        """Reject inverted response timing and size ranges."""
+
+        if self.size_bytes_max < self.size_bytes_min:
+            raise ValueError("size_bytes_max must be >= size_bytes_min")
+        if self.latency_ms_max < self.latency_ms_min:
+            raise ValueError("latency_ms_max must be >= latency_ms_min")
+        if self.throughput_bytes_per_second_max < self.throughput_bytes_per_second_min:
+            raise ValueError(
+                "throughput_bytes_per_second_max must be >= throughput_bytes_per_second_min"
+            )
+        return self
+
+
 class TlsOcspConfig(BaseModel, extra="forbid"):
     """OCSP behavior settings in tls_realism.yaml."""
 
@@ -759,6 +794,7 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     this_update_max_skew_seconds: int
     next_update_min_seconds: int
     next_update_max_seconds: int
+    response: TlsOcspResponseConfig
     request_path: TlsOcspRequestPathConfig = Field(default_factory=TlsOcspRequestPathConfig)
     responders: list[TlsOcspResponder] = Field(default_factory=list)
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
@@ -1508,6 +1544,15 @@ class PublicNtpServerEntry(BaseModel, extra="forbid"):
     weight: int = Field(gt=0)
 
 
+class PublicDnsResolverEntry(BaseModel, extra="forbid"):
+    """A public recursive DNS resolver profile in network_params.yaml."""
+
+    name: str
+    ip: IPvAnyAddress
+    operator: str
+    weight: int = Field(gt=0)
+
+
 class DnsTunnelRttConfig(BaseModel, extra="forbid"):
     """DNS tunnel response timing parameters in network_params.yaml."""
 
@@ -1633,6 +1678,30 @@ class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
         return v
 
 
+class WindowsGroupPolicyCommandProfile(BaseModel, extra="forbid"):
+    """One weighted gpupdate command morphology."""
+
+    command_line: str = Field(min_length=1)
+    weight: int = Field(gt=0)
+
+
+class WindowsGroupPolicyRefreshConfig(BaseModel, extra="forbid"):
+    """Host-scoped Windows Group Policy refresh model."""
+
+    interval_minutes_min: int = Field(ge=30, le=1440)
+    interval_minutes_max: int = Field(ge=30, le=1440)
+    process_emission_probability: float = Field(ge=0.0, le=1.0)
+    command_profiles: list[WindowsGroupPolicyCommandProfile] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def interval_is_ordered(self) -> Self:
+        """Reject inverted refresh interval bounds."""
+
+        if self.interval_minutes_max < self.interval_minutes_min:
+            raise ValueError("interval_minutes_max must be >= interval_minutes_min")
+        return self
+
+
 class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
     """Source-native 4672 privilege list profile."""
 
@@ -1684,6 +1753,7 @@ class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
     """Windows authentication realism knobs."""
 
     workstation_lock: WindowsWorkstationLockConfig
+    group_policy_refresh: WindowsGroupPolicyRefreshConfig
     failed_logon: WindowsFailedLogonConfig
     special_privileges: WindowsSpecialPrivilegesConfig
 

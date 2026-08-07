@@ -193,6 +193,33 @@ def test_ocsp_action_bundle_builds_all_contexts_from_one_plan() -> None:
     assert executor.kwargs["http"].uri == plan.request_path
     assert executor.kwargs["http"].resp_fuids == [plan.file_id]
     assert executor.kwargs["file_transfer"].fuid == plan.file_id
+    assert executor.kwargs["file_transfer"].duration == plan.response_file_duration
     assert executor.kwargs["ocsp"].serial_number == plan.certificate.serial_number
     assert executor.kwargs["ocsp_transaction"] is plan
     assert executor.kwargs.get("proxy_bypass") is None
+
+
+def test_ocsp_response_file_duration_varies_with_planned_transaction() -> None:
+    """OCSP response files should not collapse to one fixed 20 ms fingerprint."""
+    registry = CryptographicMaterialRegistry()
+    durations: list[float] = []
+    for index in range(16):
+        backend = f"api-{index}.example.com"
+        tls_planner, presentation = _presentation(registry, backend=backend)
+        issuer = tls_planner.authority_material(presentation.leaf.issuer_name)
+        plan = OcspTransactionPlanner(registry, tls_planner).plan(
+            OcspTransactionRequest(
+                _tls_event(presentation),
+                presentation.leaf,
+                issuer,
+                backend,
+            )
+        )
+        durations.append(plan.response_file_duration)
+        assert (
+            plan.response_file_duration <= (plan.responded_at - plan.requested_at).total_seconds()
+        )
+
+    assert len({round(duration, 6) for duration in durations}) >= 10
+    assert any(duration < 0.02 for duration in durations)
+    assert any(duration > 0.02 for duration in durations)

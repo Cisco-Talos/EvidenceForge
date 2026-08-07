@@ -35,7 +35,14 @@ from evidenceforge.events import (
     RawLogEntry,
     SecurityEvent,
 )
-from evidenceforge.events.contexts import SslContext, SyslogContext, X509Context
+from evidenceforge.events.contexts import (
+    FileTransferContext,
+    HttpContext,
+    OcspContext,
+    SslContext,
+    SyslogContext,
+    X509Context,
+)
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.observation import (
@@ -754,6 +761,64 @@ class TestObservationProfiles:
             "zeek_files",
             "zeek_x509",
         }
+
+    def test_zeek_ocsp_transaction_uses_one_source_observation_decision(self, monkeypatch):
+        """OCSP HTTP, file, and response rows must survive or drop as one Zeek group."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {
+                            "zeek_http": 0.0,
+                            "zeek_files": 0.0,
+                            "zeek_ocsp": 1.0,
+                        },
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        http = _make_mock_emitter("zeek_http", handles=True)
+        files = _make_mock_emitter("zeek_files", handles=True)
+        ocsp = _make_mock_emitter("zeek_ocsp", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_http": http, "zeek_files": files, "zeek_ocsp": ocsp},
+            observation_policy=ObservationPolicy("zeek_ocsp_companion_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            http=HttpContext(
+                host="ocsp.example.test",
+                resp_fuids=["Focspcompanion01"],
+                resp_mime_types=["application/ocsp-response"],
+            ),
+            file_transfer=FileTransferContext(
+                fuid="Focspcompanion01",
+                source="HTTP",
+                mime_type="application/ocsp-response",
+            ),
+            ocsp=OcspContext(id="Focspcompanion01"),
+        )
+        dispatcher.dispatch(event)
+
+        http.emit.assert_called_once()
+        files.emit.assert_called_once()
+        ocsp.emit.assert_called_once()
+        expected_formats = {"zeek_http", "zeek_files", "zeek_ocsp"}
+        assert http.emit.call_args.args[0]._observed_formats == expected_formats
+        assert files.emit.call_args.args[0]._observed_formats == expected_formats
+        assert ocsp.emit.call_args.args[0]._observed_formats == expected_formats
 
     def test_zeek_format_missingness_keeps_delay_coherent_when_visible(self, monkeypatch):
         """Format-specific drop policy must not split same-UID source delay."""

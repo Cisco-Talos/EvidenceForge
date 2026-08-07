@@ -2167,9 +2167,18 @@ class TestDnsSupportQueryTypes:
             type="server",
             roles=["forward_proxy"],
         )
-        activity_gen._ip_to_system = {proxy.ip: proxy}
+        dc = System(
+            hostname="dc-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+            services=["dns"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy, dc.ip: dc}
+        activity_gen._dc_systems = [dc]
         activity_gen._ad_domain = "example.com"
-        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen._dns_server_ips = [dc.ip]
 
         activity_gen._emit_dns_lookup(
             src_ip=proxy.ip,
@@ -2202,9 +2211,18 @@ class TestDnsSupportQueryTypes:
             type="server",
             roles=["forward_proxy"],
         )
-        activity_gen._ip_to_system = {proxy.ip: proxy}
+        dc = System(
+            hostname="dc-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+            services=["dns"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy, dc.ip: dc}
+        activity_gen._dc_systems = [dc]
         activity_gen._ad_domain = "example.com"
-        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen._dns_server_ips = [dc.ip]
 
         activity_gen._emit_dns_lookup(
             src_ip=proxy.ip,

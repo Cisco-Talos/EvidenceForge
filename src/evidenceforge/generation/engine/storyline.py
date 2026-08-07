@@ -72,6 +72,7 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.activity.network_params import activity_dns_resolver_ips
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
@@ -86,6 +87,7 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
+
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
 _STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
@@ -4498,17 +4500,34 @@ class StorylineMixin:
                     f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
                     f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
                 )
+            from evidenceforge.generation.world_model import HostCapability
             from evidenceforge.utils.ids import generate_zeek_uid
 
-            # Use DC as DHCP server (common in AD environments)
-            dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
-            dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
+            dhcp_servers = self.world_model.systems_with_capability(
+                HostCapability.DHCP_SERVER,
+                distinct_from=system,
+            )
+            if not dhcp_servers:
+                raise StateError(
+                    f"DHCP lease for {system.hostname} requires a distinct modeled DHCP server"
+                )
+            dhcp_server = dhcp_servers[
+                _stable_seed(
+                    "storyline_dhcp_server:"
+                    f"{getattr(self, '_current_storyline_spec_id', '')}:{system.hostname}"
+                )
+                % len(dhcp_servers)
+            ].ip
             lease_time = (
                 float(existing_lease["lease_time"])
                 if existing_lease
                 else float(rng.choice([3600, 7200, 14400, 86400]))
             )
-            renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
+            renewal_interval = (
+                float(existing_lease["renewal_interval"])
+                if existing_lease
+                else dhcp_renewal_interval_seconds(lease_time, rng)
+            )
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
             authored_ids_alerts = _build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
@@ -4537,6 +4556,7 @@ class StorylineMixin:
                     "lease_time": lease_time,
                     "last_renewal": time.timestamp(),
                     "next_renewal": time.timestamp() + renewal_interval,
+                    "renewal_interval": renewal_interval,
                     "server_addr": dhcp_server,
                     "system": system,
                 }
@@ -5067,9 +5087,12 @@ class StorylineMixin:
 
             # Resolve DNS server IP before choosing source-native DNS RTT so
             # local resolvers do not get impossible multi-second timings.
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
-            dns_server_ip = rng.choice(dns_server_ips)
             query_src_ip = spec.source_ip or system.ip
+            dns_server_ips = activity_dns_resolver_ips(
+                self.activity_generator,
+                query_src_ip,
+            )
+            dns_server_ip = rng.choice(dns_server_ips)
             from evidenceforge.generation.activity.generator import _dns_rtt
 
             dns_ctx = DnsContext(
@@ -5261,7 +5284,10 @@ class StorylineMixin:
             _QTYPE_MAP = {"A": 1, "AAAA": 28, "TXT": 16, "CNAME": 5}
 
             query_src_ip = spec.source_ip or system.ip
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ips = activity_dns_resolver_ips(
+                self.activity_generator,
+                query_src_ip,
+            )
 
             query_count = 0
             nxdomain_count = 0
@@ -5373,7 +5399,10 @@ class StorylineMixin:
                 duration_sec = (end_dt - start).total_seconds()
 
             query_src_ip = spec.source_ip or system.ip
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ips = activity_dns_resolver_ips(
+                self.activity_generator,
+                query_src_ip,
+            )
 
             # Generate or use payload
             if spec.payload:

@@ -171,8 +171,8 @@ def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(t
             ip="10.0.0.65",
             os="Windows Server 2022",
             type="domain_controller",
-            roles=["domain_controller", "dns_server"],
-            services=["dns"],
+            roles=["domain_controller", "dns_server", "dhcp_server"],
+            services=["dns", "windows-dhcp-server"],
         ),
     ]
     attached = [{"sid": 2002911, "policy": "every"}]

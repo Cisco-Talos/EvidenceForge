@@ -1,7 +1,7 @@
 # network_params.yaml — Network parameters for realistic DHCP and MAC address generation.
 #
-# Purpose: Defines OUI prefixes and public NTP server defaults for realistic
-#          DHCP, MAC address, and time synchronization evidence.
+# Purpose: Defines OUI prefixes and public infrastructure defaults for realistic
+#          DHCP, MAC address, DNS, and time synchronization evidence.
 #
 # Depended on by: generation engine (MAC address generation)
 # Depends on: nothing — standalone
@@ -30,6 +30,32 @@ oui_prefixes:
   - prefix: "8C:DC:D4"
     vendor: "Intel"
     weight: 5
+
+public_dns_resolvers:
+  - name: "cloudflare-primary"
+    ip: "1.1.1.1"
+    operator: "Cloudflare"
+    weight: 30
+  - name: "cloudflare-secondary"
+    ip: "1.0.0.1"
+    operator: "Cloudflare"
+    weight: 10
+  - name: "google-primary"
+    ip: "8.8.8.8"
+    operator: "Google"
+    weight: 25
+  - name: "google-secondary"
+    ip: "8.8.4.4"
+    operator: "Google"
+    weight: 10
+  - name: "quad9-primary"
+    ip: "9.9.9.9"
+    operator: "Quad9"
+    weight: 15
+  - name: "opendns-primary"
+    ip: "208.67.222.222"
+    operator: "Cisco OpenDNS"
+    weight: 10
 
 public_ntp_servers:
   - name: "time-a-g.nist.gov"

@@ -489,6 +489,7 @@ def validate_config() -> ValidationResult:
         "activity/network_params.yaml": {
             "list_fields": {
                 "oui_prefixes": None,
+                "public_dns_resolvers": "name",
                 "public_ntp_servers": "name",
                 "dns_tunnel_ttl_choices": None,
                 "external_scanner_port_profiles": "name",
@@ -2629,6 +2630,7 @@ def validate_config() -> ValidationResult:
         ProcessNetworkEntry,
         ProxyUserAgentOverrideEntry,
         PublicDnsProfilesConfig,
+        PublicDnsResolverEntry,
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
@@ -3034,6 +3036,13 @@ def validate_config() -> ValidationResult:
     net_params = load_network_params()
     if net_params:
         _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
+        _SCHEMA_CHECKS.append(
+            (
+                net_params.get("public_dns_resolvers", []),
+                PublicDnsResolverEntry,
+                "network_params.yaml (public_dns_resolvers)",
+            )
+        )
         _SCHEMA_CHECKS.append(
             (
                 net_params.get("public_ntp_servers", []),
