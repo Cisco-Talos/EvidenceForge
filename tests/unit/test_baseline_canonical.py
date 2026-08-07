@@ -37,6 +37,9 @@ import pytest
 from evidenceforge.events.contexts import HostContext, HttpContext, IdsContext
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.dll_load_profiles import (
+    module_is_compatible_with_process,
+)
 from evidenceforge.generation.activity.generator import (
     _ntp_association_poll_seconds,
     _ntp_parser_min_gap_seconds,
@@ -59,7 +62,6 @@ from evidenceforge.generation.engine.baseline import (
     _linux_sudo_command_runtime,
     _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
-    _module_matches_process,
     _ntp_observed_second,
     _ntp_sync_interval_seconds,
     _ntp_sync_seconds_for_hour,
@@ -618,10 +620,10 @@ class TestModuleLoadProcessMatching:
         chrome_module = r"C:\Program Files\Google\Chrome\Application\120.0.6099.225\libegl.dll"
         edge_module = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_elf.dll"
 
-        assert _module_matches_process("chrome.exe", chrome_module)
-        assert not _module_matches_process("msedge.exe", chrome_module)
-        assert _module_matches_process("msedge.exe", edge_module)
-        assert not _module_matches_process("chrome.exe", edge_module)
+        assert module_is_compatible_with_process("chrome.exe", chrome_module)
+        assert not module_is_compatible_with_process("msedge.exe", chrome_module)
+        assert module_is_compatible_with_process("msedge.exe", edge_module)
+        assert not module_is_compatible_with_process("chrome.exe", edge_module)
 
 
 class TestIdsAlertCorrelation:

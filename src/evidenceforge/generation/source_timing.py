@@ -1239,6 +1239,50 @@ class SourceTimingPlanner:
         plan.source_times[cache_key] = constrained_time
         return constrained_time
 
+    def process_module_source_time(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+        process_create_time: datetime,
+    ) -> datetime:
+        """Place a module observation after its source-visible process creation."""
+        process = event.process
+        image_load = event.image_load
+        if process is None or image_load is None:
+            return event.timestamp
+
+        seed_parts = (
+            format_name,
+            getattr(event.src_host, "hostname", ""),
+            process.pid,
+            process.start_time,
+            image_load.image_loaded,
+            image_load.load_phase,
+            image_load.load_order,
+        )
+        if image_load.load_phase == "startup":
+            order = max(1, image_load.load_order)
+            spacing_seed = (
+                format_name,
+                getattr(event.src_host, "hostname", ""),
+                process.pid,
+                process.start_time,
+            )
+            spacing_us = 1_500 + (_stable_seed(f"startup-module-source:{spacing_seed}") % 1_501)
+            return process_create_time + timedelta(microseconds=order * spacing_us)
+
+        source_key = (
+            "source.ecar_dependent_after_process_create"
+            if format_name == "ecar"
+            else "source.sysmon_module_after_process_create"
+        )
+        return self.source_time(
+            event,
+            source_key,
+            seed_parts=seed_parts,
+            not_before=max(event.timestamp, process_create_time + _SOURCE_EPSILON),
+        )
+
     def lifecycle_child_source_time(
         self,
         event: SecurityEvent,

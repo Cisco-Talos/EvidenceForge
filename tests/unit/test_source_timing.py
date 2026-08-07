@@ -19,6 +19,7 @@ from evidenceforge.events.contexts import (
     DnsContext,
     FileContext,
     HostContext,
+    ImageLoadContext,
     KerberosContext,
     NetworkContext,
     ProcessAccessContext,
@@ -792,6 +793,94 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     dependent_time = emitter._after_process_create_timestamp(dependent_event, proc)
 
     assert dependent_time > process_time
+
+
+def test_ecar_startup_modules_preserve_loader_order_after_process_create(tmp_path: Path) -> None:
+    """eCAR startup modules should follow CREATE in their canonical loader order."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    base = _base_time()
+    host = _host_context()
+    proc = _process_context(base)
+    process_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+    )
+    first_module = SecurityEvent(
+        timestamp=base + timedelta(milliseconds=2),
+        event_type="image_load",
+        src_host=host,
+        process=proc,
+        image_load=ImageLoadContext(
+            image_loaded=r"C:\Windows\System32\ntdll.dll",
+            load_phase="startup",
+            load_order=1,
+        ),
+    )
+    second_module = replace(
+        first_module,
+        timestamp=base + timedelta(milliseconds=4),
+        image_load=ImageLoadContext(
+            image_loaded=r"C:\Windows\System32\kernel32.dll",
+            load_phase="startup",
+            load_order=2,
+        ),
+    )
+
+    process_time = emitter._process_create_timestamp(process_event, proc)
+    first_time = emitter._after_process_create_timestamp(first_module, proc)
+    second_time = emitter._after_process_create_timestamp(second_module, proc)
+
+    assert process_time < first_time < second_time
+    assert second_time - process_time < timedelta(milliseconds=10)
+
+
+def test_sysmon_startup_module_renders_after_process_create(tmp_path: Path) -> None:
+    """Sysmon Event 7 source time should not precede the same process's Event 1."""
+    output_path = tmp_path / "sysmon.xml"
+    emitter = SysmonEventEmitter(load_format("windows_event_sysmon"), output_path, threaded=False)
+    base = _base_time()
+    host = _host_context()
+    proc = _process_context(base)
+    auth = AuthContext(username="alice", logon_id=proc.logon_id)
+    process_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+        auth=auth,
+    )
+    module_event = SecurityEvent(
+        timestamp=base + timedelta(milliseconds=2),
+        event_type="image_load",
+        src_host=host,
+        process=proc,
+        auth=auth,
+        image_load=ImageLoadContext(
+            image_loaded=r"C:\Program Files\Example\startup.dll",
+            signed=False,
+            signature="-",
+            signature_status="Unavailable",
+            load_phase="startup",
+            load_order=1,
+        ),
+    )
+
+    emitter.emit(process_event)
+    emitter.emit(module_event)
+    emitter.close()
+
+    root = ET.fromstring(output_path.read_text())
+    ns = {"evt": "http://schemas.microsoft.com/win/2004/08/events/event"}
+    times: dict[int, datetime] = {}
+    for event_node in root.findall("evt:Event", ns):
+        event_id = int(event_node.findtext("evt:System/evt:EventID", namespaces=ns) or "0")
+        system_time = event_node.find("evt:System/evt:TimeCreated", ns).attrib["SystemTime"]
+        times[event_id] = datetime.fromisoformat(system_time.replace("Z", "+00:00"))
+
+    assert times[1] < times[7]
+    assert times[7] - times[1] < timedelta(milliseconds=10)
 
 
 def test_ecar_type3_login_uses_upstream_canonical_transport_order(tmp_path: Path) -> None:

@@ -1004,6 +1004,13 @@ class EcarEmitter(HostMultiplexEmitter):
         start_time = getattr(proc, "started_at", None) or getattr(proc, "start_time", None)
         if proc is None or start_time is None:
             return event.timestamp
+        if event.image_load is not None:
+            process_create_ts = self._process_create_timestamp(event, proc)
+            return _SOURCE_TIMING.process_module_source_time(
+                event,
+                "ecar",
+                process_create_ts,
+            )
         if event.timestamp - start_time >= timedelta(seconds=5):
             return _SOURCE_TIMING.source_time(
                 event,

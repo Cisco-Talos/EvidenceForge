@@ -131,6 +131,11 @@ relationships:
     position: after
     min_ms: 18
     max_ms: 1100
+  source.sysmon_module_after_process_create:
+    class: source_latency
+    position: after
+    min_ms: 5
+    max_ms: 180
   source.sysmon_process_terminate:
     class: source_latency
     position: after

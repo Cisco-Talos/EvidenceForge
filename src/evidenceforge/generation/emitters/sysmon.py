@@ -1506,12 +1506,22 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         il = event.image_load
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         pid = proc.pid if proc else rng.randint(1000, 5000)
         image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
-        process_guid = self._get_stable_process_guid(
-            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+        process_start_time = proc.start_time if proc and proc.start_time else event.timestamp
+        process_create_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.sysmon_process_create",
+            seed_parts=(host.hostname, pid, process_start_time),
+            not_before=process_start_time,
         )
+        render_time = _SOURCE_TIMING.process_module_source_time(
+            event,
+            "sysmon",
+            process_create_time,
+        )
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        process_guid = self._get_stable_process_guid(host.hostname, pid, process_start_time)
 
         # PE metadata for the loaded DLL
         fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded, host)
@@ -1541,7 +1551,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 7,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,

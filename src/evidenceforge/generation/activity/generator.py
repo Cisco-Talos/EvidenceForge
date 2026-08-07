@@ -67,7 +67,6 @@ from evidenceforge.events.contexts import (
     HostContext,
     HttpContext,
     IdsContext,
-    ImageLoadContext,
     KerberosContext,
     NetworkContext,
     OcspContext,
@@ -11337,6 +11336,15 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
         self._record_process_source_create_time(system.hostname, pid, event)
+        if _get_os_category(system.os) == "windows":
+            self._emit_windows_process_startup_modules(
+                user=user,
+                system=system,
+                time=time,
+                pid=pid,
+                process_name=process_name,
+                from_storyline=from_storyline,
+            )
         self._emit_process_command_network_effects(
             user=user,
             system=system,
@@ -11533,53 +11541,27 @@ class ActivityGenerator:
                     ),
                 )
         if os_category == "windows" and rng.random() < 0.30:
-            from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
+            from evidenceforge.generation.activity.dll_load_profiles import (
+                get_runtime_dlls_for_process,
+            )
 
-            dll_profiles = get_dlls_for_process(_exe_lower)
+            dll_profiles = get_runtime_dlls_for_process(_exe_lower)
             dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
             dll_path = dll_profile.get("path", "")
-            dll_path = _materialize_username_path(dll_path, process_username)
             module_delay_ms = rng.randint(120, 1500)
-            process_start = running_proc.start_time if running_proc is not None else None
-            if dll_path and self._mark_loaded_module(
-                system.hostname,
-                pid,
-                process_start,
-                dll_path,
-            ):
-                self.dispatcher.dispatch(
-                    SecurityEvent(
-                        timestamp=time + timedelta(milliseconds=module_delay_ms),
-                        event_type="image_load",
-                        src_host=host_ctx,
-                        auth=auth_ctx,
-                        process=ProcessContext(
-                            pid=pid,
-                            parent_pid=parent_pid,
-                            image=process_name,
-                            command_line=command_line,
-                            username=process_username,
-                            logon_id=process_logon_id,
-                            start_time=process_start,
-                        ),
-                        image_load=ImageLoadContext(
-                            image_loaded=dll_path,
-                            signed=bool(dll_profile.get("signed", True)),
-                            signature=str(dll_profile.get("signature", "Microsoft Windows")),
-                            signature_status=str(dll_profile.get("signature_status", "Valid")),
-                        ),
-                        edr=EdrContext(
-                            object_id=stable_uuid(
-                                "image-load-edr",
-                                system.hostname,
-                                pid,
-                                dll_path,
-                                time.isoformat(),
-                            ),
-                            actor_id=proc_obj_id,
-                        ),
-                        storyline_origin=from_storyline,
-                    )
+            if dll_path:
+                self.generate_image_load(
+                    user=user,
+                    system=system,
+                    time=time + timedelta(milliseconds=module_delay_ms),
+                    pid=pid,
+                    image=process_name,
+                    dll_path=dll_path,
+                    signed=bool(dll_profile.get("signed", True)),
+                    signature=str(dll_profile.get("signature", "Microsoft Windows")),
+                    signature_status=str(dll_profile.get("signature_status", "Valid")),
+                    load_phase="runtime",
+                    from_storyline=from_storyline,
                 )
         # Only emit registry events for processes that realistically modify registry
         # (services, shells, installers) — NOT command-line recon tools like net.exe/dsquery.exe
@@ -23052,6 +23034,9 @@ class ActivityGenerator:
         signed: bool = True,
         signature: str = "Microsoft Windows",
         signature_status: str = "Valid",
+        load_phase: str = "runtime",
+        load_order: int = 0,
+        from_storyline: bool = False,
     ) -> None:
         """Generate Sysmon Event 7 (ImageLoaded) for DLL/module loading.
 
@@ -23065,13 +23050,15 @@ class ActivityGenerator:
             signed: Whether the DLL is signed
             signature: Signer name (e.g., "Microsoft Windows")
             signature_status: Signature validation status (Valid, Expired, etc.)
+            load_phase: Canonical process phase (startup or runtime)
+            load_order: One-based initialization order for startup modules
+            from_storyline: Whether the owning process came from authored activity
         """
         from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
+        from evidenceforge.generation.activity.dll_load_profiles import (
+            module_is_compatible_with_process,
+        )
 
-        image = normalize_defender_platform_path(image, system.hostname)
-        dll_path = _materialize_username_path(dll_path, user.username)
-        dll_path = normalize_defender_platform_path(dll_path, system.hostname)
-        time = self._clamp_time_after_process_start(system, pid, time)
         proc = self.state_manager.get_process(system.hostname, pid)
         if proc is None:
             logger.debug(
@@ -23082,6 +23069,31 @@ class ActivityGenerator:
                 dll_path,
             )
             return
+        image = normalize_defender_platform_path(proc.image, system.hostname)
+        dll_path = self._materialize_module_profile_path(
+            dll_path,
+            system=system,
+            username=proc.username or user.username,
+            pid=pid,
+            process_start=proc.start_time,
+        )
+        dll_path = normalize_defender_platform_path(dll_path, system.hostname)
+        exe_basename = ntpath.basename(image).lower()
+        if not module_is_compatible_with_process(exe_basename, dll_path):
+            logger.warning(
+                "Skipping module load incompatible with its configured process owner: "
+                "%s pid=%s image=%s dll=%s",
+                system.hostname,
+                pid,
+                image,
+                dll_path,
+            )
+            return
+        if load_phase not in {"startup", "runtime"}:
+            raise ValueError(f"load_phase must be 'startup' or 'runtime', got {load_phase!r}")
+        if load_phase == "startup" and load_order <= 0:
+            raise ValueError("startup module loads require a positive load_order")
+        time = self._clamp_time_after_process_start(system, pid, time)
         session_end_time = (
             self.state_manager.get_session_end_time(proc.logon_id) if proc.logon_id else None
         )
@@ -23122,6 +23134,8 @@ class ActivityGenerator:
                 signed=signed,
                 signature=signature,
                 signature_status=signature_status,
+                load_phase=load_phase,
+                load_order=load_order,
             ),
             edr=EdrContext(
                 object_id=stable_uuid(
@@ -23133,8 +23147,77 @@ class ActivityGenerator:
                 ),
                 actor_id=proc_obj_id,
             ),
+            storyline_origin=from_storyline,
         )
         self.dispatcher.dispatch(event)
+
+    def _emit_windows_process_startup_modules(
+        self,
+        *,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        from_storyline: bool,
+    ) -> None:
+        """Emit the configured Windows loader chain during process initialization."""
+        from evidenceforge.generation.activity.dll_load_profiles import (
+            get_startup_dlls_for_process,
+        )
+
+        exe_basename = ntpath.basename(process_name).lower()
+        startup_modules = get_startup_dlls_for_process(exe_basename)
+        elapsed_ms = 1 + (
+            _stable_seed(f"windows-startup-modules:{system.hostname}:{pid}:{time.isoformat()}") % 4
+        )
+        for load_order, module in enumerate(startup_modules, start=1):
+            dll_path = str(module["path"])
+            self.generate_image_load(
+                user=user,
+                system=system,
+                time=time + timedelta(milliseconds=elapsed_ms),
+                pid=pid,
+                image=process_name,
+                dll_path=dll_path,
+                signed=bool(module["signed"]),
+                signature=str(module["signature"]),
+                signature_status=str(module["signature_status"]),
+                load_phase="startup",
+                load_order=load_order,
+                from_storyline=from_storyline,
+            )
+            spacing_seed = _stable_seed(
+                f"windows-startup-module-spacing:{system.hostname}:{pid}:"
+                f"{time.isoformat()}:{load_order}:{module['path']}"
+            )
+            elapsed_ms += 1 + (spacing_seed % 7)
+
+    @staticmethod
+    def _materialize_module_profile_path(
+        path: str,
+        *,
+        system: System,
+        username: str,
+        pid: int,
+        process_start: datetime,
+    ) -> str:
+        """Resolve one module template without consuming an ambient RNG stream."""
+        from evidenceforge.generation.activity.edr_pools import materialize_edr_template
+
+        rng = random.Random(
+            _stable_seed(
+                f"module-profile:{system.hostname}:{pid}:{process_start.isoformat()}:{path}"
+            )
+        )
+        return materialize_edr_template(
+            path,
+            rng,
+            username,
+            host_key=system.hostname,
+            host_ip=system.ip,
+            host_os=system.os,
+        )
 
     def _mark_loaded_module(
         self,

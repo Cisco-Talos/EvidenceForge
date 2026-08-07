@@ -20,6 +20,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.generation.activity.dll_load_profiles import (
+    module_is_compatible_with_process,
+)
+
 _ZEEK_UID_FILES = {"dns", "http", "ntp", "smtp", "ssl"}
 _TUPLE_FIELDS = ("id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p")
 _WINDOW_TOLERANCE_SECONDS = 1.0
@@ -531,6 +535,88 @@ def _check_ecar_lifecycles(
                 )
             )
 
+    process_creates = {
+        str(record["objectID"]): record
+        for record in records
+        if record.get("object") == "PROCESS"
+        and record.get("action") == "CREATE"
+        and record.get("objectID")
+        and isinstance(record.get("timestamp_ms"), int | float)
+    }
+    startup_names = {"ntdll.dll", "kernel32.dll", "kernelbase.dll"}
+    late_startup_modules: list[dict[str, Any]] = []
+    incompatible_modules: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("object") != "MODULE" or record.get("action") != "LOAD":
+            continue
+        properties = record.get("properties") or {}
+        module_path = str(properties.get("file_path") or "")
+        image_path = str(properties.get("image_path") or "")
+        actor_id = str(record.get("actorID") or "")
+        create = process_creates.get(actor_id)
+        module_timestamp = record.get("timestamp_ms")
+        module_name = module_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if (
+            create is not None
+            and module_name in startup_names
+            and isinstance(module_timestamp, int | float)
+        ):
+            delay_ms = float(module_timestamp) - float(create["timestamp_ms"])
+            if delay_ms > 5_000:
+                late_startup_modules.append(
+                    {
+                        "actor_id": actor_id,
+                        "image_path": image_path,
+                        "module_path": module_path,
+                        "delay_ms": delay_ms,
+                        "module_record_id": record.get("id"),
+                    }
+                )
+        exe_name = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        if (
+            module_path
+            and exe_name
+            and not module_is_compatible_with_process(
+                exe_name,
+                module_path,
+            )
+        ):
+            incompatible_modules.append(
+                {
+                    "actor_id": actor_id,
+                    "image_path": image_path,
+                    "module_path": module_path,
+                    "module_record_id": record.get("id"),
+                }
+            )
+
+    if late_startup_modules:
+        findings.append(
+            Finding(
+                check="ecar_startup_module_chronology",
+                severity="error",
+                path=str(path),
+                message="Foundational Windows modules load more than five seconds after CREATE",
+                evidence={
+                    "count": len(late_startup_modules),
+                    "sample": late_startup_modules[0],
+                },
+            )
+        )
+    if incompatible_modules:
+        findings.append(
+            Finding(
+                check="ecar_module_process_compatibility",
+                severity="error",
+                path=str(path),
+                message="A configured non-OS module is attached to an undeclared executable",
+                evidence={
+                    "count": len(incompatible_modules),
+                    "sample": incompatible_modules[0],
+                },
+            )
+        )
+
     process_logon_ids = {
         str(record["objectID"]): str((record.get("properties") or {}).get("logon_id"))
         for record in records
@@ -708,6 +794,66 @@ def _check_windows_contracts(
 
     if path.name != "windows_event_sysmon.xml":
         return
+    process_creates = {
+        str(record["fields"].get("ProcessGuid")): record
+        for record in records
+        if record.get("event_id") == "1"
+        and record["fields"].get("ProcessGuid")
+        and isinstance(record.get("timestamp"), int | float)
+    }
+    early_modules: list[dict[str, Any]] = []
+    incompatible_modules: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("event_id") != "7":
+            continue
+        fields = record["fields"]
+        process_guid = str(fields.get("ProcessGuid") or "")
+        create = process_creates.get(process_guid)
+        if (
+            create is not None
+            and isinstance(record.get("timestamp"), int | float)
+            and float(record["timestamp"]) < float(create["timestamp"])
+        ):
+            early_modules.append(
+                {
+                    "process_guid": process_guid,
+                    "image": fields.get("Image"),
+                    "image_loaded": fields.get("ImageLoaded"),
+                    "create_timestamp": create["timestamp"],
+                    "module_timestamp": record["timestamp"],
+                }
+            )
+        image = str(fields.get("Image") or "")
+        module = str(fields.get("ImageLoaded") or "")
+        exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        if module and exe_name and not module_is_compatible_with_process(exe_name, module):
+            incompatible_modules.append(
+                {
+                    "process_guid": process_guid,
+                    "image": image,
+                    "image_loaded": module,
+                }
+            )
+    if early_modules:
+        findings.append(
+            Finding(
+                check="sysmon_module_after_process_create",
+                severity="error",
+                path=str(path),
+                message="A Sysmon Event 7 precedes the matching Event 1",
+                evidence={"count": len(early_modules), "sample": early_modules[0]},
+            )
+        )
+    if incompatible_modules:
+        findings.append(
+            Finding(
+                check="sysmon_module_process_compatibility",
+                severity="error",
+                path=str(path),
+                message="A configured non-OS Event 7 module has an undeclared executable owner",
+                evidence={"count": len(incompatible_modules), "sample": incompatible_modules[0]},
+            )
+        )
     guids_by_logon_id: dict[str, set[str]] = defaultdict(set)
     for record in records:
         fields = record["fields"]

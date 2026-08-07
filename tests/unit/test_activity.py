@@ -5807,36 +5807,12 @@ class TestActivityGenerator:
         test_system,
         state_manager,
         mock_emitters,
-        monkeypatch,
     ):
-        """Probabilistic process ImageLoad events should carry DLL profile signer fields."""
-
-        class ModuleLoadRandom(random.Random):
-            def __init__(self):
-                super().__init__(7)
-                self._random_values = iter([0.99, 0.01])
-
-            def random(self):
-                return next(self._random_values, 0.99)
-
-        import evidenceforge.generation.activity.dll_load_profiles as dll_profiles
+        """Startup ImageLoad events should carry DLL profile signer fields."""
 
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
-        monkeypatch.setattr(generator_module, "_get_rng", ModuleLoadRandom)
-        monkeypatch.setattr(
-            dll_profiles,
-            "get_dlls_for_process",
-            lambda _exe: [
-                {
-                    "path": r"C:\Program Files\Mozilla Firefox\mozglue.dll",
-                    "signed": True,
-                    "signature": "Mozilla Corporation",
-                    "signature_status": "Valid",
-                }
-            ],
-        )
 
         activity_gen.generate_process(
             test_user,
@@ -5853,10 +5829,15 @@ class TestActivityGenerator:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
             if call.args[0].event_type == "image_load"
         ]
-        assert image_load_events
-        assert image_load_events[-1].image_load.image_loaded.endswith("mozglue.dll")
-        assert image_load_events[-1].image_load.signature == "Mozilla Corporation"
-        assert image_load_events[-1].image_load.signature_status == "Valid"
+        mozglue = next(
+            event
+            for event in image_load_events
+            if event.image_load.image_loaded.endswith("mozglue.dll")
+        )
+        assert mozglue.image_load.signature == "Mozilla Corporation"
+        assert mozglue.image_load.signature_status == "Valid"
+        assert mozglue.image_load.load_phase == "startup"
+        assert mozglue.image_load.load_order > 0
 
     def test_image_load_is_clamped_after_process_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -5882,7 +5863,7 @@ class TestActivityGenerator:
             session_start + timedelta(minutes=1),
             pid,
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-            r"C:\Windows\System32\kernel32.dll",
+            r"C:\Windows\System32\netapi32.dll",
         )
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
@@ -5914,7 +5895,7 @@ class TestActivityGenerator:
             session_start + timedelta(seconds=6),
             pid,
             r"C:\Program Files\Zoom\bin\Zoom.exe",
-            r"C:\Users\{username}\AppData\Roaming\Zoom\bin\zVideoApp.dll",
+            r"C:\Users\{username}\AppData\Roaming\Zoom\bin\meetingPlugin.dll",
         )
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
@@ -6635,11 +6616,21 @@ class TestActivityGenerator:
             if call[0][0].event_type == "image_load"
         ]
         assert module_events
-        event = module_events[-1]
-        from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
+        from evidenceforge.generation.activity.dll_load_profiles import (
+            get_startup_dlls_for_process,
+        )
 
-        profile_paths = {entry["path"] for entry in get_dlls_for_process("firefox.exe")}
-        assert event.image_load.image_loaded in profile_paths
+        profile_paths = {entry["path"] for entry in get_startup_dlls_for_process("firefox.exe")}
+        assert {event.image_load.image_loaded for event in module_events} == profile_paths
+        assert [event.image_load.load_order for event in module_events] == list(
+            range(1, len(module_events) + 1)
+        )
+        assert all(event.image_load.load_phase == "startup" for event in module_events)
+        assert all(
+            timestamp < event.timestamp < timestamp + timedelta(milliseconds=100)
+            for event in module_events
+        )
+        event = module_events[-1]
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
         assert event.edr.actor_id
@@ -6745,7 +6736,7 @@ class TestActivityGenerator:
             timestamp + timedelta(minutes=5),
             pid,
             r"C:\Windows\System32\taskhostw.exe",
-            r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+            r"C:\Windows\System32\taskschd.dll",
         )
         activity_gen.generate_image_load(
             test_user,
@@ -6753,7 +6744,7 @@ class TestActivityGenerator:
             timestamp + timedelta(hours=2),
             pid,
             r"C:\Windows\System32\taskhostw.exe",
-            r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+            r"C:\Windows\System32\taskschd.dll",
         )
 
         module_events = [
@@ -6762,6 +6753,34 @@ class TestActivityGenerator:
             if call.args[0].event_type == "image_load"
         ]
         assert len(module_events) == 1
+
+    def test_image_load_rejects_known_third_party_module_for_wrong_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Configured vendor modules should not attach to an unrelated executable."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            pid,
+            r"C:\Windows\System32\svchost.exe",
+            r"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnapi.dll",
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
 
     def test_process_termination_waits_for_recorded_dependent_activity(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

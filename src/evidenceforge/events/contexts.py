@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.network import (
@@ -410,6 +410,8 @@ class ImageLoadContext:
     signed: bool = True
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"  # Valid, Expired, Revoked, Unavailable
+    load_phase: Literal["startup", "runtime"] = "runtime"
+    load_order: int = 0
 
 
 @dataclass(slots=True)

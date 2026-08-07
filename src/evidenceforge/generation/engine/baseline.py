@@ -1134,63 +1134,6 @@ def _hawkes_params_from_persona(persona: Persona | None) -> dict:
     return _HAWKES_RISK_PARAMS.get(risk, _HAWKES_RISK_PARAMS["medium"])
 
 
-def _signature_for_loaded_module(path: str) -> str:
-    """Infer a plausible signer for a generic baseline DLL path."""
-    lower = path.lower()
-    if "google\\chrome" in lower:
-        return "Google LLC"
-    if "mozilla firefox" in lower:
-        return "Mozilla Corporation"
-    if "adobe" in lower:
-        return "Adobe Inc."
-    if "vmware" in lower:
-        return "VMware, Inc."
-    if "dell" in lower:
-        return "Dell Inc."
-    if "cisco" in lower:
-        return "Cisco Systems, Inc."
-    if "git\\" in lower:
-        return "Git for Windows"
-    if "videolan" in lower:
-        return "VideoLAN"
-    if "notepad++" in lower:
-        return "Notepad++"
-    if "7-zip" in lower:
-        return "-"
-    return "Microsoft Corporation"
-
-
-def _module_matches_process(exe_name: str, module_path: str) -> bool:
-    """Return whether a generic DLL path plausibly belongs to a process."""
-    exe = exe_name.lower()
-    path = module_path.lower()
-    if "google\\chrome" in path:
-        return exe == "chrome.exe"
-    if "microsoft\\edge" in path:
-        return exe == "msedge.exe"
-    if "mozilla firefox" in path:
-        return exe == "firefox.exe"
-    if "microsoft onedrive" in path:
-        return exe in {"onedrive.exe", "explorer.exe"}
-    if "microsoft office" in path or "clicktorun" in path:
-        return exe in {"outlook.exe", "winword.exe", "excel.exe", "powerpnt.exe", "onedrive.exe"}
-    if "7-zip" in path or "notepad++" in path:
-        return exe == "explorer.exe"
-    if "windows defender" in path:
-        return exe in {"msmpeng.exe", "svchost.exe", "taskhostw.exe"}
-    if "vmware tools" in path or "dell\\supportassist" in path:
-        return exe in {"services.exe", "svchost.exe", "taskhostw.exe"}
-    if "cisco\\cisco anyconnect" in path:
-        return exe in {"vpnui.exe", "vpnagent.exe", "svchost.exe"}
-    if "git\\mingw64" in path:
-        return exe in {"git.exe", "code.exe", "powershell.exe", "cmd.exe"}
-    if "videolan" in path:
-        return exe == "vlc.exe"
-    if "microsoft vs code" in path:
-        return exe == "code.exe"
-    return "windows\\system32" in path
-
-
 def _registry_writer_candidates(
     key: str,
     sys_pids: dict[str, int],
@@ -7852,7 +7795,6 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.edr_pools import (
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
-                    materialize_edr_template,
                     materialize_edr_template_group,
                 )
                 from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
@@ -8172,18 +8114,13 @@ class BaselineMixin:
             # Uses data-driven DLL profiles from system_processes.yaml and
             # application_catalog.yaml. Picks from processes actually running
             # on this system (from StateManager) so PIDs are always valid.
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 from evidenceforge.generation.activity.dll_load_profiles import (
-                    get_dlls_for_process,
-                )
-                from evidenceforge.generation.activity.edr_pools import (
-                    get_dll_pool,
-                    materialize_edr_template,
+                    get_runtime_dlls_for_process,
                 )
 
                 running = self.state_manager.get_processes_on_system(system.hostname)
                 if running:
-                    generic_dll_pool = get_dll_pool()
                     num_dll = self._scaled_randint(rng, system, "windows_module_load", 20, 45)
                     for _ in range(num_dll):
                         offset = rng.uniform(0, 3599)
@@ -8196,28 +8133,7 @@ class BaselineMixin:
                             continue
                         proc_pid, proc_image = rng.choice(win_procs)
                         exe_name = proc_image.rsplit("\\", 1)[-1]
-                        profiled_dlls = get_dlls_for_process(exe_name)
-                        dll_pool = list(profiled_dlls)
-                        for path in generic_dll_pool:
-                            if not _module_matches_process(exe_name, path):
-                                continue
-                            path_lower = path.lower()
-                            dll_pool.append(
-                                {
-                                    "path": materialize_edr_template(
-                                        path,
-                                        rng,
-                                        system.assigned_user or "SYSTEM",
-                                        host_key=system.hostname,
-                                    ),
-                                    "signed": not any(
-                                        vendor in path_lower
-                                        for vendor in ["7-zip", "videolan", "notepad++"]
-                                    ),
-                                    "signature": _signature_for_loaded_module(path),
-                                    "signature_status": "Valid",
-                                }
-                            )
+                        dll_pool = get_runtime_dlls_for_process(exe_name)
                         if not dll_pool:
                             continue
                         dll = rng.choice(dll_pool)
@@ -8232,6 +8148,7 @@ class BaselineMixin:
                             signed=dll["signed"],
                             signature=dll["signature"],
                             signature_status=dll["signature_status"],
+                            load_phase="runtime",
                         )
 
             # ICMP monitoring pings are now handled by role_traffic profiles

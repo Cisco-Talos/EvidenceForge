@@ -230,3 +230,73 @@ Classification: `sibling_defect`; intended fix classification: `family_level`.
 - The post-loop blind gate remains pending; the Windows module and EventRecordID gate repairs are
   intentionally next so the panel evaluates the complete failed-gate batch rather than another
   knowingly blocked intermediate dataset.
+
+## Gate-repair loop 2 contract: Windows module lifecycle and ownership
+
+Classification: `sibling_defect`; intended fix classification: `family_level`.
+
+- **Owning abstractions:** the process-execution action bundle owns initialization-time module
+  activity; the unified DLL profile catalog owns executable compatibility and load phase; the
+  baseline engine may schedule only catalog-declared runtime loads. `ImageLoadContext` carries the
+  selected phase/order as canonical occurrence truth, while Sysmon and eCAR remain projections.
+- **Family invariant:** a visible Windows loader-chain module is observed during process
+  initialization, after the matching process-create row and before later process-owned activity.
+  A configured non-OS module may load only in an executable declared as one of its owners. One
+  module path is emitted at most once for one process instance.
+- **Entry paths:** process creation currently constructs a probabilistic `image_load` directly;
+  hourly baseline generation combines process profiles with the global `edr_pools.dll_pool` via a
+  permissive hardcoded matcher; RSAT sessions call `generate_image_load()` for explicit MMC
+  snap-ins. No authored storyline event exposes module loads. The legacy `module_load` name is an
+  emitter-only compatibility consumer and remains outside canonical production.
+- **Consumers:** canonical identity/lifecycle planning, eCAR `MODULE/LOAD`, Sysmon Event 7 and its
+  filter/PE metadata projection, process last-activity and termination containment, rendered
+  invariant probes, and DLL-profile tests.
+- **Layer rationale:** module phase and product ownership are process facts, so an emitter filter or
+  timestamp rewrite cannot repair them. The global generic pool is duplicate truth and must not
+  supplement a process profile. Explicit MMC snap-in loads remain an intentional adapter because
+  their owning tool definition supplies the process/module relationship directly.
+- **Sibling coverage:** common loader modules, application-catalog modules, inline service modules,
+  process-specific lazy/runtime modules, unknown executables, short-lived processes, duplicate
+  suppression, non-default observation, eCAR-only/Sysmon-only format selection, and exact repeat
+  determinism. EventRecordID throughput remains the final, separate gate-repair loop.
+
+### Gate-repair loop 2 validation strategy
+
+- Add phase-aware loader tests and process-bundle tests proving startup placement, canonical phase
+  projection, duplicate suppression, and exclusion of common or incompatible modules from hourly
+  sampling.
+- Extend the read-only rendered probe with startup-module chronology and configured module-owner
+  checks, then regenerate the integrated review topology and compare the exact pre-fix recurrence.
+- Run Ruff, the complete non-slow suite, human/JSON evaluation, and identical-input repeat output
+  before committing the loop.
+
+### Gate-repair loop 2 implementation and rendered evidence
+
+- Added explicit `startup`/`runtime` phase and load-order ownership to the canonical image-load
+  context. The process bundle emits catalog-declared startup modules immediately after process
+  creation, while hourly baseline sampling is restricted to catalog-declared runtime modules.
+- Removed the baseline generator's independent global DLL-pool merge and permissive executable
+  matcher. The DLL profile catalog now owns configured non-OS module compatibility, while Windows
+  system modules and explicit tool-owned adapters remain legal across their intended paths.
+- eCAR and Sysmon now project phase-aware source timing from `SourceTimingPlanner`; neither emitter
+  invents module chronology. Startup modules remain strictly ordered after the source-visible
+  process create, including independent source latency.
+- Before the repair, the integrated output contained 112 of 118 foundational loader modules more
+  than five seconds after the matching process create, plus 144 configured module/executable owner
+  violations. The repaired output contains zero in both categories; 375 foundational observations
+  follow process creation by 1--9 ms.
+- The expanded general probe decreased from 42 findings to 29. Both new module checks are zero for
+  eCAR and Sysmon; remaining findings belong to later scheduled families (Windows 4648 field
+  naming, Zeek file intervals, DNS AAAA distribution, and OCSP duration distribution).
+- Focused DLL, activity, baseline, and source-timing suites pass (265, 297, and 236 passed across
+  the recorded invocations; one baseline/config test was skipped). `uv run ruff check .` and
+  `uv run ruff format --check .` pass. The complete non-slow suite passes with 5,122 passed and
+  41 skipped in 222.17 seconds.
+- Integrated output:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop2/branch-enterprise`; identical-input repeat:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop2/branch-enterprise-repeat`. `diff -qr` returned
+  zero, proving byte-identical repeatability.
+- Human-readable and JSON `eforge eval` both pass at 95.30/100 over 48,839 records. Parseability is
+  100, plausibility 95.63, causality 89.44, timing 95.17, cross-source field agreement is 100, and
+  all 7,331 evaluated causal pairs are correctly ordered. The existing 40/100 pivot-linkability
+  flag is retained for its scheduled evaluator/remediation batch.
