@@ -1229,6 +1229,7 @@ class SourceTimingPlanner:
             preferred_time = self._sample_source_time(event, source_key, effective_seed)
         if not_before is not None and preferred_time < not_before:
             preferred_time = self._source_floor_repair_time(
+                event,
                 source_key,
                 effective_seed,
                 not_before,
@@ -1665,8 +1666,9 @@ class SourceTimingPlanner:
         )
         return timedelta(microseconds=37 + (seed % 961))
 
-    @staticmethod
     def _source_floor_repair_time(
+        self,
+        event: SecurityEvent,
         source_key: str,
         seed_parts: tuple[Any, ...],
         lower_bound: datetime,
@@ -1674,10 +1676,19 @@ class SourceTimingPlanner:
         """Keep clamped process-create sources source-native after a shared floor."""
         if source_key not in _PROCESS_CREATE_SOURCE_KEYS:
             return lower_bound
-        delay = sample_timing_delta(
-            source_key,
-            seed_parts=("floor-repair", source_key, *seed_parts),
-        )
+        if source_key == "source.ecar_process_create":
+            window = get_timing_window(
+                source_key,
+                default_min_ms=0,
+                default_max_ms=0,
+                default_position="after",
+            )
+            delay = self._coherent_ecar_process_create_latency(event, source_key, window)
+        else:
+            delay = sample_timing_delta(
+                source_key,
+                seed_parts=("floor-repair", source_key, *seed_parts),
+            )
         return lower_bound + max(delay, _SOURCE_EPSILON)
 
     @staticmethod

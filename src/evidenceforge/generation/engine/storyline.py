@@ -46,6 +46,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.network import SignaturePredicate
 from evidenceforge.generation.actions import (
     IdsAlertActionBundle,
     IdsAlertRequest,
@@ -6271,6 +6272,16 @@ class StorylineMixin:
                         rng=rng,
                         source="web_scan",
                         direction="in",
+                        predicate=SignaturePredicate(
+                            transport_protocol="tcp",
+                            destination_port=spec.dst_port,
+                            phase="application",
+                            payload_direction="orig",
+                            minimum_payload_bytes=1,
+                            application_protocol="http",
+                            inspection="payload_cleartext",
+                            semantic_claim="request_content",
+                        ),
                     )
                 ).execute()
                 ua_fired = True
@@ -6287,6 +6298,17 @@ class StorylineMixin:
                         rng=rng,
                         source="web_scan",
                         direction="in",
+                        predicate=SignaturePredicate(
+                            transport_protocol="tcp",
+                            destination_port=spec.dst_port,
+                            phase="application",
+                            payload_direction="orig",
+                            minimum_payload_bytes=1,
+                            application_protocol="http",
+                            inspection="payload_cleartext",
+                            http_methods=(method,),
+                            semantic_claim="request_content",
+                        ),
                     )
                 ).execute()
 

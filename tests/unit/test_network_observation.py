@@ -12,7 +12,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
-from evidenceforge.events.contexts import DnsContext, HttpContext, IdsContext, NetworkContext
+from evidenceforge.events.contexts import (
+    DnsContext,
+    HttpContext,
+    IdsContext,
+    NatContext,
+    NetworkContext,
+)
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import (
@@ -182,7 +188,7 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
 
 
 def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> None:
-    """Default distributed taps should not clone every cross-sensor observation."""
+    """Default taps vary per event without inventing rapidly shifting clock offsets."""
 
     planner = NetworkObservationPlanner(_visibility_engine())
     differing_traffic = 0
@@ -201,8 +207,11 @@ def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> N
         )
 
     assert differing_traffic >= 20
-    assert any(offset < 0 for offset in relative_offsets)
-    assert any(offset > 0 for offset in relative_offsets)
+    assert max(relative_offsets) - min(relative_offsets) <= 0.004
+    assert len(set(relative_offsets)) > 1
+    assert all(offset < 0 for offset in relative_offsets) or all(
+        offset > 0 for offset in relative_offsets
+    )
 
 
 def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatch) -> None:
@@ -556,6 +565,121 @@ def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
     assert observation.firewall_teardown_time - observation.observed_start_time == timedelta(
         seconds=30
     )
+
+
+def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> None:
+    """A dynamic translation cannot close before its S0 connection lifecycle."""
+
+    config = NetworkConfig(
+        segments=[
+            NetworkSegment(name="inside", cidr="10.0.2.0/24", exposure="internal"),
+        ],
+        sensors=[
+            NetworkSensor(
+                type="firewall",
+                name="fw-perimeter",
+                monitoring_segments=["inside"],
+                log_formats=["cisco_asa"],
+            )
+        ],
+    )
+    network = NetworkContext(
+        src_ip="10.0.2.40",
+        src_port=51000,
+        dst_ip="198.51.100.25",
+        dst_port=443,
+        protocol="tcp",
+        zeek_uid="CNatTimeout1",
+        conn_id="conn-nat-timeout",
+        conn_state="S0",
+        history="S",
+        orig_pkts=1,
+        orig_ip_bytes=40,
+        source_visible_start_time=T0,
+    )
+    network.finalize_transaction(
+        "network:nat-timeout",
+        hostname="edge.example",
+        outcome="failure",
+        phase_times=(("transport_start", T0),),
+    )
+    event = SecurityEvent(
+        timestamp=T0,
+        event_type="connection",
+        network=network,
+        nat=NatContext(
+            nat_type="dynamic_pat",
+            mapped_src_ip="203.0.113.10",
+            mapped_src_port=62001,
+            mapped_dst_ip="198.51.100.25",
+            mapped_dst_port=443,
+        ),
+    )
+    event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
+
+    observation = NetworkObservationPlanner(NetworkVisibilityEngine(config, systems=[])).plan(
+        event,
+        {"cisco_asa"},
+    )[0]
+
+    assert observation.nat is not None
+    assert observation.nat.direction == "source"
+    assert observation.nat.local_ip == "10.0.2.40"
+    assert observation.nat.global_ip == "203.0.113.10"
+    assert observation.nat.teardown_time == observation.firewall_teardown_time
+    assert observation.nat.teardown_time == observation.observed_start_time + timedelta(seconds=30)
+
+
+def test_firewall_observation_owns_inbound_static_nat_address_roles() -> None:
+    """Inbound translation records distinguish the public VIP from the local host."""
+
+    network = NetworkContext(
+        src_ip="198.51.100.25",
+        src_port=0,
+        dst_ip="203.0.113.5",
+        dst_port=8,
+        protocol="icmp",
+        duration=1.0,
+        zeek_uid="CInboundIcmp1",
+        conn_id="conn-inbound-icmp",
+        conn_state="SF",
+        history="Dd",
+        orig_pkts=1,
+        resp_pkts=1,
+        orig_ip_bytes=84,
+        resp_ip_bytes=84,
+        source_visible_start_time=T0,
+        source_visible_close_time=T0 + timedelta(seconds=1),
+    )
+    network.finalize_transaction(
+        "network:inbound-icmp",
+        hostname="web.corp.local",
+        outcome="success",
+        phase_times=(
+            ("transport_start", T0),
+            ("transport_close", T0 + timedelta(seconds=1)),
+        ),
+    )
+    event = SecurityEvent(
+        timestamp=T0,
+        event_type="connection",
+        network=network,
+        nat=NatContext(
+            nat_type="static",
+            mapped_src_ip="198.51.100.25",
+            mapped_src_port=0,
+            mapped_dst_ip="10.0.2.40",
+            mapped_dst_port=8,
+        ),
+    )
+    event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
+
+    observation = NetworkObservationPlanner(None).plan(event, {"cisco_asa"})[0]
+
+    assert observation.nat is not None
+    assert observation.nat.direction == "destination"
+    assert observation.nat.global_ip == "203.0.113.5"
+    assert observation.nat.local_ip == "10.0.2.40"
 
 
 def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> None:

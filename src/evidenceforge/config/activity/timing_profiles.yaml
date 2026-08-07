@@ -109,8 +109,8 @@ relationships:
   source.windows_security_process_create:
     class: source_latency
     position: after
-    min_ms: 35
-    max_ms: 900
+    min_ms: 4
+    max_ms: 24
   source.windows_explicit_credentials_after_process_create:
     class: source_latency
     position: after
@@ -129,8 +129,8 @@ relationships:
   source.sysmon_process_create:
     class: source_latency
     position: after
-    min_ms: 18
-    max_ms: 1100
+    min_ms: 3
+    max_ms: 22
   source.sysmon_module_after_process_create:
     class: source_latency
     position: after
@@ -337,8 +337,9 @@ endpoint_clock:
 network_sensor_observation:
   # Default assumes distributed security infrastructure where core, DMZ, and
   # packet-broker taps observe the same flow through different capture paths.
-  # Sensor clocks remain controlled, but buffering and path differences should
-  # not make dual-sensor rows look mechanically cloned.
+  # Sensor clocks and route delay are stable per sensor/path. Per-event capture
+  # jitter stays small enough that consecutive observations do not imply rapid
+  # clock-offset sign changes, while still avoiding mechanically cloned rows.
   default_profile: distributed_taps
   profiles:
     distributed_taps:
@@ -352,8 +353,8 @@ network_sensor_observation:
         min: 500
         max: 25000
       event_jitter_us:
-        min: -90000
-        max: 90000
+        min: -1000
+        max: 1000
       capture_loss:
         probability: 0.12
         min_fraction: 0.0005

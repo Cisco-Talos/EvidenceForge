@@ -62,10 +62,11 @@ without turning `TODO.md` back into a high-conflict work journal.
   timing, and Windows EventRecordID rate modeling, then regenerate and repeat the isolated panel.
   The bounded gate passed after five repair loops; see the
   [final panel summary](docs/design/realism-review/post-gate-loop5-blind/summary.md).
-- [ ] **P1** Implement Batch 3, the network/protocol/IDS vertical slice: make the network plan
+- [x] **P1** Implement Batch 3, the network/protocol/IDS vertical slice: make the network plan
   authoritative for source-visible intervals, protocol/file children, and IDS eligibility, with
   full/filter/parallel projection-equivalence tests. This targets `REAL-005`, `REAL-007`, and
-  `REAL-009`.
+  `REAL-009`. See the [Batch 3 worklog](docs/worklog/2026-08-07-network-protocol-ids.md) and
+  [empirical results](docs/design/realism-review/batch3-results.json).
 - [ ] **P1** Implement Batch 4 world-capability and distribution-state contracts, followed by
   Batch 5 source-native projection and evaluator-validity work. This includes `REAL-008`,
   `REAL-010` through `REAL-012`, and the remaining AAAA and OCSP findings.

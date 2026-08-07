@@ -32,6 +32,31 @@ _WINDOWS_RECORD_ID_CONSERVATIVE_PEAK_RATE = 2_000.0
 _RFC5424_SSHD_RE = re.compile(
     r"^<\d+>1\s+(?P<timestamp>\S+)\s+(?P<host>\S+)\s+sshd\s+(?P<pid>\d+)\s"
 )
+_ASA_OUTBOUND_CONNECTION_BUILD_RE = re.compile(
+    r"%ASA-6-30201[35]: Built outbound (?:TCP|UDP) connection (?P<connection_id>\d+) "
+    r"for \S+:(?P<local_ip>[^/\s]+)/(?P<local_port>\d+)"
+)
+_ASA_CONNECTION_TEARDOWN_RE = re.compile(
+    r"%ASA-6-30201[46]: Teardown (?:TCP|UDP) connection (?P<connection_id>\d+)"
+)
+_ASA_DYNAMIC_XLATE_BUILD_RE = re.compile(
+    r"%ASA-6-305011: Built dynamic (?:TCP|UDP) translation from "
+    r"\S+:(?P<local_ip>[^/\s]+)/(?P<local_port>\d+) to "
+    r"\S+:(?P<global_ip>[^/\s]+)/(?P<global_port>\d+)"
+)
+_ASA_DYNAMIC_XLATE_TEARDOWN_RE = re.compile(
+    r"%ASA-6-305012: Teardown dynamic (?:TCP|UDP) translation from "
+    r"\S+:(?P<local_ip>[^/\s]+)/(?P<local_port>\d+) to "
+    r"\S+:(?P<global_ip>[^/\s]+)/(?P<global_port>\d+)"
+)
+_ASA_INBOUND_STATIC_BUILD_RE = re.compile(
+    r"%ASA-6-30201[35]: Built inbound (?:TCP|UDP) connection \d+ .*? to "
+    r"\S+:(?P<local_ip>[^/\s]+)/\d+ \((?P<global_ip>[^/\s]+)/\d+\)"
+)
+_ASA_INBOUND_ICMP_RE = re.compile(
+    r"%ASA-6-302020: Built inbound ICMP connection .*? "
+    r"gaddr (?P<global_ip>[^/\s]+)/\d+ laddr (?P<local_ip>[^/\s]+)/\d+"
+)
 
 
 @dataclass(frozen=True)
@@ -214,6 +239,24 @@ def _check_zeek_sensor(
                     path=str(directory / "conn.json"),
                     message="Connection originator and responder are the same IP",
                     evidence={"uid": uid, "tuple": _record_tuple(record)},
+                )
+            )
+        service = record.get("service")
+        payload_bytes = int(record.get("orig_bytes") or 0) + int(record.get("resp_bytes") or 0)
+        if service not in (None, "", "-") and record.get("proto") != "icmp" and payload_bytes == 0:
+            findings.append(
+                Finding(
+                    check="zeek_unconfirmed_service",
+                    severity="error",
+                    path=str(directory / "conn.json"),
+                    message="A payload-free connection carries an analyzer-confirmed service label",
+                    evidence={
+                        "uid": uid,
+                        "service": service,
+                        "conn_state": record.get("conn_state"),
+                        "orig_bytes": record.get("orig_bytes"),
+                        "resp_bytes": record.get("resp_bytes"),
+                    },
                 )
             )
 
@@ -1422,6 +1465,78 @@ def _check_cross_source_contracts(
                 )
 
 
+def _check_cisco_asa_contracts(path: Path, findings: list[Finding]) -> None:
+    """Check rendered NAT address roles and connection-contained PAT lifetimes."""
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    static_local_by_global: dict[str, str] = {}
+    for line in lines:
+        match = _ASA_INBOUND_STATIC_BUILD_RE.search(line)
+        if match is not None and match.group("local_ip") != match.group("global_ip"):
+            static_local_by_global[match.group("global_ip")] = match.group("local_ip")
+
+    active_connections: dict[str, tuple[tuple[str, int], int]] = {}
+    active_xlates: dict[tuple[str, int], int] = {}
+    for line_number, line in enumerate(lines, start=1):
+        if match := _ASA_OUTBOUND_CONNECTION_BUILD_RE.search(line):
+            local_tuple = (match.group("local_ip"), int(match.group("local_port")))
+            active_connections[match.group("connection_id")] = (local_tuple, line_number)
+        elif match := _ASA_CONNECTION_TEARDOWN_RE.search(line):
+            active_connections.pop(match.group("connection_id"), None)
+        elif match := _ASA_DYNAMIC_XLATE_BUILD_RE.search(line):
+            local_tuple = (match.group("local_ip"), int(match.group("local_port")))
+            active_xlates[local_tuple] = line_number
+        elif match := _ASA_DYNAMIC_XLATE_TEARDOWN_RE.search(line):
+            local_tuple = (match.group("local_ip"), int(match.group("local_port")))
+            active_connection = next(
+                (
+                    (connection_id, build_line)
+                    for connection_id, (candidate_tuple, build_line) in active_connections.items()
+                    if candidate_tuple == local_tuple
+                ),
+                None,
+            )
+            if active_connection is not None:
+                findings.append(
+                    Finding(
+                        check="asa_pat_lifetime",
+                        severity="error",
+                        path=str(path),
+                        message="Dynamic PAT teardown precedes its owning connection teardown",
+                        evidence={
+                            "xlate_teardown_line": line_number,
+                            "xlate_build_line": active_xlates.get(local_tuple),
+                            "connection_id": active_connection[0],
+                            "connection_build_line": active_connection[1],
+                            "local_tuple": list(local_tuple),
+                        },
+                    )
+                )
+            active_xlates.pop(local_tuple, None)
+
+        icmp_match = _ASA_INBOUND_ICMP_RE.search(line)
+        if icmp_match is None:
+            continue
+        global_ip = icmp_match.group("global_ip")
+        expected_local_ip = static_local_by_global.get(global_ip)
+        rendered_local_ip = icmp_match.group("local_ip")
+        if expected_local_ip is not None and rendered_local_ip != expected_local_ip:
+            findings.append(
+                Finding(
+                    check="asa_inbound_icmp_nat",
+                    severity="error",
+                    path=str(path),
+                    message="Inbound ICMP static-NAT laddr does not use the translated local address",
+                    evidence={
+                        "line": line_number,
+                        "global_ip": global_ip,
+                        "rendered_local_ip": rendered_local_ip,
+                        "expected_local_ip": expected_local_ip,
+                    },
+                )
+            )
+
+
 def _load_window(dataset: Path) -> tuple[float, float] | None:
     path = dataset / "COLLECTION_PROFILE.json"
     if not path.exists():
@@ -1480,6 +1595,8 @@ def main() -> int:
                     evidence={},
                 )
             )
+    for path in sorted(data_dir.rglob("cisco_asa.log")):
+        _check_cisco_asa_contracts(path, findings)
 
     by_directory: dict[Path, dict[str, list[dict[str, Any]]]] = defaultdict(dict)
     for path, records in json_records.items():

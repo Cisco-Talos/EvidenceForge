@@ -39,6 +39,7 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionOutcome,
     NetworkTransactionPlan,
+    SignaturePredicate,
 )
 from evidenceforge.events.proxy import ProxyTransactionPlan
 
@@ -452,6 +453,7 @@ class IdsContext:
     rev: int = 1
     gid: int = 1
     policy: IdsAlertPolicyContext | None = None
+    predicate: SignaturePredicate | None = None
 
 
 @dataclass(slots=True)

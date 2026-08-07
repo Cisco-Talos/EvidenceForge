@@ -8364,12 +8364,7 @@ class ActivityGenerator:
 
         from evidenceforge.generation.activity.tls_realism import ocsp_config
 
-        if (
-            event.tls_presentation is None
-            or event.network is None
-            or self.dispatcher is None
-            or "zeek_ocsp" not in self.dispatcher.emitters
-        ):
+        if event.tls_presentation is None or event.network is None:
             return None
         settings = ocsp_config()
         probability = max(0.0, min(float(settings.get("query_probability", 0.18)), 1.0))
@@ -9355,11 +9350,7 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Emit logind open evidence for a durable local Linux session."""
-        if (
-            self.dispatcher is None
-            or "syslog" not in self.dispatcher.emitters
-            or logon_id in self._linux_local_logon_syslog_sessions
-        ):
+        if self.dispatcher is None or logon_id in self._linux_local_logon_syslog_sessions:
             return
         if _get_os_category(system.os) != "linux":
             return
@@ -23423,32 +23414,50 @@ class ActivityGenerator:
             time=time,
             msg_types=msg_types,
         )
+        network = NetworkContext(
+            src_ip=system.ip,
+            dst_ip=server_addr,
+            src_port=68,
+            dst_port=67,
+            protocol="udp",
+            service="dhcp",
+            zeek_uid=uid,
+            duration=dhcp_duration,
+            source_visible_start_time=time,
+            source_visible_close_time=time + timedelta(seconds=dhcp_duration),
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
+            orig_pkts=orig_pkts,
+            resp_pkts=resp_pkts,
+            orig_ip_bytes=orig_ip_bytes,
+            resp_ip_bytes=resp_ip_bytes,
+            conn_state="SF",
+            history="DdDd" if "DISCOVER" in msg_types else "Dd",
+            local_orig=True,
+            local_resp=True,
+            ip_proto=17,
+            link_local=True,
+        )
+        transaction = network.finalize_transaction(
+            request.stable_id,
+            hostname=system.hostname,
+            phase_times=(
+                ("transport_start", time),
+                ("transport_close", time + timedelta(seconds=dhcp_duration)),
+            ),
+        )
+        from evidenceforge.generation.actions.ids_alert import ids_alert_matches_transaction
+
+        eligible_ids_alerts = [
+            alert
+            for alert in request.ids_alerts
+            if ids_alert_matches_transaction(alert, transaction)
+        ]
         event = SecurityEvent(
             timestamp=time,
             event_type="dhcp_lease",
             src_host=self._build_host_context(system),
-            network=NetworkContext(
-                src_ip=system.ip,
-                dst_ip=server_addr,
-                src_port=68,
-                dst_port=67,
-                protocol="udp",
-                service="dhcp",
-                zeek_uid=uid,
-                duration=dhcp_duration,
-                orig_bytes=orig_bytes,
-                resp_bytes=resp_bytes,
-                orig_pkts=orig_pkts,
-                resp_pkts=resp_pkts,
-                orig_ip_bytes=orig_ip_bytes,
-                resp_ip_bytes=resp_ip_bytes,
-                conn_state="SF",
-                history="DdDd" if "DISCOVER" in msg_types else "Dd",
-                local_orig=True,
-                local_resp=True,
-                ip_proto=17,
-                link_local=True,
-            ),
+            network=network,
             dhcp=DhcpContext(
                 client_addr="0.0.0.0" if is_initial_acquisition else system.ip,
                 server_addr=server_addr,
@@ -23461,11 +23470,10 @@ class ActivityGenerator:
                 msg_types=msg_types,
                 duration=dhcp_duration,
             ),
-            ids_alerts=list(request.ids_alerts),
+            ids_alerts=eligible_ids_alerts,
         )
         self.dispatcher.dispatch(event)
-        dispatcher_emitters = getattr(self.dispatcher, "emitters", {})
-        if "syslog" in dispatcher_emitters and _get_os_category(system.os) == "linux":
+        if _get_os_category(system.os) == "linux":
             dhclient_pid = 500 + (_stable_seed(f"dhclient:{system.hostname}") % 59000)
             interface = linux_primary_interface(system)
             bound_message_index = 4 if is_initial_acquisition else 2
@@ -24294,8 +24302,6 @@ class ActivityGenerator:
             )
             zeek_dns_observed = bool(
                 uid
-                and dispatcher is not None
-                and "zeek_dns" in dispatcher.emitters
                 and visibility is not None
                 and visibility.enabled
                 and "zeek_dns"
@@ -24357,14 +24363,13 @@ class ActivityGenerator:
             visibility = self._network_visibility or (
                 dispatcher.visibility_engine if dispatcher else None
             )
-            zeek_configured = dispatcher is not None and "zeek_http" in dispatcher.emitters
             zeek_observed = (
                 visibility is not None
                 and visibility.enabled
                 and "zeek_http"
                 in visibility.get_log_formats_for_connection(system.ip, target_system.ip)
             )
-            if zeek_configured and zeek_observed:
+            if zeek_observed:
                 expected_sources.append("zeek_http")
 
         # Surface the live-callback host when this payload actually embeds it, so an

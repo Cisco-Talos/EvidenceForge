@@ -848,7 +848,7 @@ class TestStorylineCommandNetworks:
             for key, value in event.source_timing.source_times.items()
             if key.startswith("source.windows_security_process_create|")
         )
-        assert security_time >= sysmon_time + timedelta(milliseconds=25)
+        assert abs((security_time - sysmon_time).total_seconds()) <= 0.021
         assert generator.process_source_create_time(system.hostname, pid) == max(
             event.source_timing.source_times.values()
         )

@@ -64,6 +64,21 @@ def zeek_format_observed(event: Any, format_name: str) -> bool:
     return not observed_formats or format_name in observed_formats
 
 
+def planned_zeek_connection_interval(
+    event: Any,
+) -> tuple[datetime, datetime | None] | None:
+    """Return the sealed canonical interval used for per-sensor projection."""
+
+    network = getattr(event, "network", None)
+    if (
+        not getattr(event, "network_observations_planned", False)
+        or network is None
+        or network.transaction is None
+    ):
+        return None
+    return network.transaction.started_at, network.transaction.closed_at
+
+
 def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     """Apply a per-sensor NAT IP view to Zeek list-valued host fields."""
     if (
@@ -398,13 +413,48 @@ class SensorMultiplexEmitter(LogEmitter):
         timestamp_field = "ts" if "ts" in render_data else "timestamp"
         ts = render_data.get(timestamp_field)
         if canonical_start is not None and isinstance(ts, datetime):
-            render_data[timestamp_field] = observation.observed_start_time + (ts - canonical_start)
+            projected_ts: datetime | float = observation.observed_start_time + (
+                ts - canonical_start
+            )
         elif canonical_start is not None and isinstance(ts, (int, float)):
-            render_data[timestamp_field] = (
+            projected_ts = (
                 observation.observed_start_time.timestamp()
                 + float(ts)
                 - canonical_start.timestamp()
             )
+        else:
+            projected_ts = ts
+        if isinstance(projected_ts, datetime):
+            projected_ts = max(projected_ts, observation.observed_start_time)
+            if observation.observed_close_time is not None:
+                projected_ts = min(projected_ts, observation.observed_close_time)
+        elif isinstance(projected_ts, (int, float)):
+            projected_ts = max(projected_ts, observation.observed_start_time.timestamp())
+            if observation.observed_close_time is not None:
+                projected_ts = min(projected_ts, observation.observed_close_time.timestamp())
+        if projected_ts is not None:
+            render_data[timestamp_field] = projected_ts
+
+        if self.format_def.name != "zeek_conn" and observation.observed_close_time is not None:
+            remaining_seconds = None
+            if isinstance(projected_ts, datetime):
+                remaining_seconds = max(
+                    0.0,
+                    (observation.observed_close_time - projected_ts).total_seconds(),
+                )
+            elif isinstance(projected_ts, (int, float)):
+                remaining_seconds = max(
+                    0.0,
+                    observation.observed_close_time.timestamp() - float(projected_ts),
+                )
+            if remaining_seconds is not None:
+                for interval_field in ("duration", "rtt"):
+                    interval = render_data.get(interval_field)
+                    if isinstance(interval, (int, float)):
+                        render_data[interval_field] = min(
+                            max(0.0, float(interval)),
+                            remaining_seconds,
+                        )
 
         if self.format_def.name == "zeek_conn":
             ledger = observation.traffic

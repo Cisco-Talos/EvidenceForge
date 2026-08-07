@@ -28,9 +28,13 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext
+from evidenceforge.events.contexts import IdsContext, NetworkContext
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.events.network import DirectionalTrafficLedger, NetworkTrafficLedger
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkTrafficLedger,
+    SignaturePredicate,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System
@@ -364,3 +368,112 @@ def test_inferred_connection_pid_is_omitted_after_owning_session_end() -> None:
         if call.args[0].event_type == "connection"
     )
     assert event.network.initiating_pid == -1
+
+
+def test_network_planner_filters_ids_only_after_final_transport_outcome() -> None:
+    """A prepared content alert must not survive a payload-free failed transport."""
+
+    state = StateManager()
+    state.set_current_time(datetime(2024, 1, 15, 10, 0, tzinfo=UTC))
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+    alert = IdsContext(
+        sid=2012647,
+        message="upload",
+        classification="web-application-attack",
+        predicate=SignaturePredicate(
+            transport_protocol="tcp",
+            destination_port=80,
+            phase="application",
+            payload_direction="orig",
+            minimum_payload_bytes=1,
+            application_protocol="http",
+            inspection="payload_cleartext",
+            http_methods=("POST",),
+            requires_http_body=True,
+            semantic_claim="upload_request",
+        ),
+    )
+
+    generator.generate_connection(
+        src_ip="198.51.100.20",
+        dst_ip="10.0.0.20",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=200,
+        resp_bytes=500,
+        conn_state="S0",
+        ids=alert,
+    )
+
+    event = next(call.args[0] for call in emitter.emit.call_args_list)
+    assert event.network.transaction is not None
+    assert event.network.transaction.conn_state == "S0"
+    assert event.ids is None
+
+
+def test_network_planner_clears_unconfirmed_service_without_payload() -> None:
+    """A port hint cannot become Zeek service truth without analyzer-visible payload."""
+
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+    state.set_current_time(start)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+
+    generator.generate_connection(
+        src_ip="198.51.100.20",
+        dst_ip="10.0.0.20",
+        time=start,
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=0.25,
+        orig_bytes=0,
+        resp_bytes=0,
+        conn_state="OTH",
+        suppress_application_side_effects=True,
+        preserve_explicit_payload=True,
+    )
+
+    event = next(call.args[0] for call in emitter.emit.call_args_list)
+    assert event.network.transaction is not None
+    assert event.network.transaction.traffic.orig.payload_bytes == 0
+    assert event.network.transaction.traffic.resp.payload_bytes == 0
+    assert event.network.service == ""
+    assert event.network.transaction.service == ""
+
+
+def test_network_planner_retains_service_with_modeled_payload() -> None:
+    """A payload-bearing completed exchange may retain its confirmed service."""
+
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+    state.set_current_time(start)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+
+    generator.generate_connection(
+        src_ip="198.51.100.20",
+        dst_ip="10.0.0.20",
+        time=start,
+        dst_port=445,
+        proto="tcp",
+        service="smb",
+        duration=1.25,
+        orig_bytes=512,
+        resp_bytes=2048,
+        conn_state="SF",
+        suppress_application_side_effects=True,
+        preserve_explicit_payload=True,
+    )
+
+    event = next(call.args[0] for call in emitter.emit.call_args_list)
+    assert event.network.transaction is not None
+    assert event.network.transaction.service == "smb"

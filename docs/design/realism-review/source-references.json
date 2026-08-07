@@ -18,7 +18,7 @@
       "references": ["https://www.cisco.com/c/en/us/td/docs/security/asa/syslog/asa-syslog.pdf"],
       "assessment": "aligned_with_dialect_limitations",
       "confidence": "high",
-      "notes": "The supported 302/305/106/733 families and classic ASA prefix are source-shaped. The format models a bounded message subset and classic timestamp mode rather than every current ASA logging option."
+      "notes": "The supported 302/305/106/733 families and classic ASA prefix are source-shaped. The format models a bounded message subset and classic timestamp mode rather than every current ASA logging option. Post-review remediation moved static/dynamic NAT address views and PAT lifetime into each frozen sensor observation so build/teardown and inbound ICMP projections share the owning connection's facts."
     },
     {
       "format": "ecar",
@@ -42,7 +42,7 @@
       "references": ["https://docs.snort.org/start/alert_logging"],
       "assessment": "compatible_variant",
       "confidence": "medium",
-      "notes": "Timestamp, generator/signature/revision tuple, classification, priority, protocol, and endpoints match the fast-alert family. Snort 3 exemplars quote messages and may include AppID; the generated line is closer to a common Snort 2/Suricata-compatible variant."
+      "notes": "Timestamp, generator/signature/revision tuple, classification, priority, protocol, and endpoints match the fast-alert family. Snort 3 exemplars quote messages and may include AppID; the generated line is closer to a common Snort 2/Suricata-compatible variant. Post-review remediation evaluates validated structured signature predicates against the finalized transport and protocol transaction before this source-local projection is admitted."
     },
     {
       "format": "syslog",
@@ -79,10 +79,10 @@
     {
       "format": "zeek_conn",
       "code": ["src/evidenceforge/config/formats/zeek_conn.yaml", "src/evidenceforge/generation/emitters/zeek.py"],
-      "references": ["https://docs.zeek.org/en/current/reference/logs/conn.html", "https://docs.zeek.org/en/current/scripts/base/protocols/conn/main.zeek.html"],
+      "references": ["https://docs.zeek.org/en/current/reference/logs/conn.html", "https://docs.zeek.org/en/current/scripts/base/protocols/conn/main.zeek.html", "https://docs.zeek.org/en/v6.0.9/scripts/base/bif/event.bif.zeek.html"],
       "assessment": "aligned",
       "confidence": "high",
-      "notes": "JSON fields, originator/responder semantics, UID, state, history, and accounting match Zeek's connection model."
+      "notes": "JSON fields, originator/responder semantics, UID, state, history, and accounting match Zeek's connection model. Zeek documents service as the set of confirmed services and raises analyzer-confirmation events when a protocol is confirmed; post-review remediation therefore clears non-ICMP service labels on payload-free connections."
     },
     {
       "format": "zeek_dhcp",
@@ -104,9 +104,9 @@
       "format": "zeek_files",
       "code": ["src/evidenceforge/config/formats/zeek_files.yaml", "src/evidenceforge/generation/emitters/zeek_files.py"],
       "references": ["https://docs.zeek.org/en/current/scripts/base/frameworks/files/main.zeek.html"],
-      "assessment": "aligned_with_timing_defect",
+      "assessment": "aligned_post_review_timing_remediation",
       "confidence": "high",
-      "notes": "FUID, host lists, connection joins, analyzer, byte accounting, timeout, and hash fields match the files framework. In the integrated probe, 21 file observations end 1-2 ms after their parent conn interval, so cross-record timing is currently defective even though field morphology is aligned."
+      "notes": "FUID, host lists, connection joins, analyzer, byte accounting, timeout, and hash fields match the files framework. The baseline review found file observations ending 1-2 ms after their parent conn interval. Post-review Batch 3 remediation makes protocol/file projections consume the frozen sensor transaction interval; the final integrated probe reports zero file or protocol-child interval escapes."
     },
     {
       "format": "zeek_http",

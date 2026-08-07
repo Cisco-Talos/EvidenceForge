@@ -330,7 +330,17 @@ class ScenarioValidator:
                         )
                         if protocol != str(signature.get("proto", "tcp")).lower():
                             self._warn_ids_mismatch(path, attachment.sid, "protocol", protocol)
-                        signature_port = int(signature.get("dst_port", 0))
+                        predicate = signature.get("predicate")
+                        predicate_port = (
+                            predicate.get("destination_port")
+                            if isinstance(predicate, dict)
+                            else None
+                        )
+                        signature_port = int(
+                            predicate_port
+                            if predicate_port is not None
+                            else signature.get("dst_port", 0)
+                        )
                         if dst_ports and signature_port not in {0, *dst_ports}:
                             observed_ports: object = (
                                 next(iter(dst_ports)) if len(dst_ports) == 1 else sorted(dst_ports)

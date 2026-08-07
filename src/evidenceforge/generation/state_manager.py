@@ -1096,8 +1096,8 @@ class StateManager:
 
     @staticmethod
     def _linux_pid_rate_numerator(system: str) -> int:
-        """Return a stable sub-one-per-second host PID churn rate."""
-        return 7 + (_stable_seed(f"linux_pid_rate:{system}") % 3)
+        """Return a stable host PID churn rate with room for deferred insertions."""
+        return 18 + (_stable_seed(f"linux_pid_rate:{system}") % 5)
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
         """Return deterministic per-host Linux PID churn before a coarse time block."""
@@ -1179,30 +1179,20 @@ class StateManager:
                 and (future_pid_exclusive is None or candidate < future_pid_exclusive)
             )
 
-        def bounded_candidate(salt: int) -> int | None:
+        def bounded_candidate() -> int | None:
             if future_pid_exclusive is None:
                 return None
             lower_bound = max(499, minimum_pid_exclusive or 499)
             if future_pid_exclusive <= lower_bound + 1:
                 return None
             span = future_pid_exclusive - lower_bound - 1
-            # Out-of-order generation needs to preserve room for later inserts on
-            # both sides of this timestamp. Picking from either edge can consume
-            # the sole boundary slot even when the original interval was wide.
-            margin = span // 4
-            central_span = max(1, span - (2 * margin))
-            center = (
-                lower_bound
-                + 1
-                + margin
-                + (
-                    _stable_seed(
-                        f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
-                    )
-                    % central_span
-                )
-            )
-            for distance in range(min(span, 64)):
+            # The time-derived PID is already the best estimate of where this
+            # process belongs. Search outward from that point instead of choosing
+            # a random midpoint: midpoint insertion repeatedly halves the room
+            # below a preplanned future PID and exhausts otherwise adequate
+            # capacity during dense deferred baseline generation.
+            center = min(max(pid, lower_bound + 1), future_pid_exclusive - 1)
+            for distance in range(min(span, 4096)):
                 offsets = (0,) if distance == 0 else (distance, -distance)
                 for offset in offsets:
                     candidate = center + offset
@@ -1211,7 +1201,7 @@ class StateManager:
             return None
 
         if not is_available(pid):
-            bounded = bounded_candidate(0)
+            bounded = bounded_candidate()
             if bounded is not None:
                 pid = bounded
             elif minimum_pid_exclusive is not None and minimum_pid_exclusive < 4_194_304:
@@ -1232,7 +1222,7 @@ class StateManager:
                     "Unable to allocate Linux PID after bounded retries; "
                     "adjust scenario timing or reduce process contention."
                 )
-            bounded = bounded_candidate(collision_salt + 1)
+            bounded = bounded_candidate()
             if bounded is not None:
                 pid = bounded
                 if is_available(pid):

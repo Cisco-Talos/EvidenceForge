@@ -2506,7 +2506,7 @@ class BaselineMixin:
         dhcp_state: dict[str, Any] | None,
     ) -> None:
         """Emit DHCP interface registry writes coupled to a lease/renewal event."""
-        if _get_os_category(system.os) != "windows" or "windows_event_sysmon" not in self.emitters:
+        if _get_os_category(system.os) != "windows":
             return
 
         from evidenceforge.events.base import SecurityEvent
@@ -6490,9 +6490,6 @@ class BaselineMixin:
         sys_pids: dict[str, int],
     ) -> None:
         """Emit ordinary endpoint FILE telemetry from running baseline processes."""
-        if "ecar" not in self.emitters:
-            return
-
         from evidenceforge.config.schemas import MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR
         from evidenceforge.events.base import SecurityEvent
         from evidenceforge.events.contexts import (
@@ -7471,7 +7468,7 @@ class BaselineMixin:
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
-            if dhcp_state and "zeek_dhcp" in self.emitters:
+            if dhcp_state:
                 storyline_dhcp_time = self._storyline_dhcp_lease_time_in_hour(
                     system.hostname,
                     current_hour,
@@ -7785,7 +7782,7 @@ class BaselineMixin:
             # Baseline registry activity from running services. Real Sysmon
             # generates hundreds-thousands of Event 12/13 per hour. We emit
             # 15-40 per host per hour to provide realistic background volume.
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 from evidenceforge.events.base import SecurityEvent
                 from evidenceforge.events.contexts import (
                     AuthContext,
@@ -8044,7 +8041,7 @@ class BaselineMixin:
                             )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 valid_crt = [
                     p
                     for p in load_create_remote_thread_patterns()
@@ -8080,7 +8077,7 @@ class BaselineMixin:
                         )
 
             # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 valid_pa = [
                     p
                     for p in load_process_access_patterns()
@@ -8381,7 +8378,7 @@ class BaselineMixin:
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
             os_cat_svc = _get_os_category(system.os)
-            if os_cat_svc != "windows" or "windows_event_security" not in self.emitters:
+            if os_cat_svc != "windows":
                 continue
 
             sys_type_svc = (system.type or "workstation").lower()
@@ -8564,7 +8561,7 @@ class BaselineMixin:
         # Linux syslog diversity
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
-            if os_cat != "linux" or "syslog" not in self.emitters:
+            if os_cat != "linux":
                 continue
 
             sys_pids = self._system_pids.get(system.hostname, {})
@@ -9131,7 +9128,7 @@ class BaselineMixin:
                 )
 
         # IDS false-positive alerts
-        if "snort_alert" in self.emitters and self.scenario.environment.network:
+        if self.scenario.environment.network:
             _all_sigs = load_ids_signatures().get("signatures", [])
             _FP_SIGS_BY_PROTO: dict[str, list[dict]] = {"tcp": [], "udp": [], "icmp": []}
             for sig in _all_sigs:
@@ -9235,14 +9232,6 @@ class BaselineMixin:
                                 int(s.get("dst_port", 0)),
                                 "",
                             ),
-                        )
-                    ]
-                    _filtered = [
-                        s
-                        for s in _filtered
-                        if not (
-                            s.get("direction") == "in"
-                            and "response" in str(s.get("message", "")).lower()
                         )
                     ]
                     if not _filtered:
@@ -9372,9 +9361,8 @@ class BaselineMixin:
                     )
 
         # Web access logs
-        if "web_access" in self.emitters:
-            for sys_obj in systems:
-                self._emit_web_server_access(sys_obj, systems, rng, current_hour)
+        for sys_obj in systems:
+            self._emit_web_server_access(sys_obj, systems, rng, current_hour)
 
     def _emit_web_server_access(
         self,

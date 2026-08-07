@@ -2438,6 +2438,16 @@ class NetworkTransactionPlanner:
             event.network.source_visible_start_time,
             event.network.source_visible_close_time,
         )
+        if (
+            event.network.service
+            and event.network.protocol != "icmp"
+            and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) == 0
+        ):
+            # Zeek's conn.log service field records a protocol analyzer that
+            # confirmed payload parsing, not a well-known-port guess. Retain
+            # the requested service while planning children, then clear it at
+            # the canonical boundary when no application bytes were observed.
+            event.network.service = ""
         canonical_start = event.network.source_visible_start_time
         canonical_close = event.network.source_visible_close_time
         phase_times: list[tuple[str, datetime]] = [("transport_start", canonical_start)]
@@ -2466,6 +2476,37 @@ class NetworkTransactionPlanner:
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),
         )
+        from evidenceforge.generation.actions.ids_alert import ids_alert_matches_transaction
+
+        transaction = event.network.transaction
+        if transaction is None:
+            raise ValueError("Network transaction disappeared after finalization")
+        attached_files = tuple(
+            candidate
+            for candidate in (event.file_transfer, *event.file_transfers)
+            if candidate is not None
+        )
+        if event.ids is not None and not ids_alert_matches_transaction(
+            event.ids,
+            transaction,
+            http=event.http,
+            dns=event.dns,
+            ssl=event.ssl,
+            file_transfers=attached_files,
+        ):
+            event.ids = None
+        event.ids_alerts = [
+            alert
+            for alert in event.ids_alerts
+            if ids_alert_matches_transaction(
+                alert,
+                transaction,
+                http=event.http,
+                dns=event.dns,
+                ssl=event.ssl,
+                file_transfers=attached_files,
+            )
+        ]
         event = event.build_event(generator_module)
 
         # Automatic weird.log synthesis is intentionally disabled for now. The

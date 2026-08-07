@@ -60,6 +60,7 @@ from evidenceforge.events.contracts import (
     ShadowSealResult,
     shadow_seal,
 )
+from evidenceforge.events.network import NatSensorObservation, SignaturePredicate
 
 __all__ = [
     "SecurityEvent",
@@ -86,6 +87,8 @@ __all__ = [
     "FileContext",
     "RegistryContext",
     "IdsContext",
+    "NatSensorObservation",
+    "SignaturePredicate",
     "ImageLoadContext",
     "KerberosContext",
     "ShellContext",

@@ -9,7 +9,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
@@ -442,7 +442,7 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
             (parsed_received[index + 1] - parsed_received[index]).total_seconds()
             for index in range(len(parsed_received) - 1)
         ]
-        assert any(gap != 4.0 for gap in received_gaps)
+        assert all(0.0 < gap < 20.0 for gap in received_gaps)
     assert ground_truth["events"][0]["kind"] == "email_message"
     assert ground_truth["events"][0]["attributes"]["artifact_path"].endswith(".eml")
     rendered_smtp_uids = {record["uid"] for record in smtp_records}
@@ -453,6 +453,34 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert manifest_path in discovered["email_artifacts"]
     artifact_records = list(get_parser("email_artifacts").parse_file(manifest_path))
     assert artifact_records[0].fields["message_id"] == messages[0]["message_id"]
+
+
+def test_email_smtp_hop_schedule_varies_between_messages() -> None:
+    """Relay gaps vary by message instead of following one fixed cadence."""
+
+    generator = object.__new__(ActivityGenerator)
+    start = datetime(2026, 1, 5, 14, 9, 48, tzinfo=UTC)
+    route = [{}, {}]
+    transfer_sizes = [{"duration": 1.5}, {"duration": 2.0}]
+    gaps = {
+        round(
+            (
+                times[1] - times[0] - timedelta(seconds=float(transfer_sizes[0]["duration"]))
+            ).total_seconds(),
+            3,
+        )
+        for index in range(12)
+        if (
+            times := generator._email_smtp_hop_times(
+                route=route,
+                message_id=f"<message-{index}@corp.example>",
+                time=start,
+                transfer_sizes=transfer_sizes,
+            )
+        )
+    }
+
+    assert len(gaps) >= 8
 
 
 def test_email_artifact_writer_rejects_artifact_id_path_escape(tmp_path: Path) -> None:

@@ -413,7 +413,7 @@ class TestStateManagerInit:
             integrity_level="Medium",
         )
 
-        assert 8_000 <= pid < 400_000
+        assert 8_000 <= pid < 700_000
 
     def test_linux_pids_increase_across_time_bucket_boundary(self):
         """Linux PIDs should not sawtooth downward at five-minute boundaries."""
@@ -490,6 +490,24 @@ class TestStateManagerInit:
             )
 
         chronological_pids = [allocations[offset] for offset in sorted(offsets)]
+        assert chronological_pids == sorted(chronological_pids)
+        assert len(set(chronological_pids)) == len(chronological_pids)
+
+    def test_linux_pid_future_reservation_absorbs_dense_deferred_baseline(self):
+        """A preplanned future process leaves room for dense earlier process churn."""
+
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 1, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        window_start = boot_time + timedelta(days=29)
+        future_time = window_start + timedelta(seconds=190)
+        allocations = [(future_time, sm.allocate_transient_linux_pid("linux01", future_time))]
+
+        for ordinal in range(250):
+            event_time = window_start + timedelta(seconds=(ordinal * 185) / 249)
+            allocations.append((event_time, sm.allocate_transient_linux_pid("linux01", event_time)))
+
+        chronological_pids = [pid for _event_time, pid in sorted(allocations)]
         assert chronological_pids == sorted(chronological_pids)
         assert len(set(chronological_pids)) == len(chronological_pids)
 

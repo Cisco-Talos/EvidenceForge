@@ -500,6 +500,38 @@ def test_linux_ecar_process_create_latency_preserves_dense_host_order() -> None:
     assert len(set(observed_times)) == len(observed_times)
 
 
+def test_linux_ecar_floor_repair_preserves_dense_host_order() -> None:
+    """A negative host clock must not make floor repair resample each process delay."""
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+    base_time = _base_time()
+    host = replace(_linux_host_context(), hostname="WEB-BO-01")
+    observed_times = []
+
+    for ordinal in range(120):
+        event_time = base_time + timedelta(milliseconds=ordinal * 35)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="process_create",
+            src_host=host,
+            process=replace(
+                _process_context(event_time),
+                pid=320_000 + ordinal,
+                start_time=event_time,
+            ),
+        )
+        observed_times.append(
+            planner.source_time(
+                event,
+                "source.ecar_process_create",
+                seed_parts=(host.hostname, 320_000 + ordinal, event_time),
+                not_before=event_time,
+            )
+        )
+
+    assert observed_times == sorted(observed_times)
+    assert len(set(observed_times)) == len(observed_times)
+
+
 def test_ecar_flow_uses_clock_of_rendering_endpoint() -> None:
     """Inbound and outbound eCAR FLOW rows should use their local endpoint clocks."""
 
@@ -569,10 +601,11 @@ def test_network_sensor_timing_is_independent_from_endpoint_clock_profile() -> N
 
 
 def test_windows_endpoint_process_sources_are_not_globally_one_directional() -> None:
-    """Security and Sysmon process-create source times can land on either side."""
+    """Security and Sysmon may reorder narrowly without broad occurrence-time jitter."""
     planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
     security_before_sysmon = False
     security_after_sysmon = False
+    deltas: list[float] = []
     for index in range(100):
         event = SecurityEvent(
             timestamp=_base_time(),
@@ -589,11 +622,11 @@ def test_windows_endpoint_process_sources_are_not_globally_one_directional() -> 
         )
         security_before_sysmon = security_before_sysmon or security_time < sysmon_time
         security_after_sysmon = security_after_sysmon or security_time > sysmon_time
-        if security_before_sysmon and security_after_sysmon:
-            break
+        deltas.append((security_time - sysmon_time).total_seconds())
 
     assert security_before_sysmon
     assert security_after_sysmon
+    assert max(abs(delta) for delta in deltas) <= 0.021
 
 
 def test_source_time_clamps_to_declared_bounds() -> None:

@@ -94,9 +94,9 @@ def test_timing_profiles_load_default_relationship():
         default_max_ms=0,
         default_position="after",
     )
-    assert security_process_window.max_ms <= 1000
+    assert security_process_window.max_ms <= 25
     assert 0 < security_terminate_window.min_ms < security_terminate_window.max_ms
-    assert sysmon_process_window.max_ms <= 1200
+    assert sysmon_process_window.max_ms <= 25
     assert 0 < sysmon_terminate_window.min_ms < sysmon_terminate_window.max_ms
     assert ecar_process_window.max_ms >= 900
     assert 0 < ecar_after_sysmon_window.min_ms < ecar_after_sysmon_window.max_ms
@@ -205,7 +205,7 @@ def test_timing_profiles_load_default_relationship():
     assert sensor_timing.path_delay_min_us == 500
     assert sensor_timing.path_delay_max_us == 25000
     assert sensor_timing.clock_drift_min_ppm == -1
-    assert sensor_timing.event_jitter_max_us == 90000
+    assert sensor_timing.event_jitter_max_us == 1000
     assert sensor_timing.capture_loss_probability == 0.12
 
     endpoint_timing = endpoint_clock_timing("enterprise_standard", "windows")

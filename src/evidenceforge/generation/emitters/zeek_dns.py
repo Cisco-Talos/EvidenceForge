@@ -26,7 +26,10 @@ from datetime import timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    planned_zeek_connection_interval,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _SOURCE_TIMING = SourceTimingPlanner()
@@ -58,9 +61,11 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
         """Render DnsContext + NetworkContext to Zeek dns.log NDJSON."""
         net = event.network
         dns = event.dns
-        if event.network_observations_planned and net.transaction is not None:
-            conn_ts = net.transaction.started_at
+        planned_interval = planned_zeek_connection_interval(event)
+        if planned_interval is not None:
+            conn_ts, planned_close = planned_interval
         else:
+            planned_close = None
             conn_ts = _SOURCE_TIMING.source_time(
                 event,
                 "source.zeek_conn_start",
@@ -74,7 +79,13 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
                 ),
                 not_before=event.timestamp,
             )
-        conn_lifetime = net.duration if net.duration is not None else dns.rtt
+        conn_lifetime = (
+            (planned_close - conn_ts).total_seconds()
+            if planned_close is not None
+            else net.duration
+            if net.duration is not None
+            else dns.rtt
+        )
         within = None
         if conn_lifetime is not None and conn_lifetime > 0:
             rtt = dns.rtt or 0.0

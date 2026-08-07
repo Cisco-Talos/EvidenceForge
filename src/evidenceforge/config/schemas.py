@@ -38,6 +38,73 @@ _REALISM_RESERVED_DOMAINS = (
 )
 
 
+class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
+    """Validated semantic preconditions for one configured IDS signature."""
+
+    destination_port: int | None = Field(default=None, ge=0, le=65535)
+    phase: Literal["attempt", "established", "application", "response"] = "attempt"
+    payload_direction: Literal["none", "orig", "resp", "either"] = "none"
+    minimum_payload_bytes: int = Field(default=0, ge=0)
+    requires_response: bool = False
+    application_protocol: (
+        Literal["http", "dns", "tls", "ssh", "smb", "kerberos", "ldap", "ntp", "stun"] | None
+    ) = None
+    inspection: Literal["metadata", "payload_cleartext", "payload_decrypted"] = "metadata"
+    http_methods: list[str] = Field(default_factory=list)
+    http_statuses: list[int] = Field(default_factory=list)
+    requires_http_body: bool = False
+    semantic_claim: Literal[
+        "flow_metadata",
+        "scan",
+        "handshake",
+        "request_content",
+        "response_content",
+        "upload_request",
+        "dns_query",
+        "dns_response",
+        "file_content",
+    ] = "flow_metadata"
+
+    @field_validator("http_methods")
+    @classmethod
+    def normalize_http_methods(cls, values: list[str]) -> list[str]:
+        """Normalize and deduplicate configured HTTP methods."""
+
+        normalized = [value.strip().upper() for value in values]
+        if any(not value or not re.fullmatch(r"[A-Z]+", value) for value in normalized):
+            raise ValueError("http_methods must contain non-empty alphabetic method names")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("http_methods must not contain duplicates")
+        return normalized
+
+    @field_validator("http_statuses")
+    @classmethod
+    def validate_http_statuses(cls, values: list[int]) -> list[int]:
+        """Reject non-native or duplicate HTTP response codes."""
+
+        if any(isinstance(value, bool) or value < 100 or value > 599 for value in values):
+            raise ValueError("http_statuses must contain integers between 100 and 599")
+        if len(values) != len(set(values)):
+            raise ValueError("http_statuses must not contain duplicates")
+        return values
+
+    @model_validator(mode="after")
+    def validate_semantic_combination(self) -> Self:
+        """Reject predicates that cannot be evaluated coherently."""
+
+        if self.minimum_payload_bytes and self.payload_direction == "none":
+            raise ValueError("minimum_payload_bytes requires a payload_direction")
+        if (self.http_methods or self.http_statuses or self.requires_http_body) and (
+            self.application_protocol != "http"
+        ):
+            raise ValueError("HTTP-specific fields require application_protocol='http'")
+        if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
+            raise ValueError("requires_http_body needs orig/either payload_direction")
+        if self.phase == "response" and not self.requires_response:
+            raise ValueError("response-phase predicates must set requires_response=true")
+        return self
+
+
 def _normalized_domain(value: str) -> str:
     domain = value.strip().lower().rstrip(".")
     if not _DOMAIN_RE.fullmatch(domain):

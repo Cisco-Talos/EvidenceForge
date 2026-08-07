@@ -208,7 +208,11 @@ class TestVipSegmentRegistration:
             conn_state="SF",
         )
 
-        web_event = emitters["web_access"].emit.call_args.args[0]
+        web_event = next(
+            call.args[0]
+            for call in emitters["web_access"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_ip == "203.0.113.5"
+        )
         assert web_event.dst_host is not None
         assert web_event.dst_host.hostname == "WEB-01"
         assert web_event.network.dst_ip == "203.0.113.5"

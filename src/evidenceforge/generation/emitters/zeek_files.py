@@ -28,7 +28,10 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    planned_zeek_connection_interval,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed
 
@@ -190,21 +193,28 @@ def _tls_connection_analysis_times(
     net = event.network
     if net is None:
         return event.timestamp, None, event.timestamp
-    conn_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_conn_start",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=event.timestamp,
-    )
+    planned_interval = planned_zeek_connection_interval(event)
+    if planned_interval is not None:
+        conn_ts, planned_close = planned_interval
+    else:
+        planned_close = None
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
     within = None
-    if net.duration is not None and net.duration > 0:
+    if planned_close is not None:
+        within = (conn_ts, max(conn_ts, planned_close - timedelta(microseconds=1)))
+    elif net.duration is not None and net.duration > 0:
         latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
         within = (conn_ts, latest)
     ssl_ts = _SOURCE_TIMING.source_time(
@@ -374,20 +384,27 @@ def _bounded_file_transfer_observation(
     ft = file_transfer or event.file_transfer
     if net is None or ft is None:
         return event.timestamp, 0.0
-    conn_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_conn_start",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=event.timestamp,
-    )
-    conn_duration = net.duration
+    planned_interval = planned_zeek_connection_interval(event)
+    if planned_interval is not None:
+        conn_ts, planned_close = planned_interval
+        conn_duration = (
+            (planned_close - conn_ts).total_seconds() if planned_close is not None else None
+        )
+    else:
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
+        conn_duration = net.duration
     file_duration = ft.duration
     file_ts = _file_transfer_analyzer_timestamp(event, net.zeek_uid, ft.fuid, conn_ts)
     hard_lower_bound = max(conn_ts, min_start) if min_start is not None else conn_ts
@@ -443,19 +460,23 @@ def _related_http_analyzer_timestamp(event: SecurityEvent) -> datetime | None:
     http = event.http
     if net is None or ft is None or http is None or ft.fuid not in http.resp_fuids:
         return None
-    conn_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_conn_start",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=event.timestamp,
-    )
+    planned_interval = planned_zeek_connection_interval(event)
+    if planned_interval is not None:
+        conn_ts = planned_interval[0]
+    else:
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
     return _SOURCE_TIMING.source_time(
         event,
         "source.zeek_http_request",

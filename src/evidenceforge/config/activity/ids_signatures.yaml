@@ -82,12 +82,83 @@ signatures:
   - {sid: 2002106, rev: 6, message: "ET SCAN Rapid POP3 Connection - Possible Brute Force Attack", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 110, direction: in, baseline_fp_allowed: false}
 
   # Web application attacks (inbound to web servers)
-  - {sid: 2009582, rev: 3, message: "ET WEB_SERVER SQL Injection Attempt SELECT FROM", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
-  - {sid: 2009714, rev: 9, message: "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
-  - {sid: 2024317, rev: 2, message: "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 8080, direction: in, target_services: [http, nginx, apache]}
-  - {sid: 2000105, rev: 5, message: "ET WEB_SERVER SQL sp_password attempt", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, iis]}
-  - {sid: 2012647, rev: 6, message: "ET WEB_SERVER PHP Possible file upload attempt", classification: "web-application-attack", priority: 2, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache]}
-  - {sid: 2012887, rev: 2, message: "ET WEB_SERVER Possible CRLF Injection Attempt in HTTP Header", classification: "web-application-attack", priority: 2, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
+  - sid: 2009582
+    rev: 3
+    message: "ET WEB_SERVER SQL Injection Attempt SELECT FROM"
+    classification: "web-application-attack"
+    priority: 1
+    proto: tcp
+    dst_port: 80
+    direction: in
+    target_services: [http, nginx, apache, iis]
+    predicate: &http_request_content
+      # These rules inspect HTTP application traffic across the configured
+      # HTTP port set; dst_port above is only the preferred generation target.
+      destination_port: 0
+      phase: application
+      payload_direction: orig
+      minimum_payload_bytes: 1
+      application_protocol: http
+      inspection: payload_cleartext
+      semantic_claim: request_content
+  - sid: 2009714
+    rev: 9
+    message: "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT"
+    classification: "web-application-attack"
+    priority: 1
+    proto: tcp
+    dst_port: 80
+    direction: in
+    target_services: [http, nginx, apache, iis]
+    predicate: *http_request_content
+  - sid: 2024317
+    rev: 2
+    message: "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt"
+    classification: "web-application-attack"
+    priority: 1
+    proto: tcp
+    dst_port: 8080
+    direction: in
+    target_services: [http, nginx, apache]
+    predicate: *http_request_content
+  - sid: 2000105
+    rev: 5
+    message: "ET WEB_SERVER SQL sp_password attempt"
+    classification: "web-application-attack"
+    priority: 1
+    proto: tcp
+    dst_port: 80
+    direction: in
+    target_services: [http, iis]
+    predicate: *http_request_content
+  - sid: 2012647
+    rev: 6
+    message: "ET WEB_SERVER PHP Possible file upload attempt"
+    classification: "web-application-attack"
+    priority: 2
+    proto: tcp
+    dst_port: 80
+    direction: in
+    target_services: [http, nginx, apache]
+    predicate:
+      phase: application
+      payload_direction: orig
+      minimum_payload_bytes: 1
+      application_protocol: http
+      inspection: payload_cleartext
+      http_methods: [POST, PUT, PATCH]
+      requires_http_body: true
+      semantic_claim: upload_request
+  - sid: 2012887
+    rev: 2
+    message: "ET WEB_SERVER Possible CRLF Injection Attempt in HTTP Header"
+    classification: "web-application-attack"
+    priority: 2
+    proto: tcp
+    dst_port: 80
+    direction: in
+    target_services: [http, nginx, apache, iis]
+    predicate: *http_request_content
 
   # SMB/NetBIOS (inbound to Windows hosts)
   - {sid: 2000033, rev: 9, message: "ET NETBIOS MS04011 Lsasrv.dll RPC exploit (WinXP)", classification: "attempted-admin", priority: 1, proto: tcp, dst_port: 445, direction: in, target_os: [windows]}
@@ -101,9 +172,39 @@ signatures:
   # DNS anomalies (outbound)
   - {sid: 2027865, rev: 4, message: "ET DNS Query to a .top domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["cdn-check-{token}.top", "metrics-{token}.top", "update-{token}.top"]}
   - {sid: 2029706, rev: 1, message: "ET DNS Query to .cloud TLD", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["api-{token}.cloud", "storage-{token}.cloud", "telemetry-{token}.cloud"]}
-  - {sid: 2001116, rev: 6, message: "ET DNS Standard query response, Format error", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: in}
-  - {sid: 2001117, rev: 6, message: "ET DNS Standard query response, Name Error", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: in}
-  - {sid: 2001119, rev: 6, message: "ET DNS Standard query response, Refused", classification: "misc-activity", priority: 2, proto: udp, dst_port: 53, direction: in}
+  - sid: 2001116
+    rev: 6
+    message: "ET DNS Standard query response, Format error"
+    classification: "misc-activity"
+    priority: 3
+    proto: udp
+    dst_port: 53
+    direction: in
+    predicate: &dns_response
+      phase: response
+      payload_direction: resp
+      minimum_payload_bytes: 1
+      requires_response: true
+      application_protocol: dns
+      semantic_claim: dns_response
+  - sid: 2001117
+    rev: 6
+    message: "ET DNS Standard query response, Name Error"
+    classification: "misc-activity"
+    priority: 3
+    proto: udp
+    dst_port: 53
+    direction: in
+    predicate: *dns_response
+  - sid: 2001119
+    rev: 6
+    message: "ET DNS Standard query response, Refused"
+    classification: "misc-activity"
+    priority: 2
+    proto: udp
+    dst_port: 53
+    direction: in
+    predicate: *dns_response
   - {sid: 2027757, rev: 2, message: "ET DNS Query for .to TLD", classification: "potentially-bad-traffic", priority: 3, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["sync-{token}.to", "cdn-{token}.to", "assets-{token}.to"]}
   - {sid: 2027863, rev: 3, message: "ET DNS Query to a .tk domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["lookup-{token}.tk", "status-{token}.tk", "update-{token}.tk"]}
   - {sid: 2024291, rev: 4, message: "ET DNS Query to .bit TLD", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["node-{token}.bit", "resolver-{token}.bit", "sync-{token}.bit"]}

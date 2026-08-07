@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    NatSensorObservation,
     NetworkSensorObservation,
     NetworkTrafficLedger,
     NetworkTuple,
@@ -162,9 +163,69 @@ class NetworkObservationPlanner:
                     visible_formats=frozenset(formats),
                     firewall_teardown_reason=firewall_reason,
                     firewall_teardown_time=firewall_teardown,
+                    nat=self._nat_observation(
+                        event,
+                        observed_start,
+                        observed_close,
+                        firewall_teardown,
+                    ),
                 )
             )
         return tuple(observations)
+
+    @staticmethod
+    def _nat_observation(
+        event: SecurityEvent,
+        observed_start: datetime,
+        observed_close: datetime | None,
+        firewall_teardown: datetime | None,
+    ) -> NatSensorObservation | None:
+        """Freeze local/global address roles and translation lifetime for one sensor."""
+
+        nat = event.nat
+        network = event.network
+        if nat is None or network is None or network.transaction is None:
+            return None
+        transaction = network.transaction
+        teardown_time = None
+        if nat.nat_type == "dynamic_pat":
+            teardown_time = firewall_teardown or observed_close
+        if nat.mapped_src_ip != transaction.src_ip or nat.mapped_src_port != transaction.src_port:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="source",
+                local_ip=transaction.src_ip,
+                local_port=transaction.src_port,
+                global_ip=nat.mapped_src_ip,
+                global_port=nat.mapped_src_port,
+                built_time=observed_start,
+                teardown_time=teardown_time,
+            )
+        public_dst_ip = nat.pre_nat_dst_ip or transaction.dst_ip
+        public_dst_port = nat.pre_nat_dst_port or transaction.dst_port
+        if nat.mapped_dst_ip != public_dst_ip or nat.mapped_dst_port != public_dst_port:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="destination",
+                local_ip=nat.mapped_dst_ip,
+                local_port=nat.mapped_dst_port,
+                global_ip=public_dst_ip,
+                global_port=public_dst_port,
+                built_time=observed_start,
+                teardown_time=teardown_time,
+            )
+        if nat.pre_nat_dst_ip:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="destination",
+                local_ip=transaction.dst_ip,
+                local_port=transaction.dst_port,
+                global_ip=nat.pre_nat_dst_ip,
+                global_port=public_dst_port,
+                built_time=observed_start,
+                teardown_time=teardown_time,
+            )
+        return None
 
     @staticmethod
     def _firewall_teardown_plan(

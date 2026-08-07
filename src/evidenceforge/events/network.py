@@ -29,6 +29,56 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 NetworkTransactionOutcome = Literal["success", "failure", "denied"]
+PayloadDirection = Literal["none", "orig", "resp", "either"]
+TransportPhase = Literal["attempt", "established", "application", "response"]
+InspectionCapability = Literal["metadata", "payload_cleartext", "payload_decrypted"]
+SemanticClaim = Literal[
+    "flow_metadata",
+    "scan",
+    "handshake",
+    "request_content",
+    "response_content",
+    "upload_request",
+    "dns_query",
+    "dns_response",
+    "file_content",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class SignaturePredicate:
+    """Canonical preconditions for attaching one IDS signature to a transport."""
+
+    transport_protocol: str
+    destination_port: int
+    phase: TransportPhase = "attempt"
+    payload_direction: PayloadDirection = "none"
+    minimum_payload_bytes: int = 0
+    requires_response: bool = False
+    application_protocol: str | None = None
+    inspection: InspectionCapability = "metadata"
+    http_methods: tuple[str, ...] = ()
+    http_statuses: tuple[int, ...] = ()
+    requires_http_body: bool = False
+    semantic_claim: SemanticClaim = "flow_metadata"
+
+    def __post_init__(self) -> None:
+        """Reject internally contradictory signature requirements."""
+
+        if self.transport_protocol not in {"tcp", "udp", "icmp"}:
+            raise ValueError("IDS predicates require tcp, udp, or icmp transport")
+        if self.destination_port < 0 or self.destination_port > 65535:
+            raise ValueError("IDS predicate destination_port must be between 0 and 65535")
+        if self.minimum_payload_bytes < 0:
+            raise ValueError("IDS predicate minimum_payload_bytes cannot be negative")
+        if self.minimum_payload_bytes and self.payload_direction == "none":
+            raise ValueError("IDS payload thresholds require a payload direction")
+        if (self.http_methods or self.http_statuses or self.requires_http_body) and (
+            self.application_protocol != "http"
+        ):
+            raise ValueError("HTTP-specific IDS predicates require application_protocol='http'")
+        if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
+            raise ValueError("HTTP request bodies require orig/either payload direction")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +159,30 @@ class NetworkTuple:
 
 
 @dataclass(frozen=True, slots=True)
+class NatSensorObservation:
+    """Source-local view and lifetime of one NAT translation."""
+
+    nat_type: Literal["dynamic_pat", "static"]
+    direction: Literal["source", "destination"]
+    local_ip: str
+    local_port: int
+    global_ip: str
+    global_port: int
+    built_time: datetime
+    teardown_time: datetime | None
+
+    def __post_init__(self) -> None:
+        """Reject incomplete address views and impossible translation lifetimes."""
+
+        if not self.local_ip or not self.global_ip:
+            raise ValueError("NAT observations require local and global addresses")
+        if not 0 <= self.local_port <= 65535 or not 0 <= self.global_port <= 65535:
+            raise ValueError("NAT observation ports must be between 0 and 65535")
+        if self.teardown_time is not None and self.teardown_time < self.built_time:
+            raise ValueError("NAT teardown cannot precede translation creation")
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkSensorObservation:
     """Frozen view of one canonical transaction at one network sensor."""
 
@@ -127,6 +201,7 @@ class NetworkSensorObservation:
     visible_formats: frozenset[str]
     firewall_teardown_reason: str = ""
     firewall_teardown_time: datetime | None = None
+    nat: NatSensorObservation | None = None
 
     def __post_init__(self) -> None:
         """Validate source-local interval and identifier invariants."""
@@ -146,6 +221,13 @@ class NetworkSensorObservation:
             raise ValueError("Firewall teardown cannot precede the observed connection start")
         if self.firewall_teardown_reason and self.firewall_teardown_time is None:
             raise ValueError("Firewall teardown reasons require a planned teardown time")
+        if (
+            self.nat is not None
+            and self.nat.nat_type == "dynamic_pat"
+            and "cisco_asa" in self.visible_formats
+            and self.nat.teardown_time != self.firewall_teardown_time
+        ):
+            raise ValueError("ASA dynamic NAT and connection teardown must share one lifetime")
         canonical_ids = [canonical for canonical, _observed in self.file_ids]
         if len(canonical_ids) != len(set(canonical_ids)):
             raise ValueError("Canonical file IDs must be unique within one sensor observation")

@@ -214,6 +214,43 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_contradictory_ids_predicate(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 900001,
+                        "rev": 1,
+                        "message": "response without response evidence",
+                        "classification": "misc-activity",
+                        "priority": 2,
+                        "proto": "tcp",
+                        "dst_port": 80,
+                        "direction": "in",
+                        "predicate": {
+                            "phase": "response",
+                            "payload_direction": "resp",
+                            "minimum_payload_bytes": 1,
+                            "application_protocol": "http",
+                        },
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "invalid predicate" in issue.message
+            and "requires_response" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import endpoint_noise
 

@@ -41,6 +41,7 @@ from evidenceforge.config import (
     get_formats_directory,
     get_personas_directory,
 )
+from evidenceforge.config.schemas import IdsSignaturePredicateSpec
 from evidenceforge.models.ids import IdsAlertPolicySpec
 
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
@@ -949,6 +950,29 @@ def validate_config() -> ValidationResult:
                 )
             )
 
+    def _validate_ids_signature_predicate(
+        file_name: str,
+        context: str,
+        signature: dict[str, object],
+    ) -> None:
+        """Validate structured IDS semantic requirements at every config boundary."""
+
+        predicate = signature.get("predicate")
+        if predicate is None and signature.get("inspection") is not None:
+            predicate = {"inspection": signature["inspection"]}
+        if predicate is None:
+            return
+        try:
+            IdsSignaturePredicateSpec.model_validate(predicate)
+        except ValidationError as exc:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{context} has invalid predicate: {exc.errors(include_url=False)}",
+                )
+            )
+
     # --- IDS Signature Integrity ---
     for i, sig in enumerate(ids_data.get("signatures", [])):
         sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
@@ -1006,6 +1030,7 @@ def validate_config() -> ValidationResult:
             "ids_signatures.yaml", f"Signature {sid}", sig, "priority", required=True
         )
         _validate_ids_numeric_field("ids_signatures.yaml", f"Signature {sid}", sig, "gid")
+        _validate_ids_signature_predicate("ids_signatures.yaml", f"Signature {sid}", sig)
         _record_ids_rule_identity("ids_signatures.yaml", sig.get("sid"), gid, sig.get("message"))
         templates = sig.get("dns_query_templates")
         if templates is not None:
@@ -3380,6 +3405,9 @@ def validate_config() -> ValidationResult:
                 _validate_ids_numeric_field(
                     "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "gid"
                 )
+                _validate_ids_signature_predicate(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua
+                )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
@@ -3422,6 +3450,9 @@ def validate_config() -> ValidationResult:
                 )
                 _validate_ids_numeric_field(
                     "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "gid"
+                )
+                _validate_ids_signature_predicate(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate
                 )
                 threshold = ids_rate.get("threshold")
                 if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
@@ -3469,6 +3500,7 @@ def validate_config() -> ValidationResult:
                     "web_scan_presets.yaml", path_context, path_ids, "priority"
                 )
                 _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "gid")
+                _validate_ids_signature_predicate("web_scan_presets.yaml", path_context, path_ids)
 
     # --- RSAT tools validation ---
     from evidenceforge.generation.activity.rsat_tools import load_rsat_tools
