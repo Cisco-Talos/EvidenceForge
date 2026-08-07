@@ -48,11 +48,31 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Implement the approved canonical contracts as bounded feature-branch batches,
-  beginning with the behavior-preserving registry, semantic occurrence-key, authored-intent,
-  seal-validation, and early safety foundation. See the
-  [contract foundation worklog](docs/worklog/2026-08-05-canonical-contract-foundation.md) and the
-  [approved contracts](docs/design/realism-review/contract-proposals.md).
+- [x] **P1** Complete realism-remediation Batches 0–2: approve the canonical contracts, add the
+  behavior-preserving contract foundation, and implement the session/process/authentication
+  vertical slice. See the [approved contracts](docs/design/realism-review/contract-proposals.md),
+  [foundation worklog](docs/worklog/2026-08-05-canonical-contract-foundation.md), and
+  [session/authentication worklog](docs/worklog/2026-08-05-session-auth-lifecycle.md).
+- [ ] **P1** Run the isolated four-specialty blind panel against the post-Batch-2 integrated
+  output, verify material findings against rendered evidence or code, then use that result as the
+  gate into Batch 3.
+- [ ] **P1** Implement Batch 3, the network/protocol/IDS vertical slice: make the network plan
+  authoritative for source-visible intervals, protocol/file children, and IDS eligibility, with
+  full/filter/parallel projection-equivalence tests. This targets `REAL-005`, `REAL-007`, and
+  `REAL-009`.
+- [ ] **P1** Implement Batch 4 world-capability and distribution-state contracts, followed by
+  Batch 5 source-native projection and evaluator-validity work. This includes `REAL-008`,
+  `REAL-010` through `REAL-012`, and the remaining AAAA, OCSP, and Windows 4648 findings.
+- [ ] **P1** Complete Batch 6 input-safety, workload-budget, authoring, and reproducibility work,
+  including the deferred evaluator-memory capacity decision (`REAL-013`, `REAL-014`,
+  `SEC-001` through `SEC-010`, and `SEC-DEFER-001`).
+- [ ] **P2** Complete Batch 7 only after all canonical consumers migrate: remove legacy mutable or
+  duplicate compatibility truth and reconcile architecture, scenario, source, and evaluation
+  documentation. Treat public API/schema changes as separately approved migrations.
+- The complete dependency order and acceptance boundaries remain in the
+  [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
+  exact evidence, owners, remediation, and tests remain in
+  [the machine-readable finding register](docs/design/realism-review/findings.json).
 - [ ] Continue current-dev realism assessment only if another loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.
