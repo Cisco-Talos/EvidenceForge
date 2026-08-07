@@ -1565,7 +1565,7 @@ class TestActivityGenerator:
         assert first_logout.auth.session_id == first_login.auth.session_id
 
     def test_interactive_logons_get_distinct_userinit_parents(
-        self, activity_gen, test_user, test_system, state_manager
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
         """Interactive shells should not all inherit one long-lived userinit.exe parent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -1610,6 +1610,19 @@ class TestActivityGenerator:
             test_system.hostname, sessions[second_logon].explorer_pid
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
+        logon_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        caller_pids = {
+            event.auth.logon_id: event.auth.process_pid
+            for event in logon_events
+            if event.auth is not None
+        }
+        assert caller_pids[first_logon] == sessions[first_logon].session_winlogon_pid
+        assert caller_pids[second_logon] == sessions[second_logon].session_winlogon_pid
+        assert caller_pids[first_logon] != caller_pids[second_logon]
 
     def test_repeated_explorer_creation_reuses_session_shell(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

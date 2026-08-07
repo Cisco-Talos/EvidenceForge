@@ -1186,16 +1186,28 @@ class StateManager:
             if future_pid_exclusive <= lower_bound + 1:
                 return None
             span = future_pid_exclusive - lower_bound - 1
-            start = (
-                _stable_seed(
-                    f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
+            # Out-of-order generation needs to preserve room for later inserts on
+            # both sides of this timestamp. Picking from either edge can consume
+            # the sole boundary slot even when the original interval was wide.
+            margin = span // 4
+            central_span = max(1, span - (2 * margin))
+            center = (
+                lower_bound
+                + 1
+                + margin
+                + (
+                    _stable_seed(
+                        f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
+                    )
+                    % central_span
                 )
-                % span
             )
-            for offset in range(min(span, 64)):
-                candidate = future_pid_exclusive - 1 - ((start + offset) % span)
-                if is_available(candidate):
-                    return candidate
+            for distance in range(min(span, 64)):
+                offsets = (0,) if distance == 0 else (distance, -distance)
+                for offset in offsets:
+                    candidate = center + offset
+                    if lower_bound < candidate < future_pid_exclusive and is_available(candidate):
+                        return candidate
             return None
 
         if not is_available(pid):

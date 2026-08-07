@@ -2329,8 +2329,8 @@ class TestWindowsEventEmitter:
             "TargetInfo": "fileserver01",
             "ProcessId": "0x704",
             "ProcessName": r"C:\Windows\System32\winlogon.exe",
-            "NetworkAddress": "10.0.0.50",
-            "NetworkPort": 50123,
+            "IpAddress": "10.0.0.50",
+            "IpPort": 50123,
         }
 
         emitter.emit_event(event_data)
@@ -2343,11 +2343,13 @@ class TestWindowsEventEmitter:
         assert '<Data Name="TargetServerName">fileserver01</Data>' in content
         assert '<Data Name="TargetInfo">fileserver01</Data>' in content
         assert '<Data Name="TargetUserName">admin01</Data>' in content
-        assert '<Data Name="NetworkAddress">10.0.0.50</Data>' in content
-        assert '<Data Name="NetworkPort">50123</Data>' in content
+        assert '<Data Name="IpAddress">10.0.0.50</Data>' in content
+        assert '<Data Name="IpPort">50123</Data>' in content
+        assert "NetworkAddress" not in content
+        assert "NetworkPort" not in content
 
     def test_explicit_credentials_blank_endpoint_renders_dash_port(self, format_def, temp_output):
-        """4648 should render unavailable NetworkAddress and NetworkPort consistently."""
+        """4648 should render unavailable IpAddress and IpPort consistently."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
         event = SecurityEvent(
@@ -2380,8 +2382,43 @@ class TestWindowsEventEmitter:
         emitter.close()
 
         content = temp_output.read_text()
-        assert '<Data Name="NetworkAddress">-</Data>' in content
-        assert '<Data Name="NetworkPort">-</Data>' in content
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">-</Data>' in content
+
+    def test_interactive_logon_prefers_canonical_session_winlogon_pid(
+        self, format_def, temp_output
+    ):
+        """4624 should render the per-session winlogon PID supplied by the logon bundle."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        emitter._system_pids = {"WKS-01": {"winlogon": 6000}}
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="logon",
+            dst_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.25",
+                fqdn="WKS-01.corp.local",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                netbios_domain="CORP",
+            ),
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0xabc123",
+                logon_type=2,
+                process_pid=7124,
+                process_name=r"C:\Windows\System32\winlogon.exe",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="ProcessId">0x1bd4</Data>' in content
+        assert r'<Data Name="ProcessName">C:\Windows\System32\winlogon.exe</Data>' in content
 
     def test_emit_wfp_outbound_connection(self, format_def, temp_output):
         """Test emitting 5156 (WFP outbound connection)."""

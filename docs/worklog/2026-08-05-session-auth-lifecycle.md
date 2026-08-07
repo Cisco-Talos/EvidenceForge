@@ -367,7 +367,7 @@ Classification: `sibling_defect`; intended fix classification: `family_level`.
 - Focused sequence/emitter/threading tests pass with 138 passed. `eforge validate-config` passes
   all 87 files with zero findings. Repository-wide Ruff check and format check pass.
 - The first complete suite run exposed only the repository's first-reference trademark guard for
-  the new worklog text (5,118 passed, 41 skipped, one failure); the worklog now uses `SOF-ELK®` at
+  the new worklog text (5,118 passed, 41 skipped, one failure); the worklog now uses `SOF-ELK` at
   first mention. The final complete non-slow suite passes with 5,121 passed and 41 skipped in
   225.82 seconds. Targeted slow parallel-generation validation passes with 5 passed.
 - Integrated output:
@@ -375,7 +375,115 @@ Classification: `sibling_defect`; intended fix classification: `family_level`.
   `/private/tmp/eforge-postbatch2-lifecycle-loop3/branch-enterprise-repeat`. `diff -qr` returned
   zero, proving byte-identical repeatability. The general probe returns the same 29 later-batch
   findings as loop 2 and no Windows record-ID, Linux PID/SSH, or Windows module findings.
+- The final probe also makes the first two gate families directly reproducible. Against the frozen
+  pre-repair output it detects 47 Linux PID reversals across both Linux hosts and 57 same-PID SSH
+  syslog-before-eCAR-create inversions; both checks are zero against the repaired output. The same
+  pre-repair run non-vacuously detects the module and record-ID families as well.
 - Human-readable and JSON `eforge eval` both pass at 95.3524/100 over 48,839 records. Parseability,
   cross-source field agreement, causal ordering, and rate plausibility are 100. The retained
   40/100 pivot-linkability flag remains scheduled beyond this gate rather than reopening the
   repaired family.
+
+## Post-gate blind panel and gate disposition
+
+- Four fresh reviewers inspected only the neutral data copy at `/private/tmp/case-zeta.7JbRlL`.
+  Their synthetic-confidence scores were Threat Hunter 72, Detection Engineer 74, Network
+  Forensics 84, and Host/EDR 85 (average 78.75; spread 13). All four verdicts were synthetic with
+  average verdict confidence 88.25, so the established deliberation thresholds were not met.
+- This is a material improvement from the pre-repair average of 96.5, but the gate does not yet
+  pass. Static and rendered verification accepted three same-scope root-cause families: local
+  session bootstrap materialized an in-window `/bin/login` for a pre-window session, Windows 4624
+  projected a host-global winlogon PID instead of the canonical per-session PID, and all 29
+  Windows 4648 rows used display labels rather than native `IpAddress`/`IpPort` XML field names.
+- The repeated nine-module startup sequence is a sibling of the repaired module family and is the
+  next bounded gate loop. Network findings (IDS payload prerequisites, NAT lifetime containment,
+  Zeek identifier morphology, transport visibility, and sensor timing) remain in their existing
+  Batch-3/network slices. Fleet software, daemon/scanner texture, Linux system-session identity,
+  and SSH concurrency remain in Batch 4. The panel therefore refines evidence and ordering without
+  replacing the authoritative remediation roadmap.
+
+## Gate-repair loop 4 contract: authentication session projection
+
+Classification: `sibling_defect`; intended fix classification: `family_level`.
+
+- **Owning abstractions:** session state owns the canonical start and Windows terminal-session
+  winlogon identity; the logon action bundle owns the 4624 caller reference and local-session
+  bootstrap; the Windows Security format definition owns native 4648 field names. Emitters may
+  project those facts but may not replace a session PID with a host-global process identity.
+- **Family invariants:** an in-window `/bin/login` creation requires a matching in-window local
+  session opening; a session that began before collection keeps its login parent before the
+  collection boundary. Concurrent Windows interactive sessions use distinct winlogon PIDs in 4624,
+  while unlocks reuse their owning session's PID. Event 4648 renders `IpAddress` and `IpPort`, the
+  provider-manifest names, while `Network Address` and `Port` remain display labels only.
+- **Entry paths:** generic/baseline local logon, lazy Linux shell materialization, Windows local and
+  compatibility interactive logons, Type-7 unlock reuse, RDP-owned sessions that reach the generic
+  renderer, explicit-credential action bundles, direct emitter tests, and XML/Snare/SOF-ELK
+  projections.
+- **Consumers:** StateManager session/process relationships, eCAR session and process lifecycles,
+  Linux syslog/logind projection, Windows Security 4624/4648, evaluators/parsers, and rendered
+  invariant probes.
+- **Layer rationale:** shifting or inventing rows in eCAR/syslog would leave the canonical session
+  boundary wrong; the pre-window bootstrap must be repaired where the process is planned. The 4624
+  caller must use the session-owned PID supplied in `AuthContext`. The 4648 spelling is purely a
+  source-native schema correction and belongs in the format definition plus Windows projection.
+- **Sibling coverage:** pre-window and in-window Linux local sessions, workstation and server local
+  shells, overlapping Windows Type-2 sessions, Type-7 reuse, interactive compatibility paths,
+  blank and populated 4648 endpoints, enterprise observation, and identical-input determinism.
+
+### Gate-repair loop 4 validation strategy
+
+- Add unit tests proving pre-window login parents remain pre-window, overlapping Windows sessions
+  carry distinct canonical caller PIDs, unlocks reuse their session owner, and 4648 uses only the
+  provider-native XML names.
+- Extend the rendered probe with in-window local-login/session-open and concurrent-winlogon-owner
+  checks; retain the existing 4648 schema check as the source-format proof.
+- Run focused tests, config validation, Ruff, the complete non-slow suite, regenerate the integrated
+  enterprise output, compare exact pre/post recurrence, run human/JSON evaluation, and prove an
+  identical-input repeat before committing.
+
+### Gate-repair loop 4 regression sibling: bounded Linux PID insertion
+
+- The first repaired integrated output cleared the local-session, winlogon-owner, and 4648 checks,
+  but the retained Linux chronology probe found one new reversal on `WEB-BO-01`: PID 2050145 at
+  15:26:05 was followed by PID 2050035 at 15:30:03. A generation trace proved that baseline
+  scheduled tasks, storyline SSH, and proxy service-process owners reached the shared allocator in
+  non-chronological order.
+- The allocator's existing future-bounded repair chose candidates anywhere in an available numeric
+  interval. It placed a 15:12 SSH responder immediately below the already allocated 15:30
+  responder, leaving no numeric slot when the 15:26 proxy process was generated later. This is an
+  allocator-level sibling of loop 1, not an SSH projection defect.
+- Preserve the existing time-derived PID model and shared namespace, but choose bounded
+  out-of-order insertions from the interval's middle region so later insertions retain capacity on
+  both sides. Add the exact four-way traversal order as a state-manager regression test and require
+  the regenerated output to return the Linux chronology check to zero.
+
+### Gate-repair loop 4 implementation and rendered evidence
+
+- Windows interactive logon planning now resolves a session-owned `winlogon.exe` PID before the
+  canonical logon event and carries it in `AuthContext`; the 4624 projection prefers that canonical
+  caller. Later shell setup reuses the same process rather than creating a second session owner.
+- Lazy Linux local-shell bootstrap keeps the user-manager or terminal parent at the original
+  pre-window logon time when the owning session predates collection. The probe now rejects an
+  in-window `/bin/login` without a matching visible local session opening.
+- Event 4648 now renders the provider-native `IpAddress` and `IpPort` XML names in the format
+  schema, direct emitter output, and transformed targets. The source-reference ledger records the
+  reviewed subset as aligned rather than retaining the repaired defect.
+- The Linux PID allocator now selects future-bounded out-of-order allocations from the middle
+  region of the available interval. The exact integrated traversal that previously exhausted the
+  15:12/15:26/15:30/15:31/15:32 interval is covered by a state-manager regression test.
+- Focused activity, world-model, emitter, dispatcher, format, and state tests pass with 678 tests.
+  Configuration validation passes all 87 files, and repository-wide Ruff check and format check
+  pass.
+- Repaired integrated output:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop4b/branch-enterprise`; identical-input repeat:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop4b/branch-enterprise-repeat`. `diff -qr` returned
+  zero. The probe reports zero local-session-opening, winlogon-owner, 4648-field, Linux-PID, and
+  SSH chronology findings. Its 28 retained findings are all pre-scheduled network families: 26
+  Zeek file intervals, one AAAA distribution warning, and one OCSP-duration warning.
+- Human-readable evaluation passes at 96/100 over 50,142 records. Parseability, cross-source field
+  agreement, causal ordering, temporal integrity, and rate plausibility are 100. The 40/100
+  pivot-linkability flag remains scheduled outside this bounded gate repair.
+- The complete non-slow suite produced 5,123 passes and 41 skips in 225.41 seconds with one
+  sandbox-only failure: the Splunk runtime unit test could not bind an ephemeral loopback port.
+  Rerunning that exact test with loopback permission passed, yielding 5,124 effective passes and
+  no code failures.

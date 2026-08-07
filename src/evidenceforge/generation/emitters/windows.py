@@ -726,6 +726,11 @@ class WindowsEventEmitter(LogEmitter):
         auth: AuthContext,
     ) -> tuple[int, str]:
         """Return EventData ProcessId/ProcessName for source-native 4624 semantics."""
+        if auth.logon_type in {2, 7, 10, 11} and auth.process_pid > 0:
+            return (
+                auth.process_pid,
+                auth.process_name or r"C:\Windows\System32\winlogon.exe",
+            )
         caller_by_type = {
             2: ("winlogon", 0x280, r"C:\Windows\System32\winlogon.exe"),
             4: ("services", 0x2BC, r"C:\Windows\System32\services.exe"),
@@ -1205,8 +1210,8 @@ class WindowsEventEmitter(LogEmitter):
             "TargetInfo": auth.target_server or "localhost",
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
-            "NetworkAddress": auth.source_ip or "-",
-            "NetworkPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
+            "IpAddress": auth.source_ip or "-",
+            "IpPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
         }
         self.emit_event(event_data)
 

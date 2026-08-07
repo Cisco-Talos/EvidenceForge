@@ -64,9 +64,9 @@
       "format": "windows_event_security",
       "code": ["src/evidenceforge/config/formats/windows_event_security.yaml", "src/evidenceforge/generation/emitters/windows.py"],
       "references": ["https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-schema", "https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-eventrecordid-systempropertiestype-element", "https://learn.microsoft.com/en-us/windows/win32/eventlog/event-log-records", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4624", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4648", "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/advanced-audit-policy-configuration"],
-      "assessment": "bounded_subset_with_4648_schema_defect",
+      "assessment": "bounded_subset_aligned_for_reviewed_events",
       "confidence": "high",
-      "notes": "The XML event envelope and most supported Security payloads are source-shaped. Event 4648 is a current defect: the official manifest and public exemplar use IpAddress/IpPort, while the format definition and emitter use NetworkAddress/NetworkPort. Microsoft defines EventRecordID as the record number assigned when an event is logged and documents sequential numbering; post-review remediation models omitted selected-channel rows from elapsed time instead of independent gaps. The emitter is a selected-event renderer, not an EVTX writer, and fixed provider/task/version metadata creates a maintenance obligation as Windows variants evolve."
+      "notes": "The XML event envelope and supported Security payloads are source-shaped for the reviewed event subset. Event 4648 now uses the provider-manifest IpAddress/IpPort names; Network Address and Port are display labels, not XML field names. Microsoft defines EventRecordID as the record number assigned when an event is logged and documents sequential numbering; post-review remediation models omitted selected-channel rows from elapsed time instead of independent gaps. The emitter is a selected-event renderer, not an EVTX writer, and fixed provider/task/version metadata creates a maintenance obligation as Windows variants evolve."
     },
     {
       "format": "windows_event_sysmon",

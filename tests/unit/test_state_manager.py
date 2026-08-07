@@ -469,6 +469,30 @@ class TestStateManagerInit:
 
         assert earlier_pid < later_pid
 
+    def test_linux_pid_out_of_order_insertions_preserve_interval_capacity(self):
+        """Repeated temporal insertions should not consume an interval edge prematurely."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        offsets = (
+            timedelta(minutes=32),
+            timedelta(minutes=12),
+            timedelta(minutes=30),
+            timedelta(minutes=31),
+            timedelta(minutes=26),
+        )
+
+        allocations: dict[timedelta, int] = {}
+        for offset in offsets:
+            allocations[offset] = sm.allocate_transient_linux_pid(
+                "linux01",
+                boot_time + offset,
+            )
+
+        chronological_pids = [allocations[offset] for offset in sorted(offsets)]
+        assert chronological_pids == sorted(chronological_pids)
+        assert len(set(chronological_pids)) == len(chronological_pids)
+
     def test_linux_pids_keep_parent_child_shape_before_future_process(self):
         """Earlier parent/child allocations should fit below known future PIDs."""
         sm = StateManager()

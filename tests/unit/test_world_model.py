@@ -1172,6 +1172,46 @@ def test_linux_local_session_shell_has_visible_terminal_parent(
         assert user_manager.lifecycle_group_id == session.lifecycle_group_id
 
 
+def test_pre_window_linux_session_keeps_login_parent_before_collection(
+    activity_generator: ActivityGenerator,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """A lazily materialized shell must not invent an in-window local login."""
+    system = systems["DB-01"]
+    user = users["alice.admin"]
+    scenario_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    session_time = scenario_start - timedelta(hours=2)
+    activity_time = scenario_start + timedelta(minutes=5)
+    activity_generator._scenario_start_time = scenario_start
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip=system.ip,
+        session_kind="interactive",
+    )
+
+    shell_pid = activity_generator.ensure_linux_session_shell(
+        user=user,
+        target_system=system,
+        logon_id=logon_id,
+        logon_time=session_time,
+        activity_time=activity_time,
+    )
+
+    assert shell_pid is not None
+    shell = state_manager.get_process(system.hostname, shell_pid)
+    assert shell is not None
+    login_parent = state_manager.get_process(system.hostname, shell.parent_pid)
+    assert login_parent is not None
+    assert login_parent.image == "/bin/login"
+    assert login_parent.start_time < scenario_start
+    assert shell.start_time >= scenario_start
+
+
 def test_find_user_session_handles_mixed_timezone_start_times(
     planner: WorldPlanner,
     state_manager: StateManager,

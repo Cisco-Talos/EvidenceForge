@@ -9074,6 +9074,39 @@ class ActivityGenerator:
             session_for_guid = self.state_manager.get_session(logon_id)
             session_id = session_for_guid.session_id if session_for_guid is not None else 0
 
+        logon_caller_pid = 0
+        logon_caller_process = ""
+        if os_cat == "windows" and logon_type in {2, 7, 10, 11}:
+            session_for_caller = self.state_manager.get_session(logon_id)
+            if session_for_caller is not None:
+                logon_caller_pid = session_for_caller.session_winlogon_pid or 0
+                if logon_caller_pid <= 0 and logon_type != 7:
+                    self.state_manager.set_current_time(time)
+                    sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+                    parent_for_chain = next(
+                        (
+                            pid
+                            for candidate in ("smss", "wininit", "winlogon", "services")
+                            if (pid := sys_pids.get(candidate))
+                            and self.state_manager.get_process(system.hostname, pid) is not None
+                        ),
+                        None,
+                    )
+                    if parent_for_chain is not None:
+                        logon_caller_pid = self.state_manager.create_process(
+                            system.hostname,
+                            parent_for_chain,
+                            r"C:\Windows\System32\winlogon.exe",
+                            "winlogon.exe",
+                            "SYSTEM",
+                            "System",
+                            logon_id=logon_id,
+                        )
+                        session_for_caller.session_winlogon_pid = logon_caller_pid
+                        session_for_caller.process_tree_root = logon_caller_pid
+                if logon_caller_pid > 0:
+                    logon_caller_process = r"C:\Windows\System32\winlogon.exe"
+
         # Phase 2: Build SecurityEvent with all contexts
         # For network logons (type 3, 10), resolve source host from source_ip
         src_host_ctx = None
@@ -9129,6 +9162,8 @@ class ActivityGenerator:
                 subject_logon_id=subject["logon_id"],
                 privilege_list=privilege_list,
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
+                process_pid=logon_caller_pid,
+                process_name=logon_caller_process,
             ),
             edr=EdrContext(object_id=session_obj_id, actor_id=session_actor_id),
             remote_auth=remote_authentication_plan,
@@ -9275,16 +9310,18 @@ class ActivityGenerator:
                             parent_for_chain = pid
                             break
                     if parent_for_chain is not None:
-                        winlogon_pid = self.state_manager.create_process(
-                            system.hostname,
-                            parent_for_chain,
-                            r"C:\Windows\System32\winlogon.exe",
-                            "winlogon.exe",
-                            "SYSTEM",
-                            "System",
-                            logon_id=logon_id,
-                        )
-                        session.session_winlogon_pid = winlogon_pid
+                        winlogon_pid = session.session_winlogon_pid
+                        if winlogon_pid is None:
+                            winlogon_pid = self.state_manager.create_process(
+                                system.hostname,
+                                parent_for_chain,
+                                r"C:\Windows\System32\winlogon.exe",
+                                "winlogon.exe",
+                                "SYSTEM",
+                                "System",
+                                logon_id=logon_id,
+                            )
+                            session.session_winlogon_pid = winlogon_pid
                         userinit_pid = self.state_manager.create_process(
                             system.hostname,
                             winlogon_pid,
@@ -17421,13 +17458,23 @@ class ActivityGenerator:
         } or target_system.hostname.upper().startswith(("WS-", "LT-"))
         session = self.state_manager.get_session(logon_id)
         bootstrap_lifecycle_group_id = session.lifecycle_group_id if session is not None else ""
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        pre_window_session = (
+            scenario_start is not None
+            and ensure_utc(logon_time) < scenario_start
+            and ensure_utc(bash_time) >= scenario_start
+        )
         user_systemd_time = logon_time
         user_systemd_pid: int | None = None
         if workstation_like:
-            user_systemd_time = max(
-                logon_time + timedelta(milliseconds=90),
-                bash_time - timedelta(milliseconds=900 + (shell_seed % 320)),
-            )
+            user_systemd_time = logon_time + timedelta(milliseconds=90)
+            if not pre_window_session:
+                user_systemd_time = max(
+                    user_systemd_time,
+                    bash_time - timedelta(milliseconds=900 + (shell_seed % 320)),
+                )
             if user_systemd_time >= bash_time:
                 user_systemd_time = logon_time + timedelta(milliseconds=90)
             user_systemd_pid = self._active_linux_session_user_manager_pid(
@@ -17480,10 +17527,12 @@ class ActivityGenerator:
                 return existing_parent_pid, ensure_utc(existing_parent.start_time)
             return existing_parent_pid, user_systemd_time
 
-        terminal_time = max(
-            user_systemd_time + timedelta(milliseconds=120),
-            bash_time - timedelta(milliseconds=260 + (shell_seed % 170)),
-        )
+        terminal_time = user_systemd_time + timedelta(milliseconds=120)
+        if not pre_window_session:
+            terminal_time = max(
+                terminal_time,
+                bash_time - timedelta(milliseconds=260 + (shell_seed % 170)),
+            )
         terminal_pid = self.generate_process(
             user=user,
             system=target_system,
@@ -17552,7 +17601,10 @@ class ActivityGenerator:
             not parent_pid
             or self.state_manager.get_process(target_system.hostname, parent_pid) is None
         ):
-            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+            anchor_time = activity_time
+            if scenario_start is not None and logon_time < scenario_start:
+                anchor_time = logon_time
+            parent_pid = self._linux_anchor_pid(target_system, anchor_time)
 
         shell_seed = _stable_seed(
             "linux_session_shell:"

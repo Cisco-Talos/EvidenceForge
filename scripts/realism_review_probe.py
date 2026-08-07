@@ -29,6 +29,9 @@ _TUPLE_FIELDS = ("id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p")
 _WINDOW_TOLERANCE_SECONDS = 1.0
 _WINDOWS_RECORD_ID_BURST_ALLOWANCE = 64
 _WINDOWS_RECORD_ID_CONSERVATIVE_PEAK_RATE = 2_000.0
+_RFC5424_SSHD_RE = re.compile(
+    r"^<\d+>1\s+(?P<timestamp>\S+)\s+(?P<host>\S+)\s+sshd\s+(?P<pid>\d+)\s"
+)
 
 
 @dataclass(frozen=True)
@@ -545,6 +548,41 @@ def _check_ecar_lifecycles(
         and record.get("objectID")
         and isinstance(record.get("timestamp_ms"), int | float)
     }
+    linux_process_creates = sorted(
+        (
+            record
+            for record in process_creates.values()
+            if str((record.get("properties") or {}).get("image_path") or "").startswith("/")
+            and isinstance(record.get("pid"), int)
+        ),
+        key=lambda record: (float(record["timestamp_ms"]), str(record.get("id") or "")),
+    )
+    linux_pid_reversals: list[dict[str, Any]] = []
+    for prior, current in zip(linux_process_creates, linux_process_creates[1:], strict=False):
+        if int(current["pid"]) <= int(prior["pid"]):
+            linux_pid_reversals.append(
+                {
+                    "prior_pid": prior["pid"],
+                    "prior_timestamp_ms": prior["timestamp_ms"],
+                    "prior_record_id": prior.get("id"),
+                    "pid": current["pid"],
+                    "timestamp_ms": current["timestamp_ms"],
+                    "record_id": current.get("id"),
+                }
+            )
+    if linux_pid_reversals:
+        findings.append(
+            Finding(
+                check="ecar_linux_pid_chronology",
+                severity="error",
+                path=str(path),
+                message="Linux process-create PIDs reverse without a modeled PID-space wrap",
+                evidence={
+                    "count": len(linux_pid_reversals),
+                    "sample": linux_pid_reversals[0],
+                },
+            )
+        )
     startup_names = {"ntdll.dll", "kernel32.dll", "kernelbase.dll"}
     late_startup_modules: list[dict[str, Any]] = []
     incompatible_modules: list[dict[str, Any]] = []
@@ -694,6 +732,36 @@ def _check_ecar_lifecycles(
                     "count": len(inverted_linux_logins),
                     "sample_record_id": inverted_linux_logins[0].get("id"),
                     "sample_properties": inverted_linux_logins[0].get("properties"),
+                },
+            )
+        )
+
+    session_login_ids = {
+        str((record.get("properties") or {}).get("logon_id"))
+        for record in records
+        if record.get("object") == "USER_SESSION"
+        and record.get("action") == "LOGIN"
+        and (record.get("properties") or {}).get("logon_id")
+    }
+    local_login_without_session_open = [
+        record
+        for record in records
+        if record.get("object") == "PROCESS"
+        and record.get("action") == "CREATE"
+        and str((record.get("properties") or {}).get("image_path") or "") == "/bin/login"
+        and str((record.get("properties") or {}).get("logon_id") or "") not in session_login_ids
+    ]
+    if local_login_without_session_open:
+        findings.append(
+            Finding(
+                check="ecar_local_login_session_open",
+                severity="error",
+                path=str(path),
+                message="An in-window /bin/login process has no matching eCAR session opening",
+                evidence={
+                    "count": len(local_login_without_session_open),
+                    "sample_record_id": local_login_without_session_open[0].get("id"),
+                    "sample_properties": local_login_without_session_open[0].get("properties"),
                 },
             )
         )
@@ -909,6 +977,66 @@ def _check_windows_contracts(
                 )
             )
 
+        interactive_logons = [
+            record
+            for record in records
+            if record.get("event_id") == "4624"
+            and str(record["fields"].get("LogonType") or "") in {"2", "10", "11"}
+            and record["fields"].get("TargetLogonId")
+            and record["fields"].get("ProcessId")
+            and isinstance(record.get("timestamp"), int | float)
+        ]
+        logout_times: dict[str, float] = {}
+        for record in records:
+            logon_id = str(record["fields"].get("TargetLogonId") or "")
+            timestamp = record.get("timestamp")
+            if record.get("event_id") == "4634" and logon_id and isinstance(timestamp, int | float):
+                logout_times[logon_id] = min(
+                    float(timestamp),
+                    logout_times.get(logon_id, math.inf),
+                )
+        overlapping_winlogon_owners: list[dict[str, Any]] = []
+        for index, first in enumerate(interactive_logons):
+            first_fields = first["fields"]
+            first_id = str(first_fields["TargetLogonId"])
+            first_end = logout_times.get(first_id, math.inf)
+            for second in interactive_logons[index + 1 :]:
+                second_fields = second["fields"]
+                second_id = str(second_fields["TargetLogonId"])
+                if first_id == second_id:
+                    continue
+                if first_fields["ProcessId"] != second_fields["ProcessId"]:
+                    continue
+                second_end = logout_times.get(second_id, math.inf)
+                first_start = float(first["timestamp"])
+                second_start = float(second["timestamp"])
+                if first_start >= second_end or second_start >= first_end:
+                    continue
+                overlapping_winlogon_owners.append(
+                    {
+                        "process_id": first_fields["ProcessId"],
+                        "first_logon_id": first_id,
+                        "first_start": first_start,
+                        "first_end": first_end if math.isfinite(first_end) else None,
+                        "second_logon_id": second_id,
+                        "second_start": second_start,
+                        "second_end": second_end if math.isfinite(second_end) else None,
+                    }
+                )
+        if overlapping_winlogon_owners:
+            findings.append(
+                Finding(
+                    check="windows_interactive_session_winlogon_owner",
+                    severity="error",
+                    path=str(path),
+                    message="Overlapping interactive sessions share one winlogon PID",
+                    evidence={
+                        "count": len(overlapping_winlogon_owners),
+                        "sample": overlapping_winlogon_owners[0],
+                    },
+                )
+            )
+
     if path.name != "windows_event_sysmon.xml":
         return
     process_creates = {
@@ -1010,6 +1138,67 @@ def _check_cross_source_contracts(
         if path.name == "ecar.json"
         for record in records
     ]
+    for path, records in json_records.items():
+        if path.name != "ecar.json":
+            continue
+        syslog_path = path.with_name("syslog.log")
+        if not syslog_path.is_file():
+            continue
+        process_create_by_pid = {
+            int(record["pid"]): record
+            for record in records
+            if record.get("object") == "PROCESS"
+            and record.get("action") == "CREATE"
+            and isinstance(record.get("pid"), int)
+            and isinstance(record.get("timestamp_ms"), int | float)
+        }
+        first_sshd_by_pid: dict[int, tuple[float, int, str]] = {}
+        for line_number, line in enumerate(
+            syslog_path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            match = _RFC5424_SSHD_RE.match(line)
+            if match is None:
+                continue
+            try:
+                pid = int(match.group("pid"))
+                timestamp = datetime.fromisoformat(
+                    match.group("timestamp").replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError:
+                continue
+            current = first_sshd_by_pid.get(pid)
+            if current is None or timestamp < current[0]:
+                first_sshd_by_pid[pid] = (timestamp, line_number, line)
+
+        inverted: list[dict[str, Any]] = []
+        for pid, (syslog_timestamp, line_number, line) in first_sshd_by_pid.items():
+            create = process_create_by_pid.get(pid)
+            if create is None:
+                continue
+            create_timestamp = float(create["timestamp_ms"]) / 1000.0
+            if syslog_timestamp < create_timestamp:
+                inverted.append(
+                    {
+                        "pid": pid,
+                        "process_create_timestamp": create_timestamp,
+                        "process_create_record_id": create.get("id"),
+                        "first_syslog_timestamp": syslog_timestamp,
+                        "syslog_line": line_number,
+                        "syslog_text": line,
+                    }
+                )
+        if inverted:
+            findings.append(
+                Finding(
+                    check="ssh_syslog_after_ecar_process_create",
+                    severity="error",
+                    path=str(syslog_path),
+                    message="An sshd syslog message precedes the same PID's eCAR process create",
+                    evidence={"count": len(inverted), "sample": inverted[0]},
+                )
+            )
+
     conn_by_tuple: dict[tuple[str, int, str, int], dict[str, Any]] = {}
     for path, records in json_records.items():
         if path.name != "conn.json":
