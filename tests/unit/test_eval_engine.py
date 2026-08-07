@@ -76,7 +76,7 @@ class TestEvaluationEngine:
         hard_criteria = [c for c in report.acceptance_criteria if c.level == "hard"]
         assert len(hard_criteria) > 0
         for c in hard_criteria:
-            if c.sub_score_key == "ids_integrity":
+            if c.applicable is False:
                 assert c.actual is None
                 assert c.passed is None
                 continue
@@ -105,7 +105,24 @@ class TestEvaluationEngine:
         report = engine.run()
 
         assert report.total_records == 0
-        assert report.overall_score is not None  # 100 (no failures)
+        assert report.overall_score is not None
+        assert report.overall_score < 100
+        assert report.acceptance_passed is False
+
+    def test_reports_separate_evaluation_categories(self, retail_scenario):
+        """Concern-oriented category scores must be independent of legacy pillar labels."""
+
+        report = EvaluationEngine(output_dir=GOOD_FIXTURES, scenario=retail_scenario).run()
+
+        assert [category.key for category in report.categories] == [
+            "source_schema",
+            "canonical_invariants",
+            "scenario_completeness",
+            "distribution_realism",
+            "expert_comparison",
+        ]
+        assert report.categories[0].score is not None
+        assert report.categories[-1].score is None
 
     def test_report_is_repeatable_except_evaluated_at(self, retail_scenario):
         """Stable discovery and sampling produce identical evaluation content."""

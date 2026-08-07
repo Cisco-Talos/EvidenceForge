@@ -440,7 +440,13 @@
       "reproduction": "Run the evaluation commands in empirical-results.json, then compare with probe and blind-summary.md.",
       "sibling_risk": "Regression loops optimize to an insensitive score and declare family completion while expert-rejection defects persist.",
       "proposed_remediation": "Add invariant-based hard gates, non-vacuous coverage denominators, scenario completeness thresholds, and independent bad fixtures.",
-      "required_tests": ["known-bad fixture must fail", "indicator/pivot minimums", "probe findings mapped to gates", "anti-circular distribution fixtures"]
+      "required_tests": ["known-bad fixture must fail", "indicator/pivot minimums", "probe findings mapped to gates", "anti-circular distribution fixtures"],
+      "remediation": {
+        "status": "resolved_in_batch_5",
+        "branch": "codex/batch5-projection-evaluation",
+        "evidence": "Required measures are non-vacuous, high-impact mismatches are hard gates, concern-oriented categories are reported, and durable named bad cases plus generated retail/branch controls fail on their actual missing evidence.",
+        "results": "docs/design/realism-review/batch5-results.json"
+      }
     },
     {
       "id": "REAL-011",
@@ -464,7 +470,13 @@
       "reproduction": "Run the probe and inspect windows_4648_native_fields; compare source-references.json.",
       "sibling_risk": "Other hand-maintained Windows event schemas, provider version metadata, and downstream parser mappings.",
       "proposed_remediation": "Correct the format/emitter together and add official-manifest field snapshots for every supported Windows Event ID.",
-      "required_tests": ["4648 official field set", "parser round trip", "all Windows event schemas against reference ledger"]
+      "required_tests": ["4648 official field set", "parser round trip", "all Windows event schemas against reference ledger"],
+      "remediation": {
+        "status": "resolved_and_preserved_in_batch_5",
+        "implementation_commit": "739dbea2",
+        "evidence": "The provider-native IpAddress/IpPort correction predates Batch 5 and is now protected by exact field-order, rendered, parser, and realism-probe tests.",
+        "results": "docs/design/realism-review/batch5-results.json"
+      }
     },
     {
       "id": "REAL-012",

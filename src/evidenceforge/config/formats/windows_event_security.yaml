@@ -601,12 +601,20 @@ variants:
       - name: SubjectLogonId
         type: hex_string
         required: true
+      - name: LogonGuid
+        type: string
+        required: false
+        description: "GUID to correlate with Kerberos authentication"
       - name: TargetUserName
         type: string
         required: true
       - name: TargetDomainName
         type: string
         required: true
+      - name: TargetLogonGuid
+        type: string
+        required: false
+        description: "GUID for target logon correlation"
       - name: TargetServerName
         type: string
         required: true
@@ -625,14 +633,6 @@ variants:
       - name: IpPort
         type: integer
         required: false
-      - name: LogonGuid
-        type: string
-        required: false
-        description: "GUID to correlate with Kerberos authentication"
-      - name: TargetLogonGuid
-        type: string
-        required: false
-        description: "GUID for target logon correlation"
 
   # EventID 4768: A Kerberos authentication ticket (TGT) was requested
   - name: kerberos_tgt

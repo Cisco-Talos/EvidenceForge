@@ -34,6 +34,7 @@ from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
+    EvaluationCategoryScore,
     PillarScore,
     QualityReport,
 )
@@ -108,7 +109,16 @@ def _build_acceptance_criteria(
             )
 
             sub = _find_sub_score_for_key(key, by_name, by_number)
-            if sub is not None and sub.score is not None:
+            if sub is None:
+                crit.applicable = True
+                crit.passed = False
+            elif sub.skipped:
+                crit.applicable = False
+            elif sub.score is None:
+                crit.applicable = True
+                crit.passed = False
+            else:
+                crit.applicable = True
                 crit.actual = sub.score
                 crit.passed = sub.score >= ss_thresh.minimum
                 if ss_thresh.aspirational is not None:
@@ -117,6 +127,106 @@ def _build_acceptance_criteria(
             results.append(crit)
 
     return results
+
+
+_CATEGORY_DEFINITIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "source_schema",
+        "Parseability & Source Schema",
+        ("spec_conformance", "format_constraints"),
+    ),
+    (
+        "canonical_invariants",
+        "Canonical Cross-Source Invariants",
+        (
+            "value_plausibility",
+            "co_occurrence",
+            "field_agreement",
+            "ids_integrity",
+            "causal_ordering",
+            "rate_plausibility",
+        ),
+    ),
+    (
+        "scenario_completeness",
+        "Declared Scenario Completeness",
+        (
+            "intent_reconciliation",
+            "event_presence",
+            "indicator_accuracy",
+            "pivot_linkability",
+            "temporal_integrity",
+            "storyline_trace_coverage",
+        ),
+    ),
+    (
+        "distribution_realism",
+        "Distribution & Realism Diagnostics",
+        (
+            "distribution_fit",
+            "user_diversity",
+            "anomaly_rate",
+            "attack_chain_timing",
+            "burstiness",
+            "system_regularity",
+            "diurnal_pattern",
+            "volume_adequacy",
+        ),
+    ),
+)
+
+
+def _build_category_scores(pillars: list[PillarScore]) -> list[EvaluationCategoryScore]:
+    """Build concern-oriented scores while retaining the existing pillar API."""
+
+    by_key = {sub.key: sub for pillar in pillars for sub in pillar.sub_scores}
+    categories: list[EvaluationCategoryScore] = []
+    for key, name, sub_score_keys in _CATEGORY_DEFINITIONS:
+        active = [
+            by_key[sub_key]
+            for sub_key in sub_score_keys
+            if sub_key in by_key
+            and by_key[sub_key].score is not None
+            and not by_key[sub_key].skipped
+        ]
+        score = sum(float(sub.score) for sub in active) / len(active) if active else None
+        categories.append(
+            EvaluationCategoryScore(
+                key=key,
+                name=name,
+                score=score,
+                sub_score_keys=[sub.key for sub in active],
+                details=(
+                    f"{len(active)}/{len(sub_score_keys)} configured measures scored"
+                    if active
+                    else "No applicable automated measures"
+                ),
+            )
+        )
+    categories.append(
+        EvaluationCategoryScore(
+            key="expert_comparison",
+            name="Optional Expert Comparison",
+            score=None,
+            details="No expert assessment was supplied to this deterministic evaluation run",
+        )
+    )
+    return categories
+
+
+def _acceptance_verdict(criteria: list[AcceptanceCriterion]) -> bool | None:
+    """Return a non-vacuous verdict across all applicable hard requirements."""
+
+    applicable_hard = [
+        criterion
+        for criterion in criteria
+        if criterion.level == "hard" and criterion.applicable is not False
+    ]
+    if any(criterion.passed is False for criterion in applicable_hard):
+        return False
+    if applicable_hard and all(criterion.passed is True for criterion in applicable_hard):
+        return True
+    return None
 
 
 def _count_aspirational(
@@ -339,9 +449,7 @@ class EvaluationEngine:
 
         # 4. Check acceptance criteria from thresholds.yaml
         acceptance_criteria = _build_acceptance_criteria(self._thresholds, pillars)
-        all_hard_pass = all(
-            c.passed for c in acceptance_criteria if c.level == "hard" and c.passed is not None
-        )
+        all_hard_pass = _acceptance_verdict(acceptance_criteria)
 
         # 5. Count aspirational targets met
         asp_met, asp_total = _count_aspirational(self._thresholds, pillars)
@@ -375,9 +483,8 @@ class EvaluationEngine:
             source_counts=source_counts,
             overall_score=overall,
             pillars=pillars,
-            acceptance_passed=all_hard_pass
-            if any(c.passed is not None for c in acceptance_criteria if c.level == "hard")
-            else None,
+            categories=_build_category_scores(pillars),
+            acceptance_passed=all_hard_pass,
             acceptance_criteria=acceptance_criteria,
             aspirational_met=asp_met if asp_total > 0 else None,
             aspirational_total=asp_total if asp_total > 0 else None,
@@ -460,8 +567,9 @@ class EvaluationEngine:
         # Flag failed acceptance criteria
         for c in criteria:
             if c.passed is False:
+                actual = f"{c.actual:.1f}" if c.actual is not None else "unmeasured"
                 flags.append(
-                    f"[{c.level.upper()}] {c.name}: {c.actual:.1f} < {c.threshold:.1f} threshold"
+                    f"[{c.level.upper()}] {c.name}: {actual} < {c.threshold:.1f} threshold"
                 )
 
         return flags

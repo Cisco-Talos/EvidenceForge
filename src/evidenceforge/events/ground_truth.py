@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
@@ -264,6 +264,7 @@ class GroundTruthEventBase(BaseModel):
 
     record_id: str
     kind: str
+    intent_id: str | None = None
     storyline_id: str | None = None
     time: datetime
     actor: str
@@ -541,6 +542,89 @@ class GroundTruthStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class GroundTruthIntentEvidence(BaseModel):
+    """Authored intent reconciled with planning, occurrence, and observation evidence."""
+
+    intent_id: str
+    ground_truth_section: GroundTruthSection
+    storyline_id: str
+    event_type: str
+    semantic_instance_key: str
+    authored_time: str
+    actor: str
+    system: str
+    activity: str
+    planned: bool
+    action_ids: list[str] = Field(default_factory=list)
+    occurrence_ids: list[str] = Field(default_factory=list)
+    dispatched_event_ids: list[str] = Field(default_factory=list)
+    source_status: dict[str, dict[str, int]] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_status")
+    @classmethod
+    def validate_source_status(cls, value: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+        """Reject unknown or negative intent-scoped observation counters."""
+
+        allowed = {"visible", "delayed", "dropped", "filtered", "out_of_window"}
+        for source, statuses in value.items():
+            for status, count in statuses.items():
+                if status not in allowed:
+                    raise ValueError(
+                        f"source_status[{source!r}] contains unknown status {status!r}"
+                    )
+                if count < 0:
+                    raise ValueError(f"source_status[{source!r}][{status!r}] must be non-negative")
+        return value
+
+
+class GroundTruthIntentReconciliation(BaseModel):
+    """Dataset-level reconciliation of the independent authored intent ledger."""
+
+    complete: bool
+    expected_count: int = Field(ge=0)
+    planned_count: int = Field(ge=0)
+    occurred_count: int = Field(ge=0)
+    observed_count: int = Field(ge=0)
+    missing_intent_ids: list[str] = Field(default_factory=list)
+    unexpected_intent_ids: list[str] = Field(default_factory=list)
+    intents: list[GroundTruthIntentEvidence] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> GroundTruthIntentReconciliation:
+        """Keep summary counts and completeness consistent with the intent rows."""
+
+        if self.expected_count != len(self.intents):
+            raise ValueError("expected_count must equal the number of reconciled intent rows")
+        intent_ids = [intent.intent_id for intent in self.intents]
+        if len(intent_ids) != len(set(intent_ids)):
+            raise ValueError("reconciled intent IDs must be unique")
+        if self.planned_count != sum(intent.planned for intent in self.intents):
+            raise ValueError("planned_count does not match reconciled intent rows")
+        if self.occurred_count != sum(bool(intent.dispatched_event_ids) for intent in self.intents):
+            raise ValueError("occurred_count does not match reconciled intent rows")
+        observed_count = sum(
+            any(
+                statuses.get("visible", 0) > 0 or statuses.get("delayed", 0) > 0
+                for statuses in intent.source_status.values()
+            )
+            for intent in self.intents
+        )
+        if self.observed_count != observed_count:
+            raise ValueError("observed_count does not match reconciled intent rows")
+        expected_complete = (
+            self.planned_count == self.expected_count
+            and not self.missing_intent_ids
+            and not self.unexpected_intent_ids
+        )
+        if self.complete != expected_complete:
+            raise ValueError("complete does not match missing/unexpected intent IDs")
+        return self
+
+
 class IdsEvaluationSignature(BaseModel):
     """Bounded expected-output summary for one signature on one IDS sensor."""
 
@@ -608,6 +692,7 @@ class GroundTruthDocument(BaseModel):
     ids_evaluation: IdsEvaluationSummary | None = None
     storyline_steps: list[GroundTruthStep] = Field(default_factory=list)
     red_herring_steps: list[GroundTruthStep] = Field(default_factory=list)
+    intent_reconciliation: GroundTruthIntentReconciliation | None = None
     events: list[GroundTruthEvent] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")

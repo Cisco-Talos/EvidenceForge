@@ -73,6 +73,7 @@ from evidenceforge.generation.activity.http_content import (
 )
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.network_params import activity_dns_resolver_ips
+from evidenceforge.generation.intent_ledger import IntentSection
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
@@ -2844,17 +2845,25 @@ class StorylineMixin:
             self.dispatcher.storyline_cluster_id = storyline_event.id
             try:
                 for i, spec in enumerate(storyline_event.events):
-                    previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
-                    self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
-                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                    event_t = self._apply_storyline_shell_availability(
-                        actor=actor,
-                        system=system,
-                        time=event_t,
-                        rng=rng,
+                    intent = self.authored_intent_ledger.intent_at(
+                        IntentSection.STORYLINE,
+                        storyline_event.id,
+                        i,
                     )
-                    self.state_manager.set_current_time(event_t)
+                    previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
+                    previous_intent_id = self.dispatcher.authored_intent_id
+                    self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
+                    self.dispatcher.authored_intent_id = intent.intent_id
+                    self.intent_execution_ledger.mark_planned(intent.intent_id)
                     try:
+                        event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                        event_t = self._apply_storyline_shell_availability(
+                            actor=actor,
+                            system=system,
+                            time=event_t,
+                            rng=rng,
+                        )
+                        self.state_manager.set_current_time(event_t)
                         malicious_event = self._execute_typed_event(
                             spec=spec,
                             actor=actor,
@@ -2865,9 +2874,11 @@ class StorylineMixin:
                             future_specs=itertools.islice(storyline_event.events, i + 1, None),
                         )
                         if malicious_event:
+                            malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
                     finally:
                         self._current_storyline_spec_id = previous_spec_id
+                        self.dispatcher.authored_intent_id = previous_intent_id
                 self._flush_story_process_terminations()
             finally:
                 self.dispatcher.storyline_cluster_id = previous_cluster
@@ -2916,17 +2927,25 @@ class StorylineMixin:
         self.dispatcher.storyline_cluster_id = storyline_event.id
         try:
             for i, spec in enumerate(storyline_event.events):
-                previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
-                self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
-                event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                event_t = self._apply_storyline_shell_availability(
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    rng=rng,
+                intent = self.authored_intent_ledger.intent_at(
+                    IntentSection.STORYLINE,
+                    storyline_event.id,
+                    i,
                 )
-                self.state_manager.set_current_time(event_t)
+                previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
+                previous_intent_id = self.dispatcher.authored_intent_id
+                self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
+                self.dispatcher.authored_intent_id = intent.intent_id
+                self.intent_execution_ledger.mark_planned(intent.intent_id)
                 try:
+                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = self._apply_storyline_shell_availability(
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        rng=rng,
+                    )
+                    self.state_manager.set_current_time(event_t)
                     malicious_event = self._execute_typed_event(
                         spec=spec,
                         actor=actor,
@@ -2937,9 +2956,11 @@ class StorylineMixin:
                         future_specs=itertools.islice(storyline_event.events, i + 1, None),
                     )
                     if malicious_event:
+                        malicious_event["intent_id"] = intent.intent_id
                         self.malicious_events.append(malicious_event)
                 finally:
                     self._current_storyline_spec_id = previous_spec_id
+                    self.dispatcher.authored_intent_id = previous_intent_id
             self._flush_story_process_terminations()
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
@@ -2984,27 +3005,39 @@ class StorylineMixin:
         self.dispatcher.storyline_cluster_id = f"red_herring:{rh_event.id}"
         try:
             for i, spec in enumerate(rh_event.events):
-                event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                event_t = self._apply_storyline_shell_availability(
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    rng=rng,
+                intent = self.authored_intent_ledger.intent_at(
+                    IntentSection.RED_HERRING,
+                    rh_event.id,
+                    i,
                 )
-                self.state_manager.set_current_time(event_t)
-                result = self._execute_typed_event(
-                    spec=spec,
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    activity=rh_event.activity,
-                    explicit_types=explicit_types,
-                    future_specs=itertools.islice(rh_event.events, i + 1, None),
-                )
-                if result:
-                    # Track as red herring, not malicious
-                    result["explanation"] = rh_event.explanation
-                    self.red_herring_events.append(result)
+                previous_intent_id = self.dispatcher.authored_intent_id
+                self.dispatcher.authored_intent_id = intent.intent_id
+                self.intent_execution_ledger.mark_planned(intent.intent_id)
+                try:
+                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = self._apply_storyline_shell_availability(
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        rng=rng,
+                    )
+                    self.state_manager.set_current_time(event_t)
+                    result = self._execute_typed_event(
+                        spec=spec,
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        activity=rh_event.activity,
+                        explicit_types=explicit_types,
+                        future_specs=itertools.islice(rh_event.events, i + 1, None),
+                    )
+                    if result:
+                        # Track as red herring, not malicious
+                        result["intent_id"] = intent.intent_id
+                        result["explanation"] = rh_event.explanation
+                        self.red_herring_events.append(result)
+                finally:
+                    self.dispatcher.authored_intent_id = previous_intent_id
             self._flush_story_process_terminations()
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster

@@ -288,8 +288,12 @@ otherwise indistinguishable peer repetitions.
 
 `AuthoredIntentLedger` (`src/evidenceforge/generation/intent_ledger.py`) is captured from the
 validated scenario before planning. It remains independent from generated occurrence and
-observation data so future ground-truth reconciliation can expose authored intents that failed to
-plan or render. The foundation stores this ledger but does not change current ground-truth output.
+observation data. `IntentExecutionLedger` records planner acknowledgement, dispatched event IDs,
+stable action/occurrence identities when available, and intent-scoped source-observation outcomes
+at the dispatcher boundary. `GROUND_TRUTH.json` projects one reconciliation row for every authored
+typed storyline or red-herring specification, including rows that failed to plan or produced no
+event dictionary. Legacy events without semantic occurrence keys remain explicit proof gaps; the
+projection does not invent action identity for them.
 
 ### Action Bundles
 
@@ -741,6 +745,8 @@ EvaluationEngine
 └── QualityReport
     ├── overall_score: 0-100
     ├── pillars: list[PillarScore]
+    ├── categories: source schema, canonical invariants, scenario completeness,
+    │               distribution realism, optional expert comparison
     ├── acceptance_criteria: pass/fail (hard gates only)
     ├── aspirational_met / aspirational_total
     ├── flags: list[str]
@@ -757,6 +763,13 @@ but has zero score weight. Older datasets skip it explicitly unless their
 scenario authors IDS attachments. Storyline pivot linkability is inferred from
 typed stable indicators; it connects consecutive events per indicator rather
 than scoring unrelated globally consecutive steps.
+
+Required acceptance measures are non-vacuous: missing or unmeasurable hard gates fail rather than
+disappearing from the verdict, while explicitly inapplicable scenario-free checks render as `N/A`.
+The zero-weight intent-reconciliation gate independently rebuilds authored intent from the scenario
+and compares IDs and authored metadata with canonical ground truth. Observation-profile exclusions
+remain valid only when the matching manifest records dropped, filtered, delayed, or out-of-window
+source evidence.
 
 - **Grace period:** Events within the scenario's `logon_grace_period` (default 30m) from scenario start are exempt from causal ordering checks, since data collection begins mid-session with pre-existing user sessions.
 - **Per-rule tolerance:** Rules can specify a `tolerance` fraction (e.g., 0.03 for DNS→TCP) allowing a percentage of failures without penalty. Used for intentional direct-IP baseline connections.

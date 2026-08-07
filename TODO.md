@@ -71,8 +71,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   and `REAL-012`, including the remaining AAAA and OCSP distribution findings. See the
   [Batch 4 worklog](docs/worklog/2026-08-07-world-capability-distribution-state.md) and empirical
   results package.
-- [ ] **P1** Implement Batch 5 source-native projection and evaluator-validity work for
-  `REAL-010` and `REAL-011`, including the evaluator proof gaps recorded by Batch 4.
+- [x] **P1** Implement Batch 5 source-native projection and evaluator-validity work for
+  `REAL-010` and `REAL-011`, including the evaluator proof gaps recorded by Batch 4. See the
+  [Batch 5 worklog](docs/worklog/2026-08-07-projection-evaluation-validity.md) and
+  [empirical results](docs/design/realism-review/batch5-results.json).
 - [ ] **P1** Complete Batch 6 input-safety, workload-budget, authoring, and reproducibility work,
   including the deferred evaluator-memory capacity decision (`REAL-013`, `REAL-014`,
   `SEC-001` through `SEC-010`, and `SEC-DEFER-001`).

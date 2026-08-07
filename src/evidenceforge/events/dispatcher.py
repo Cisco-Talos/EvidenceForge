@@ -49,6 +49,7 @@ from evidenceforge.utils.rng import stable_uuid
 
 if TYPE_CHECKING:
     from evidenceforge.generation.emitters.base import LogEmitter
+    from evidenceforge.generation.intent_ledger import IntentExecutionLedger
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.generation.state_manager import StateManager
 
@@ -126,6 +127,7 @@ class EventDispatcher:
         output_start_time: datetime | None = None,
         output_end_time: datetime | None = None,
         observation_policy: ObservationPolicy | None = None,
+        intent_execution_ledger: IntentExecutionLedger | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.emitters = emitters
@@ -140,6 +142,8 @@ class EventDispatcher:
         self._contract_violation_counts: Counter[str] = Counter()
         self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
         self.storyline_cluster_id: str | None = None
+        self.authored_intent_id: str | None = None
+        self.intent_execution_ledger = intent_execution_ledger
         from evidenceforge.generation.source_timing import SourceTimingPlanner
 
         self.source_timing_planner = SourceTimingPlanner(
@@ -251,6 +255,17 @@ class EventDispatcher:
                 event.storyline_cluster_id or "",
             )
             self._event_sequence += 1
+        if self.authored_intent_id and self.intent_execution_ledger is not None:
+            occurrence_key = (
+                event.contract_seal.occurrence.occurrence_key
+                if event.contract_seal.occurrence is not None
+                else None
+            )
+            self.intent_execution_ledger.record_occurrence(
+                self.authored_intent_id,
+                event.event_id,
+                occurrence_key,
+            )
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
@@ -702,6 +717,12 @@ class EventDispatcher:
         cluster = self._source_evidence_status.setdefault(cluster_id, {})
         source_counts = cluster.setdefault(source, ObservationSummary())
         source_counts.record(status)
+        if self.authored_intent_id and self.intent_execution_ledger is not None:
+            self.intent_execution_ledger.record_observation(
+                self.authored_intent_id,
+                source,
+                status,
+            )
 
     def reconcile_ids_policy_filtering(
         self,

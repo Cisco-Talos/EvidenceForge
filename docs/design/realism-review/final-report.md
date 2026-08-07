@@ -285,6 +285,14 @@ This addresses REAL-008 and REAL-012 without broad unstructured noise expansion.
 
 This resolves REAL-010 and REAL-011 and makes later realism scores trustworthy.
 
+**Implementation status (2026-08-07): complete on `codex/batch5-projection-evaluation`.** Event
+4648 uses provider-native `IpAddress`/`IpPort` ordering; authored intent is reconciled through
+planning, canonical dispatch, and source observation; required measures no longer receive vacuous
+passes; and concern-oriented categories coexist with the compatibility pillars. The exact parent
+commit and Batch 5 produce byte-identical rendered `data/` trees for the integrated control, while
+ground truth gains additive reconciliation metadata. See `batch5-results.json` and the focused
+Batch 5 worklog.
+
 ### Batch 6 — Input safety, budgets, authoring, and reproducibility
 
 - Enforce safe asset/output paths and no-symlink external-parser staging.

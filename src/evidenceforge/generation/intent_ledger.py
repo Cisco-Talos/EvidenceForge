@@ -11,10 +11,12 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from threading import RLock
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from evidenceforge.events.contracts import SemanticOccurrenceKey
 from evidenceforge.utils.rng import stable_uuid
 
 if TYPE_CHECKING:
@@ -122,6 +124,143 @@ class AuthoredIntentLedger:
             missing_intent_ids=expected - planned,
             unexpected_intent_ids=planned - expected,
         )
+
+    def intent_at(
+        self,
+        section: IntentSection,
+        step_id: str,
+        event_index: int,
+    ) -> AuthoredIntent:
+        """Return the authored intent at one typed step-relative position."""
+
+        matches = tuple(
+            intent
+            for intent in self.intents
+            if intent.section == section and intent.step_id == step_id
+        )
+        try:
+            return matches[event_index]
+        except IndexError as exc:
+            raise KeyError(
+                f"No authored intent for {section.value} step {step_id!r} event {event_index}"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class IntentSourceObservation:
+    """One source-observation counter attached to an authored intent."""
+
+    source: str
+    status: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class IntentExecutionSnapshot:
+    """Immutable planned/occurrence/observation evidence for one authored intent."""
+
+    intent_id: str
+    planned: bool
+    action_ids: tuple[str, ...]
+    occurrence_ids: tuple[str, ...]
+    dispatched_event_ids: tuple[str, ...]
+    source_observations: tuple[IntentSourceObservation, ...]
+
+    @property
+    def source_status(self) -> dict[str, dict[str, int]]:
+        """Return source observations in the ground-truth manifest shape."""
+
+        result: dict[str, dict[str, int]] = {}
+        for observation in self.source_observations:
+            result.setdefault(observation.source, {})[observation.status] = observation.count
+        return result
+
+
+class IntentExecutionLedger:
+    """Thread-safe mutable recorder that freezes execution evidence for reconciliation."""
+
+    def __init__(self, authored: AuthoredIntentLedger):
+        self._authored = authored
+        self._planned: set[str] = set()
+        self._action_ids: dict[str, set[str]] = {}
+        self._occurrence_ids: dict[str, set[str]] = {}
+        self._dispatched_event_ids: dict[str, set[str]] = {}
+        self._source_counts: Counter[tuple[str, str, str]] = Counter()
+        self._lock = RLock()
+
+    def mark_planned(self, intent_id: str) -> None:
+        """Record that execution entered the planner path for one authored intent."""
+
+        with self._lock:
+            self._planned.add(intent_id)
+
+    def record_occurrence(
+        self,
+        intent_id: str,
+        event_id: str,
+        occurrence_key: SemanticOccurrenceKey | None,
+    ) -> None:
+        """Record one dispatched event and any stable semantic occurrence identity."""
+
+        with self._lock:
+            self._dispatched_event_ids.setdefault(intent_id, set()).add(event_id)
+            if occurrence_key is None:
+                return
+            self._action_ids.setdefault(intent_id, set()).add(occurrence_key.action_id)
+            self._occurrence_ids.setdefault(intent_id, set()).add(occurrence_key.occurrence_id)
+
+    def record_observation(
+        self,
+        intent_id: str,
+        source: str,
+        status: str,
+    ) -> None:
+        """Record one source decision for an authored intent."""
+
+        with self._lock:
+            self._source_counts[(intent_id, source, status)] += 1
+
+    def snapshot(self) -> tuple[IntentExecutionSnapshot, ...]:
+        """Freeze execution evidence in stable authored-intent order."""
+
+        with self._lock:
+            known_ids = [intent.intent_id for intent in self._authored.intents]
+            observed_ids = {intent_id for intent_id, _source, _status in self._source_counts}
+            execution_ids = (
+                self._planned
+                | set(self._action_ids)
+                | set(self._occurrence_ids)
+                | set(self._dispatched_event_ids)
+                | observed_ids
+            )
+            unexpected_ids = sorted(execution_ids - set(known_ids))
+            intent_ids = [*known_ids, *unexpected_ids]
+            snapshots = []
+            for intent_id in intent_ids:
+                observations = tuple(
+                    IntentSourceObservation(source=source, status=status, count=count)
+                    for (candidate_id, source, status), count in sorted(self._source_counts.items())
+                    if candidate_id == intent_id
+                )
+                snapshots.append(
+                    IntentExecutionSnapshot(
+                        intent_id=intent_id,
+                        planned=intent_id in self._planned,
+                        action_ids=tuple(sorted(self._action_ids.get(intent_id, set()))),
+                        occurrence_ids=tuple(sorted(self._occurrence_ids.get(intent_id, set()))),
+                        dispatched_event_ids=tuple(
+                            sorted(self._dispatched_event_ids.get(intent_id, set()))
+                        ),
+                        source_observations=observations,
+                    )
+                )
+            return tuple(snapshots)
+
+    def reconcile(self) -> IntentReconciliation:
+        """Compare the current planned set with the independent authored oracle."""
+
+        with self._lock:
+            return self._authored.reconcile(self._planned)
 
 
 def _semantic_spec_fingerprint(spec: BaseModel) -> str:

@@ -1,0 +1,47 @@
+[
+  {
+    "name": "invalid_source_schema",
+    "sub_score_key": "format_constraints",
+    "score": 0.0
+  },
+  {
+    "name": "cross_source_disagreement",
+    "sub_score_key": "field_agreement",
+    "score": 0.0
+  },
+  {
+    "name": "causal_inversion",
+    "sub_score_key": "causal_ordering",
+    "score": 0.0
+  },
+  {
+    "name": "missing_declared_evidence",
+    "sub_score_key": "event_presence",
+    "score": 0.0
+  },
+  {
+    "name": "missing_authored_intent",
+    "sub_score_key": "intent_reconciliation",
+    "score": 0.0
+  },
+  {
+    "name": "incorrect_indicators",
+    "sub_score_key": "indicator_accuracy",
+    "score": 0.0
+  },
+  {
+    "name": "broken_pivots",
+    "sub_score_key": "pivot_linkability",
+    "score": 0.0
+  },
+  {
+    "name": "temporal_inversion",
+    "sub_score_key": "temporal_integrity",
+    "score": 0.0
+  },
+  {
+    "name": "missing_storyline_source",
+    "sub_score_key": "storyline_trace_coverage",
+    "score": 0.0
+  }
+]
