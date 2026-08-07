@@ -38,7 +38,7 @@ from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
-from threading import Lock
+from threading import Lock, local
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -611,6 +611,8 @@ class WindowsEventEmitter(LogEmitter):
     def emit(self, event: SecurityEvent) -> None:
         """Dispatch to per-type render method."""
         self._current_storyline_origin = event.storyline_origin
+        host = self._get_host(event)
+        self._emission_context.host_type = host.system_type if host is not None else ""
         renderer = {
             "logon": self._render_logon,
             "logoff": self._render_logoff,
@@ -655,6 +657,7 @@ class WindowsEventEmitter(LogEmitter):
             renderer(event)
         finally:
             self._current_storyline_origin = False
+            self._emission_context.host_type = ""
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
@@ -1588,13 +1591,12 @@ class WindowsEventEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
         # Buffer raw event dicts instead of rendered strings
         self._event_dicts: list[dict[str, Any]] = []
-        # Per-computer RecordID counters persist across flushes
-        self._record_id_counters: dict[str, int] = {}
         self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._current_storyline_origin: bool = False
+        self._emission_context = local()
         self._spool_dir: Path | None = None
         self._owns_spool_dir: bool = False
         self._spool_path: Path | None = None
@@ -1667,6 +1669,9 @@ class WindowsEventEmitter(LogEmitter):
         _normalize_wfp_layer_fields(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
+        host_type = getattr(self._emission_context, "host_type", "")
+        if host_type:
+            event_data["_host_type"] = host_type
         if self.threaded:
             self._emit_threaded(event_data)
         else:
@@ -2346,14 +2351,17 @@ class WindowsEventEmitter(LogEmitter):
             computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             sequence_model = self._record_id_sequences.setdefault(
-                counter_key, WindowsRecordIdSequence("security", counter_key)
+                counter_key,
+                WindowsRecordIdSequence(
+                    "security",
+                    counter_key,
+                    str(event.get("_host_type") or ""),
+                ),
             )
             event["EventRecordID"] = sequence_model.next(
                 event.get("TimeCreated"),
                 coerce_windows_event_id(event.get("EventID")),
             )
-            self._record_id_counters[counter_key] = sequence_model.current
-
             normalized_time = event.get("TimeCreated")
             if isinstance(normalized_time, datetime):
                 current_time = ensure_utc(normalized_time)

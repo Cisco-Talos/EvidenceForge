@@ -173,8 +173,12 @@ event as a separate record on Linux.
 | 4776 | NTLM Credential Validation | Authentication | Field names: TargetUserName (not LogonAccount), Workstation (not SourceWorkstation). Status reflects validation success or failure. |
 | 5156 | WFP Connection Permitted | Network | Application path uses device format (`\device\harddiskvolume1\...`). Direction: %%14592=Inbound, %%14593=Outbound. |
 
+EventRecordIDs are assigned in one final chronological pass per host/channel. Because this format
+is a selected projection rather than a complete EVTX channel, gaps model omitted same-channel
+records. Hidden counts are derived from elapsed time and conservative host/channel background
+rates, with a peak-rate safety bound; Security Event 1102 starts a new channel epoch at record 1.
+
 **Known Limitations:**
-- EventRecordIDs use probabilistic gaps (15% chance +2-8, 3% chance +20-200) rather than correlating with unlogged events
 - Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses the System process (PID 4, now properly registered)
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
 - SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts

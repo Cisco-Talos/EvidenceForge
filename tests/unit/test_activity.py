@@ -11372,42 +11372,6 @@ class TestActivityGenerator:
 
         assert not mock_emitters["zeek_conn"].emit.called
 
-    def test_event_record_id_increments(self, activity_gen, test_user, test_system):
-        """EventRecordID should increment per-host for each Windows event."""
-        id1 = activity_gen._get_next_event_record_id("HOST-A")
-        id2 = activity_gen._get_next_event_record_id("HOST-A")
-        id3 = activity_gen._get_next_event_record_id("HOST-A")
-
-        assert id2 == id1 + 1
-        assert id3 == id2 + 1
-
-    def test_event_record_id_per_host_independent(self):
-        """EventRecordIDs should be independent per hostname."""
-        state_manager = StateManager()
-        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
-        activity_gen = ActivityGenerator(state_manager, emitters)
-
-        id_a1 = activity_gen._get_next_event_record_id("HOST-A")
-        id_b1 = activity_gen._get_next_event_record_id("HOST-B")
-        id_a2 = activity_gen._get_next_event_record_id("HOST-A")
-        id_b2 = activity_gen._get_next_event_record_id("HOST-B")
-
-        # Each host increments independently
-        assert id_a2 == id_a1 + 1
-        assert id_b2 == id_b1 + 1
-        # Different hosts may have different starting values
-        assert id_a1 != id_b1 or True  # Starting values are seeded from hostname
-
-    def test_event_record_id_starts_in_valid_range(self):
-        """EventRecordID should start at a random offset per host (1000-50000)."""
-        state_manager = StateManager()
-        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
-        activity_gen = ActivityGenerator(state_manager, emitters)
-
-        first_id = activity_gen._get_next_event_record_id("TEST-HOST")
-
-        assert 1001 <= first_id <= 50001
-
     def test_generate_connection_calculates_packet_counts(
         self, activity_gen, state_manager, mock_emitters
     ):

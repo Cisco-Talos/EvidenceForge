@@ -63,18 +63,18 @@
     {
       "format": "windows_event_security",
       "code": ["src/evidenceforge/config/formats/windows_event_security.yaml", "src/evidenceforge/generation/emitters/windows.py"],
-      "references": ["https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-schema", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4624", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4648", "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/advanced-audit-policy-configuration"],
+      "references": ["https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-schema", "https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-eventrecordid-systempropertiestype-element", "https://learn.microsoft.com/en-us/windows/win32/eventlog/event-log-records", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4624", "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4648", "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/advanced-audit-policy-configuration"],
       "assessment": "bounded_subset_with_4648_schema_defect",
       "confidence": "high",
-      "notes": "The XML event envelope and most supported Security payloads are source-shaped. Event 4648 is a current defect: the official manifest and public exemplar use IpAddress/IpPort, while the format definition and emitter use NetworkAddress/NetworkPort. The emitter is a selected-event renderer, not an EVTX writer, and fixed provider/task/version metadata creates a maintenance obligation as Windows variants evolve."
+      "notes": "The XML event envelope and most supported Security payloads are source-shaped. Event 4648 is a current defect: the official manifest and public exemplar use IpAddress/IpPort, while the format definition and emitter use NetworkAddress/NetworkPort. Microsoft defines EventRecordID as the record number assigned when an event is logged and documents sequential numbering; post-review remediation models omitted selected-channel rows from elapsed time instead of independent gaps. The emitter is a selected-event renderer, not an EVTX writer, and fixed provider/task/version metadata creates a maintenance obligation as Windows variants evolve."
     },
     {
       "format": "windows_event_sysmon",
       "code": ["src/evidenceforge/config/formats/windows_event_sysmon.yaml", "src/evidenceforge/generation/emitters/sysmon.py"],
-      "references": ["https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon", "https://learn.microsoft.com/en-us/windows/security/operating-system-security/sysmon/sysmon-events"],
+      "references": ["https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon", "https://learn.microsoft.com/en-us/windows/security/operating-system-security/sysmon/sysmon-events", "https://learn.microsoft.com/en-us/windows/win32/wes/eventschema-eventrecordid-systempropertiestype-element"],
       "assessment": "aligned_with_architectural_defects",
       "confidence": "high",
-      "notes": "Supported event shapes and UTC timestamps align with Sysmon. Shared destination hostname and one ProcessGuid path are recomputed in the emitter, violating cross-source ownership even when individual rows remain source-shaped."
+      "notes": "Supported event shapes and UTC timestamps align with Sysmon. Sysmon EventRecordIDs share the Windows channel-sequence contract and post-review elapsed-time gap model but use an independent per-host Sysmon channel epoch. Shared destination hostname and one ProcessGuid path are recomputed in the emitter, violating cross-source ownership even when individual rows remain source-shaped."
     },
     {
       "format": "zeek_conn",

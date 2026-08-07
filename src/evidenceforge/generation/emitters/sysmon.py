@@ -32,7 +32,7 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
-from threading import Lock
+from threading import Lock, local
 from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
@@ -782,32 +782,38 @@ class SysmonEventEmitter(LogEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         """Dispatch to per-type render method, applying Sysmon filters."""
-        if event.event_type in ("process_create", "system_process_create"):
-            self._render_sysmon_process_create(event)
-        elif event.event_type == "process_terminate":
-            self._render_sysmon_process_terminate(event)
-        elif event.event_type == "create_remote_thread":
-            self._render_sysmon_create_remote_thread(event)
-        elif event.event_type == "process_access":
-            self._render_sysmon_process_access(event)
-        elif event.event_type == "connection":
-            # Connection events can produce Event 3 (NetworkConnect) and/or Event 22 (DNSQuery)
-            is_application_layer_only = (
-                event.network is not None and event.network.application_layer_only
-            )
-            if not is_application_layer_only and self._passes_event3_filter(event):
-                self._render_sysmon_network_connect(event)
-            if event.dns and self._passes_event22_filter(event):
-                self._render_sysmon_dns_query(event)
-        elif event.event_type in ("file_create", "file_modify"):
-            if event.file and self._passes_event11_filter(event):
-                self._render_sysmon_file_create(event)
-        elif event.event_type == "registry_modify":
-            if event.registry:
-                self._render_sysmon_registry_event(event)
-        elif event.event_type == "image_load":
-            if event.image_load and self._passes_event7_filter(event):
-                self._render_sysmon_image_loaded(event)
+        self._emission_context.host_type = (
+            event.src_host.system_type if event.src_host is not None else ""
+        )
+        try:
+            if event.event_type in ("process_create", "system_process_create"):
+                self._render_sysmon_process_create(event)
+            elif event.event_type == "process_terminate":
+                self._render_sysmon_process_terminate(event)
+            elif event.event_type == "create_remote_thread":
+                self._render_sysmon_create_remote_thread(event)
+            elif event.event_type == "process_access":
+                self._render_sysmon_process_access(event)
+            elif event.event_type == "connection":
+                # Connection events can produce Event 3 (NetworkConnect) and/or Event 22 (DNSQuery)
+                is_application_layer_only = (
+                    event.network is not None and event.network.application_layer_only
+                )
+                if not is_application_layer_only and self._passes_event3_filter(event):
+                    self._render_sysmon_network_connect(event)
+                if event.dns and self._passes_event22_filter(event):
+                    self._render_sysmon_dns_query(event)
+            elif event.event_type in ("file_create", "file_modify"):
+                if event.file and self._passes_event11_filter(event):
+                    self._render_sysmon_file_create(event)
+            elif event.event_type == "registry_modify":
+                if event.registry:
+                    self._render_sysmon_registry_event(event)
+            elif event.event_type == "image_load":
+                if event.image_load and self._passes_event7_filter(event):
+                    self._render_sysmon_image_loaded(event)
+        finally:
+            self._emission_context.host_type = ""
 
     @staticmethod
     def _format_user(username: str, netbios_domain: str) -> str:
@@ -1786,8 +1792,8 @@ class SysmonEventEmitter(LogEmitter):
 
         super().__init__(format_def, output_path, buffer_size, threaded)
         self._event_dicts: list[dict[str, Any]] = []
-        self._record_id_counters: dict[str, int] = {}
         self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
+        self._emission_context = local()
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._final_process_guids: dict[tuple[str, int, str], str] = {}
@@ -1855,6 +1861,9 @@ class SysmonEventEmitter(LogEmitter):
             event_data[field] = normalize_windows_id_value(value)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
+        host_type = getattr(self._emission_context, "host_type", "")
+        if host_type:
+            event_data["_host_type"] = host_type
         if self.threaded:
             self._emit_threaded(event_data)
         else:
@@ -1922,14 +1931,17 @@ class SysmonEventEmitter(LogEmitter):
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             sequence_model = self._record_id_sequences.setdefault(
-                counter_key, WindowsRecordIdSequence("sysmon", counter_key)
+                counter_key,
+                WindowsRecordIdSequence(
+                    "sysmon",
+                    counter_key,
+                    str(event.get("_host_type") or ""),
+                ),
             )
             event["EventRecordID"] = sequence_model.next(
                 event.get("TimeCreated"),
                 coerce_windows_event_id(event.get("EventID")),
             )
-            self._record_id_counters[counter_key] = sequence_model.current
-
         self._sync_utc_time_fields()
         self._sync_process_guids_to_event1_times()
 

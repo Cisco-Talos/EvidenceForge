@@ -300,3 +300,82 @@ Classification: `sibling_defect`; intended fix classification: `family_level`.
   100, plausibility 95.63, causality 89.44, timing 95.17, cross-source field agreement is 100, and
   all 7,331 evaluated causal pairs are correctly ordered. The existing 40/100 pivot-linkability
   flag is retained for its scheduled evaluator/remediation batch.
+
+## Gate-repair loop 3 contract: Windows channel sequence realism
+
+Classification: `sibling_defect`; intended fix classification: `family_level`.
+
+- **Owning abstraction:** `WindowsRecordIdSequence` is the sole owner of source-native record
+  numbers, with one stateful sequence per rendered host/channel. Windows Security and Sysmon
+  emitters own final chronological assignment after their source timestamps are normalized;
+  XML, Splunk, and SOF-ELK® projections consume the same assigned value.
+- **Family invariant:** within one host/channel epoch, every record ID increases with rendered
+  time. Gaps represent omitted records from that same channel, so their count must arise from and
+  be bounded by elapsed time and host/channel throughput. Security Event 1102 starts a new
+  Security-channel epoch at record 1; no Sysmon event resets that sequence.
+- **Entry paths:** canonical Windows Security and Sysmon events, raw compatibility events, direct
+  emitter tests, spool/non-spool Security flushes, Sysmon final flush, and the three Windows output
+  target projections all converge on the two emitter flush loops. The engine and activity
+  generator retain unused private counters that never reach output and are duplicate legacy truth.
+- **Consumers:** Windows XML and Snare renderers, timestamp-precision derivation, external parsers,
+  evaluator parsing, chronological-order tests, rendered probes, and investigators who use record
+  gaps to infer missing/filtered channel activity.
+- **Layer rationale:** record IDs are explicitly permitted source-local derivation under the
+  approved projection contract. Canonical events must not own them, but independent per-event
+  heavy-tailed gap sampling is also invalid because it fabricates thousands of same-channel
+  writes without elapsed time. Remove the dead upstream counters and keep one final source owner.
+- **Sibling coverage:** Security versus Sysmon, domain-controller/server/workstation rate bands,
+  subsecond bursts, long quiet intervals, same-time normalization, log clears, malformed raw event
+  IDs, direct/XML/Splunk/SOF-ELK rendering, spool mode, deterministic repeats, and 30-day cost.
+- **Reference basis:** Microsoft defines EventRecordID as the record number assigned when an event
+  is logged and documents sequential numbering. No universal host throughput is specified, so
+  the model uses conservative per-host/channel background rates and an explicit peak-rate safety
+  bound rather than presenting a fitted production distribution.
+
+### Gate-repair loop 3 validation strategy
+
+- Replace independent heavy-tailed gaps with elapsed-time Poisson counts bounded by a conservative
+  host/channel peak. Unit tests must prove short-interval bounds, elapsed-time scaling, independent
+  channel epochs, log-clear behavior, deterministic output, and efficient long-duration sampling.
+- Extend the rendered probe to flag high-confidence millisecond-scale record-ID rate
+  contradictions, then measure exact recurrence against the frozen loop-2 output and the repair.
+- Update the source-reference ledger and Evidence Formats limitation, run focused emitter/parser
+  tests, Ruff, the complete non-slow suite, human/JSON evaluation, and identical-input repeat output
+  before the post-gate blind panel.
+
+### Gate-repair loop 3 implementation and rendered evidence
+
+- Replaced independent heavy-tailed per-row gaps with elapsed-time Poisson counts. Large expected
+  counts use a constant-cost normal approximation for long-duration generation, and every draw is
+  capped by a conservative host/channel peak rate.
+- Canonical `HostContext.system_type` now selects the domain-controller/server/workstation rate
+  class. Hostname inference remains only as a raw/direct-emitter compatibility fallback. Host type
+  travels as non-rendered emitter metadata and is thread-local during projection.
+- Removed the engine and activity generator's unused private record counters plus the emitters'
+  duplicate numeric mirrors. `WindowsRecordIdSequence` is now the only value owner; Security and
+  Sysmon retain independent stateful per-host channel epochs.
+- Extended the general probe with chronological epoch, Security-clear reset, and conservative
+  throughput checks. On the frozen loop-2 output it found 171 high-confidence rate contradictions
+  aggregated across 13 of 14 Windows channel files. The repaired output has zero. The worst
+  inferred hidden-record rate fell from 1,784,568.369 records/second to 49.461 records/second.
+- The repair preserves non-contiguous texture: for example, the DC Security stream has 11,688
+  omitted records across 4,994 visible rows and a maximum gap of 3,324 over a correspondingly long
+  interval; workstation channels retain smaller host-specific gaps instead of becoming contiguous.
+- Added the direct Microsoft EventRecordID and sequential-record references to the source ledger
+  and replaced the obsolete probabilistic-gap limitation in `EVIDENCE_FORMATS.md` with the actual
+  elapsed-time contract.
+- Focused sequence/emitter/threading tests pass with 138 passed. `eforge validate-config` passes
+  all 87 files with zero findings. Repository-wide Ruff check and format check pass.
+- The first complete suite run exposed only the repository's first-reference trademark guard for
+  the new worklog text (5,118 passed, 41 skipped, one failure); the worklog now uses `SOF-ELK®` at
+  first mention. The final complete non-slow suite passes with 5,121 passed and 41 skipped in
+  225.82 seconds. Targeted slow parallel-generation validation passes with 5 passed.
+- Integrated output:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop3/branch-enterprise`; identical-input repeat:
+  `/private/tmp/eforge-postbatch2-lifecycle-loop3/branch-enterprise-repeat`. `diff -qr` returned
+  zero, proving byte-identical repeatability. The general probe returns the same 29 later-batch
+  findings as loop 2 and no Windows record-ID, Linux PID/SSH, or Windows module findings.
+- Human-readable and JSON `eforge eval` both pass at 95.3524/100 over 48,839 records. Parseability,
+  cross-source field agreement, causal ordering, and rate plausibility are 100. The retained
+  40/100 pivot-linkability flag remains scheduled beyond this gate rather than reopening the
+  repaired family.

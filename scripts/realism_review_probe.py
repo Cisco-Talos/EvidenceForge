@@ -27,6 +27,8 @@ from evidenceforge.generation.activity.dll_load_profiles import (
 _ZEEK_UID_FILES = {"dns", "http", "ntp", "smtp", "ssl"}
 _TUPLE_FIELDS = ("id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p")
 _WINDOW_TOLERANCE_SECONDS = 1.0
+_WINDOWS_RECORD_ID_BURST_ALLOWANCE = 64
+_WINDOWS_RECORD_ID_CONSERVATIVE_PEAK_RATE = 2_000.0
 
 
 @dataclass(frozen=True)
@@ -742,6 +744,11 @@ def _parse_xml_records(path: Path, findings: list[Finding]) -> list[dict[str, An
     records: list[dict[str, Any]] = []
     for event in root.findall("e:Event", namespace):
         event_id = event.findtext("e:System/e:EventID", namespaces=namespace)
+        record_id_text = event.findtext("e:System/e:EventRecordID", namespaces=namespace)
+        try:
+            record_id = int(record_id_text) if record_id_text is not None else None
+        except ValueError:
+            record_id = None
         created = event.find("e:System/e:TimeCreated", namespace)
         timestamp_text = created.get("SystemTime") if created is not None else None
         timestamp: float | None = None
@@ -756,8 +763,118 @@ def _parse_xml_records(path: Path, findings: list[Finding]) -> list[dict[str, An
             item.get("Name", ""): item.text
             for item in event.findall("e:EventData/e:Data", namespace)
         }
-        records.append({"event_id": event_id, "timestamp": timestamp, "fields": fields})
+        records.append(
+            {
+                "event_id": event_id,
+                "record_id": record_id,
+                "timestamp": timestamp,
+                "fields": fields,
+            }
+        )
     return records
+
+
+def _check_windows_record_id_sequence(
+    path: Path,
+    records: list[dict[str, Any]],
+    findings: list[Finding],
+) -> None:
+    """Check channel-local sequence order and conservative throughput bounds."""
+    prior: dict[str, Any] | None = None
+    order_violations: list[dict[str, Any]] = []
+    rate_violations: list[dict[str, Any]] = []
+    reset_violations: list[dict[str, Any]] = []
+    security_channel = path.name == "windows_event_security.xml"
+
+    for record in records:
+        record_id = record.get("record_id")
+        timestamp = record.get("timestamp")
+        if not isinstance(record_id, int) or not isinstance(timestamp, int | float):
+            continue
+        if security_channel and record.get("event_id") == "1102":
+            if record_id != 1:
+                reset_violations.append(
+                    {
+                        "event_record_id": record_id,
+                        "timestamp": timestamp,
+                    }
+                )
+            prior = record
+            continue
+        if prior is None:
+            prior = record
+            continue
+
+        prior_id = prior.get("record_id")
+        prior_timestamp = prior.get("timestamp")
+        if not isinstance(prior_id, int) or not isinstance(prior_timestamp, int | float):
+            prior = record
+            continue
+        if record_id <= prior_id:
+            order_violations.append(
+                {
+                    "prior_event_record_id": prior_id,
+                    "event_record_id": record_id,
+                    "prior_timestamp": prior_timestamp,
+                    "timestamp": timestamp,
+                }
+            )
+            prior = record
+            continue
+
+        elapsed = max(0.0, float(timestamp) - float(prior_timestamp))
+        hidden_records = record_id - prior_id - 1
+        allowed_hidden = max(
+            _WINDOWS_RECORD_ID_BURST_ALLOWANCE,
+            math.ceil(elapsed * _WINDOWS_RECORD_ID_CONSERVATIVE_PEAK_RATE),
+        )
+        if hidden_records > allowed_hidden:
+            rate_violations.append(
+                {
+                    "prior_event_record_id": prior_id,
+                    "event_record_id": record_id,
+                    "prior_timestamp": prior_timestamp,
+                    "timestamp": timestamp,
+                    "elapsed_seconds": elapsed,
+                    "hidden_records": hidden_records,
+                    "allowed_hidden_records": allowed_hidden,
+                    "implied_hidden_records_per_second": (
+                        hidden_records / elapsed if elapsed > 0.0 else None
+                    ),
+                }
+            )
+        prior = record
+
+    if order_violations:
+        findings.append(
+            Finding(
+                check="windows_record_id_order",
+                severity="error",
+                path=str(path),
+                message="EventRecordID does not increase within one channel epoch",
+                evidence={"count": len(order_violations), "sample": order_violations[0]},
+            )
+        )
+    if reset_violations:
+        findings.append(
+            Finding(
+                check="windows_record_id_clear_epoch",
+                severity="error",
+                path=str(path),
+                message="Security Event 1102 does not begin a new record-ID epoch at 1",
+                evidence={"count": len(reset_violations), "sample": reset_violations[0]},
+            )
+        )
+    if rate_violations:
+        findings.append(
+            Finding(
+                check="windows_record_id_rate",
+                severity="error",
+                path=str(path),
+                message="EventRecordID gap implies implausible same-channel write throughput",
+                evidence={"count": len(rate_violations), "sample": rate_violations[0]},
+            )
+        )
 
 
 def _check_windows_contracts(
@@ -1076,6 +1193,7 @@ def main() -> int:
     for path in sorted(data_dir.rglob("*.xml")):
         records = _parse_xml_records(path, findings)
         xml_records[path] = records
+        _check_windows_record_id_sequence(path, records, findings)
         _check_windows_contracts(path, records, findings)
         timestamps = [record["timestamp"] for record in records if record["timestamp"] is not None]
         if timestamps != sorted(timestamps):

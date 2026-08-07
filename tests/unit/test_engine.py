@@ -1197,17 +1197,6 @@ class TestGenerationEngine:
         # Should not raise exception
         engine.generate()
 
-    def test_get_next_event_record_id_increments(self, minimal_scenario, tmp_path):
-        """Event record IDs should increment sequentially."""
-        engine = GenerationEngine(minimal_scenario, tmp_path)
-
-        id1 = engine._get_next_event_record_id()
-        id2 = engine._get_next_event_record_id()
-        id3 = engine._get_next_event_record_id()
-
-        assert id2 == id1 + 1
-        assert id3 == id2 + 1
-
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekPacketFilterEmitter")

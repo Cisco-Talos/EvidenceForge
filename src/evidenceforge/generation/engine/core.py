@@ -126,9 +126,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.authored_intent_ledger = AuthoredIntentLedger.from_scenario(scenario)
         self.network_resolver = ScenarioNetworkResolver.from_scenario(scenario)
 
-        # Event counter for record IDs
-        self.event_record_counter = 10000
-
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
 
@@ -319,7 +316,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
             emitters=self.emitters,
-            event_record_counter=self.event_record_counter,
             network_visibility=visibility_engine,
             sid_registry=sid_registry,
             identity_directory=identity_directory,
@@ -603,8 +599,3 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         write_output_target_marker(self.ground_truth_dir, self.output_target)
         logger.info(f"Ground truth documentation generated: {output_path}")
-
-    def _get_next_event_record_id(self) -> int:
-        """Get next EventRecordID for Windows events."""
-        self.event_record_counter += 1
-        return self.event_record_counter

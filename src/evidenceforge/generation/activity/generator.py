@@ -45,7 +45,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Lock
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
@@ -4096,14 +4095,12 @@ class ActivityGenerator:
     Attributes:
         state_manager: StateManager instance for state tracking
         emitters: Dict mapping format name to emitter instance
-        event_record_counter: Counter for Windows EventRecordID generation
     """
 
     def __init__(
         self,
         state_manager: StateManager,
         emitters: dict[str, WindowsEventEmitter | ZeekEmitter],
-        event_record_counter: int = 10000,
         network_visibility=None,
         sid_registry: dict[str, str] | None = None,
         identity_directory: IdentityDirectory | None = None,
@@ -4116,7 +4113,6 @@ class ActivityGenerator:
         Args:
             state_manager: StateManager instance
             emitters: Dict of emitters by format name
-            event_record_counter: Starting EventRecordID
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
             identity_directory: Optional logical/platform account directory
@@ -4134,8 +4130,6 @@ class ActivityGenerator:
                 emitters=emitters,
             )
         self.dispatcher = dispatcher
-        self._event_record_counters: dict[str, int] = {}
-        self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
         self.identity_directory = identity_directory
 
@@ -24493,22 +24487,6 @@ class ActivityGenerator:
                     shell=ShellContext(command=f"{level}|{msg}"),
                 )
                 self.dispatcher.dispatch(reporter_event)
-
-    def _get_next_event_record_id(self, hostname: str = "") -> int:
-        """Get next EventRecordID for a specific computer (thread-safe).
-
-        Real Windows event logs have per-computer sequential IDs. Each host
-        starts at a random offset (1000-50000) to simulate uptime history.
-
-        Args:
-            hostname: Computer hostname for per-machine counter
-        """
-        with self._counter_lock:
-            if hostname not in self._event_record_counters:
-                rng = random.Random(_stable_seed(f"erid_{hostname}"))
-                self._event_record_counters[hostname] = rng.randint(1000, 50000)
-            self._event_record_counters[hostname] += 1
-            return self._event_record_counters[hostname]
 
     # Well-known Windows SIDs (always available regardless of registry)
     _WELL_KNOWN_SIDS = {
