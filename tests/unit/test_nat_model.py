@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""TDD tests for NatRule model, NatContext dataclass, and SecurityEvent.nat field.
+"""TDD tests for NatRule model, NatContext dataclass, and OccurrenceBuilder.nat field.
 
 These tests define the planned API for the NAT feature. All tests will fail
 until the implementation is added.
@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import NatContext
 from evidenceforge.models.scenario import NatRule
 
@@ -94,10 +94,10 @@ class TestNatContext:
         assert ctx.mapped_dst_port == 443
 
 
-class TestSecurityEventNatField:
-    """Tests for the nat field on SecurityEvent."""
+class TestOccurrenceNatField:
+    """Tests for the nat field on OccurrenceBuilder."""
 
     def test_security_event_nat_field_default_none(self):
-        """SecurityEvent.nat should default to None."""
-        event = SecurityEvent(timestamp=T0, event_type="connection")
+        """OccurrenceBuilder.nat should default to None."""
+        event = OccurrenceBuilder(timestamp=T0, event_type="connection")
         assert event.nat is None

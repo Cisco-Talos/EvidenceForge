@@ -12,8 +12,7 @@ from urllib.parse import unquote
 import pytest
 from cryptography.x509.ocsp import load_der_ocsp_request
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.generation.actions.ocsp_transaction import (
     OcspTransactionActionBundle,
     OcspTransactionPlanner,
@@ -21,6 +20,7 @@ from evidenceforge.generation.actions.ocsp_transaction import (
 )
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from tests.network_factories import network_plan
 
 _EVENT_TIME = datetime(2024, 10, 14, 12, 0, tzinfo=UTC)
 _ISSUER_CONFIG = {
@@ -49,11 +49,11 @@ def _presentation(
     )
 
 
-def _tls_event(presentation, *, timestamp: datetime = _EVENT_TIME) -> SecurityEvent:
-    return SecurityEvent(
+def _tls_event(presentation, *, timestamp: datetime = _EVENT_TIME) -> OccurrenceBuilder:
+    return OccurrenceBuilder(
         timestamp=timestamp,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.10.25",
             src_port=51000,
             dst_ip="93.184.216.34",
@@ -191,8 +191,35 @@ def test_ocsp_action_bundle_builds_all_contexts_from_one_plan() -> None:
 
     assert executor.kwargs is not None
     assert executor.kwargs["http"].uri == plan.request_path
-    assert executor.kwargs["http"].resp_fuids == [plan.file_id]
+    assert executor.kwargs["http"].resp_fuids == (plan.file_id,)
     assert executor.kwargs["file_transfer"].fuid == plan.file_id
+    assert executor.kwargs["file_transfer"].duration == plan.response_file_duration
     assert executor.kwargs["ocsp"].serial_number == plan.certificate.serial_number
     assert executor.kwargs["ocsp_transaction"] is plan
     assert executor.kwargs.get("proxy_bypass") is None
+
+
+def test_ocsp_response_file_duration_varies_with_planned_transaction() -> None:
+    """OCSP response files should not collapse to one fixed 20 ms fingerprint."""
+    registry = CryptographicMaterialRegistry()
+    durations: list[float] = []
+    for index in range(16):
+        backend = f"api-{index}.example.com"
+        tls_planner, presentation = _presentation(registry, backend=backend)
+        issuer = tls_planner.authority_material(presentation.leaf.issuer_name)
+        plan = OcspTransactionPlanner(registry, tls_planner).plan(
+            OcspTransactionRequest(
+                _tls_event(presentation),
+                presentation.leaf,
+                issuer,
+                backend,
+            )
+        )
+        durations.append(plan.response_file_duration)
+        assert (
+            plan.response_file_duration <= (plan.responded_at - plan.requested_at).total_seconds()
+        )
+
+    assert len({round(duration, 6) for duration in durations}) >= 10
+    assert any(duration < 0.02 for duration in durations)
+    assert any(duration > 0.02 for duration in durations)

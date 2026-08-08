@@ -66,6 +66,10 @@ class ConfigurationError(EvidenceForgeError):
     """
 
 
+class PathSafetyError(EvidenceForgeError):
+    """An untrusted filesystem reference violated the declared path boundary."""
+
+
 class ScenarioIncludeError(ConfigurationError):
     """Scenario include expansion failed.
 
@@ -87,6 +91,18 @@ class GenerationError(EvidenceForgeError):
 
     Base class for errors that occur during the log generation process.
     """
+
+
+class EventContractError(GenerationError):
+    """A canonical occurrence violated its registered dispatch contract."""
+
+
+class WorkloadLimitError(GenerationError):
+    """Projected generation or evaluation work exceeds the supported envelope."""
+
+
+class EvaluationLimitError(EvidenceForgeError):
+    """An evaluation corpus or record exceeds the supported capacity envelope."""
 
 
 class StateError(GenerationError):

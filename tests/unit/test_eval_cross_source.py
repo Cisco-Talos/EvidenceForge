@@ -177,8 +177,8 @@ class TestSourceCorrectness:
 
 
 class TestFieldAgreement:
-    def test_matching_timestamps(self):
-        """Records from different formats within 30s should agree."""
+    def test_unjoinable_records_are_explicitly_skipped(self):
+        """Timestamp proximity alone is not a configured cross-source pivot."""
         records = {
             "windows_event_security": [
                 _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
@@ -189,10 +189,11 @@ class TestFieldAgreement:
         }
         scorer = PlausibilityScorer()
         result = scorer._score_field_agreement(records)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
-    def test_drifted_timestamps(self):
-        """Records from different formats > 30s apart should disagree."""
+    def test_unjoinable_same_bucket_does_not_receive_vacuous_credit(self):
+        """Sharing a coarse time bucket does not prove field agreement."""
         records = {
             "windows_event_security": [
                 _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
@@ -202,9 +203,10 @@ class TestFieldAgreement:
             ],
         }
         scorer = PlausibilityScorer()
-        # Same bucket → agree
+        # Same bucket alone is not an agreement denominator.
         r1 = scorer._score_field_agreement(records)
-        assert r1.score == 100.0
+        assert r1.score is None
+        assert r1.skipped
 
 
 class TestBaselineAggregate:
@@ -259,8 +261,8 @@ class TestEndToEnd:
         assert result.number == 3
         assert result.name == "Causality"
         assert result.weight == 0.25
-        assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert result.score is None
+        assert len(result.sub_scores) == 7
 
     def test_with_retail_scenario(self):
         """Run on real fixtures — should produce valid scores."""
@@ -286,7 +288,7 @@ class TestEndToEnd:
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
         assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert len(result.sub_scores) == 7
 
 
 def _make_scenario_with_domain(domain="example.com"):

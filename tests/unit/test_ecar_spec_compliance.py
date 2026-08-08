@@ -30,6 +30,7 @@ Verifies that the EcarEmitter produces records matching the eCAR spec:
 """
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -39,19 +40,23 @@ from evidenceforge.events.authentication import (
     RemoteAuthenticationPlan,
     RemoteAuthenticationTransportPlan,
 )
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
-    EdrContext,
     FileContext,
     HostContext,
     ImageLoadContext,
-    NetworkContext,
     ProcessContext,
     RegistryContext,
     RemoteThreadContext,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, ThreadIdentity
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+from evidenceforge.events.identity import (
+    EntityIdentity,
+    EventIdentityPlan,
+    ProcessIdentity,
+    ThreadIdentity,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.formats.loader import load_format
@@ -60,6 +65,18 @@ from evidenceforge.generation.activity.timing_profiles import sample_timing_delt
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from tests.network_factories import network_plan
+
+
+def _identity_plan_from_ids(
+    object_id: str = "",
+    actor_id: str = "",
+) -> EventIdentityPlan:
+    """Build explicit immutable IDs for direct source-projector tests."""
+
+    subject = EntityIdentity(object_id=object_id, kind="service") if object_id else None
+    actor = EntityIdentity(object_id=actor_id, kind="service") if actor_id else None
+    return EventIdentityPlan(subject=subject, actor=actor)
 
 
 @pytest.fixture
@@ -132,7 +149,7 @@ def _canonical_process_identity(
 def test_machine_account_logon_projects_as_user_session_login(emitter, ts):
     """Canonical machine-account logons must not leave endpoint logout orphans."""
     emitter.emit_event = Mock()
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=ts,
         event_type="machine_logon",
         dst_host=HostContext(
@@ -150,7 +167,7 @@ def test_machine_account_logon_projects_as_user_session_login(emitter, ts):
             source_ip="10.0.1.10",
             source_port=49355,
         ),
-        edr=EdrContext(object_id="machine-session-object"),
+        identity_plan=_identity_plan_from_ids(object_id="machine-session-object"),
     )
 
     assert emitter.can_handle(event)
@@ -195,7 +212,7 @@ def test_remote_auth_login_and_flow_render_exact_tuple_without_internal_id(emitt
         os_category="windows",
         system_type="server",
     )
-    network = NetworkContext(
+    network = network_plan(
         src_ip="10.0.1.10",
         src_port=55222,
         dst_ip=host.ip,
@@ -208,7 +225,7 @@ def test_remote_auth_login_and_flow_render_exact_tuple_without_internal_id(emitt
         conn_state="SF",
         history="ShADadFf",
     )
-    network.finalize_transaction("network-remote-auth-test")
+    network = replace(network, stable_id="network-remote-auth-test")
     transport = RemoteAuthenticationTransportPlan(
         role="target_service",
         transaction_id="network-remote-auth-test",
@@ -235,13 +252,13 @@ def test_remote_auth_login_and_flow_render_exact_tuple_without_internal_id(emitt
         session_object_id="session-test",
         logon_id="0x123",
     )
-    flow_event = SecurityEvent(
+    flow_event = OccurrenceBuilder(
         timestamp=ts,
         event_type="connection",
         dst_host=host,
         network=network,
     )
-    login_event = SecurityEvent(
+    login_event = OccurrenceBuilder(
         timestamp=remote_auth.canonical_auth_time,
         event_type="logon",
         dst_host=host,
@@ -252,7 +269,7 @@ def test_remote_auth_login_and_flow_render_exact_tuple_without_internal_id(emitt
             source_ip=network.src_ip,
             source_port=network.src_port,
         ),
-        edr=EdrContext(object_id="session-test"),
+        identity_plan=_identity_plan_from_ids(object_id="session-test"),
         remote_auth=remote_auth,
     )
 
@@ -278,10 +295,14 @@ def test_distinct_canonical_occurrences_cannot_reuse_ecar_record_ids(emitter, ts
         system_type="workstation",
     )
     events = [
-        SecurityEvent(
+        OccurrenceBuilder(
             timestamp=ts,
             event_type="failed_logon",
-            event_id=event_id,
+            occurrence_key=SemanticOccurrenceKey(
+                action_id="failed-logon-action",
+                role=OccurrenceRole.PRIMARY,
+                instance_key=event_id,
+            ),
             dst_host=host,
             auth=AuthContext(
                 username="alice",
@@ -302,6 +323,10 @@ def test_distinct_canonical_occurrences_cannot_reuse_ecar_record_ids(emitter, ts
     ]
     assert records[0]["id"] != records[1]["id"]
     assert records[0]["objectID"] != records[1]["objectID"]
+    for event, record in zip(events, records, strict=True):
+        assert "occurrence_id" not in record
+        assert "_occurrence_id" not in record
+        assert event.occurrence_id not in record.values()
 
 
 class TestPidEmission:
@@ -331,7 +356,7 @@ class TestPidEmission:
 
     def test_unlock_reauth_renders_login_with_logon_type(self, emitter, ts):
         """Type 7 unlock reauth should use session lifecycle action vocabulary."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="logon",
             dst_host=HostContext(
@@ -342,7 +367,7 @@ class TestPidEmission:
                 system_type="workstation",
             ),
             auth=AuthContext(username="alice", logon_id="0x123", logon_type=7),
-            edr=EdrContext(object_id="session-1"),
+            identity_plan=_identity_plan_from_ids(object_id="session-1"),
         )
 
         emitter.emit_event = Mock()
@@ -359,7 +384,7 @@ class TestPidEmission:
 
     def test_linux_ssh_login_renders_session_type_not_windows_logon_type(self, emitter, ts):
         """Linux eCAR sessions should use OS-native session semantics."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="ssh_session",
             dst_host=HostContext(
@@ -376,7 +401,7 @@ class TestPidEmission:
                 source_ip="10.0.0.10",
                 source_port=55222,
             ),
-            edr=EdrContext(object_id="session-1"),
+            identity_plan=_identity_plan_from_ids(object_id="session-1"),
         )
 
         emitter.emit_event = Mock()
@@ -398,7 +423,7 @@ class TestPidEmission:
 
     def test_windows_logout_preserves_session_properties(self, emitter, ts):
         """Logout rows should retain source-native session correlation fields."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="logoff",
             dst_host=HostContext(
@@ -417,7 +442,7 @@ class TestPidEmission:
                 source_ip="10.0.0.20",
                 source_port=54433,
             ),
-            edr=EdrContext(object_id="session-1"),
+            identity_plan=_identity_plan_from_ids(object_id="session-1"),
         )
 
         emitter.emit_event = Mock()
@@ -441,7 +466,7 @@ class TestPidEmission:
 
     def test_machine_logout_preserves_logon_id_without_remote_source(self, emitter, ts):
         """Machine-account logouts should not render empty eCAR properties."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="logoff",
             dst_host=HostContext(
@@ -452,7 +477,7 @@ class TestPidEmission:
                 system_type="domain_controller",
             ),
             auth=AuthContext(username="WS-01$", logon_id="0x456", logon_type=3),
-            edr=EdrContext(object_id="session-2"),
+            identity_plan=_identity_plan_from_ids(object_id="session-2"),
         )
 
         emitter.emit_event = Mock()
@@ -466,7 +491,7 @@ class TestPidEmission:
 
     def test_linux_logout_without_logon_id_preserves_logind_session_id(self, emitter, ts):
         """Unmanaged SSH logouts should still carry a source-native session identifier."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="logoff",
             dst_host=HostContext(
@@ -483,7 +508,7 @@ class TestPidEmission:
                 source_ip="10.0.0.10",
                 source_port=55222,
             ),
-            edr=EdrContext(object_id="session-3"),
+            identity_plan=_identity_plan_from_ids(object_id="session-3"),
         )
 
         emitter.emit_event = Mock()
@@ -550,7 +575,7 @@ class TestFileEventActions:
 
         for event_type in ("file_read", "file_modify"):
             emitter._render_file_event(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=ts,
                     event_type=event_type,
                     src_host=host,
@@ -587,7 +612,7 @@ class TestFileEventActions:
         emitter.emit_event = Mock()
 
         emitter._render_process_create(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="process_create",
                 src_host=host,
@@ -596,7 +621,7 @@ class TestFileEventActions:
             )
         )
         emitter._render_file_event(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="file_create",
                 src_host=host,
@@ -630,7 +655,7 @@ class TestFileEventActions:
         emitter.emit_event = Mock()
 
         emitter._render_file_event(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="file_read",
                 src_host=host,
@@ -676,7 +701,7 @@ class TestModuleEventActorIdentity:
         emitter.emit_event = Mock()
 
         emitter._render_module_event(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="image_load",
                 src_host=host,
@@ -714,7 +739,7 @@ class TestModuleEventActorIdentity:
         emitter.emit_event = Mock()
 
         emitter._render_registry_event(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="registry_modify",
                 src_host=host,
@@ -747,7 +772,7 @@ class TestRemoteThreadRendering:
             fqdn="ws-01.example.com",
         )
         emitter.emit_event = Mock()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="create_remote_thread",
             src_host=host,
@@ -774,7 +799,9 @@ class TestRemoteThreadRendering:
                 user_stack_base=0x000000C0001000,
                 user_stack_limit=0x000000BFF01000,
             ),
-            edr=EdrContext(object_id="thread-object-id", actor_id="source-process-id"),
+            identity_plan=_identity_plan_from_ids(
+                object_id="thread-object-id", actor_id="source-process-id"
+            ),
         )
 
         emitter._render_create_remote_thread(event)
@@ -804,19 +831,19 @@ class TestSessionOutcomeRendering:
         )
         emitter.emit_event = Mock()
         events = [
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="logon",
                 dst_host=host,
                 auth=AuthContext(username="alice", source_ip="10.0.0.21", logon_id="0x1001"),
-                edr=EdrContext(object_id="session-alice"),
+                identity_plan=_identity_plan_from_ids(object_id="session-alice"),
             ),
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="logon",
                 dst_host=host,
                 auth=AuthContext(username="bob", source_ip="10.0.0.22", logon_id="0x1002"),
-                edr=EdrContext(object_id="session-bob"),
+                identity_plan=_identity_plan_from_ids(object_id="session-bob"),
             ),
         ]
 
@@ -843,17 +870,17 @@ class TestSessionOutcomeRendering:
         )
         emitter.emit_event = Mock()
         emitter._render_logon(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="logon",
                 dst_host=host,
                 auth=AuthContext(username="alice", logon_id="0x1001"),
-                edr=EdrContext(object_id="session-alice"),
+                identity_plan=_identity_plan_from_ids(object_id="session-alice"),
             )
         )
         logon_row = emitter.emit_event.call_args.args[0]
         emitter._render_process_create(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="process_create",
                 src_host=host,
@@ -882,11 +909,11 @@ class TestSessionOutcomeRendering:
             fqdn="linux-01.example.com",
         )
         emitter.emit_event = Mock()
-        flow_event = SecurityEvent(
+        flow_event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=host,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=55222,
                 dst_ip="10.0.0.20",
@@ -897,9 +924,9 @@ class TestSessionOutcomeRendering:
                 conn_state="SF",
                 history="ShADadFf",
             ),
-            edr=EdrContext(object_id="flow-1"),
+            identity_plan=_identity_plan_from_ids(object_id="flow-1"),
         )
-        session_event = SecurityEvent(
+        session_event = OccurrenceBuilder(
             timestamp=ts + timedelta(seconds=2),
             event_type="ssh_session",
             dst_host=host,
@@ -910,7 +937,7 @@ class TestSessionOutcomeRendering:
                 logon_id="0x123",
                 logon_type=10,
             ),
-            edr=EdrContext(object_id="session-1"),
+            identity_plan=_identity_plan_from_ids(object_id="session-1"),
         )
 
         emitter._render_connection(flow_event)
@@ -931,11 +958,11 @@ class TestSessionOutcomeRendering:
             fqdn="win-01.example.com",
         )
         emitter.emit_event = Mock()
-        flow_event = SecurityEvent(
+        flow_event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=host,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=55222,
                 dst_ip="10.0.0.20",
@@ -946,9 +973,9 @@ class TestSessionOutcomeRendering:
                 conn_state="SF",
                 history="ShADadFf",
             ),
-            edr=EdrContext(object_id="flow-1"),
+            identity_plan=_identity_plan_from_ids(object_id="flow-1"),
         )
-        session_event = SecurityEvent(
+        session_event = OccurrenceBuilder(
             timestamp=ts + timedelta(seconds=2),
             event_type="logon",
             dst_host=host,
@@ -959,7 +986,7 @@ class TestSessionOutcomeRendering:
                 logon_id="0x123",
                 logon_type=10,
             ),
-            edr=EdrContext(object_id="session-1"),
+            identity_plan=_identity_plan_from_ids(object_id="session-1"),
         )
 
         emitter._render_connection(flow_event)
@@ -980,7 +1007,7 @@ class TestSessionOutcomeRendering:
             fqdn="ws-01.example.com",
         )
         emitter.emit_event = Mock()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="failed_logon",
             dst_host=host,
@@ -1022,7 +1049,7 @@ class TestSessionOutcomeRendering:
             fqdn="ws-01.example.com",
         )
         emitter.emit_event = Mock()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="failed_logon",
             dst_host=host,
@@ -1050,7 +1077,7 @@ class TestSessionOutcomeRendering:
             fqdn="lnx-01.example.com",
         )
         emitter.emit_event = Mock()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="failed_logon",
             dst_host=host,
@@ -1554,7 +1581,7 @@ class TestChronologicalOutput:
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1565,7 +1592,7 @@ class TestChronologicalOutput:
                 system_type="workstation",
                 fqdn="ws01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="93.184.216.34",
@@ -1630,8 +1657,8 @@ class TestChronologicalOutput:
             src_port: int,
             dst_port: int,
             uid: str,
-        ) -> SecurityEvent:
-            network = NetworkContext(
+        ) -> OccurrenceBuilder:
+            network = network_plan(
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
@@ -1650,8 +1677,8 @@ class TestChronologicalOutput:
                 source_visible_start_time=timestamp,
                 source_visible_close_time=timestamp + timedelta(milliseconds=500),
             )
-            network.finalize_transaction(f"network-{uid}")
-            return SecurityEvent(
+            network = replace(network, stable_id=f"network-{uid}")
+            return OccurrenceBuilder(
                 timestamp=timestamp,
                 event_type="connection",
                 src_host=src_host,
@@ -1713,7 +1740,7 @@ class TestChronologicalOutput:
             username="alice",
             start_time=ts,
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1725,16 +1752,17 @@ class TestChronologicalOutput:
                 fqdn="ws01.example.org",
             ),
             process=process,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="93.184.216.34",
                 dst_port=443,
                 protocol="tcp",
                 duration=0.05,
+                source_visible_start_time=ts,
                 initiating_pid=1234,
             ),
-            edr=EdrContext(object_id="flow-1", actor_id="process-1"),
+            identity_plan=_identity_plan_from_ids(object_id="flow-1", actor_id="process-1"),
         )
 
         emitter._render_connection(event)
@@ -1753,7 +1781,7 @@ class TestChronologicalOutput:
         """Collection delay must not shift an endpoint FLOW beyond canonical close."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts + timedelta(milliseconds=700),
             event_type="connection",
             src_host=HostContext(
@@ -1763,7 +1791,7 @@ class TestChronologicalOutput:
                 os_category="windows",
                 system_type="workstation",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.53",
@@ -1790,7 +1818,7 @@ class TestChronologicalOutput:
         """Failed no-duration FLOW rows should not share Zeek's exact packet timestamp."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1801,12 +1829,13 @@ class TestChronologicalOutput:
                 system_type="workstation",
                 fqdn="ws01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
                 dst_port=135,
                 protocol="tcp",
+                source_visible_start_time=ts,
                 conn_state="S0",
                 initiating_pid=-1,
             ),
@@ -1825,7 +1854,7 @@ class TestChronologicalOutput:
         """Paired endpoint FLOW rows should carry host-local observation texture."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1844,12 +1873,13 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="srv01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
                 dst_port=445,
                 protocol="tcp",
+                source_visible_start_time=ts,
                 conn_state="S0",
                 initiating_pid=-1,
             ),
@@ -1874,7 +1904,7 @@ class TestChronologicalOutput:
         """Unbounded successful paired FLOW rows should not cluster on one millisecond."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1893,7 +1923,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="dc01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=57124,
                 dst_ip="10.0.0.20",
@@ -1923,7 +1953,7 @@ class TestChronologicalOutput:
             username="alice",
             start_time=ts,
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1935,7 +1965,7 @@ class TestChronologicalOutput:
                 fqdn="ws01.example.org",
             ),
             process=process,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -1943,7 +1973,7 @@ class TestChronologicalOutput:
                 protocol="tcp",
                 initiating_pid=1234,
             ),
-            edr=EdrContext(object_id="flow-1", actor_id="process-1"),
+            identity_plan=_identity_plan_from_ids(object_id="flow-1", actor_id="process-1"),
         )
 
         emitter._render_connection(event)
@@ -1970,7 +2000,7 @@ class TestChronologicalOutput:
             integrity_level="System",
         )
         emitter._state_manager = state_manager
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -1989,7 +2019,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="linux01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2040,7 +2070,7 @@ class TestChronologicalOutput:
         )
         emitter._state_manager = state_manager
         emitter._system_pids = {"linux01": {"sshd": listener_pid}}
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2059,13 +2089,14 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="linux01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
                 dst_port=22,
                 protocol="tcp",
                 duration=0.35,
+                source_visible_start_time=ts,
                 conn_state="SF",
                 history="ShADadfF",
                 initiating_pid=-1,
@@ -2102,7 +2133,7 @@ class TestChronologicalOutput:
             integrity_level="System",
         )
         emitter._state_manager = state_manager
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2121,7 +2152,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="win01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2159,7 +2190,7 @@ class TestChronologicalOutput:
             username="alice",
             start_time=ts + timedelta(seconds=2),
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2179,7 +2210,7 @@ class TestChronologicalOutput:
                 fqdn="linux01.example.org",
             ),
             process=process,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2203,7 +2234,7 @@ class TestChronologicalOutput:
         """User-owned FLOW records render the canonical principal group."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2222,7 +2253,7 @@ class TestChronologicalOutput:
                 username="alice",
                 start_time=ts,
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="93.184.216.34",
@@ -2255,7 +2286,7 @@ class TestChronologicalOutput:
         """A known canonical FLOW actor renders as one complete identity group."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2274,7 +2305,7 @@ class TestChronologicalOutput:
                 username="SYSTEM",
                 start_time=ts,
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49153,
                 dst_ip="10.0.0.20",
@@ -2318,7 +2349,7 @@ class TestChronologicalOutput:
             principal="www-data",
             os_category="linux",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2337,13 +2368,14 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="server01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=50123,
                 dst_ip="10.0.0.20",
                 dst_port=443,
                 protocol="tcp",
                 duration=1.5,
+                source_visible_start_time=ts,
                 conn_state="SF",
                 history="ShADadfF",
                 initiating_pid=source.pid,
@@ -2366,7 +2398,7 @@ class TestChronologicalOutput:
         """Actor-linked user FLOW rows should not drop a known user principal."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2385,17 +2417,13 @@ class TestChronologicalOutput:
                 username="marcus.chen",
                 start_time=ts,
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.10.1.24",
                 src_port=50124,
                 dst_ip="142.250.72.14",
                 dst_port=443,
                 protocol="tcp",
                 initiating_pid=6124,
-            ),
-            edr=EdrContext(
-                object_id="11111111-2222-3333-4444-555555555555",
-                actor_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             ),
             identity_plan=EventIdentityPlan(
                 actor=_canonical_process_identity(
@@ -2426,7 +2454,7 @@ class TestChronologicalOutput:
             image="/usr/sbin/apache2",
             principal="www-data",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=HostContext(
@@ -2437,7 +2465,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="web-ext-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="198.51.100.7",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2446,7 +2474,6 @@ class TestChronologicalOutput:
                 initiating_pid=-1,
                 responding_pid=listener.pid,
             ),
-            edr=EdrContext(object_id="flow-1", actor_id=""),
             identity_plan=EventIdentityPlan(target=listener),
         )
 
@@ -2489,7 +2516,7 @@ class TestChronologicalOutput:
             principal="SYSTEM",
             os_category="windows",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=HostContext(
@@ -2500,7 +2527,7 @@ class TestChronologicalOutput:
                 system_type="domain_controller",
                 fqdn="dc-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.7",
                 src_port=49152,
                 dst_ip="10.0.3.10",
@@ -2511,7 +2538,6 @@ class TestChronologicalOutput:
                 initiating_pid=-1,
                 responding_pid=expected_pid,
             ),
-            edr=EdrContext(object_id="flow-1", actor_id=""),
             identity_plan=EventIdentityPlan(target=listener),
         )
 
@@ -2538,7 +2564,7 @@ class TestChronologicalOutput:
         )
         emitter._state_manager = state
         emitter._system_pids = {"DC-01": {"dns": dns_pid}}
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=HostContext(
@@ -2549,19 +2575,19 @@ class TestChronologicalOutput:
                 system_type="domain_controller",
                 fqdn="dc-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.7",
                 src_port=49152,
                 dst_ip="10.0.3.10",
                 dst_port=53,
                 protocol="udp",
                 duration=0.0002,
+                source_visible_start_time=ts,
                 conn_state="SF",
                 history="Dd",
                 initiating_pid=-1,
                 responding_pid=dns_pid,
             ),
-            edr=EdrContext(object_id="flow-1", actor_id=""),
             identity_plan=EventIdentityPlan(target=state.get_process_identity("DC-01", dns_pid)),
         )
 
@@ -2588,7 +2614,7 @@ class TestChronologicalOutput:
         )
         emitter._state_manager = state
         emitter._system_pids = {"APP-INT-01": {"apache2": 36148}}
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=HostContext(
@@ -2599,7 +2625,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="app-int-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.10.1.31",
                 src_port=50049,
                 dst_ip="10.10.2.30",
@@ -2607,7 +2633,6 @@ class TestChronologicalOutput:
                 protocol="tcp",
                 responding_pid=listener_pid,
             ),
-            edr=EdrContext(object_id="flow-1", actor_id=""),
             identity_plan=EventIdentityPlan(
                 target=state.get_process_identity("APP-INT-01", listener_pid)
             ),
@@ -2635,7 +2660,7 @@ class TestChronologicalOutput:
         )
         emitter._state_manager = state
         emitter._system_pids = {"WEB-EXT-01": {"apache2": pid}}
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=HostContext(
@@ -2646,7 +2671,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="web-ext-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="198.51.100.7",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2670,7 +2695,7 @@ class TestChronologicalOutput:
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         emitter._system_pids = {"WEB-EXT-01": {"apache2": 24118}}
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             dst_host=HostContext(
@@ -2681,7 +2706,7 @@ class TestChronologicalOutput:
                 system_type="server",
                 fqdn="web-ext-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="198.51.100.7",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2707,7 +2732,7 @@ class TestChronologicalOutput:
         """Outbound endpoint FLOW rows should expose failed transport outcomes."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -2718,7 +2743,7 @@ class TestChronologicalOutput:
                 system_type="domain_controller",
                 fqdn="dc-01.example.org",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=62552,
                 dst_ip="10.0.0.22",
@@ -2763,7 +2788,7 @@ class TestChronologicalOutput:
             system_type="workstation",
             fqdn="ws-01.example.org",
         )
-        process_event = SecurityEvent(
+        process_event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_create",
             src_host=host,
@@ -2776,11 +2801,11 @@ class TestChronologicalOutput:
                 start_time=ts,
             ),
         )
-        flow_event = SecurityEvent(
+        flow_event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=host,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="10.0.0.20",
@@ -2789,7 +2814,9 @@ class TestChronologicalOutput:
                 conn_state="SF",
                 initiating_pid=pid,
             ),
-            edr=EdrContext(actor_id=state.get_process_object_id("WS-01", pid)),
+            identity_plan=EventIdentityPlan(
+                actor=state.get_process_identity("WS-01", pid),
+            ),
         )
 
         emitter._render_process_create(process_event)
@@ -3144,7 +3171,7 @@ class TestChronologicalOutput:
         """Dependent FLOW rows omit TID unless the identity plan selects a thread."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -3163,7 +3190,7 @@ class TestChronologicalOutput:
                 username="root",
                 start_time=ts,
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=49152,
                 dst_ip="93.184.216.34",
@@ -3171,7 +3198,6 @@ class TestChronologicalOutput:
                 protocol="tcp",
                 initiating_pid=3200,
             ),
-            edr=EdrContext(tid=3207),
             identity_plan=EventIdentityPlan(
                 actor=_canonical_process_identity(
                     "linux-01",
@@ -3235,7 +3261,7 @@ class TestTidEmission:
             os_category="windows",
         )
         emitter._render_process_create(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="process_create",
                 src_host=host,
@@ -3274,7 +3300,7 @@ class TestTidEmission:
             principal="root",
         )
         emitter._render_process_create(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=ts,
                 event_type="process_create",
                 src_host=host,
@@ -3339,7 +3365,7 @@ class TestPpidOnlyOnProcess:
 class TestPropertiesAreStrings:
     def test_icmp_flow_omits_transport_ports(self, emitter, ts):
         """ICMP FLOW rows should expose type/code instead of fake port zeroes."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -3356,7 +3382,7 @@ class TestPropertiesAreStrings:
                 os_category="linux",
                 system_type="server",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=0,
                 dst_ip="10.0.0.2",

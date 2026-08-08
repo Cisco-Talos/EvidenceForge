@@ -208,7 +208,7 @@ def test_route_profile_keeps_method_and_status_owned_by_route() -> None:
     assert http.status_code == 201
     assert http.request_body_len == 100
     assert http.response_body_len == 200
-    assert http.resp_mime_types == ["application/json"]
+    assert http.resp_mime_types == ("application/json",)
 
 
 def test_validator_does_not_warn_for_raw_ip_endpoint() -> None:

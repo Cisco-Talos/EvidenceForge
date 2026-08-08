@@ -149,6 +149,12 @@ def render_extra_syslog_message(
     """Render a syslog message template with data-driven placeholder pools."""
     template = rng.choice(entry.get("messages", [""]))
     render_values: dict[str, Any] = dict(values or {})
+    parameter_profiles = entry.get("parameter_profiles") or []
+    if parameter_profiles:
+        profile = rng.choice(parameter_profiles)
+        if isinstance(profile, dict):
+            for key, value in profile.items():
+                render_values.setdefault(str(key), value)
     for key, candidates in (entry.get("params") or {}).items():
         if key in render_values:
             continue

@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import LogParser, ParsedRecord, register_parser
+from . import LogParser, ParsedRecord, iter_bounded_text_lines, register_parser
 
 TIMESTAMP_PATTERN = re.compile(r"^#(\d+)$")
 
@@ -56,23 +56,23 @@ class BashHistoryParser(LogParser):
             # Old layout: bash_history/<hostname>/<user>.history
             hostname = path.parent.name
 
-        with path.open(encoding="utf-8") as f:
-            lines = f.readlines()
-
         record_num = 0
-        i = 0
-        while i < len(lines):
-            line = lines[i].rstrip("\n")
+        lines = iter(iter_bounded_text_lines(path))
+        while True:
+            try:
+                _line_number, raw_line = next(lines)
+            except StopIteration:
+                break
+            line = raw_line.rstrip("\n")
             ts_match = TIMESTAMP_PATTERN.match(line)
             if ts_match:
                 epoch = int(ts_match.group(1))
-                # Next line is the command
                 command = ""
-                if i + 1 < len(lines):
-                    command = lines[i + 1].rstrip("\n")
-                    i += 2
-                else:
-                    i += 1
+                try:
+                    _command_line_number, raw_command = next(lines)
+                    command = raw_command.rstrip("\n")
+                except StopIteration:
+                    pass
 
                 record_num += 1
                 timestamp = None
@@ -112,4 +112,3 @@ class BashHistoryParser(LogParser):
                         parse_errors=["Command without preceding timestamp"],
                         line_number=record_num,
                     )
-                i += 1

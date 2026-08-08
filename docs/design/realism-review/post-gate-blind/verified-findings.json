@@ -1,0 +1,147 @@
+{
+  "schema_version": "evidenceforge-realism-finding-dispositions/v1",
+  "assessment": "post-gate-blind",
+  "gate": "failed_pending_bounded_sibling_remediation",
+  "findings": [
+    {
+      "id": "PGB-001",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "linux_local_session_bootstrap",
+      "recurrence": "one rendered pre-window session on PROXY",
+      "evidence": "An in-window /bin/login PID 527891 and shell PID 527892 use session 80370, but its opening was outside the window and only its logout is visible.",
+      "owner": "local-session bootstrap in ActivityGenerator",
+      "planned_slice": "post_batch_2_gate_repair_loop_4"
+    },
+    {
+      "id": "PGB-002",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "windows_interactive_session_process_owner",
+      "recurrence": "five hosts with overlapping interactive sessions sharing one rendered winlogon PID",
+      "evidence": "NKAPOOR sessions 0x847177c and 0x8485238 overlap but both 4624 rows render ProcessId 0x1730 despite distinct session-owned winlogon processes.",
+      "owner": "logon bundle and Windows Security projection",
+      "planned_slice": "post_batch_2_gate_repair_loop_4"
+    },
+    {
+      "id": "PGB-003",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "windows_4648_schema",
+      "recurrence": "29/29 records across seven Windows hosts",
+      "evidence": "Event 4648 renders NetworkAddress/NetworkPort instead of provider-native IpAddress/IpPort.",
+      "owner": "Windows Security format definition and emitter",
+      "planned_slice": "post_batch_2_gate_repair_loop_4"
+    },
+    {
+      "id": "PGB-004",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "windows_module_startup_distribution",
+      "recurrence": "repeated exact nine-module sequences across unrelated applications and hosts",
+      "evidence": "NKAPOOR contains 44 exact nine-module startup tuples with near-identical 2-3 ms spacing.",
+      "owner": "process-execution module profile and source timing",
+      "planned_slice": "post_batch_2_gate_repair_loop_5"
+    },
+    {
+      "id": "PGB-005",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "ids_payload_prerequisites",
+      "recurrence": "one hard contradiction plus several unsupported content labels",
+      "evidence": "A SQL-injection alert is attached to UID CH09DlhXMdixtxjTy while Zeek and ASA both report zero application bytes.",
+      "owner": "canonical IDS attachment and network transaction outcome planning",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGB-006",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "nat_connection_lifecycle",
+      "recurrence": "3/704 dynamic translations",
+      "evidence": "Three dynamic translations tear down at build time while their owning SYN-timeout connections remain open for 30 seconds.",
+      "owner": "ASA source projection consuming canonical firewall teardown time",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGB-007",
+      "priority": "P2",
+      "disposition": "proof_gap",
+      "family": "zeek_identifier_morphology",
+      "recurrence": "17/18/19-character UID and FUID distributions",
+      "evidence": "The panel observed matching 10/60/30 percent length distributions, but native Zeek generation behavior has not yet been established from primary source code.",
+      "owner": null,
+      "planned_slice": "batch_3_reference_check"
+    },
+    {
+      "id": "PGB-008",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "windows_provider_timing_texture",
+      "recurrence": "510 matched Security 4688/Sysmon Event 1 pairs",
+      "evidence": "Provider displacement spans -1.018293 to +0.846788 seconds with a smooth bounded profile.",
+      "owner": "SourceTimingPlanner host/provider clock model",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGB-009",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "fleet_software_coherence",
+      "recurrence": "multiple workstations",
+      "evidence": "Server Veeam services and multiple competing VPN/file-sync stacks coexist on ordinary workstations.",
+      "owner": "world capability planning and application assignment",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PGB-010",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "linux_daemon_and_scanner_texture",
+      "recurrence": "both Linux hosts and the exposed WEB host",
+      "evidence": "Repeated daemon messages behave as weighted samples and 861/864 UFW blocks come from eight fixed scanner personas.",
+      "owner": "baseline daemon state and Internet-noise population model",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PGB-011",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "linux_system_session_identity",
+      "recurrence": "227 Linux eCAR rows",
+      "evidence": "Linux system processes use the Windows SYSTEM LUID 0x3e7 in a cross-platform field.",
+      "owner": "canonical host-specific session identity",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PGB-012",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "ssh_session_population",
+      "recurrence": "41 sessions for one user, with eight concurrent",
+      "evidence": "nina.kapoor sustains repeated interactive SSH churn to WEB and PROXY.",
+      "owner": "baseline remote-administration demand model",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PGB-G01",
+      "priority": null,
+      "disposition": "proof_gap",
+      "family": "scan_endpoint_visibility",
+      "recurrence": "185/187 MPATEL S0 scan attempts",
+      "evidence": "Network/firewall attempts lack endpoint rows, but raw-socket behavior and configured endpoint collection policy were not established.",
+      "owner": null,
+      "planned_slice": "batch_3_visibility_check"
+    },
+    {
+      "id": "PGB-G02",
+      "priority": null,
+      "disposition": "proof_gap",
+      "family": "single_ssh_endpoint_flow_gap",
+      "recurrence": "one successful external WEB session",
+      "evidence": "One successful SSH tuple lacks eCAR FLOW while peer sessions have it; a single observation drop remains compatible with the enterprise profile.",
+      "owner": null,
+      "planned_slice": "batch_3_visibility_check"
+    }
+  ]
+}

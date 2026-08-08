@@ -29,6 +29,56 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 NetworkTransactionOutcome = Literal["success", "failure", "denied"]
+PayloadDirection = Literal["none", "orig", "resp", "either"]
+TransportPhase = Literal["attempt", "established", "application", "response"]
+InspectionCapability = Literal["metadata", "payload_cleartext", "payload_decrypted"]
+SemanticClaim = Literal[
+    "flow_metadata",
+    "scan",
+    "handshake",
+    "request_content",
+    "response_content",
+    "upload_request",
+    "dns_query",
+    "dns_response",
+    "file_content",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class SignaturePredicate:
+    """Canonical preconditions for attaching one IDS signature to a transport."""
+
+    transport_protocol: str
+    destination_port: int
+    phase: TransportPhase = "attempt"
+    payload_direction: PayloadDirection = "none"
+    minimum_payload_bytes: int = 0
+    requires_response: bool = False
+    application_protocol: str | None = None
+    inspection: InspectionCapability = "metadata"
+    http_methods: tuple[str, ...] = ()
+    http_statuses: tuple[int, ...] = ()
+    requires_http_body: bool = False
+    semantic_claim: SemanticClaim = "flow_metadata"
+
+    def __post_init__(self) -> None:
+        """Reject internally contradictory signature requirements."""
+
+        if self.transport_protocol not in {"tcp", "udp", "icmp"}:
+            raise ValueError("IDS predicates require tcp, udp, or icmp transport")
+        if self.destination_port < 0 or self.destination_port > 65535:
+            raise ValueError("IDS predicate destination_port must be between 0 and 65535")
+        if self.minimum_payload_bytes < 0:
+            raise ValueError("IDS predicate minimum_payload_bytes cannot be negative")
+        if self.minimum_payload_bytes and self.payload_direction == "none":
+            raise ValueError("IDS payload thresholds require a payload direction")
+        if (self.http_methods or self.http_statuses or self.requires_http_body) and (
+            self.application_protocol != "http"
+        ):
+            raise ValueError("HTTP-specific IDS predicates require application_protocol='http'")
+        if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
+            raise ValueError("HTTP request bodies require orig/either payload direction")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +159,54 @@ class NetworkTuple:
 
 
 @dataclass(frozen=True, slots=True)
+class NatSensorObservation:
+    """Source-local view and lifetime of one NAT translation."""
+
+    nat_type: Literal["dynamic_pat", "static"]
+    direction: Literal["source", "destination"]
+    local_ip: str
+    local_port: int
+    global_ip: str
+    global_port: int
+    built_time: datetime
+    teardown_time: datetime | None
+
+    def __post_init__(self) -> None:
+        """Reject incomplete address views and impossible translation lifetimes."""
+
+        if not self.local_ip or not self.global_ip:
+            raise ValueError("NAT observations require local and global addresses")
+        if not 0 <= self.local_port <= 65535 or not 0 <= self.global_port <= 65535:
+            raise ValueError("NAT observation ports must be between 0 and 65535")
+        if self.teardown_time is not None and self.teardown_time < self.built_time:
+            raise ValueError("NAT teardown cannot precede translation creation")
+
+
+@dataclass(frozen=True, slots=True)
+class FileSensorObservation:
+    """Frozen source-local completeness for one canonical transferred object."""
+
+    canonical_id: str
+    seen_bytes: int
+    total_bytes: int | None
+    missing_bytes: int
+    analyzers_visible: bool
+
+    def __post_init__(self) -> None:
+        """Reject impossible file-observation accounting."""
+
+        if not self.canonical_id:
+            raise ValueError("File observations require a canonical file ID")
+        if self.seen_bytes < 0 or self.missing_bytes < 0:
+            raise ValueError("File observation byte counts must be non-negative")
+        if self.total_bytes is not None:
+            if self.total_bytes < 0:
+                raise ValueError("File observation total bytes must be non-negative")
+            if self.seen_bytes + self.missing_bytes < self.total_bytes:
+                raise ValueError("File observations must account for the complete canonical file")
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkSensorObservation:
     """Frozen view of one canonical transaction at one network sensor."""
 
@@ -125,8 +223,13 @@ class NetworkSensorObservation:
     observed_close_time: datetime | None
     traffic: NetworkTrafficLedger
     visible_formats: frozenset[str]
+    history: str = ""
+    file_observations: tuple[FileSensorObservation, ...] = ()
+    http_request_body_len: int | None = None
+    http_response_body_len: int | None = None
     firewall_teardown_reason: str = ""
     firewall_teardown_time: datetime | None = None
+    nat: NatSensorObservation | None = None
 
     def __post_init__(self) -> None:
         """Validate source-local interval and identifier invariants."""
@@ -146,9 +249,23 @@ class NetworkSensorObservation:
             raise ValueError("Firewall teardown cannot precede the observed connection start")
         if self.firewall_teardown_reason and self.firewall_teardown_time is None:
             raise ValueError("Firewall teardown reasons require a planned teardown time")
+        if (
+            self.nat is not None
+            and self.nat.nat_type == "dynamic_pat"
+            and "cisco_asa" in self.visible_formats
+            and self.nat.teardown_time != self.firewall_teardown_time
+        ):
+            raise ValueError("ASA dynamic NAT and connection teardown must share one lifetime")
         canonical_ids = [canonical for canonical, _observed in self.file_ids]
         if len(canonical_ids) != len(set(canonical_ids)):
             raise ValueError("Canonical file IDs must be unique within one sensor observation")
+        observation_ids = [observation.canonical_id for observation in self.file_observations]
+        if len(observation_ids) != len(set(observation_ids)):
+            raise ValueError("Canonical file observations must be unique within one sensor")
+        if self.http_request_body_len is not None and self.http_request_body_len < 0:
+            raise ValueError("Observed HTTP request bodies must be non-negative")
+        if self.http_response_body_len is not None and self.http_response_body_len < 0:
+            raise ValueError("Observed HTTP response bodies must be non-negative")
 
     @property
     def observed_duration(self) -> float | None:
@@ -165,6 +282,14 @@ class NetworkSensorObservation:
             if candidate == canonical_id:
                 return observed
         return canonical_id
+
+    def file_observation(self, canonical_id: str) -> FileSensorObservation | None:
+        """Return source-local completeness for a canonical file identifier."""
+
+        for observation in self.file_observations:
+            if observation.canonical_id == canonical_id:
+                return observation
+        return None
 
     def connection_id(self, canonical_id: str) -> str:
         """Return the sensor-local form of a canonical connection identifier."""
@@ -199,6 +324,11 @@ class NetworkTransactionPlan:
     traffic: NetworkTrafficLedger
     initiating_pid: int = -1
     responding_pid: int = -1
+    local_orig: bool = True
+    local_resp: bool = False
+    ip_proto: int = 6
+    link_local: bool = False
+    application_layer_only: bool = False
 
     def __post_init__(self) -> None:
         """Validate interval and tuple invariants at the canonical boundary."""
@@ -238,3 +368,45 @@ class NetworkTransactionPlan:
                 raise ValueError("Network transaction duration does not match its interval")
         elif self.duration is not None:
             raise ValueError("Network transaction duration requires a close timestamp")
+
+    @property
+    def orig_bytes(self) -> int:
+        """Return canonical originator payload bytes."""
+
+        return self.traffic.orig.payload_bytes
+
+    @property
+    def resp_bytes(self) -> int:
+        """Return canonical responder payload bytes."""
+
+        return self.traffic.resp.payload_bytes
+
+    @property
+    def orig_pkts(self) -> int:
+        """Return canonical originator packet count."""
+
+        return self.traffic.orig.packets
+
+    @property
+    def resp_pkts(self) -> int:
+        """Return canonical responder packet count."""
+
+        return self.traffic.resp.packets
+
+    @property
+    def orig_ip_bytes(self) -> int:
+        """Return canonical originator IP-byte count."""
+
+        return self.traffic.orig.ip_bytes
+
+    @property
+    def resp_ip_bytes(self) -> int:
+        """Return canonical responder IP-byte count."""
+
+        return self.traffic.resp.ip_bytes
+
+    @property
+    def missed_bytes(self) -> int:
+        """Return canonical sensor-independent missed-byte budget."""
+
+        return self.traffic.missed_bytes

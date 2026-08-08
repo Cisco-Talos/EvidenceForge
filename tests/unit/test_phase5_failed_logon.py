@@ -153,6 +153,26 @@ class TestFailedLogonWindows:
         sessions = state_manager.get_sessions_for_user("alice.smith")
         assert len(sessions) == 0
 
+    def test_same_timestamp_attempts_have_distinct_action_relative_identity(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Identical retries share an action family but receive distinct peer ordinals."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(test_user, win_system, timestamp)
+        activity_gen.generate_failed_logon(test_user, win_system, timestamp)
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "failed_logon"
+        ]
+        assert len(events) == 2
+        assert events[0].occurrence_key.action_id == events[1].occurrence_key.action_id
+        assert events[0].occurrence_key.instance_key == "attempt:0"
+        assert events[1].occurrence_key.instance_key == "attempt:1"
+        assert events[0].identity_plan.object_id != events[1].identity_plan.object_id
+
     def test_subject_is_null_for_failed_logon(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):
@@ -498,7 +518,7 @@ class TestFailedLogonDC:
         assert failed_event.remote_auth.session_object_id == ""
         transport = failed_event.remote_auth.primary_transport
         assert transport is not None
-        assert transport.transaction_id == network_events[0].network.transaction.stable_id
+        assert transport.transaction_id == network_events[0].network.stable_id
         assert network_events[0].lifecycle.parent_group_id == failed_event.remote_auth.stable_id
         ecar_event_types = [
             call[0][0].event_type for call in mock_emitters["ecar"].emit.call_args_list

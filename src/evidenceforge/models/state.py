@@ -79,7 +79,7 @@ class ActiveSession:
     transport_pid: int | None = None
     ecar_object_id: str = ""
     storyline_protected: bool = False
-    logon_guid: str = ""
+    logon_guid: str = ""  # Final once first published; null/non-null policy is immutable
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
     end_plan: SessionEndPlan | None = None
@@ -119,6 +119,7 @@ class RunningProcess:
     primary_tid: int = -1
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
+    end_time: datetime | None = None
 
 
 @dataclass

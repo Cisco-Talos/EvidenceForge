@@ -6,8 +6,6 @@
 # looks like.
 
 min_transfer_bytes: 32768
-missing_bytes_probability: 0.06
-timeout_probability: 0.01
 
 mime_types:
   - mime_type: application/vnd.openxmlformats-officedocument.wordprocessingml.document

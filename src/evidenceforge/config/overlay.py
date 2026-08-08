@@ -43,8 +43,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 logger = logging.getLogger(__name__)
 
 _OVERLAY_DIR_NAME = ".eforge/config"
@@ -96,8 +94,9 @@ def load_with_overlay(
     Returns:
         The (possibly merged) config data.
     """
-    with open(package_path) as f:
-        data = yaml.safe_load(f)
+    from evidenceforge.utils.yaml_loader import load_yaml_file
+
+    data = load_yaml_file(package_path)
 
     overlay_dir = get_overlay_directory()
     if overlay_dir is None:
@@ -119,8 +118,7 @@ def load_with_overlay(
         return data
 
     logger.info("Merging overlay config: %s", overlay_path)
-    with open(overlay_path) as f:
-        overlay_data = yaml.safe_load(f)
+    overlay_data = load_yaml_file(overlay_path)
 
     if overlay_data is None:
         return data

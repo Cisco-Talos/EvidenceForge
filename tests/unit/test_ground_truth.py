@@ -26,7 +26,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -173,6 +175,62 @@ class TestGroundTruthGenerator:
             "dst_port": 443,
             "uid": "C12345",
         }
+
+    def test_build_document_reconciles_authored_intent_ledgers(
+        self, minimal_scenario, malicious_events
+    ):
+        """Ground truth v2 links independent intent to occurrences and observations."""
+
+        authored = AuthoredIntentLedger.from_scenario(minimal_scenario)
+        execution = IntentExecutionLedger(authored)
+        for intent in authored.intents:
+            execution.mark_planned(intent.intent_id)
+        first = authored.intents[0]
+        occurrence_key = SemanticOccurrenceKey(
+            action_id="action-1",
+            role=OccurrenceRole.PRIMARY,
+            instance_key="process-1",
+        )
+        execution.record_occurrence(first.intent_id, occurrence_key)
+        execution.record_observation(first.intent_id, "windows_security", "visible")
+        events = [dict(event) for event in malicious_events]
+        events[0]["intent_id"] = first.intent_id
+
+        document = GroundTruthGenerator(
+            minimal_scenario,
+            events,
+            authored_intent_ledger=authored,
+            intent_execution_snapshot=execution.snapshot(),
+        ).build_document()
+
+        assert document.schema_version == 2
+        with pytest.raises(ValueError, match="Input should be 2"):
+            type(document).model_validate(
+                {
+                    **document.model_dump(mode="python"),
+                    "schema_version": 1,
+                }
+            )
+        reconciliation = document.intent_reconciliation
+        assert reconciliation is not None
+        assert reconciliation.complete
+        assert reconciliation.expected_count == 2
+        assert reconciliation.planned_count == 2
+        assert reconciliation.occurred_count == 1
+        assert reconciliation.observed_count == 1
+        assert document.events[0].intent_id == first.intent_id
+        first_row = reconciliation.intents[0]
+        assert first_row.action_ids == ["action-1"]
+        assert first_row.occurrence_ids == [occurrence_key.occurrence_id]
+        assert first_row.source_status == {"windows_security": {"visible": 1}}
+
+        with pytest.raises(ValueError, match="unknown status"):
+            type(first_row).model_validate(
+                {
+                    **first_row.model_dump(mode="python"),
+                    "source_status": {"windows_security": {"invented": 1}},
+                }
+            )
 
     def test_build_document_includes_red_herring_explanation(
         self, minimal_scenario, malicious_events

@@ -22,7 +22,7 @@
 
 """SSH session action bundle.
 
-The SSH bundle sits above individual SecurityEvents. It owns the ordered SSH
+The SSH bundle sits above individual canonical occurrences. It owns the ordered SSH
 activity lifecycle and uses the current activity generator as a runtime adapter
 for shared state, host context construction, source timing, and dispatch.
 """
@@ -36,12 +36,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
-    EdrContext,
     HostContext,
-    IdsContext,
+    IdsAlertPlan,
     ProcessContext,
     SyslogContext,
 )
@@ -122,8 +121,9 @@ class SshSessionRequest:
     public_key_type: str = ""
     public_key_hash: str = ""
     emit_session_close: bool = False
+    defer_session_close: bool = False
     session_end_plan: SessionEndPlan | None = None
-    ids_alerts: list[IdsContext] = field(default_factory=list)
+    ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property
@@ -141,6 +141,7 @@ class SshSessionRequest:
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
             f"{self.emit_session_close}:"
+            f"{self.defer_session_close}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.ids_alerts}:"
             f"{self.source}:{self.time.isoformat()}"
@@ -160,7 +161,8 @@ class SshSessionRequest:
             f"{self.duration or ''}:{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
-            f"{self.emit_session_close}:{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
+            f"{self.emit_session_close}:{self.defer_session_close}:"
+            f"{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
         )
         return f"ssh-session-exec-{seed:016x}"
 
@@ -292,6 +294,32 @@ class SshSessionExecutor(Protocol):
         """Return or materialize the source-side SSH client process."""
         ...
 
+    def _clamp_after_visible_linux_process_create(
+        self,
+        system: System,
+        pid: int,
+        time: datetime,
+        relationship_key: str = "source.ecar_dependent_after_process_create",
+        *,
+        later_source: str | None = None,
+    ) -> datetime:
+        """Keep Linux same-process observations after visible eCAR creation."""
+        ...
+
+    def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
+        """Return the latest planned source timestamp for a process creation."""
+        ...
+
+    def _defer_ssh_session_close(
+        self,
+        bundle: SshSessionActionBundle,
+        state: _SshTransportState,
+        event: OccurrenceBuilder,
+        auth_state: _SshLinuxAuthState,
+    ) -> None:
+        """Queue an action-owned SSH closure until dependent generation is complete."""
+        ...
+
     def _remember_ssh_responder_pid(
         self,
         source_ip: str,
@@ -369,11 +397,16 @@ class SshSessionActionBundle:
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             self._mark_edr_login_readiness(state, event, auth_state)
-        self.executor.dispatcher.dispatch(event)
+        self.executor.dispatcher.dispatch_builder(event)
+        if self.request.emit_session_close:
+            self._terminate_source_ssh_client_process(state)
         if auth_state is not None:
             self._dispatch_linux_auth_messages(state, event, auth_state)
             if self.request.emit_session_close:
-                self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+                if self.request.defer_session_close:
+                    self.executor._defer_ssh_session_close(self, state, event, auth_state)
+                else:
+                    self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
 
         logger.debug(
             "Generated SSH session: %s -> %s (UID: %s)",
@@ -504,7 +537,15 @@ class SshSessionActionBundle:
 
         request = self.request
         executor = self.executor
-        if not state.logon_id:
+        session_identity = (
+            executor.state_manager.get_session_identity(state.logon_id) if state.logon_id else None
+        )
+        if state.logon_id and session_identity is None:
+            raise StateError(
+                "SSH bundle logon_id must reference a StateManager-owned session: "
+                f"{request.target_system.hostname} {state.logon_id}"
+            )
+        if session_identity is None:
             state.logon_id = executor.state_manager.create_session(
                 username=request.user.username,
                 system=request.target_system.hostname,
@@ -519,8 +560,18 @@ class SshSessionActionBundle:
                     else request.stable_id
                 ),
             )
-        if not state.session_obj_id:
-            state.session_obj_id = executor.state_manager.get_session_object_id(state.logon_id)
+            session_identity = executor.state_manager.get_session_identity(state.logon_id)
+        if session_identity is None:
+            raise StateError(
+                "SSH bundle could not resolve the session identity it created: "
+                f"{request.target_system.hostname} {state.logon_id}"
+            )
+        if state.session_obj_id and state.session_obj_id != session_identity.object_id:
+            raise StateError(
+                "SSH bundle session_obj_id contradicts the StateManager-owned session: "
+                f"{request.target_system.hostname} {state.logon_id}"
+            )
+        state.session_obj_id = session_identity.object_id
         if request.session_end_plan is not None:
             executor.state_manager.plan_session_end(state.logon_id, request.session_end_plan)
 
@@ -625,6 +676,46 @@ class SshSessionActionBundle:
                 1.0,
                 (state.close_time - self.request.time).total_seconds(),
             )
+        if state.source_process is None and connection.initiating_pid > 0:
+            state.source_process = self._resolve_source_process(
+                connection.initiating_pid,
+                self.request.source_process_image,
+            )
+
+    def _terminate_source_ssh_client_process(self, state: _SshTransportState) -> None:
+        """End a one-transport SSH client immediately after its owned connection."""
+
+        source_system = self._source_system()
+        source_process = state.source_process
+        if source_system is None or source_process is None or source_process.pid <= 0:
+            return
+        executable = source_process.image.lower().replace("\\", "/").rsplit("/", 1)[-1]
+        if executable not in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}:
+            return
+        running = self.executor.state_manager.get_process(
+            source_system.hostname,
+            source_process.pid,
+        )
+        if running is None:
+            return
+        seed = _stable_seed(
+            "ssh_session_source_client_terminate:"
+            f"{source_system.hostname}:{source_process.pid}:{state.source_port}:"
+            f"{self.request.target_system.hostname}:{state.close_time.isoformat()}"
+        )
+        terminate_time = state.close_time + timedelta(
+            milliseconds=80 + (seed % 1420),
+            microseconds=191 + (seed % 613),
+        )
+        self.executor.generate_process_termination(
+            user=self.request.user,
+            system=source_system,
+            time=terminate_time,
+            pid=source_process.pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+            from_storyline=self.request.source.startswith("storyline"),
+        )
 
     def _resolve_source_process(
         self,
@@ -663,7 +754,7 @@ class SshSessionActionBundle:
         self,
         state: _SshTransportState,
         auth_state: _SshLinuxAuthState | None = None,
-    ) -> SecurityEvent:
+    ) -> OccurrenceBuilder:
         """Build the canonical SSH session occurrence.
 
         The TCP transport is a separate canonical ``connection`` occurrence owned by
@@ -672,7 +763,7 @@ class SshSessionActionBundle:
         """
 
         request = self.request
-        return SecurityEvent(
+        return OccurrenceBuilder(
             timestamp=request.time,
             event_type="ssh_session",
             src_host=state.src_host,
@@ -686,13 +777,12 @@ class SshSessionActionBundle:
                 logon_type=10,
             ),
             process=state.source_process,
-            edr=EdrContext(object_id=state.session_obj_id),
         )
 
     def _plan_linux_auth(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         plan: _SshLinuxAuthPlan | None,
     ) -> _SshLinuxAuthState | None:
         """Plan Linux SSH auth evidence and destination-side sshd ownership."""
@@ -709,6 +799,7 @@ class SshSessionActionBundle:
             )
         resolved_times = self._resolve_linux_auth_lifecycle(
             event=event,
+            responder_pid=plan.sshd_pid,
             syslog_seed=plan.syslog_seed,
             conn_delay_ms=plan.conn_delay_ms,
             accepted_gap_ms=plan.accepted_gap_ms,
@@ -775,7 +866,8 @@ class SshSessionActionBundle:
     def _resolve_linux_auth_lifecycle(
         self,
         *,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
+        responder_pid: int,
         syslog_seed: tuple[Any, ...],
         conn_delay_ms: int,
         accepted_gap_ms: int,
@@ -815,14 +907,22 @@ class SshSessionActionBundle:
         )
         graph = TemporalConstraintGraph()
         graph.add_node("transport_open", transport_open_time)
+        preferred_connection_time = _ssh_syslog_time(
+            transport_open_time,
+            "connection",
+            conn_delay_ms,
+            *syslog_seed,
+        )
+        connection_time = self.executor._clamp_after_visible_linux_process_create(
+            request.target_system,
+            responder_pid,
+            preferred_connection_time,
+            later_source="syslog",
+        )
+        responder_source_shift = connection_time - preferred_connection_time
         graph.add_node(
             "connection",
-            _ssh_syslog_time(
-                transport_open_time,
-                "connection",
-                conn_delay_ms,
-                *syslog_seed,
-            ),
+            connection_time,
         )
         graph.add_node(
             "accepted",
@@ -831,7 +931,8 @@ class SshSessionActionBundle:
                 "accepted",
                 auth_ready_delay_ms,
                 *syslog_seed,
-            ),
+            )
+            + responder_source_shift,
         )
         graph.add_node(
             "pam",
@@ -840,7 +941,8 @@ class SshSessionActionBundle:
                 "pam",
                 auth_ready_delay_ms + pam_gap_ms,
                 *syslog_seed,
-            ),
+            )
+            + responder_source_shift,
         )
         graph.add_node(
             "logind",
@@ -849,7 +951,8 @@ class SshSessionActionBundle:
                 "logind",
                 auth_ready_delay_ms + pam_gap_ms + logind_gap_ms,
                 *syslog_seed,
-            ),
+            )
+            + responder_source_shift,
         )
         graph.constrain_after(
             "connection",
@@ -882,7 +985,7 @@ class SshSessionActionBundle:
     def _extend_transport_close_after(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         earliest_close_time: datetime,
     ) -> None:
         """Extend too-short SSH transport lifetimes to satisfy lifecycle ordering."""
@@ -962,14 +1065,14 @@ class SshSessionActionBundle:
     def _dispatch_linux_connection_message(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Dispatch the pre-auth sshd connection syslog message."""
 
         request = self.request
-        self.executor.dispatcher.dispatch(
-            SecurityEvent(
+        self.executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.connection_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -997,7 +1100,7 @@ class SshSessionActionBundle:
     def _mark_edr_login_readiness(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Record when EDR/session-owned child evidence may appear."""
@@ -1057,7 +1160,7 @@ class SshSessionActionBundle:
     def _dispatch_linux_auth_messages(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Dispatch accepted-auth, PAM session-open, and logind session messages."""
@@ -1072,8 +1175,8 @@ class SshSessionActionBundle:
             )
         else:
             user_uid = _linux_uid_for_user(request.user.username)
-        executor.dispatcher.dispatch(
-            SecurityEvent(
+        executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.accepted_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1094,8 +1197,8 @@ class SshSessionActionBundle:
                 ),
             )
         )
-        executor.dispatcher.dispatch(
-            SecurityEvent(
+        executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.pam_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1122,8 +1225,8 @@ class SshSessionActionBundle:
         )
         hostname = request.target_system.hostname
         session_id = auth_state.logind_session_id
-        executor.dispatcher.dispatch(
-            SecurityEvent(
+        executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.logind_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1167,15 +1270,16 @@ class SshSessionActionBundle:
     def _dispatch_linux_session_close_lifecycle(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Dispatch source-native close/logout evidence for a modeled SSH session."""
 
         request = self.request
         close_time = self._source_native_session_close_time(state, auth_state)
-        self.executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._terminate_receiver_session_shell(state, close_time)
+        self.executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=close_time,
                 event_type="logoff",
                 dst_host=event.dst_host,
@@ -1187,7 +1291,6 @@ class SshSessionActionBundle:
                     session_id=auth_state.logind_session_id,
                     logon_type=10,
                 ),
-                edr=EdrContext(object_id=state.session_obj_id),
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=auth_state.sshd_pid,
@@ -1199,8 +1302,8 @@ class SshSessionActionBundle:
                 ),
             )
         )
-        self.executor.dispatcher.dispatch(
-            SecurityEvent(
+        self.executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=self._source_native_logind_removed_time(state, auth_state, close_time),
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1226,6 +1329,49 @@ class SshSessionActionBundle:
             )
         )
         self._terminate_receiver_sshd_process(state, auth_state, close_time)
+
+    def _terminate_receiver_session_shell(
+        self,
+        state: _SshTransportState,
+        close_time: datetime,
+    ) -> None:
+        """End the bundle-owned login shell before the SSH session closes."""
+
+        request = self.request
+        if not state.logon_id:
+            return
+        session = self.executor.state_manager.get_session(state.logon_id)
+        shell_pid = session.session_shell_pid if session is not None else None
+        if shell_pid is None:
+            return
+        running = self.executor.state_manager.get_process(
+            request.target_system.hostname,
+            shell_pid,
+        )
+        if running is None:
+            return
+        seed = _stable_seed(
+            "ssh_session_shell_terminate:"
+            f"{request.target_system.hostname}:{state.logon_id}:{shell_pid}:"
+            f"{state.close_time.isoformat()}"
+        )
+        gap = close_time - state.close_time
+        maximum_offset_ms = max(20, int(gap.total_seconds() * 1000) - 25)
+        terminate_time = state.close_time + timedelta(
+            milliseconds=20 + (seed % max(1, maximum_offset_ms - 19)),
+            microseconds=101 + (seed % 733),
+        )
+        if terminate_time >= close_time:
+            terminate_time = close_time - timedelta(milliseconds=1)
+        self.executor.generate_process_termination(
+            user=request.user,
+            system=request.target_system,
+            time=terminate_time,
+            pid=shell_pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+            from_storyline=request.source.startswith("storyline"),
+        )
 
     def _terminate_receiver_sshd_process(
         self,

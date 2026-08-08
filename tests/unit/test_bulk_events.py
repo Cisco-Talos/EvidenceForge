@@ -32,6 +32,7 @@ from evidenceforge.generation.engine.storyline import (
     _iter_shuffled_port_scan_pairs,
     _observed_web_scan_status,
     _port_scan_connection_profile,
+    _sample_network_hosts,
     _scan_target_exposes_port,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
@@ -659,6 +660,29 @@ class TestWebScanConnectionProfile:
 
 
 class TestPortScanPairIteration:
+    def test_sample_network_hosts_handles_ipv6_64_without_enumeration(self):
+        import ipaddress
+
+        network = ipaddress.ip_network("2001:db8:1234::/64")
+        sampled = _sample_network_hosts(network, 3, random.Random(29))
+
+        assert len(sampled) == 3
+        assert len(set(sampled)) == 3
+        assert all(ipaddress.ip_address(address) in network for address in sampled)
+        assert str(network.network_address) not in sampled
+
+    def test_sample_network_hosts_matches_ipv4_host_semantics(self):
+        import ipaddress
+
+        network = ipaddress.ip_network("10.0.0.0/8")
+        sampled = _sample_network_hosts(network, 5, random.Random(31))
+
+        assert len(sampled) == 5
+        assert len(set(sampled)) == 5
+        assert all(ipaddress.ip_address(address) in network for address in sampled)
+        assert str(network.network_address) not in sampled
+        assert str(network.broadcast_address) not in sampled
+
     def test_iter_shuffled_port_scan_pairs_covers_product_once(self):
         targets = ["10.0.0.10", "10.0.0.11", "10.0.0.12"]
         ports = [22, 80, 443, 3389]
@@ -1301,7 +1325,7 @@ class TestWebScanPresets:
         http = captured[0]["http"]
         assert http.method == "HEAD"
         assert http.response_body_len == 0
-        assert http.resp_mime_types == []
+        assert http.resp_mime_types == ()
 
     def test_web_scan_paths_are_shuffled_between_passes(self):
         import inspect

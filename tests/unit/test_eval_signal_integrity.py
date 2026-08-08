@@ -395,7 +395,8 @@ class TestEventPresence:
         scenario = _scenario_with_storyline([])
         scorer = SignalIntegrityScorer()
         result = scorer.score({}, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert all(sub.skipped for sub in result.sub_scores)
 
 
 class TestIndicatorAccuracy:
@@ -514,7 +515,7 @@ class TestPivotLinkability:
         pl = next(s for s in result.sub_scores if s.key == "pivot_linkability")
         assert pl.score == 100.0
 
-    def test_single_event_is_perfect(self):
+    def test_single_event_has_no_applicable_pivot_contract(self):
         scenario = _scenario_with_storyline(
             [
                 {
@@ -543,7 +544,8 @@ class TestPivotLinkability:
         scorer = SignalIntegrityScorer()
         result = scorer.score(records, scenario)
         pl = next(s for s in result.sub_scores if s.key == "pivot_linkability")
-        assert pl.score == 100.0
+        assert pl.score is None
+        assert pl.skipped
 
 
 class TestTemporalIntegrity:
@@ -748,7 +750,7 @@ class TestEndToEnd:
         assert result.name == "Causality"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert len(result.sub_scores) == 7
 
     def test_with_retail_scenario(self):
         """Run scorer on existing good fixtures with real scenario."""
@@ -771,4 +773,4 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         # Should produce a score (may be low since fixtures don't match storyline)
         assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert len(result.sub_scores) == 7

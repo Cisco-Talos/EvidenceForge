@@ -24,7 +24,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
@@ -34,7 +34,7 @@ from evidenceforge.events.contexts import (
     FileTransferContext,
     FirewallContext,
     HttpContext,
-    IdsContext,
+    IdsAlertPlan,
     OcspContext,
     PeContext,
     ProxyContext,
@@ -101,13 +101,12 @@ class NetworkConnectionRequest:
     smtp: SmtpContext | None = None
     ssl: SslContext | None = None
     x509: X509Context | None = None
-    x509_chain: list[X509Context] = field(default_factory=list)
+    x509_chain: tuple[X509Context, ...] = ()
     tls_presentation: TlsCertificatePresentationPlan | None = None
-    ids: IdsContext | None = None
-    ids_alerts: list[IdsContext] = field(default_factory=list)
+    ids_alerts: tuple[IdsAlertPlan, ...] = ()
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
-    file_transfers: list[FileTransferContext] = field(default_factory=list)
+    file_transfers: tuple[FileTransferContext, ...] = ()
     pe: PeContext | None = None
     ocsp: OcspContext | None = None
     ocsp_transaction: OcspTransactionPlan | None = None
@@ -141,7 +140,6 @@ class NetworkConnectionRequest:
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:{self.src_port or ''}:"
             f"{self.emit_dns}:{self.pid}:{source_hostname}:{self.conn_state or ''}:"
             f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ssl)}:"
-            f"{_context_fingerprint(self.ids)}:"
             f"{_context_fingerprint(self.ids_alerts)}:"
             f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
             f"{_context_fingerprint(self.file_transfers)}:"

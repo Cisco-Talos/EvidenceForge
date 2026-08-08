@@ -23,14 +23,16 @@
 """Tests for WebEmitter role-gated can_handle() logic."""
 
 import json
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HostContext, HttpContext, NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import HostContext, HttpContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.web import WebEmitter, _split_uri_for_apache_json
+from tests.network_factories import network_plan
 
 
 def _make_host(system_type: str, roles: list[str]) -> HostContext:
@@ -48,18 +50,20 @@ def _make_event(
     dst_host: HostContext | None,
     http: HttpContext | None,
     timestamp: datetime | None = None,
-) -> SecurityEvent:
-    return SecurityEvent(
-        timestamp=timestamp or datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC),
+) -> OccurrenceBuilder:
+    event_time = timestamp or datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC)
+    return OccurrenceBuilder(
+        timestamp=event_time,
         event_type="connection",
         dst_host=dst_host,
         http=http,
-        network=NetworkContext(
+        network=network_plan(
             src_ip="192.168.1.10",
             src_port=54321,
             dst_ip="10.0.0.5",
             dst_port=80,
             protocol="tcp",
+            source_visible_start_time=event_time,
         ),
     )
 
@@ -119,7 +123,7 @@ class TestWebEmitterCanHandle:
 
     def test_wrong_event_type_rejected(self, emitter):
         host = _make_host("server", ["web_server"])
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC),
             event_type="logon",
             dst_host=host,
@@ -176,7 +180,13 @@ class TestWebEmitterCanHandle:
             http=http,
             timestamp=datetime(2026, 6, 15, 14, 23, 5, tzinfo=UTC),
         )
-        event.network.duration = 0.023
+        close = event.network.started_at + timedelta(seconds=0.023)
+        event.network = replace(
+            event.network,
+            duration=0.023,
+            closed_at=close,
+            phase_times=(("transport_start", event.network.started_at), ("transport_close", close)),
+        )
 
         emitter.emit(event)
         emitter.close()

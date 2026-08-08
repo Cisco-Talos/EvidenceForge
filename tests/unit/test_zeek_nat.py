@@ -20,11 +20,17 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for per-sensor NAT IP swapping in Zeek conn emitters."""
+"""Tests for observation-owned per-sensor NAT projection in Zeek emitters."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+    NetworkTuple,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_smtp import ZeekSmtpEmitter
@@ -34,13 +40,13 @@ T0 = datetime(2024, 6, 15, 14, 23, 5, tzinfo=UTC)
 
 def _make_conn_event_data(
     sensor_hostnames=None,
-    nat_swaps_by_sensor=None,
+    observations=None,
     src_ip="10.0.10.50",
     src_port=54321,
     dst_ip="203.0.113.50",
     dst_port=443,
 ):
-    """Build a Zeek conn event_data dict with optional NAT swap metadata."""
+    """Build Zeek conn render data with optional frozen sensor observations."""
     data = {
         "ts": T0.timestamp(),
         "uid": "CTest123",
@@ -58,9 +64,45 @@ def _make_conn_event_data(
     }
     if sensor_hostnames is not None:
         data["_sensor_hostnames"] = sensor_hostnames
-    if nat_swaps_by_sensor is not None:
-        data["_nat_swaps_by_sensor"] = nat_swaps_by_sensor
+    if observations is not None:
+        data["_network_sensor_observations"] = {
+            observation.sensor_identity: observation for observation in observations
+        }
+        data["_network_observations_planned"] = True
+        data["_canonical_network_start"] = T0
     return data
+
+
+def _observation(
+    sensor: str,
+    *,
+    src_ip: str = "10.0.10.50",
+    src_port: int = 54321,
+    dst_ip: str = "203.0.113.50",
+    dst_port: int = 443,
+    visible_format: str = "zeek_conn",
+    local_resp: bool = False,
+) -> NetworkSensorObservation:
+    """Return one immutable sensor view for a rendered NAT test."""
+
+    return NetworkSensorObservation(
+        sensor_identity=sensor,
+        path_role="source_side" if sensor == "inside-zeek" else "destination_side",
+        capture_profile="well_synced",
+        tuple_view=NetworkTuple(src_ip, src_port, dst_ip, dst_port, "tcp"),
+        connection_uid=f"C{sensor.replace('-', '')}",
+        connection_ids=(),
+        file_ids=(),
+        local_orig=True,
+        local_resp=local_resp,
+        observed_start_time=T0,
+        observed_close_time=T0 + timedelta(seconds=1.5),
+        traffic=NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(100, 1, 140),
+            resp=DirectionalTrafficLedger(200, 1, 240),
+        ),
+        visible_formats=frozenset({visible_format}),
+    )
 
 
 def _read_conn_json(base_path, sensor_hostname):
@@ -79,17 +121,17 @@ def _read_smtp_json(base_path, sensor_hostname):
         return json.loads(f.readline())
 
 
-class TestZeekNatSwaps:
-    """Verify that _nat_swaps_by_sensor causes IP/port field substitution per sensor."""
+class TestZeekNatObservations:
+    """Verify that frozen observations project the source-local NAT view."""
 
     def test_inside_sensor_sees_real_ips(self, tmp_path):
-        """A sensor NOT listed in _nat_swaps_by_sensor should see the original IPs."""
+        """An inside observation retains the canonical source tuple."""
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, tmp_path, sensor_hostnames=["inside-zeek"])
 
         event_data = _make_conn_event_data(
             sensor_hostnames=["inside-zeek"],
-            nat_swaps_by_sensor={"outside-zeek": {"src_ip": "198.51.100.1"}},
+            observations=[_observation("inside-zeek")],
         )
         emitter.emit_event(event_data)
         emitter.close()
@@ -99,13 +141,16 @@ class TestZeekNatSwaps:
         assert record["id.orig_p"] == 54321
 
     def test_outside_sensor_sees_mapped_src_ip(self, tmp_path):
-        """A sensor listed in _nat_swaps_by_sensor should see the NAT-mapped source IP."""
+        """Inside and outside observations may expose different source addresses."""
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, tmp_path, sensor_hostnames=["inside-zeek", "outside-zeek"])
 
         event_data = _make_conn_event_data(
             sensor_hostnames=["inside-zeek", "outside-zeek"],
-            nat_swaps_by_sensor={"outside-zeek": {"src_ip": "198.51.100.1", "src_port": 12345}},
+            observations=[
+                _observation("inside-zeek"),
+                _observation("outside-zeek", src_ip="198.51.100.1", src_port=12345),
+            ],
         )
         emitter.emit_event(event_data)
         emitter.close()
@@ -119,13 +164,16 @@ class TestZeekNatSwaps:
         assert outside_record["id.orig_h"] == "198.51.100.1"
 
     def test_outside_sensor_sees_mapped_src_port(self, tmp_path):
-        """A sensor with src_port in its NAT swap should see the mapped source port."""
+        """The source-local tuple owns the corresponding translated source port."""
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, tmp_path, sensor_hostnames=["inside-zeek", "outside-zeek"])
 
         event_data = _make_conn_event_data(
             sensor_hostnames=["inside-zeek", "outside-zeek"],
-            nat_swaps_by_sensor={"outside-zeek": {"src_ip": "198.51.100.1", "src_port": 12345}},
+            observations=[
+                _observation("inside-zeek"),
+                _observation("outside-zeek", src_ip="198.51.100.1", src_port=12345),
+            ],
         )
         emitter.emit_event(event_data)
         emitter.close()
@@ -139,13 +187,16 @@ class TestZeekNatSwaps:
         assert outside_record["id.orig_p"] == 12345
 
     def test_dst_ip_swapped_for_inbound_static_nat(self, tmp_path):
-        """A NAT swap with dst_ip should replace id.resp_h for the post-NAT sensor."""
+        """An inbound observation projects the post-NAT destination."""
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, tmp_path, sensor_hostnames=["inside-zeek", "outside-zeek"])
 
         event_data = _make_conn_event_data(
             sensor_hostnames=["inside-zeek", "outside-zeek"],
-            nat_swaps_by_sensor={"outside-zeek": {"dst_ip": "198.51.100.80"}},
+            observations=[
+                _observation("inside-zeek"),
+                _observation("outside-zeek", dst_ip="198.51.100.80"),
+            ],
         )
         emitter.emit_event(event_data)
         emitter.close()
@@ -186,12 +237,19 @@ class TestZeekNatSwaps:
             "user_agent": "Postfix",
             "fuids": [],
             "_sensor_hostnames": ["outside-zeek"],
-            "_nat_swaps_by_sensor": {
-                "outside-zeek": {
-                    "dst_ip": "203.0.113.25",
-                    "local_resp": True,
-                }
+            "_network_sensor_observations": {
+                "outside-zeek": _observation(
+                    "outside-zeek",
+                    src_ip="198.51.100.10",
+                    src_port=52525,
+                    dst_ip="203.0.113.25",
+                    dst_port=25,
+                    visible_format="zeek_smtp",
+                    local_resp=True,
+                )
             },
+            "_network_observations_planned": True,
+            "_canonical_network_start": T0,
         }
         emitter.emit_event(event_data)
         emitter.close()
@@ -203,13 +261,12 @@ class TestZeekNatSwaps:
         assert "rx_hosts" not in record
 
     def test_no_swap_when_no_nat_metadata(self, tmp_path):
-        """Without _nat_swaps_by_sensor, all sensors see identical real IPs."""
+        """The direct raw adapter retains its supplied tuple without an observation plan."""
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, tmp_path, sensor_hostnames=["inside-zeek", "outside-zeek"])
 
         event_data = _make_conn_event_data(
             sensor_hostnames=["inside-zeek", "outside-zeek"],
-            # No _nat_swaps_by_sensor
         )
         emitter.emit_event(event_data)
         emitter.close()

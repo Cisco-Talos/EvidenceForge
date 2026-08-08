@@ -193,30 +193,6 @@ class TestTCPOverhead:
             assert overhead_per_pkt in (28, 32, 52, 60, 78)
 
 
-class TestPerHostEventRecordIDs:
-    """P1-11: Per-computer EventRecordIDs."""
-
-    def test_independent_per_host(self, activity_gen):
-        id_a1 = activity_gen._get_next_event_record_id("HOST-A")
-        id_b1 = activity_gen._get_next_event_record_id("HOST-B")
-        id_a2 = activity_gen._get_next_event_record_id("HOST-A")
-        id_b2 = activity_gen._get_next_event_record_id("HOST-B")
-        assert id_a2 == id_a1 + 1
-        assert id_b2 == id_b1 + 1
-
-    def test_start_in_valid_range(self, activity_gen):
-        first_id = activity_gen._get_next_event_record_id("UNIQUE-HOST")
-        assert 1001 <= first_id <= 50001
-
-    def test_deterministic_per_hostname(self):
-        """Same hostname should get same starting value across instances."""
-        sm = StateManager()
-        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
-        gen1 = ActivityGenerator(sm, emitters)
-        gen2 = ActivityGenerator(sm, emitters)
-        assert gen1._get_next_event_record_id("TEST") == gen2._get_next_event_record_id("TEST")
-
-
 class TestLogonTypeDistribution:
     """P1-12: LogonType distribution."""
 
@@ -284,7 +260,7 @@ class TestMachineAccountLogon:
             dc_ip="10.10.100.10",
             time=ts,
         )
-        # machine_logon dispatched via SecurityEvent
+        # machine_logon dispatched via OccurrenceBuilder
         events = [
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]

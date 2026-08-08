@@ -35,6 +35,7 @@ import ipaddress
 import logging
 import re
 from collections import defaultdict
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from urllib.parse import urlsplit
@@ -62,6 +63,7 @@ from evidenceforge.events.observation_manifest import (
     ObservationManifestEvent,
     observation_manifest_matches_scenario,
 )
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.time import parse_duration
 
@@ -84,7 +86,7 @@ class CausalityScorer(DimensionScorer):
         if context.observation_manifest is not None and not observation_manifest_matches_scenario(
             context.observation_manifest, scenario
         ):
-            context = EvaluationContext(observation_manifest=None)
+            context = replace(context, observation_manifest=None)
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
@@ -168,31 +170,35 @@ class CausalityScorer(DimensionScorer):
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
 
-        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 6})
+        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 7})
         s1 = self._score_causal_ordering(records, scenario)
         progress("sub_score_done", {"name": "Causal Ordering", "score": s1.score})
 
-        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 6})
+        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 7})
         s2 = self._score_event_presence(resolved, context)
         progress("sub_score_done", {"name": "Event Presence", "score": s2.score})
 
-        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 6})
+        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 7})
         s3 = self._score_indicator_accuracy(resolved)
         progress("sub_score_done", {"name": "Indicator Accuracy", "score": s3.score})
 
-        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 6})
+        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 7})
         s4 = self._score_pivot_linkability(resolved, context)
         progress("sub_score_done", {"name": "Pivot Linkability", "score": s4.score})
 
-        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 6})
+        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 7})
         s5 = self._score_temporal_integrity(resolved, context)
         progress("sub_score_done", {"name": "Temporal Integrity", "score": s5.score})
 
-        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 6})
+        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 7})
         s6 = self._score_storyline_trace_coverage(resolved, vis, host_time_index, context)
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s6.score})
 
-        sub_scores = [s1, s2, s3, s4, s5, s6]
+        progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 7})
+        s7 = self._score_intent_reconciliation(scenario, context)
+        progress("sub_score_done", {"name": "Intent Reconciliation", "score": s7.score})
+
+        sub_scores = [s1, s2, s3, s4, s5, s6, s7]
         dim_score = aggregate_sub_scores(sub_scores)
 
         host_log_profile = _build_host_log_profile(records, vis, scenario)
@@ -204,6 +210,113 @@ class CausalityScorer(DimensionScorer):
             score=dim_score,
             sub_scores=sub_scores,
             supplementary={"host_log_profile": host_log_profile},
+        )
+
+    @staticmethod
+    def _score_intent_reconciliation(
+        scenario: Scenario,
+        context: EvaluationContext,
+    ) -> SubScore:
+        """Require every authored typed intent to survive planning reconciliation."""
+
+        authored = AuthoredIntentLedger.from_scenario(scenario)
+        if not authored.intents:
+            return SubScore(
+                name="Intent Reconciliation",
+                key="intent_reconciliation",
+                weight=0.0,
+                score=None,
+                skipped=True,
+                details="Scenario has no authored storyline or red-herring intents",
+            )
+        ground_truth = context.ground_truth
+        if ground_truth is None or ground_truth.intent_reconciliation is None:
+            return SubScore(
+                name="Intent Reconciliation",
+                key="intent_reconciliation",
+                weight=0.0,
+                score=0.0,
+                details="Canonical ground truth has no authored-intent reconciliation",
+                sample_failures=["GROUND_TRUTH.json is missing the intent_reconciliation contract"],
+            )
+
+        reconciliation = ground_truth.intent_reconciliation
+        rows_by_id = {row.intent_id: row for row in reconciliation.intents}
+        authored_by_id = {intent.intent_id: intent for intent in authored.intents}
+        expected_ids = authored.intent_ids
+        actual_ids = frozenset(rows_by_id)
+        missing_rows = expected_ids - actual_ids
+        unexpected_rows = actual_ids - expected_ids
+        unplanned = {
+            intent_id
+            for intent_id in expected_ids & actual_ids
+            if not rows_by_id[intent_id].planned
+        }
+        mismatched_metadata = {
+            intent_id
+            for intent_id in expected_ids & actual_ids
+            if (
+                rows_by_id[intent_id].ground_truth_section,
+                rows_by_id[intent_id].storyline_id,
+                rows_by_id[intent_id].event_type,
+                rows_by_id[intent_id].semantic_instance_key,
+                rows_by_id[intent_id].authored_time,
+                rows_by_id[intent_id].actor,
+                rows_by_id[intent_id].system,
+                rows_by_id[intent_id].activity,
+            )
+            != (
+                authored_by_id[intent_id].section.value,
+                authored_by_id[intent_id].step_id,
+                authored_by_id[intent_id].event_type,
+                authored_by_id[intent_id].semantic_instance_key,
+                authored_by_id[intent_id].authored_time,
+                authored_by_id[intent_id].actor,
+                authored_by_id[intent_id].system,
+                authored_by_id[intent_id].activity,
+            )
+        }
+        failures = [
+            f"Missing reconciliation row for authored intent {value}" for value in missing_rows
+        ]
+        failures.extend(f"Authored intent was not planned: {value}" for value in unplanned)
+        failures.extend(
+            f"Reconciliation metadata differs from authored intent: {value}"
+            for value in mismatched_metadata
+        )
+        failures.extend(f"Unexpected reconciliation intent: {value}" for value in unexpected_rows)
+        failures.extend(
+            f"Reconciliation reported missing intent: {value}"
+            for value in reconciliation.missing_intent_ids
+        )
+        failures.extend(
+            f"Reconciliation reported unexpected intent: {value}"
+            for value in reconciliation.unexpected_intent_ids
+        )
+        reported_missing = frozenset(reconciliation.missing_intent_ids)
+        reported_unexpected = frozenset(reconciliation.unexpected_intent_ids)
+        expected_missing = missing_rows | unplanned
+        missing_summary_drift = reported_missing ^ expected_missing
+        unexpected_ids = unexpected_rows | reported_unexpected
+        failures.extend(
+            f"Reconciliation missing-intent summary differs from rows: {value}"
+            for value in missing_summary_drift
+        )
+        invalid_ids = expected_missing | mismatched_metadata | missing_summary_drift
+        total_assertions = len(expected_ids) + len(unexpected_ids)
+        correct = max(0, len(expected_ids) - len(invalid_ids))
+        score = 100.0 * correct / total_assertions if total_assertions else 0.0
+        return SubScore(
+            name="Intent Reconciliation",
+            key="intent_reconciliation",
+            weight=0.0,
+            score=score,
+            details=(
+                f"{correct}/{total_assertions} authored/planner reconciliation assertions pass; "
+                f"{reconciliation.occurred_count} intents dispatched canonical events and "
+                f"{reconciliation.observed_count} had visible or delayed source evidence"
+            ),
+            sample_failures=sorted(set(failures))[:10],
         )
 
     # --- Host-time index ---
@@ -1539,7 +1652,8 @@ class CausalityScorer(DimensionScorer):
                 name="Causal Ordering",
                 key="causal_ordering",
                 weight=0.25,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No causal pair rules defined",
             )
 
@@ -1694,7 +1808,16 @@ class CausalityScorer(DimensionScorer):
                 break
             failures.append(failure)
 
-        score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
+        if total_pairs == 0:
+            return SubScore(
+                name="Causal Ordering",
+                key="causal_ordering",
+                weight=0.25,
+                score=None,
+                skipped=True,
+                details="No applicable causal pairs in this dataset",
+            )
+        score = 100.0 * correct_pairs / total_pairs
         return SubScore(
             name="Causal Ordering",
             key="causal_ordering",
@@ -1876,7 +1999,8 @@ class CausalityScorer(DimensionScorer):
                 name="Event Presence",
                 key="event_presence",
                 weight=0.20,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
         raw_total = len(resolved)
@@ -1937,7 +2061,8 @@ class CausalityScorer(DimensionScorer):
                 name="Indicator Accuracy",
                 key="indicator_accuracy",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
         total_checks = 0
@@ -1958,7 +2083,16 @@ class CausalityScorer(DimensionScorer):
                             f"Event {event.index}: {indicator_name} mismatch in {trace.source_format}"
                         )
 
-        score = (100.0 * correct_checks / total_checks) if total_checks > 0 else 100.0
+        if total_checks == 0:
+            return SubScore(
+                name="Indicator Accuracy",
+                key="indicator_accuracy",
+                weight=0.15,
+                score=None,
+                skipped=True,
+                details="No checkable authored indicators were present in matched traces",
+            )
+        score = 100.0 * correct_checks / total_checks
         return SubScore(
             name="Indicator Accuracy",
             key="indicator_accuracy",
@@ -2098,7 +2232,8 @@ class CausalityScorer(DimensionScorer):
                 name="Pivot Linkability",
                 key="pivot_linkability",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="Fewer than 2 events — nothing to link",
             )
         expected_by_event = {
@@ -2137,7 +2272,19 @@ class CausalityScorer(DimensionScorer):
                     f"Events {first_index}→{second_index}: expected pivot not present in both "
                     f"rendered traces ({a.actor}@{a.system} → {b.actor}@{b.system})"
                 )
-        score = (100.0 * linkable / total_pairs) if total_pairs > 0 else 100.0
+        if total_pairs == 0:
+            return SubScore(
+                name="Pivot Linkability",
+                key="pivot_linkability",
+                weight=0.15,
+                score=None,
+                skipped=True,
+                details=(
+                    f"No authored narrative edges share an expected pivot; "
+                    f"{len(resolved)} events are isolated"
+                ),
+            )
+        score = 100.0 * linkable / total_pairs
         connected = {index for edge in edges for index in edge}
         isolated = len(resolved) - len(connected)
         return SubScore(
@@ -2249,7 +2396,8 @@ class CausalityScorer(DimensionScorer):
                 name="Temporal Integrity",
                 key="temporal_integrity",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
         raw_total = len(resolved)
@@ -2350,7 +2498,8 @@ class CausalityScorer(DimensionScorer):
                 name="Storyline Trace Coverage",
                 key="storyline_trace_coverage",
                 weight=0.10,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
 
@@ -2418,6 +2567,20 @@ class CausalityScorer(DimensionScorer):
                 else:
                     total_expected += 1
 
+        if total_expected == 0 and raw_total_expected == 0:
+            return SubScore(
+                name="Storyline Trace Coverage",
+                key="storyline_trace_coverage",
+                weight=0.10,
+                score=0.0,
+                details=(
+                    f"0/0 format traces: {len(resolved)} authored storyline events have no "
+                    "enabled expected source group"
+                ),
+                sample_failures=[
+                    "No enabled output source can prove the authored storyline evidence"
+                ],
+            )
         score = (100.0 * found / total_expected) if total_expected > 0 else 100.0
         raw_score = (100.0 * raw_found / raw_total_expected) if raw_total_expected > 0 else 100.0
         return SubScore(

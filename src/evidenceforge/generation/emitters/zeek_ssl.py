@@ -25,8 +25,12 @@
 from datetime import timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter, zeek_format_observed
+from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    planned_zeek_connection_interval,
+    zeek_format_observed,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _SOURCE_TIMING = SourceTimingPlanner()
@@ -35,7 +39,7 @@ _SOURCE_TIMING = SourceTimingPlanner()
 class ZeekSslEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek ssl.log format (NDJSON).
 
-    Generates SSL/TLS handshake logs. Requires both NetworkContext and SslContext.
+    Generates SSL/TLS handshake logs. Requires both NetworkTransactionPlan and SslContext.
     Shares conn.log UID via event.network.zeek_uid.
     """
 
@@ -43,32 +47,40 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_ssl.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         return (
             event.event_type in self._supported_types
             and event.network is not None
             and event.network.conn_state == "SF"
-            and event.ssl is not None
+            and event.protocol.ssl is not None
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
-        ssl = event.ssl
-        conn_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_conn_start",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=event.timestamp,
-        )
+        ssl = event.protocol.ssl
+        planned_interval = planned_zeek_connection_interval(event)
+        if planned_interval is not None:
+            conn_ts, planned_close = planned_interval
+        else:
+            planned_close = None
+            conn_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
         within = None
-        if net.duration is not None and net.duration > 0:
+        if planned_close is not None:
+            latest = max(conn_ts, planned_close - timedelta(microseconds=1))
+            within = (conn_ts, latest)
+        elif net.duration is not None and net.duration > 0:
             latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
             within = (conn_ts, latest)
         event_ts = _SOURCE_TIMING.source_time(

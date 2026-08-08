@@ -160,6 +160,7 @@ class OcspTransactionPlan:
     next_update: int
     file_id: str
     response_size: int
+    response_file_duration: float
     requested_at: datetime
     responded_at: datetime
     revocation_time: int | None = None
@@ -179,8 +180,11 @@ class OcspTransactionPlan:
             raise ValueError("OCSP issuer-key hash length does not match its algorithm")
         if self.next_update <= self.this_update:
             raise ValueError("OCSP next_update must follow this_update")
+        response_duration = (self.responded_at - self.requested_at).total_seconds()
         if self.response_size <= 0 or self.responded_at < self.requested_at:
             raise ValueError("OCSP response size and phase timing must be positive and ordered")
+        if not 0 < self.response_file_duration <= response_duration:
+            raise ValueError("OCSP file duration must fit inside request/response timing")
         if self.certificate_status == "revoked":
             if self.revocation_time is None or not self.revocation_reason:
                 raise ValueError("Revoked OCSP status requires time and reason metadata")

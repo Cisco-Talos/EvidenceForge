@@ -1,0 +1,248 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Tests for the behavior-preserving canonical event contract foundation."""
+
+import ast
+import json
+from dataclasses import FrozenInstanceError, fields
+from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from evidenceforge.events import CanonicalOccurrence, NetworkTransactionPlan, OccurrenceBuilder
+from evidenceforge.events.contexts import FileTransferContext, HttpContext
+from evidenceforge.events.contracts import (
+    EVENT_KIND_CONTRACTS,
+    ContextKind,
+    ContractViolationCode,
+    EventKind,
+    FormatKind,
+    OccurrenceRole,
+    SemanticOccurrenceKey,
+    shadow_seal,
+)
+from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import EventContractError
+from tests.network_factories import network_plan
+
+
+def _timestamp() -> datetime:
+    return datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+
+
+def _network() -> NetworkTransactionPlan:
+    return network_plan(
+        src_ip="10.0.0.10",
+        src_port=50000,
+        dst_ip="198.51.100.20",
+        dst_port=443,
+        protocol="tcp",
+    )
+
+
+def test_registry_is_closed_over_every_event_kind() -> None:
+    """Every typed canonical kind has exactly one registry contract."""
+
+    assert set(EVENT_KIND_CONTRACTS) == set(EventKind)
+
+
+def test_emitters_do_not_admit_unreachable_legacy_event_aliases() -> None:
+    """Dead consumer-only names cannot regain a parallel projection path."""
+
+    aliases = {"module_load", "special_privileges"}
+
+    assert aliases.isdisjoint(EcarEmitter._supported_types)
+    assert aliases.isdisjoint(WindowsEventEmitter._supported_types)
+
+
+def test_ssh_contract_allows_unmodeled_external_transport_source() -> None:
+    """External SSH clients retain tuple truth without requiring a modeled source host."""
+
+    contract = EVENT_KIND_CONTRACTS[EventKind.SSH_SESSION]
+
+    assert ContextKind.SRC_HOST not in contract.required_contexts
+    assert ContextKind.SRC_HOST in contract.optional_contexts
+
+
+def test_registry_matches_reviewed_constructor_context_and_format_inventory() -> None:
+    """The refreshed reviewed path census is an exact current registry closure gate."""
+
+    root = Path(__file__).resolve().parents[2]
+    inventory = json.loads(
+        (root / "docs/design/realism-review/event-context-paths.json").read_text(encoding="utf-8")
+    )
+    produced = {row["event_type"] for row in inventory["events"] if row.get("constructors")}
+    consumer_only = {
+        row["event_type"]
+        for row in inventory["events"]
+        if not row.get("constructors") and row.get("emitter_consumers")
+    }
+    context_fields = set(inventory["occurrence_builder"]["payload_field_names"]) - {
+        "identity_plan",
+        "network_observations",
+        "source_timing",
+    }
+
+    assert produced == {kind.value for kind in EventKind}
+    assert consumer_only == set()
+    assert context_fields == {context.value for context in ContextKind}
+    assert {row["format"] for row in inventory["formats"]} == {
+        format_kind.value for format_kind in FormatKind
+    }
+
+
+def test_source_has_no_unregistered_literal_security_event_kind() -> None:
+    """A new literal constructor cannot bypass the closed registry unnoticed."""
+
+    root = Path(__file__).resolve().parents[2]
+    permitted = {kind.value for kind in EventKind}
+    discovered: set[str] = set()
+    for source in (root / "src/evidenceforge").rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            call_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if call_name != "OccurrenceBuilder":
+                continue
+            event_type = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "event_type"),
+                None,
+            )
+            if isinstance(event_type, ast.Constant) and isinstance(event_type.value, str):
+                discovered.add(event_type.value)
+
+    assert discovered <= permitted
+
+
+def test_shadow_seal_captures_valid_immutable_occurrence() -> None:
+    """A valid event produces a frozen occurrence snapshot without changing the event."""
+
+    event = OccurrenceBuilder(timestamp=_timestamp(), event_type="connection", network=_network())
+
+    result = shadow_seal(event)
+
+    assert result.valid
+    assert result.occurrence is not None
+    assert result.occurrence.kind is EventKind.CONNECTION
+    assert result.occurrence.canonical_time == event.timestamp
+    assert event.occurrence_id == ""
+
+
+def test_raw_fields_cannot_enter_the_canonical_builder() -> None:
+    """Source-local raw payloads have no canonical construction path."""
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'raw'"):
+        OccurrenceBuilder(  # type: ignore[call-arg]
+            timestamp=_timestamp(),
+            event_type="connection",
+            raw={"message": "test"},
+        )
+
+
+def test_shadow_seal_reports_unknown_event_kind() -> None:
+    """Unknown internal strings remain compatible but become visible contract debt."""
+
+    result = shadow_seal(OccurrenceBuilder(timestamp=_timestamp(), event_type="future_event"))
+
+    assert result.occurrence is None
+    assert [violation.code for violation in result.violations] == [
+        ContractViolationCode.UNKNOWN_EVENT_KIND
+    ]
+
+
+def test_semantic_occurrence_id_ignores_unrelated_dispatch_position() -> None:
+    """Action-relative occurrence IDs depend only on semantic identity."""
+
+    anchor = ActionAnchor(family="ssh", stable_id="story-1:ssh:transport", source="storyline")
+    first = anchor.occurrence_key(OccurrenceRole.PRIMARY, "tcp-10.0.0.10-50000-10.0.0.20-22")
+    unrelated = SemanticOccurrenceKey(
+        action_id="another-action",
+        role=OccurrenceRole.PRIMARY,
+        instance_key="unrelated",
+    )
+    repeated = anchor.occurrence_key(
+        OccurrenceRole.PRIMARY,
+        "tcp-10.0.0.10-50000-10.0.0.20-22",
+    )
+
+    assert unrelated.occurrence_id != first.occurrence_id
+    assert repeated.occurrence_id == first.occurrence_id
+
+
+def test_internal_occurrence_identity_has_no_source_event_id_field() -> None:
+    """Canonical identity cannot masquerade as a source-native event identifier."""
+
+    assert "event_id" not in {item.name for item in fields(OccurrenceBuilder)}
+    assert "event_id" not in {item.name for item in fields(CanonicalOccurrence)}
+
+
+def test_dispatcher_rejects_contract_violations_before_state_application() -> None:
+    """Unknown canonical kinds cannot reach state or projection paths."""
+
+    state_manager = MagicMock(spec=StateManager)
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters={})
+    event = OccurrenceBuilder(timestamp=_timestamp(), event_type="future_event")
+
+    with pytest.raises(EventContractError, match="Unknown canonical event kind"):
+        dispatcher.dispatch_builder(event)
+
+    state_manager.apply.assert_not_called()
+    assert event.contract_seal is not None
+    assert dispatcher.contract_violation_counts == {"unknown_event_kind": 1}
+    assert dispatcher.contract_violations_by_event == {"future_event": {"unknown_event_kind": 1}}
+
+
+def test_dispatcher_publishes_frozen_deep_snapshot_and_rejects_builders() -> None:
+    """Only sealed snapshots cross the state/projection boundary."""
+
+    state_manager = MagicMock(spec=StateManager)
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters={})
+    builder = OccurrenceBuilder(
+        timestamp=_timestamp(),
+        event_type="connection",
+        network=_network(),
+        http=HttpContext(
+            host="example.com",
+            resp_fuids=("FContractFile",),
+            resp_mime_types=("text/plain",),
+        ),
+        file_transfer=FileTransferContext(
+            fuid="FContractFile",
+            source="HTTP",
+            mime_type="text/plain",
+            seen_bytes=64,
+            total_bytes=64,
+        ),
+    )
+
+    dispatcher.dispatch_builder(builder)
+    occurrence = state_manager.apply.call_args.args[0]
+
+    assert isinstance(occurrence, CanonicalOccurrence)
+    assert occurrence.event_type is EventKind.CONNECTION
+    assert occurrence is not builder
+    assert not hasattr(occurrence, "http")
+    assert not hasattr(occurrence, "file_transfer")
+    assert occurrence.protocol.http is not builder.http
+    assert occurrence.protocol.primary_file_transfer is not builder.file_transfer
+    assert len(occurrence.protocol.file_transfers) == 1
+    with pytest.raises(FrozenInstanceError):
+        occurrence.timestamp = _timestamp()
+    with pytest.raises(FrozenInstanceError):
+        occurrence.protocol.http.status_code = 500
+    with pytest.raises(TypeError, match="only sealed"):
+        dispatcher.dispatch(builder)  # type: ignore[arg-type]

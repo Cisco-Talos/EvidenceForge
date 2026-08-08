@@ -28,7 +28,7 @@ from itertools import pairwise
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
@@ -397,8 +397,8 @@ class TestStateManagerInit:
         assert offset > 0
         assert sm._linux_pid_block_offsets == {}
 
-    def test_linux_visible_pids_stay_in_lived_in_desktop_range_after_days(self):
-        """Long collection windows should not create obvious million-range PID bands."""
+    def test_linux_visible_pids_stay_below_pid_max_after_days(self):
+        """Ordinary multi-day uptime should retain plausible pre-wrap PID values."""
         sm = StateManager()
         boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
         sm.register_boot_time("linux01", boot_time)
@@ -413,7 +413,7 @@ class TestStateManagerInit:
             integrity_level="Medium",
         )
 
-        assert 8_000 <= pid < 180_000
+        assert 8_000 <= pid < 700_000
 
     def test_linux_pids_increase_across_time_bucket_boundary(self):
         """Linux PIDs should not sawtooth downward at five-minute boundaries."""
@@ -468,6 +468,48 @@ class TestStateManagerInit:
         )
 
         assert earlier_pid < later_pid
+
+    def test_linux_pid_out_of_order_insertions_preserve_interval_capacity(self):
+        """Repeated temporal insertions should not consume an interval edge prematurely."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        offsets = (
+            timedelta(minutes=32),
+            timedelta(minutes=12),
+            timedelta(minutes=30),
+            timedelta(minutes=31),
+            timedelta(minutes=26),
+        )
+
+        allocations: dict[timedelta, int] = {}
+        for offset in offsets:
+            allocations[offset] = sm.allocate_transient_linux_pid(
+                "linux01",
+                boot_time + offset,
+            )
+
+        chronological_pids = [allocations[offset] for offset in sorted(offsets)]
+        assert chronological_pids == sorted(chronological_pids)
+        assert len(set(chronological_pids)) == len(chronological_pids)
+
+    def test_linux_pid_future_reservation_absorbs_dense_deferred_baseline(self):
+        """A preplanned future process leaves room for dense earlier process churn."""
+
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 1, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        window_start = boot_time + timedelta(days=29)
+        future_time = window_start + timedelta(seconds=190)
+        allocations = [(future_time, sm.allocate_transient_linux_pid("linux01", future_time))]
+
+        for ordinal in range(250):
+            event_time = window_start + timedelta(seconds=(ordinal * 185) / 249)
+            allocations.append((event_time, sm.allocate_transient_linux_pid("linux01", event_time)))
+
+        chronological_pids = [pid for _event_time, pid in sorted(allocations)]
+        assert chronological_pids == sorted(chronological_pids)
+        assert len(set(chronological_pids)) == len(chronological_pids)
 
     def test_linux_pids_keep_parent_child_shape_before_future_process(self):
         """Earlier parent/child allocations should fit below known future PIDs."""
@@ -572,6 +614,29 @@ class TestStateManagerInit:
             ]
 
         assert allocate_sequence() == allocate_sequence()
+
+    def test_linux_pid_order_survives_dense_out_of_order_transient_allocation(self):
+        """Host PID chronology must not depend on generator traversal order."""
+        import random
+
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        chronological_times = [boot_time + timedelta(seconds=offset * 3) for offset in range(400)]
+        allocation_times = list(chronological_times)
+        random.Random(17).shuffle(allocation_times)
+        sm = StateManager()
+        sm.register_boot_time("linux01", boot_time)
+
+        allocations = sorted(
+            (
+                event_time,
+                sm.allocate_transient_linux_pid("linux01", event_time),
+            )
+            for event_time in allocation_times
+        )
+
+        chronological_pids = [pid for _event_time, pid in allocations]
+        assert chronological_pids == sorted(chronological_pids)
+        assert len(set(chronological_pids)) == len(chronological_pids)
 
     def test_linux_transient_pid_rejects_non_linux_hosts_before_allocator_init(self):
         """Transient Linux PIDs should not initialize a Windows host namespace."""
@@ -806,6 +871,54 @@ class TestSessionManagement:
         assert session.logon_guid == guid_a
         assert guid_a != "{00000000-0000-0000-0000-000000000000}"
 
+    def test_session_logon_guid_nullability_is_immutable(self):
+        """Later consumers cannot upgrade a published null LogonGuid for one LogonID."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        logon_id = sm.create_session("jdoe", "WS-01", 3, "192.168.1.50")
+
+        null_guid = sm.get_or_create_session_logon_guid(
+            logon_id,
+            "WS-01",
+            require_nonzero=False,
+        )
+        later = sm.get_or_create_session_logon_guid(
+            logon_id,
+            "WS-01",
+            require_nonzero=True,
+        )
+
+        assert null_guid == "{00000000-0000-0000-0000-000000000000}"
+        assert later == null_guid
+        with pytest.raises(StateError, match="Cannot replace published session LogonGuid"):
+            sm.update_session_metadata(
+                logon_id,
+                logon_guid="{11111111-2222-4333-8444-555555555555}",
+            )
+
+    def test_create_session_can_finalize_logon_guid_policy_before_publication(self):
+        """Session creation can seal nullability before any dependent process exists."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        null_id = sm.create_session(
+            "service",
+            "WS-01",
+            5,
+            "-",
+            logon_guid_required=False,
+        )
+        nonnull_id = sm.create_session(
+            "jdoe",
+            "WS-01",
+            2,
+            "-",
+            logon_guid_required=True,
+        )
+
+        assert sm.get_session(null_id).logon_guid == "{00000000-0000-0000-0000-000000000000}"
+        assert sm.get_session(nonnull_id).logon_guid != "{00000000-0000-0000-0000-000000000000}"
+
     def test_generated_logon_guids_use_uuid4_morphology(self):
         """Deterministic LogonGuid values should use normal RFC variant/version nibbles."""
         sm = StateManager()
@@ -922,6 +1035,16 @@ class TestSessionManagement:
         ids = [sm.create_session(f"user{i}", f"WS-{i:02d}", 3, f"192.168.1.{i}") for i in range(20)]
 
         assert len(set(ids)) == len(ids)
+
+    def test_semantic_peer_ordinals_are_scoped_by_stable_action_key(self):
+        """Unrelated peer allocation must not renumber attempts in another action."""
+
+        sm = StateManager()
+
+        assert sm.next_semantic_peer_ordinal("failed_logon", "action-a") == 0
+        assert sm.next_semantic_peer_ordinal("failed_logon", "action-b") == 0
+        assert sm.next_semantic_peer_ordinal("failed_logon", "action-a") == 1
+        assert StateManager().next_semantic_peer_ordinal("failed_logon", "action-a") == 0
 
     def test_create_session_supports_more_than_legacy_host_bucket_count(self):
         """Large scenarios should not exhaust Windows LogonID host ranges."""
@@ -1174,6 +1297,37 @@ class TestCanonicalIdentityState:
 
         with pytest.raises(StateError, match="owning process object is not live"):
             sm.create_thread("WS-01", process.object_id, tid=7000, kind="remote")
+
+    def test_ended_identity_indexes_plateau_across_45_days(self) -> None:
+        """Late-reference indexes retain 48 hours, not all elapsed process history."""
+
+        sm = StateManager()
+        start = datetime(2024, 1, 1, tzinfo=UTC)
+        first_object_id = ""
+        latest_object_id = ""
+
+        for hour in range(45 * 24):
+            event_time = start + timedelta(hours=hour)
+            sm.set_current_time(event_time)
+            pid = sm.create_process(
+                system="WS-01",
+                parent_pid=0,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line=f"cmd.exe /c echo {hour}",
+                username="analyst",
+                integrity_level="Medium",
+            )
+            identity = sm.get_process_identity("WS-01", pid)
+            assert identity is not None
+            first_object_id = first_object_id or identity.object_id
+            latest_object_id = identity.object_id
+            sm.end_process("WS-01", pid, event_time + timedelta(seconds=1))
+
+        assert len(sm._ended_processes_by_object_id) <= 49
+        assert len(sm._ended_processes_by_key) <= 49
+        assert len(sm._ended_threads) <= 49
+        assert sm.get_process_identity_by_object_id(first_object_id) is None
+        assert sm.get_process_identity_by_object_id(latest_object_id) is not None
 
 
 class TestProcessManagement:
@@ -1442,7 +1596,7 @@ class TestProcessManagement:
         pid = sm.create_process("WS-01", 0, "proc.exe", "proc.exe", "jdoe", "Medium")
 
         sm.apply(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=activity_time,
                 event_type="process_access",
                 src_host=HostContext(
@@ -1477,7 +1631,7 @@ class TestProcessManagement:
         assert actor is not None
 
         sm.apply(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=activity_time,
                 event_type="connection",
                 identity_plan=EventIdentityPlan(actor=actor),

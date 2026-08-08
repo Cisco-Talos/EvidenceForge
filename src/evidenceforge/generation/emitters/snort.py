@@ -32,7 +32,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import (
     IdsAlertPolicyContext,
     IdsDetectionFilterContext,
@@ -48,7 +48,7 @@ class SnortEmitter(SensorMultiplexEmitter):
 
     Per-sensor directory routing: each IDS sensor gets its own alert file.
 
-    Handles SecurityEvents with IdsContext (fan-out from connection events
+    Handles canonical occurrences with IdsAlertPlan entries (fan-out from connection events
     through IDS sensors) and raw dict events from baseline false-positive
     alert generation.
     """
@@ -66,19 +66,18 @@ class SnortEmitter(SensorMultiplexEmitter):
         self._ids_alert_summary: dict[str, dict[int, dict[str, Any]]] = {}
         self._ids_evaluation_summary: dict[str, dict[str, dict[str, Any]]] = {}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
-        """Handle physical canonical transports that carry an IdsContext."""
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
+        """Handle physical canonical transports that carry an IdsAlertPlan."""
         return (
             event.network is not None
-            and bool(event.all_ids_alerts())
+            and bool(event.ids_alerts)
             and not event.network.application_layer_only
         )
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Render IdsContext to Snort fast alert format."""
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Render IdsAlertPlan to Snort fast alert format."""
         net = event.network
-        authored = {(alert.gid, alert.sid) for alert in event.ids_alerts}
-        for ids in event.all_ids_alerts():
+        for ids in event.ids_alerts:
             event_data = {
                 "timestamp": event.timestamp,
                 "gid": ids.gid,
@@ -94,14 +93,12 @@ class SnortEmitter(SensorMultiplexEmitter):
                 "dst_port": net.dst_port if net else 0,
                 "_ids_candidate": True,
                 "_ids_policy": asdict(ids.policy) if ids.policy is not None else None,
-                "_cluster_id": event.storyline_cluster_id or event.event_id,
-                "_event_id": event.event_id,
+                "_cluster_id": event.storyline_cluster_id or event.occurrence_id,
+                "_occurrence_id": event.occurrence_id,
                 "_source_observation_status": getattr(
                     event, "_source_observation_status", "visible"
                 ),
-                "_ids_origin": (
-                    "authored_attachment" if (ids.gid, ids.sid) in authored else "built_in"
-                ),
+                "_ids_origin": ids.origin,
                 **self._sensor_metadata(event, "snort_alert"),
             }
             self.emit_event(event_data)
@@ -178,7 +175,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                 payload TEXT NOT NULL,
                 policy TEXT,
                 cluster_id TEXT NOT NULL,
-                event_id TEXT NOT NULL,
+                occurrence_id TEXT NOT NULL,
                 observation_status TEXT NOT NULL,
                 origin TEXT NOT NULL
             )"""
@@ -203,7 +200,7 @@ class SnortEmitter(SensorMultiplexEmitter):
             connection = self._open_spool()
             connection.execute(
                 """INSERT INTO candidates
-                (sensor, timestamp, gid, sid, payload, policy, cluster_id, event_id,
+                (sensor, timestamp, gid, sid, payload, policy, cluster_id, occurrence_id,
                  observation_status, origin)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
@@ -214,7 +211,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                     json.dumps(payload, sort_keys=True),
                     json.dumps(event_data.get("_ids_policy"), sort_keys=True),
                     str(event_data.get("_cluster_id", "")),
-                    str(event_data.get("_event_id", "")),
+                    str(event_data.get("_occurrence_id", "")),
                     str(event_data.get("_source_observation_status", "visible")),
                     str(event_data.get("_ids_origin", "built_in")),
                 ),
@@ -251,7 +248,7 @@ class SnortEmitter(SensorMultiplexEmitter):
             """SELECT sensor, timestamp, gid, sid, payload, policy, cluster_id,
             observation_status, origin
             FROM candidates
-            ORDER BY timestamp, sensor, event_id, gid, sid, sequence"""
+            ORDER BY timestamp, sensor, occurrence_id, gid, sid, sequence"""
         )
         for (
             sensor,

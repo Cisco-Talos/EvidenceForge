@@ -32,7 +32,7 @@ import random
 from datetime import datetime, timedelta
 from threading import RLock
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTransactionPlan
@@ -61,6 +61,12 @@ _MAX_GENERATED_LOGON_LUID = 0xFFFFFFFF
 _GENERATED_LOGON_LUID_SPAN = _MAX_GENERATED_LOGON_LUID - _MIN_GENERATED_LOGON_LUID + 1
 _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
+_NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
+_LINUX_PID_BLOCK_SECONDS = 300
+_MINUTES_PER_WEEK = 7 * 24 * 60
+_ENDED_IDENTITY_RETENTION = timedelta(hours=48)
+_MAX_RETAINED_PROCESS_IDENTITIES = 500_000
+_MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -151,6 +157,7 @@ class StateManager:
         self._logon_id_used_host_bases: set[int] = set()
         self._logon_id_epochs: dict[str, datetime] = {}
         self._logon_id_second_ordinals: dict[tuple[str, int, int], int] = {}
+        self._semantic_peer_ordinals: dict[tuple[str, str], int] = {}
         self._logon_id_block_offsets: dict[str, dict[int, int]] = {}
         self._used_logon_ids: set[int] = set()
         self._logon_id_aliases: dict[str, str] = {}
@@ -162,6 +169,7 @@ class StateManager:
         self._pid_time_epochs: dict[str, datetime] = {}
         self._pid_bucket_offsets: dict[tuple[str, int, int], int] = {}
         self._linux_pid_block_offsets: dict[str, dict[int, int]] = {}
+        self._linux_pid_weekly_churn_prefixes: dict[str, tuple[int, ...]] = {}
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, TemporalAllocationIndex] = {}
         self._connection_id_counter = 0
@@ -194,7 +202,11 @@ class StateManager:
         )
         self._process_object_ids: dict[tuple[str, int], str] = {}
         self._processes_by_object_id: dict[str, RunningProcess] = {}
-        self._ended_threads: dict[tuple[str, str, int], RunningThread] = {}
+        self._ended_processes_by_key: ExpiringIndex[tuple[str, int], RunningProcess] = (
+            ExpiringIndex()
+        )
+        self._ended_processes_by_object_id: ExpiringIndex[str, RunningProcess] = ExpiringIndex()
+        self._ended_threads: ExpiringIndex[tuple[str, str, int], RunningThread] = ExpiringIndex()
 
     # ========================================
     # Session Management
@@ -308,6 +320,17 @@ class StateManager:
                 event_time = self.state.current_time
             return f"0x{self._allocate_logon_luid(system, event_time):x}"
 
+    def next_semantic_peer_ordinal(self, family: str, stable_key: str) -> int:
+        """Allocate an ordinal scoped only to otherwise identical semantic peers."""
+
+        if not family or not stable_key:
+            raise ValueError("Semantic peer ordinals require a family and stable key")
+        with self._lock:
+            key = (family, stable_key)
+            ordinal = self._semantic_peer_ordinals.get(key, 0)
+            self._semantic_peer_ordinals[key] = ordinal + 1
+            return ordinal
+
     def _allocate_windows_session_id(
         self,
         system: str,
@@ -402,6 +425,7 @@ class StateManager:
         transport_pid: int | None = None,
         start_time: datetime | None = None,
         logon_guid: str = "",
+        logon_guid_required: bool | None = None,
         session_id: int | None = None,
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
@@ -455,6 +479,12 @@ class StateManager:
                 logon_id,
                 windows_session_id,
             )
+            if logon_guid_required is not None:
+                logon_guid = (
+                    self._stable_logon_guid(system, logon_id)
+                    if logon_guid_required
+                    else _NULL_LOGON_GUID
+                )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -663,6 +693,7 @@ class StateManager:
         session_kind: str = "logon",
         transport_pid: int | None = None,
         logon_guid: str = "",
+        logon_guid_required: bool | None = None,
         session_id: int | None = None,
         lifecycle_group_id: str = "",
         parent_lifecycle_group_id: str = "",
@@ -701,6 +732,12 @@ class StateManager:
                 logon_id,
                 windows_session_id,
             )
+            if logon_guid_required is not None:
+                logon_guid = (
+                    self._stable_logon_guid(system, logon_id)
+                    if logon_guid_required
+                    else _NULL_LOGON_GUID
+                )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -766,6 +803,11 @@ class StateManager:
             if source_ready_time is not None:
                 session.source_ready_time = ensure_utc(source_ready_time)
             if logon_guid is not None:
+                if session.logon_guid and session.logon_guid != logon_guid:
+                    raise StateError(
+                        "Cannot replace published session LogonGuid for "
+                        f"{logon_id}: {session.logon_guid} -> {logon_guid}"
+                    )
                 session.logon_guid = logon_guid
             if session_id is not None:
                 session.session_id = session_id
@@ -842,6 +884,7 @@ class StateManager:
                 session_kind=session.session_kind,
                 started_at=session.start_time,
                 lifecycle_group_id=session.lifecycle_group_id,
+                logon_guid=session.logon_guid,
                 parent_lifecycle_group_id=session.parent_lifecycle_group_id,
             )
 
@@ -865,9 +908,6 @@ class StateManager:
         require_nonzero: bool = True,
     ) -> str:
         """Return the canonical LogonGuid for a session, creating it if needed."""
-        null_guid = "{00000000-0000-0000-0000-000000000000}"
-        if not require_nonzero:
-            return null_guid
         with self._lock:
             resolved = self._resolve_logon_id(logon_id)
             session = self.state.active_sessions.get(resolved)
@@ -876,7 +916,11 @@ class StateManager:
                 session = ended[0] if ended is not None else None
             if session is not None and session.logon_guid:
                 return session.logon_guid
-            guid = self._stable_logon_guid(system, resolved or logon_id)
+            guid = (
+                self._stable_logon_guid(system, resolved or logon_id)
+                if require_nonzero
+                else _NULL_LOGON_GUID
+            )
             if session is not None:
                 session.logon_guid = guid
             return guid
@@ -1058,18 +1102,69 @@ class StateManager:
         self._pid_time_epochs[system] = epoch
         return epoch
 
-    def _linux_pid_block_stride(self, system: str, block: int) -> int:
-        """Return background process churn for one coarse Linux PID time block."""
-        return 997 + (_stable_seed(f"linux_pid_stride:{system}:{block}") % 311)
+    def _linux_pid_weekly_churn_prefix(self, system: str) -> tuple[int, ...]:
+        """Return cached hidden process churn at each minute boundary in a week.
+
+        Real Linux hosts consume PIDs for short-lived processes that may never be
+        represented in collected endpoint telemetry. A fixed elapsed-seconds
+        multiplier exposes generator time directly, so model that hidden churn as
+        a stable host-specific weekly schedule. The prefix table trades bounded
+        memory for O(1) lookup, including for far-future timestamps.
+        """
+        cached = self._linux_pid_weekly_churn_prefixes.get(system)
+        if cached is not None:
+            return cached
+
+        rng = random.Random(_stable_seed(f"linux_pid_hidden_churn:{system}"))
+        prefix = [0]
+        hourly_factor = 1.0
+        for minute_of_week in range(_MINUTES_PER_WEEK):
+            day = minute_of_week // (24 * 60)
+            minute_of_day = minute_of_week % (24 * 60)
+            hour = minute_of_day // 60
+            if minute_of_day % 60 == 0:
+                hourly_factor = rng.choices(
+                    (0.70, 0.85, 1.00, 1.20, 1.50),
+                    weights=(10, 20, 40, 20, 10),
+                    k=1,
+                )[0]
+            if day >= 5:
+                base_churn = 95
+            elif 8 <= hour < 18:
+                base_churn = 145
+            else:
+                base_churn = 115
+            hourly_target = round(base_churn * hourly_factor)
+            lower = max(76, hourly_target - 18)
+            upper = min(220, hourly_target + 18)
+            churn = rng.randint(lower, upper)
+            if rng.random() < 0.015:
+                churn += rng.randint(18, 72)
+            prefix.append(prefix[-1] + churn)
+
+        frozen = tuple(prefix)
+        self._linux_pid_weekly_churn_prefixes[system] = frozen
+        return frozen
+
+    def _linux_pid_hidden_churn_offset(self, system: str, elapsed_seconds: int) -> int:
+        """Return hidden PID consumption before an elapsed host-runtime offset."""
+        if elapsed_seconds <= 0:
+            return 0
+
+        prefix = self._linux_pid_weekly_churn_prefix(system)
+        elapsed_minutes, second_in_minute = divmod(elapsed_seconds, 60)
+        full_weeks, minute_of_week = divmod(elapsed_minutes, _MINUTES_PER_WEEK)
+        weekly_churn = prefix[-1]
+        minute_churn = prefix[minute_of_week + 1] - prefix[minute_of_week]
+        partial_churn = (second_in_minute * minute_churn) // 60
+        return (full_weeks * weekly_churn) + prefix[minute_of_week] + partial_churn
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
         """Return deterministic per-host Linux PID churn before a coarse time block."""
         if block <= 0:
             return 0
-
-        block_width = 96
-        jitter = _stable_seed(f"linux_pid_block_jitter:{system}:{block}") % 32
-        return (block * block_width) + jitter
+        elapsed_seconds = block * _LINUX_PID_BLOCK_SECONDS
+        return self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
 
     @staticmethod
     def _normalize_linux_pid(pid: int) -> int:
@@ -1107,15 +1202,13 @@ class StateManager:
         current_time = ensure_utc(current_time or self.state.current_time)
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
-        block = elapsed_seconds // 300
-        slot = (elapsed_seconds % 300) // 10
-        ordinal_key = (system, block, slot)
+        time_offset = self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
+        ordinal_key = (system, time_offset, 0)
         ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
-        gap = 23 + max(1, int(pid_rng.lognormvariate(0.7, 0.8)))
+        gap = max(1, min(5, int(pid_rng.lognormvariate(0.3, 0.8))))
         self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
-        pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
-        pid += (slot * 2) + ordinal
+        pid = self._pid_counters[system] + time_offset + ordinal
         pid = self._normalize_linux_pid(pid)
 
         running = {process.pid for process in self._running_processes.find("system", system)}
@@ -1141,34 +1234,31 @@ class StateManager:
                     or candidate > minimum_pid_exclusive
                 )
                 and (future_pid_exclusive is None or candidate < future_pid_exclusive)
-                and not allocations.matches_elapsed_delta(
-                    current_time,
-                    candidate,
-                    tolerance=1.0,
-                )
             )
 
-        def bounded_candidate(salt: int) -> int | None:
+        def bounded_candidate() -> int | None:
             if future_pid_exclusive is None:
                 return None
             lower_bound = max(499, minimum_pid_exclusive or 499)
             if future_pid_exclusive <= lower_bound + 1:
                 return None
             span = future_pid_exclusive - lower_bound - 1
-            start = (
-                _stable_seed(
-                    f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
-                )
-                % span
-            )
-            for offset in range(min(span, 64)):
-                candidate = future_pid_exclusive - 1 - ((start + offset) % span)
-                if is_available(candidate):
-                    return candidate
+            # The time-derived PID is already the best estimate of where this
+            # process belongs. Search outward from that point instead of choosing
+            # a random midpoint: midpoint insertion repeatedly halves the room
+            # below a preplanned future PID and exhausts otherwise adequate
+            # capacity during dense deferred baseline generation.
+            center = min(max(pid, lower_bound + 1), future_pid_exclusive - 1)
+            for distance in range(min(span, 4096)):
+                offsets = (0,) if distance == 0 else (distance, -distance)
+                for offset in offsets:
+                    candidate = center + offset
+                    if lower_bound < candidate < future_pid_exclusive and is_available(candidate):
+                        return candidate
             return None
 
         if not is_available(pid):
-            bounded = bounded_candidate(0)
+            bounded = bounded_candidate()
             if bounded is not None:
                 pid = bounded
             elif minimum_pid_exclusive is not None and minimum_pid_exclusive < 4_194_304:
@@ -1189,7 +1279,7 @@ class StateManager:
                     "Unable to allocate Linux PID after bounded retries; "
                     "adjust scenario timing or reduce process contention."
                 )
-            bounded = bounded_candidate(collision_salt + 1)
+            bounded = bounded_candidate()
             if bounded is not None:
                 pid = bounded
                 if is_available(pid):
@@ -1319,6 +1409,7 @@ class StateManager:
             self.state.running_processes[(system, pid)] = process
             self._process_object_ids[(system, pid)] = object_id
             self._processes_by_object_id[object_id] = process
+            self._ended_processes_by_key.pop((system, pid), None)
             primary_tid = (
                 pid
                 if os_category == "linux"
@@ -1462,6 +1553,7 @@ class StateManager:
             self.state.running_processes[key] = process
             self._process_object_ids[key] = ecar_object_id
             self._processes_by_object_id[ecar_object_id] = process
+            self._ended_processes_by_key.pop(key, None)
             primary_tid = (
                 pid
                 if self._pid_os.get(system) == "linux"
@@ -1654,14 +1746,19 @@ class StateManager:
                 return False
             effective_end = end_time or self.state.current_time
             thread.end_time = ensure_utc(effective_end) if effective_end is not None else None
-            self._ended_threads[key] = thread
+            if thread.end_time is not None:
+                deadline = (thread.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+                self._ended_threads.set(key, thread, deadline)
+                self._trim_retained_thread_identities()
             return True
 
     def get_process_identity(self, system: str, pid: int) -> ProcessIdentity | None:
-        """Return an immutable snapshot for the currently live process at a host-local PID."""
+        """Return the latest immutable process identity at a host-local PID."""
 
         with self._lock:
             process = self.state.running_processes.get((system, pid))
+            if process is None:
+                process = self._ended_processes_by_key.get((system, pid))
             if process is None:
                 return None
             return self._process_identity(process)
@@ -1670,7 +1767,9 @@ class StateManager:
         """Resolve a live or ended process by its durable process object identity."""
 
         with self._lock:
-            process = self._processes_by_object_id.get(object_id)
+            process = self._processes_by_object_id.get(
+                object_id
+            ) or self._ended_processes_by_object_id.get(object_id)
             return self._process_identity(process) if process is not None else None
 
     def _process_identity(self, process: RunningProcess) -> ProcessIdentity:
@@ -1730,7 +1829,8 @@ class StateManager:
             proc = self.state.running_processes.get(key)
             if proc:
                 return proc.ecar_object_id
-            return self._process_object_ids.get(key, "")
+            ended = self._ended_processes_by_key.get(key)
+            return ended.ecar_object_id if ended is not None else ""
 
     def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for a running process."""
@@ -1836,6 +1936,9 @@ class StateManager:
             key = (system, pid)
             process = self.state.running_processes.get(key)
             if process is not None:
+                effective_end = ensure_utc(
+                    end_time or self.state.current_time or process.start_time
+                )
                 thread_keys = [
                     (thread.hostname, thread.process_object_id, thread.tid)
                     for thread in self._running_threads.find(
@@ -1844,12 +1947,53 @@ class StateManager:
                     )
                 ]
                 for thread_key in thread_keys:
-                    self.end_thread(*thread_key, end_time=end_time)
+                    self.end_thread(*thread_key, end_time=effective_end)
                 del self.state.running_processes[key]
+                process.end_time = effective_end
+                self._process_object_ids.pop(key, None)
+                self._processes_by_object_id.pop(process.ecar_object_id, None)
+                deadline = (effective_end + _ENDED_IDENTITY_RETENTION).timestamp()
+                self._ended_processes_by_key.set(key, process, deadline)
+                self._ended_processes_by_object_id.set(
+                    process.ecar_object_id,
+                    process,
+                    deadline,
+                )
+                self._trim_retained_process_identities()
                 self._clear_session_process_references(system, pid)
                 logger.debug(f"Ended process {pid} on {system}")
                 return True
             return False
+
+    def _trim_retained_process_identities(self) -> None:
+        """Enforce a hard cap while preserving the newest ended process identities."""
+
+        removed = self._ended_processes_by_object_id.trim_earliest(
+            _MAX_RETAINED_PROCESS_IDENTITIES,
+        )
+        for _object_id, process in removed:
+            key = (process.system, process.pid)
+            if self._ended_processes_by_key.get(key) is process:
+                self._ended_processes_by_key.pop(key, None)
+
+    def _trim_retained_thread_identities(self) -> None:
+        """Enforce a hard cap while preserving the newest ended thread identities."""
+
+        self._ended_threads.trim_earliest(_MAX_RETAINED_THREAD_IDENTITIES)
+
+    def _expire_retained_identities(self, current_time: datetime) -> None:
+        """Expire ended identity snapshots outside the explicit late-reference window."""
+
+        cutoff = ensure_utc(current_time).timestamp()
+        expired = self._ended_processes_by_object_id.expire_before(cutoff, inclusive=True)
+        for _object_id, process in expired:
+            key = (process.system, process.pid)
+            if self._ended_processes_by_key.get(key) is process:
+                self._ended_processes_by_key.pop(key, None)
+        for _key, process in self._ended_processes_by_key.expire_before(cutoff, inclusive=True):
+            if self._ended_processes_by_object_id.get(process.ecar_object_id) is process:
+                self._ended_processes_by_object_id.pop(process.ecar_object_id, None)
+        self._ended_threads.expire_before(cutoff, inclusive=True)
 
     def _clear_session_process_references(self, system: str, pid: int) -> None:
         """Clear active-session pointers to a process that has ended."""
@@ -2258,6 +2402,7 @@ class StateManager:
         """
         with self._lock:
             self.state.current_time = dt
+            self._expire_retained_identities(dt)
             logger.debug(f"Set current time to {dt}")
 
     def get_current_time(self) -> datetime | None:
@@ -2283,6 +2428,7 @@ class StateManager:
                 raise StateError("Cannot advance time: current_time not set")
 
             self.state.current_time += delta
+            self._expire_retained_identities(self.state.current_time)
             logger.debug(f"Advanced time by {delta} to {self.state.current_time}")
 
     # ========================================
@@ -2374,12 +2520,12 @@ class StateManager:
     # Event Application
     # ========================================
 
-    def apply(self, event: SecurityEvent) -> None:
-        """Record state changes from a fully-constructed SecurityEvent.
+    def apply(self, event: CanonicalOccurrence) -> None:
+        """Record state changes from a fully-constructed CanonicalOccurrence.
 
         IDs (logon_id, pid, conn_id, zeek_uid) are already allocated by the
         caller via create_session(), create_process(), open_connection() before
-        building the SecurityEvent. This method handles only teardown (logoff,
+        building the CanonicalOccurrence. This method handles only teardown (logoff,
         process termination) and updates (connection bytes).
         """
         with self._lock:
@@ -2397,8 +2543,8 @@ class StateManager:
                 proc = self.state.running_processes.get((process_host, process_pid))
                 if proc is not None:
                     activity_time = ensure_utc(event.timestamp)
-                    if event.network is not None and event.network.transaction is not None:
-                        closed_at = event.network.transaction.closed_at
+                    if event.network is not None:
+                        closed_at = event.network.closed_at
                         if closed_at is not None:
                             activity_time = max(activity_time, ensure_utc(closed_at))
                     if proc.last_activity_time is None or activity_time > proc.last_activity_time:
@@ -2409,68 +2555,52 @@ class StateManager:
             elif event.event_type == "process_terminate" and event.process and event.src_host:
                 self.end_process(event.src_host.hostname, event.process.pid, event.timestamp)
             elif event.event_type == "connection" and event.network:
-                event.network.validate_finalized_transaction()
                 if event.network.conn_id:
                     conn = self.state.open_connections.get(event.network.conn_id)
                     if conn is not None:
-                        transaction = event.network.transaction
-                        if transaction is not None:
-                            conn.transaction_id = transaction.stable_id
-                            if event.network.application_layer_only:
-                                conn.traffic_ledger = conn.traffic_ledger.accumulate(
-                                    transaction.traffic
-                                )
-                            else:
-                                conn.traffic_ledger = transaction.traffic
-                            conn.bytes_sent = transaction.traffic.orig.payload_bytes
-                            conn.bytes_received = transaction.traffic.resp.payload_bytes
-                            if event.network.application_layer_only:
-                                conn.bytes_sent = conn.traffic_ledger.orig.payload_bytes
-                                conn.bytes_received = conn.traffic_ledger.resp.payload_bytes
-                                if transaction.closed_at is not None and (
-                                    conn.close_time is None
-                                    or ensure_utc(transaction.closed_at) > conn.close_time
-                                ):
-                                    conn.close_time = ensure_utc(transaction.closed_at)
-                                if conn.close_time is not None:
-                                    conn.duration = max(
-                                        0.0,
-                                        (conn.close_time - conn.start_time).total_seconds(),
-                                    )
-                            else:
-                                conn.history = transaction.history
-                                conn.duration = transaction.duration
-                                conn.start_time = ensure_utc(transaction.started_at)
-                                conn.close_time = (
-                                    ensure_utc(transaction.closed_at)
-                                    if transaction.closed_at is not None
-                                    else None
-                                )
-                                conn.conn_state = transaction.conn_state
-                                conn.state = (
-                                    "closed"
-                                    if transaction.closed_at is not None
-                                    else transaction.conn_state
+                        transaction = event.network
+                        conn.transaction_id = transaction.stable_id
+                        if transaction.application_layer_only:
+                            conn.traffic_ledger = conn.traffic_ledger.accumulate(
+                                transaction.traffic
+                            )
+                            conn.bytes_sent = conn.traffic_ledger.orig.payload_bytes
+                            conn.bytes_received = conn.traffic_ledger.resp.payload_bytes
+                            if transaction.closed_at is not None and (
+                                conn.close_time is None
+                                or ensure_utc(transaction.closed_at) > conn.close_time
+                            ):
+                                conn.close_time = ensure_utc(transaction.closed_at)
+                            if conn.close_time is not None:
+                                conn.duration = max(
+                                    0.0,
+                                    (conn.close_time - conn.start_time).total_seconds(),
                                 )
                         else:
-                            if event.network.orig_bytes is not None:
-                                conn.bytes_sent = event.network.orig_bytes
-                            if event.network.resp_bytes is not None:
-                                conn.bytes_received = event.network.resp_bytes
-                        conn.initiating_pid = event.network.initiating_pid
+                            conn.traffic_ledger = transaction.traffic
+                            conn.bytes_sent = transaction.traffic.orig.payload_bytes
+                            conn.bytes_received = transaction.traffic.resp.payload_bytes
+                            conn.history = transaction.history
+                            conn.duration = transaction.duration
+                            conn.start_time = ensure_utc(transaction.started_at)
+                            conn.close_time = (
+                                ensure_utc(transaction.closed_at)
+                                if transaction.closed_at is not None
+                                else None
+                            )
+                            conn.conn_state = transaction.conn_state
+                            conn.state = (
+                                "closed"
+                                if transaction.closed_at is not None
+                                else transaction.conn_state
+                            )
+                        conn.initiating_pid = transaction.initiating_pid
                         if event.src_host is not None:
                             conn.source_system = event.src_host.hostname
                             conn.source_hostname = event.src_host.fqdn or event.src_host.hostname
-                        if event.http is not None and event.http.host:
-                            conn.hostname = event.http.host
-                        if event.ssl is not None and event.ssl.server_name:
-                            conn.hostname = event.ssl.server_name
-                        if transaction is None and event.network.duration is not None:
-                            conn.close_time = event.timestamp + timedelta(
-                                seconds=event.network.duration
-                            )
-                            conn.state = "closed"
-                        elif transaction is None and event.network.conn_state:
-                            conn.state = event.network.conn_state
+                        if event.protocol.http is not None and event.protocol.http.host:
+                            conn.hostname = event.protocol.http.host
+                        if event.protocol.ssl is not None and event.protocol.ssl.server_name:
+                            conn.hostname = event.protocol.ssl.server_name
                         self._open_connections.refresh(conn.conn_id)
                         self._refresh_connection_lifecycle(conn)

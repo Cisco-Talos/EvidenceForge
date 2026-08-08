@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import random
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,7 +17,7 @@ from urllib.parse import quote
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509.ocsp import OCSPRequestBuilder, load_der_ocsp_request
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import FileTransferContext, HttpContext, OcspContext
 from evidenceforge.events.cryptography import (
     CertificateAuthorityMaterial,
@@ -36,7 +37,7 @@ from evidenceforge.utils.rng import _stable_seed
 class OcspTransactionRequest:
     """Intent to query the status of one presented certificate."""
 
-    tls_event: SecurityEvent
+    tls_event: OccurrenceBuilder
     certificate: CertificateIdentityPlan
     issuer: CertificateAuthorityMaterial
     cert_name: str
@@ -46,7 +47,7 @@ class OcspTransactionRequest:
         """Return the durable OCSP action-group identity."""
 
         net = self.tls_event.network
-        transaction_id = net.transaction.stable_id if net and net.transaction else ""
+        transaction_id = net.stable_id if net is not None else ""
         seed = _stable_seed(
             "action_bundle:ocsp_transaction:"
             f"{transaction_id}:{self.certificate.fingerprint}:{self.certificate.serial_number}"
@@ -142,8 +143,41 @@ class OcspTransactionPlanner:
         requested_at = request.tls_event.timestamp + timedelta(
             milliseconds=phase_rng.randint(900, 4500)
         )
-        responded_at = requested_at + timedelta(milliseconds=phase_rng.randint(20, 350))
-        response_size = phase_rng.randint(900, 2500)
+        response_config = config.get("response", {})
+        size_min = max(1, int(response_config.get("size_bytes_min", 900)))
+        size_max = max(size_min, int(response_config.get("size_bytes_max", 2500)))
+        response_size = phase_rng.randint(size_min, size_max)
+        throughput_min = max(
+            1.0,
+            float(response_config.get("throughput_bytes_per_second_min", 40_000)),
+        )
+        throughput_max = max(
+            throughput_min,
+            float(response_config.get("throughput_bytes_per_second_max", 400_000)),
+        )
+        source_ip = request.tls_event.network.src_ip if request.tls_event.network else ""
+        responder_rng = random.Random(
+            _stable_seed(f"ocsp_responder_transport:{responder}:{source_ip}")
+        )
+        scoped_throughput = math.exp(
+            responder_rng.uniform(math.log(throughput_min), math.log(throughput_max))
+        )
+        effective_throughput = scoped_throughput * phase_rng.uniform(0.78, 1.22)
+        duration_floor = max(
+            0.0001,
+            float(response_config.get("file_duration_floor_ms", 3.0)) / 1000.0,
+        )
+        response_file_duration = max(
+            duration_floor * phase_rng.uniform(0.85, 1.35),
+            response_size / effective_throughput,
+        )
+        latency_min = max(0.001, float(response_config.get("latency_ms_min", 18.0)) / 1000.0)
+        latency_max = max(
+            latency_min,
+            float(response_config.get("latency_ms_max", 240.0)) / 1000.0,
+        )
+        response_latency = phase_rng.uniform(latency_min, latency_max)
+        responded_at = requested_at + timedelta(seconds=response_latency + response_file_duration)
         file_id = generate_stable_zeek_uid(
             "F",
             f"ocsp_response:{request.stable_id}:{bucket_start}:{request_der.hex()}",
@@ -163,6 +197,7 @@ class OcspTransactionPlanner:
             next_update=next_update,
             file_id=file_id,
             response_size=response_size,
+            response_file_duration=response_file_duration,
             requested_at=requested_at,
             responded_at=responded_at,
             revocation_time=revocation_time,
@@ -226,7 +261,7 @@ class OcspTransactionActionBundle:
             depth=0,
             analyzers=[],
             mime_type="application/ocsp-response",
-            duration=min(0.02, duration),
+            duration=plan.response_file_duration,
             local_orig=responder_ip.startswith(("10.", "172.", "192.168.")),
             is_orig=False,
             seen_bytes=plan.response_size,

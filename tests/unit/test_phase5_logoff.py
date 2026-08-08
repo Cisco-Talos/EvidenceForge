@@ -29,6 +29,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.state_manager import StateManager
@@ -220,6 +221,41 @@ class TestLogoffWindows:
         assert logoff.timestamp > visible_terminate
         assert all(proc.logon_id != logon_id for proc in state_manager.list_running_processes())
 
+    def test_logoff_budgets_ecar_process_observation_delay(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Delayed eCAR process teardown must remain before source-visible logout."""
+        activity_gen.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, linux_system, timestamp)
+        state_manager.set_current_time(timestamp + timedelta(minutes=1))
+        child_pid = state_manager.create_process(
+            linux_system.hostname,
+            0,
+            "/bin/bash",
+            "bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        mock_emitters["ecar"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(minutes=2),
+            logon_id,
+        )
+
+        emitted = [call.args[0] for call in mock_emitters["ecar"].emit.call_args_list]
+        child_terminate = next(
+            event
+            for event in emitted
+            if event.event_type == "process_terminate" and event.process.pid == child_pid
+        )
+        logoff = next(event for event in emitted if event.event_type == "logoff")
+        assert child_terminate.timestamp < logoff.timestamp
+
     def test_logoff_follows_preplanned_session_process_termination(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):
@@ -379,7 +415,7 @@ class TestLogoffLinux:
         assert event.syslog.message == (
             "pam_unix(sshd:session): session closed for user alice.smith"
         )
-        assert ecar_event.edr.object_id == session_obj_id
+        assert ecar_event.identity_plan.object_id == session_obj_id
         assert ecar_event.auth.source_ip == "10.0.10.50"
         assert ecar_event.auth.source_port == 51111
         assert removed_event.timestamp > event.timestamp
@@ -662,5 +698,5 @@ class TestLogoffNoEcar:
         logon_id = gen.generate_logon(user, system, timestamp)
         gen.generate_logoff(user, system, timestamp, logon_id)
 
-        # Should not raise, logoff SecurityEvent dispatched
+        # Should not raise, logoff OccurrenceBuilder dispatched
         assert emitters["windows_event_security"].emit.called

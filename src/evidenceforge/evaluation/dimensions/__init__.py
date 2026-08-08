@@ -39,20 +39,20 @@ def _noop_callback(event_type: str, data: dict[str, Any]) -> None:
     pass
 
 
-def aggregate_sub_scores(sub_scores: Iterable[SubScore]) -> float:
+def aggregate_sub_scores(sub_scores: Iterable[SubScore]) -> float | None:
     """Compute a pillar score from sub-scores, excluding skipped ones.
 
     Skipped sub-scores (score=None or skipped=True) are dropped and the
     remaining sub-score weights are proportionally renormalized so the pillar
     score stays on a 0–100 scale regardless of how many sub-scores were skipped.
-    Returns 100.0 if every sub-score is skipped.
+    Returns ``None`` if every sub-score is skipped or otherwise unmeasurable.
     """
     active = [s for s in sub_scores if s.score is not None and not s.skipped]
     if not active:
-        return 100.0
+        return None
     total_weight = sum(s.weight for s in active)
     if total_weight <= 0:
-        return 100.0
+        return None
     return sum(s.score * s.weight for s in active) / total_weight
 
 

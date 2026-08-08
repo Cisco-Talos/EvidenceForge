@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "archive_root": "/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-expanded/blind-test",
+  "use": "Historical recurrence and sibling-risk evidence only; not current blind-verdict evidence",
+  "selected_reports": [
+    {
+      "path": "loop-72/REPORT.md",
+      "role": "late historical residuals",
+      "current_status": "selected observations require current reproduction"
+    },
+    {
+      "path": "session-closure-lifecycle-contract/REPORT.md",
+      "role": "identity and closure contract regression evidence",
+      "current_status": "duplicated failed-attempt object identity reproduced in 9/10 current integrated runs"
+    },
+    {
+      "path": "network-contract-milestone-3/REPORT.md",
+      "role": "positive counterevidence for tuple and accounting improvements",
+      "current_status": "current reviewers independently confirmed strong network accounting"
+    },
+    {
+      "path": "cryptographic-protocol-payload-contract/REPORT.md",
+      "role": "cryptographic, protocol, process, and file sibling-risk inventory",
+      "current_status": "not carried forward without current evidence"
+    },
+    {
+      "path": "identity-lifecycle-contract/final_panel_scorecard.json",
+      "role": "prior accepted identity-lifecycle counterevidence",
+      "current_status": "current session/process reuse defects are narrower regressions or uncovered paths"
+    }
+  ],
+  "limitations": [
+    "The approximately 8 GB archive was not re-evaluated in full.",
+    "Historical reports may describe older code and cannot establish a current defect alone.",
+    "Current reviewers remained isolated from the archive until their reports were complete."
+  ]
+}

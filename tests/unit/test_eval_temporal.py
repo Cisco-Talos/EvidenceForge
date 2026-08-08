@@ -346,7 +346,8 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
     def test_grace_period_skips_early_events(self):
         """Events within grace period are not checked for causal ordering."""
@@ -366,8 +367,9 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        # Within grace period → skipped → no pairs → perfect score
-        assert result.score == 100.0
+        # Within grace period → no measurable causal pair contract.
+        assert result.score is None
+        assert result.skipped
 
     def test_dns_rule_handles_non_numeric_zeek_conn_port(self):
         """Non-numeric zeek_conn id.resp_p should not crash exclude_ports evaluation."""
@@ -430,7 +432,8 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
     def test_dns_weak_rule_skips_later_matching_answer(self):
         """A later DNS answer may be cache/static-IP behavior, not a TCP inversion."""
@@ -461,7 +464,8 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
     def test_kerberos_domain_logon_weak_rule_skips_later_matching_tgt(self):
         """A later user TGT on a DC is not proof a target-host 4624 is inverted."""
@@ -491,7 +495,8 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
     def test_kerberos_service_ticket_weak_rule_skips_later_matching_tgt(self):
         """A cached-ticket 4769 is not inverted just because a matching 4768 appears later."""
@@ -521,7 +526,8 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
     def test_causal_ordering_counts_failures_after_sample_cap(self):
         """Failures beyond the diagnostic sample cap still count against the score."""
@@ -592,7 +598,8 @@ class TestCausalOrdering:
         scenario = _make_scenario()
         scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
 
 class TestTimingPlausibility:

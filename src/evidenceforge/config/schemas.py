@@ -17,7 +17,14 @@ import re
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    IPvAnyAddress,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 
@@ -36,6 +43,73 @@ _REALISM_RESERVED_DOMAINS = (
     "invalid",
     "localhost",
 )
+
+
+class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
+    """Validated semantic preconditions for one configured IDS signature."""
+
+    destination_port: int | None = Field(default=None, ge=0, le=65535)
+    phase: Literal["attempt", "established", "application", "response"] = "attempt"
+    payload_direction: Literal["none", "orig", "resp", "either"] = "none"
+    minimum_payload_bytes: int = Field(default=0, ge=0)
+    requires_response: bool = False
+    application_protocol: (
+        Literal["http", "dns", "tls", "ssh", "smb", "kerberos", "ldap", "ntp", "stun"] | None
+    ) = None
+    inspection: Literal["metadata", "payload_cleartext", "payload_decrypted"] = "metadata"
+    http_methods: list[str] = Field(default_factory=list)
+    http_statuses: list[int] = Field(default_factory=list)
+    requires_http_body: bool = False
+    semantic_claim: Literal[
+        "flow_metadata",
+        "scan",
+        "handshake",
+        "request_content",
+        "response_content",
+        "upload_request",
+        "dns_query",
+        "dns_response",
+        "file_content",
+    ] = "flow_metadata"
+
+    @field_validator("http_methods")
+    @classmethod
+    def normalize_http_methods(cls, values: list[str]) -> list[str]:
+        """Normalize and deduplicate configured HTTP methods."""
+
+        normalized = [value.strip().upper() for value in values]
+        if any(not value or not re.fullmatch(r"[A-Z]+", value) for value in normalized):
+            raise ValueError("http_methods must contain non-empty alphabetic method names")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("http_methods must not contain duplicates")
+        return normalized
+
+    @field_validator("http_statuses")
+    @classmethod
+    def validate_http_statuses(cls, values: list[int]) -> list[int]:
+        """Reject non-native or duplicate HTTP response codes."""
+
+        if any(isinstance(value, bool) or value < 100 or value > 599 for value in values):
+            raise ValueError("http_statuses must contain integers between 100 and 599")
+        if len(values) != len(set(values)):
+            raise ValueError("http_statuses must not contain duplicates")
+        return values
+
+    @model_validator(mode="after")
+    def validate_semantic_combination(self) -> Self:
+        """Reject predicates that cannot be evaluated coherently."""
+
+        if self.minimum_payload_bytes and self.payload_direction == "none":
+            raise ValueError("minimum_payload_bytes requires a payload_direction")
+        if (self.http_methods or self.http_statuses or self.requires_http_body) and (
+            self.application_protocol != "http"
+        ):
+            raise ValueError("HTTP-specific fields require application_protocol='http'")
+        if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
+            raise ValueError("requires_http_body needs orig/either payload_direction")
+        if self.phase == "response" and not self.requires_response:
+            raise ValueError("response-phase predicates must set requires_response=true")
+        return self
 
 
 def _normalized_domain(value: str) -> str:
@@ -144,6 +218,7 @@ class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
     nameserver_profiles: list[PublicDnsAnswerProfile]
     mail_profiles: list[PublicDnsAnswerProfile]
     aaaa_profiles: list[PublicDnsAnswerProfile]
+    generic_aaaa_probability: float = Field(default=0.62, ge=0.0, le=1.0)
 
     @field_validator("nameserver_profiles", "mail_profiles")
     @classmethod
@@ -373,6 +448,16 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"
     pe_metadata: dict[str, str] | None = None
+    load_phase: Literal["startup", "runtime"] | None = None
+    startup_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("startup_probability", mode="before")
+    @classmethod
+    def startup_probability_is_numeric(cls, value: Any) -> Any:
+        """Reject booleans masquerading as numeric probabilities."""
+        if isinstance(value, bool):
+            raise ValueError("startup_probability must be a number between 0 and 1")
+        return value
 
     @model_validator(mode="after")
     def known_vendor_modules_have_native_identity(self) -> Self:
@@ -488,6 +573,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     app: str
     messages: list[str]
     params: dict[str, list[str]] | None = None
+    parameter_profiles: list[dict[str, str]] | None = None
     distro: str | None = None
     roles: list[str] | None = None
     exclude_roles: list[str] | None = None
@@ -673,6 +759,32 @@ class TlsOcspStatusProfile(BaseModel, extra="forbid"):
         return self
 
 
+class TlsOcspResponseConfig(BaseModel, extra="forbid"):
+    """OCSP response size and responder-scoped transfer timing bounds."""
+
+    size_bytes_min: int = Field(gt=0)
+    size_bytes_max: int = Field(gt=0)
+    latency_ms_min: float = Field(gt=0)
+    latency_ms_max: float = Field(gt=0)
+    throughput_bytes_per_second_min: float = Field(gt=0)
+    throughput_bytes_per_second_max: float = Field(gt=0)
+    file_duration_floor_ms: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def ranges_are_ordered(self) -> Self:
+        """Reject inverted response timing and size ranges."""
+
+        if self.size_bytes_max < self.size_bytes_min:
+            raise ValueError("size_bytes_max must be >= size_bytes_min")
+        if self.latency_ms_max < self.latency_ms_min:
+            raise ValueError("latency_ms_max must be >= latency_ms_min")
+        if self.throughput_bytes_per_second_max < self.throughput_bytes_per_second_min:
+            raise ValueError(
+                "throughput_bytes_per_second_max must be >= throughput_bytes_per_second_min"
+            )
+        return self
+
+
 class TlsOcspConfig(BaseModel, extra="forbid"):
     """OCSP behavior settings in tls_realism.yaml."""
 
@@ -682,6 +794,7 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     this_update_max_skew_seconds: int
     next_update_min_seconds: int
     next_update_max_seconds: int
+    response: TlsOcspResponseConfig
     request_path: TlsOcspRequestPathConfig = Field(default_factory=TlsOcspRequestPathConfig)
     responders: list[TlsOcspResponder] = Field(default_factory=list)
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
@@ -1272,8 +1385,6 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
     """Root schema for smb_file_transfers.yaml."""
 
     min_transfer_bytes: int
-    missing_bytes_probability: float
-    timeout_probability: float
     mime_types: list[SmbMimeTypeEntry]
     analyzer_sets: list[SmbAnalyzerSetEntry]
     filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
@@ -1283,13 +1394,6 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
     def min_transfer_bytes_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("min_transfer_bytes must be positive")
-        return v
-
-    @field_validator("missing_bytes_probability", "timeout_probability")
-    @classmethod
-    def probability_range(cls, v: float) -> float:
-        if not 0 <= v <= 1:
-            raise ValueError("probability must be between 0 and 1")
         return v
 
     @field_validator("mime_types", "analyzer_sets")
@@ -1431,6 +1535,15 @@ class PublicNtpServerEntry(BaseModel, extra="forbid"):
     weight: int = Field(gt=0)
 
 
+class PublicDnsResolverEntry(BaseModel, extra="forbid"):
+    """A public recursive DNS resolver profile in network_params.yaml."""
+
+    name: str
+    ip: IPvAnyAddress
+    operator: str
+    weight: int = Field(gt=0)
+
+
 class DnsTunnelRttConfig(BaseModel, extra="forbid"):
     """DNS tunnel response timing parameters in network_params.yaml."""
 
@@ -1556,6 +1669,30 @@ class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
         return v
 
 
+class WindowsGroupPolicyCommandProfile(BaseModel, extra="forbid"):
+    """One weighted gpupdate command morphology."""
+
+    command_line: str = Field(min_length=1)
+    weight: int = Field(gt=0)
+
+
+class WindowsGroupPolicyRefreshConfig(BaseModel, extra="forbid"):
+    """Host-scoped Windows Group Policy refresh model."""
+
+    interval_minutes_min: int = Field(ge=30, le=1440)
+    interval_minutes_max: int = Field(ge=30, le=1440)
+    process_emission_probability: float = Field(ge=0.0, le=1.0)
+    command_profiles: list[WindowsGroupPolicyCommandProfile] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def interval_is_ordered(self) -> Self:
+        """Reject inverted refresh interval bounds."""
+
+        if self.interval_minutes_max < self.interval_minutes_min:
+            raise ValueError("interval_minutes_max must be >= interval_minutes_min")
+        return self
+
+
 class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
     """Source-native 4672 privilege list profile."""
 
@@ -1607,6 +1744,7 @@ class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
     """Windows authentication realism knobs."""
 
     workstation_lock: WindowsWorkstationLockConfig
+    group_policy_refresh: WindowsGroupPolicyRefreshConfig
     failed_logon: WindowsFailedLogonConfig
     special_privileges: WindowsSpecialPrivilegesConfig
 

@@ -9,18 +9,20 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
 from hashlib import md5, sha1, sha256
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
-from evidenceforge.events.contexts import DnsContext, SslContext
+from evidenceforge.events.contexts import DnsContext, EmailContext, SslContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.generation.activity.generator import ActivityGenerator
@@ -35,6 +37,8 @@ from evidenceforge.generation.activity.mail_public_identities import (
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.workload import estimate_workload
+from evidenceforge.models.exceptions import GenerationError
 from evidenceforge.models.scenario import (
     BaselineActivity,
     EmailArtifactsConfig,
@@ -439,7 +443,7 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
             (parsed_received[index + 1] - parsed_received[index]).total_seconds()
             for index in range(len(parsed_received) - 1)
         ]
-        assert any(gap != 4.0 for gap in received_gaps)
+        assert all(0.0 < gap < 20.0 for gap in received_gaps)
     assert ground_truth["events"][0]["kind"] == "email_message"
     assert ground_truth["events"][0]["attributes"]["artifact_path"].endswith(".eml")
     rendered_smtp_uids = {record["uid"] for record in smtp_records}
@@ -450,6 +454,164 @@ def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path)
     assert manifest_path in discovered["email_artifacts"]
     artifact_records = list(get_parser("email_artifacts").parse_file(manifest_path))
     assert artifact_records[0].fields["message_id"] == messages[0]["message_id"]
+
+
+def test_email_smtp_hop_schedule_varies_between_messages() -> None:
+    """Relay gaps vary by message instead of following one fixed cadence."""
+
+    generator = object.__new__(ActivityGenerator)
+    start = datetime(2026, 1, 5, 14, 9, 48, tzinfo=UTC)
+    route = [{}, {}]
+    transfer_sizes = [{"duration": 1.5}, {"duration": 2.0}]
+    gaps = {
+        round(
+            (
+                times[1] - times[0] - timedelta(seconds=float(transfer_sizes[0]["duration"]))
+            ).total_seconds(),
+            3,
+        )
+        for index in range(12)
+        if (
+            times := generator._email_smtp_hop_times(
+                route=route,
+                message_id=f"<message-{index}@corp.example>",
+                time=start,
+                transfer_sizes=transfer_sizes,
+            )
+        )
+    }
+
+    assert len(gaps) >= 8
+
+
+def test_email_artifact_writer_rejects_artifact_id_path_escape(tmp_path: Path) -> None:
+    """Authored artifact identity must not become an escaping output path."""
+    generator = object.__new__(ActivityGenerator)
+    generator._email_artifact_dir = tmp_path / "artifacts"
+    context = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id="../outside",
+        envelope_from="alice@example.test",
+        header_from="alice@example.test",
+    )
+
+    with pytest.raises(GenerationError, match="Unsafe email artifact filename"):
+        generator._write_email_artifact(context)
+
+
+@pytest.mark.parametrize("artifact_id", ["/tmp/outside", "nested/artifact"])
+def test_email_artifact_writer_rejects_nonlocal_artifact_ids(
+    tmp_path: Path, artifact_id: str
+) -> None:
+    """Absolute, nested, and traversal-shaped artifact IDs cannot select output paths."""
+    generator = object.__new__(ActivityGenerator)
+    generator._email_artifact_dir = tmp_path / "artifacts" / "email"
+    context = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id=artifact_id,
+        envelope_from="alice@example.test",
+        header_from="alice@example.test",
+    )
+
+    with pytest.raises(GenerationError, match="Unsafe email artifact filename"):
+        generator._write_email_artifact(context)
+
+
+def test_email_artifact_writer_refuses_existing_file(tmp_path: Path) -> None:
+    """Artifact creation is exclusive and never overwrites an earlier package member."""
+    artifact_dir = tmp_path / "artifacts" / "email"
+    artifact_dir.mkdir(parents=True)
+    destination = artifact_dir / "message-1.eml"
+    destination.write_bytes(b"existing")
+    generator = object.__new__(ActivityGenerator)
+    generator._email_artifact_dir = artifact_dir
+    context = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id="message-1",
+        envelope_from="alice@example.test",
+        header_from="alice@example.test",
+    )
+
+    with pytest.raises(GenerationError, match="refusing to overwrite"):
+        generator._write_email_artifact(context)
+
+    assert destination.read_bytes() == b"existing"
+
+
+def test_email_artifact_writer_refuses_symlink_file_and_directory(tmp_path: Path) -> None:
+    """Neither an artifact symlink nor a replaced output directory can redirect writes."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "target.eml"
+    outside_file.write_bytes(b"outside")
+    artifact_dir = tmp_path / "artifacts" / "email"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "message-1.eml").symlink_to(outside_file)
+    generator = object.__new__(ActivityGenerator)
+    generator._email_artifact_dir = artifact_dir
+    context = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id="message-1",
+        envelope_from="alice@example.test",
+        header_from="alice@example.test",
+    )
+
+    with pytest.raises(GenerationError):
+        generator._write_email_artifact(context)
+    assert outside_file.read_bytes() == b"outside"
+
+    redirected = tmp_path / "redirected-artifacts"
+    redirected.mkdir()
+    link_dir = tmp_path / "artifact-link"
+    link_dir.symlink_to(redirected, target_is_directory=True)
+    generator._email_artifact_dir = link_dir
+    context.artifact_id = "message-2"
+
+    with pytest.raises(GenerationError):
+        generator._write_email_artifact(context)
+    assert not (redirected / "message-2.eml").exists()
+
+
+def test_email_artifact_base64_is_emitted_in_bounded_chunks() -> None:
+    """Large MIME attachments are encoded incrementally instead of duplicating full output."""
+    generator = object.__new__(ActivityGenerator)
+    context = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id="message-1",
+        envelope_from="alice@example.test",
+        header_from="alice@example.test",
+        attachments=[
+            {
+                "filename": "payload.bin",
+                "content_type": "application/octet-stream",
+                "size": 512 * 1024,
+            }
+        ],
+    )
+
+    chunks = generator._iter_email_artifact_bytes(context)
+
+    assert max(len(chunk) for chunk in chunks) < 4096
+
+
+def test_email_attachment_budget_uses_declared_size_without_allocating_payload() -> None:
+    """Oversized attachments fail preflight from metadata alone."""
+    scenario = _with_email_storyline(
+        _email_scenario(),
+        EmailMessageEventSpec(
+            to=["bob@corp.example"],
+            attachments=[
+                EmailAttachmentSpec(
+                    filename="oversized.bin",
+                    size=26 * 1024 * 1024,
+                )
+            ],
+        ),
+    )
+
+    estimate = estimate_workload(scenario)
+
+    assert any("attachment" in violation for violation in estimate.limit_violations)
 
 
 def test_email_artifacts_mode_none_skips_artifact_manifest(tmp_path: Path) -> None:
@@ -2345,6 +2507,60 @@ messages:
     assert "Duplicate email corpus id 'duplicate'" in messages
     assert "references unknown corpus_id 'missing'" in messages
     assert "mailbox 'nobody@corp.example' is not a known user email" in messages
+
+
+@pytest.mark.parametrize("reference", ["../outside.yaml", "/tmp/outside.yaml"])
+def test_email_corpus_must_be_scenario_relative(tmp_path: Path, reference: str) -> None:
+    """Corpus references cannot escape the package root through traversal or absolute paths."""
+    scenario_root = tmp_path / "scenario"
+    scenario_root.mkdir()
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.corpus = reference
+
+    issues = ScenarioValidator(scenario, scenario_root=scenario_root).validate()
+
+    assert any(
+        issue.field_path == "environment.email.corpus"
+        and issue.severity == "error"
+        and "safely loaded" in issue.message
+        for issue in issues
+    )
+
+
+def test_email_corpus_rejects_symlink_and_duplicate_yaml_keys(tmp_path: Path) -> None:
+    """Sidecars are regular in-package files with unambiguous YAML mapping semantics."""
+    scenario_root = tmp_path / "scenario"
+    scenario_root.mkdir()
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("messages: []\n", encoding="utf-8")
+    (scenario_root / "linked.yaml").symlink_to(outside)
+    scenario = _email_scenario()
+    assert scenario.environment.email is not None
+    scenario.environment.email.corpus = "linked.yaml"
+
+    symlink_issues = ScenarioValidator(scenario, scenario_root=scenario_root).validate()
+
+    assert any(
+        issue.field_path == "environment.email.corpus" and issue.severity == "error"
+        for issue in symlink_issues
+    )
+
+    duplicate = scenario_root / "duplicate.yaml"
+    duplicate.write_text(
+        "messages:\n  - id: first\n    subject: one\n    subject: two\n",
+        encoding="utf-8",
+    )
+    scenario.environment.email.corpus = "duplicate.yaml"
+
+    duplicate_issues = ScenarioValidator(scenario, scenario_root=scenario_root).validate()
+
+    assert any(
+        issue.field_path == "environment.email.corpus"
+        and issue.severity == "error"
+        and "duplicate key" in issue.message
+        for issue in duplicate_issues
+    )
 
 
 def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -> None:

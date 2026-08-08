@@ -22,7 +22,7 @@
 
 """Base types for action bundles.
 
-Action bundles model real-world activities above individual SecurityEvents. A
+Action bundles model real-world activities above individual canonical occurrences. A
 bundle may emit multiple canonical events while owning lifecycle, timing,
 observation, and durable identity constraints for the activity as a whole.
 """
@@ -33,6 +33,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+from evidenceforge.utils.rng import stable_uuid
+
 
 @dataclass(frozen=True, slots=True)
 class ActionAnchor:
@@ -41,6 +44,25 @@ class ActionAnchor:
     family: str
     stable_id: str
     source: str = ""
+
+    @property
+    def action_id(self) -> str:
+        """Return the stable canonical action identity for this anchor."""
+
+        return stable_uuid("canonical-action", self.family, self.stable_id, self.source)
+
+    def occurrence_key(
+        self,
+        role: OccurrenceRole,
+        instance_key: str,
+    ) -> SemanticOccurrenceKey:
+        """Build one stable semantic occurrence key owned by this action."""
+
+        return SemanticOccurrenceKey(
+            action_id=self.action_id,
+            role=role,
+            instance_key=instance_key,
+        )
 
 
 class ActionBundle(Protocol):

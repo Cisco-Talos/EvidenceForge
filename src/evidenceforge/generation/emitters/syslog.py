@@ -22,7 +22,7 @@
 
 """Syslog emitter for Linux system logs.
 
-Renders syslog-format entries from SyslogContext on SecurityEvent.
+Renders syslog-format entries from SyslogContext on CanonicalOccurrence.
 All syslog message construction is done by ActivityGenerator — the emitter
 just formats the context fields into the syslog template.
 """
@@ -34,7 +34,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.emitters.syslog_family import (
@@ -251,7 +251,7 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     Default target writes flat per-host RFC5424 files. SOF-ELK target writes
     per-host/year RFC3164 files.
-    Renders any SecurityEvent that carries a SyslogContext on a Linux host.
+    Renders any CanonicalOccurrence that carries a SyslogContext on a Linux host.
     """
 
     _log_filename = "syslog.log"
@@ -283,12 +283,12 @@ class SyslogEmitter(HostMultiplexEmitter):
             flat_filename=self._flat_filename,
         )
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Syslog emitter handles any event with SyslogContext on a Linux host."""
         return event.syslog is not None and self._linux_host(event) is not None
 
     @staticmethod
-    def _linux_host(event: SecurityEvent) -> "HostContext | None":
+    def _linux_host(event: CanonicalOccurrence) -> "HostContext | None":
         """Return whichever host has os_category == 'linux'."""
         if (
             event.syslog is not None
@@ -303,7 +303,7 @@ class SyslogEmitter(HostMultiplexEmitter):
             return event.dst_host
         return None
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render syslog entry from SyslogContext."""
         if event.syslog is None:
             raise NotImplementedError(

@@ -35,12 +35,17 @@ import ipaddress
 import re
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.network import (
+    NatSensorObservation,
+    NetworkSensorObservation,
+    NetworkTransactionPlan,
+)
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.syslog_family import (
     bounded_syslog_int,
@@ -59,6 +64,51 @@ from evidenceforge.output_targets import OutputTarget
 _ASA_FACILITY = 20
 
 
+@dataclass(frozen=True, slots=True)
+class _AsaNetworkProjection:
+    """Source-local network values needed to render one ASA observation."""
+
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str
+    duration: float | None
+    conn_state: str
+    orig_bytes: int
+    resp_bytes: int
+    orig_ip_bytes: int
+    resp_ip_bytes: int
+
+    @classmethod
+    def from_observation(
+        cls,
+        canonical: NetworkTransactionPlan,
+        observation: NetworkSensorObservation,
+    ) -> "_AsaNetworkProjection":
+        """Project an observation without reconstructing canonical transaction truth."""
+
+        return cls(
+            src_ip=observation.tuple_view.src_ip,
+            src_port=observation.tuple_view.src_port,
+            dst_ip=observation.tuple_view.dst_ip,
+            dst_port=observation.tuple_view.dst_port,
+            protocol=observation.tuple_view.protocol,
+            duration=(
+                None
+                if observation.observed_close_time is None
+                else (
+                    observation.observed_close_time - observation.observed_start_time
+                ).total_seconds()
+            ),
+            conn_state=canonical.conn_state,
+            orig_bytes=observation.traffic.orig.payload_bytes,
+            resp_bytes=observation.traffic.resp.payload_bytes,
+            orig_ip_bytes=observation.traffic.orig.ip_bytes,
+            resp_ip_bytes=observation.traffic.resp.ip_bytes,
+        )
+
+
 class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
@@ -66,7 +116,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     per-sensor/year files so BSD-syslog archive consumers can infer years.
 
     Handles all connection events visible to firewall sensors. Unlike Snort
-    (which requires IdsContext), the ASA emitter renders every connection it
+    (which requires IdsAlertPlan), the ASA emitter renders every connection it
     sees -- either as a permit (Built/Teardown) or deny (Deny) record.
     """
 
@@ -371,7 +421,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             return int((orig_ip_bytes or orig_payload) + (resp_ip_bytes or resp_payload))
         return int(payload_total)
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle all connection events with network context."""
         return (
             event.event_type in self._supported_types
@@ -379,7 +429,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             and not event.network.application_layer_only
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render ASA syslog records from a connection event.
 
         For permitted connections: emits a Built record + Teardown record.
@@ -408,55 +458,34 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             sensor_hosts = self._sensor_hostnames or [""]
 
         for sensor_hostname in sensor_hosts:
-            sensor_event = event
+            sensor_timestamp = event.timestamp
             sensor_net = net
             observation = observations.get(sensor_hostname)
             if observation is not None:
-                ledger = observation.traffic
-                sensor_net = replace(
-                    net,
-                    src_ip=observation.tuple_view.src_ip,
-                    src_port=observation.tuple_view.src_port,
-                    dst_ip=observation.tuple_view.dst_ip,
-                    dst_port=observation.tuple_view.dst_port,
-                    protocol=observation.tuple_view.protocol,
-                    duration=observation.observed_duration,
-                    source_visible_start_time=observation.observed_start_time,
-                    source_visible_close_time=observation.observed_close_time,
-                    orig_bytes=ledger.orig.payload_bytes,
-                    resp_bytes=ledger.resp.payload_bytes,
-                    orig_pkts=ledger.orig.packets,
-                    resp_pkts=ledger.resp.packets,
-                    orig_ip_bytes=ledger.orig.ip_bytes,
-                    resp_ip_bytes=ledger.resp.ip_bytes,
-                    missed_bytes=ledger.missed_bytes,
-                )
-                sensor_event = replace(
-                    event,
-                    timestamp=observation.observed_start_time,
-                    network=sensor_net,
-                )
+                sensor_timestamp = observation.observed_start_time
+                sensor_net = _AsaNetworkProjection.from_observation(net, observation)
             src_iface = self._resolve_interface(sensor_net.src_ip, sensor_hostname)
             dst_iface = self._resolve_interface(sensor_net.dst_ip, sensor_hostname)
             if fw is not None:
                 src_iface = fw.src_interface or src_iface
                 dst_iface = fw.dst_interface or dst_iface
+            nat_view = self._nat_view(event, sensor_net, observation)
             conn_id = (
                 fw.connection_id
                 if fw is not None and fw.connection_id > 0
-                else self._next_conn_id(sensor_hostname, sensor_event.timestamp)
+                else self._next_conn_id(sensor_hostname, sensor_timestamp)
             )
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:
-                if src_iface == dst_iface and event.nat is None:
+                if src_iface == dst_iface and nat_view is None:
                     continue
                 if self._should_suppress_outside_private_deny(
                     sensor_net, src_iface, dst_iface, sensor_hostname
                 ):
                     continue
                 self._emit_deny(
-                    sensor_event,
+                    sensor_timestamp,
                     sensor_net,
                     fw,
                     src_iface,
@@ -465,10 +494,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     fw_hostname,
                 )
             else:
-                if src_iface == dst_iface and event.nat is None:
+                if src_iface == dst_iface and nat_view is None:
                     continue
                 self._emit_built(
-                    sensor_event,
+                    sensor_timestamp,
                     sensor_net,
                     protocol,
                     conn_id,
@@ -476,19 +505,20 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     dst_iface,
                     sensor_hostname,
                     fw_hostname,
+                    nat_view,
                 )
-                if sensor_event.nat and sensor_event.nat.nat_type != "static":
+                if nat_view is not None and nat_view.nat_type != "static":
                     self._emit_nat_built(
-                        sensor_event,
                         sensor_net,
                         protocol,
                         src_iface,
                         dst_iface,
                         sensor_hostname,
                         fw_hostname,
+                        nat_view,
                     )
                 teardown_emitted = self._emit_teardown(
-                    sensor_event,
+                    sensor_timestamp,
                     sensor_net,
                     protocol,
                     conn_id,
@@ -497,22 +527,65 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                     observation,
+                    nat_view,
                 )
-                if sensor_event.nat and sensor_event.nat.nat_type != "static":
+                if nat_view is not None and nat_view.nat_type != "static":
                     if teardown_emitted:
                         self._emit_nat_teardown(
-                            sensor_event,
                             sensor_net,
                             protocol,
                             src_iface,
                             dst_iface,
                             sensor_hostname,
                             fw_hostname,
+                            nat_view,
                         )
+
+    @staticmethod
+    def _nat_view(
+        event: CanonicalOccurrence,
+        net: Any,
+        observation: NetworkSensorObservation | None,
+    ) -> NatSensorObservation | None:
+        """Return the planned NAT view, with direct-emission compatibility fallback."""
+
+        if observation is not None:
+            return observation.nat
+        nat = event.nat
+        if nat is None:
+            return None
+        teardown_time = None
+        if nat.nat_type == "dynamic_pat" and net.duration is not None:
+            teardown_time = event.timestamp + timedelta(seconds=max(0.0, net.duration))
+        if nat.mapped_src_ip != net.src_ip or nat.mapped_src_port != net.src_port:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="source",
+                local_ip=net.src_ip,
+                local_port=net.src_port,
+                global_ip=nat.mapped_src_ip,
+                global_port=nat.mapped_src_port,
+                built_time=event.timestamp,
+                teardown_time=teardown_time,
+            )
+        global_ip = nat.pre_nat_dst_ip or net.dst_ip
+        global_port = nat.pre_nat_dst_port or net.dst_port
+        if nat.mapped_dst_ip != global_ip or nat.mapped_dst_port != global_port:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="destination",
+                local_ip=nat.mapped_dst_ip,
+                local_port=nat.mapped_dst_port,
+                global_ip=global_ip,
+                global_port=global_port,
+                built_time=event.timestamp,
+                teardown_time=teardown_time,
+            )
+        return None
 
     def _emit_built(
         self,
-        event: SecurityEvent,
+        timestamp: datetime,
         net: Any,
         protocol: str,
         conn_id: int,
@@ -520,6 +593,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         dst_iface: str,
         sensor_hostname: str,
         fw_hostname: str,
+        nat: NatSensorObservation | None,
     ) -> None:
         """Emit a Built connection record (302013/302015/302020)."""
         # Determine direction: if src is "outside", it's inbound
@@ -530,12 +604,12 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             icmp_type = net.dst_port if net.dst_port else 8  # Default echo request
             if direction == "inbound":
                 foreign_ip = net.src_ip
-                global_ip = net.dst_ip
-                local_ip = net.dst_ip
+                global_ip = nat.global_ip if nat is not None else net.dst_ip
+                local_ip = nat.local_ip if nat is not None else net.dst_ip
             else:
                 foreign_ip = net.dst_ip
-                global_ip = net.src_ip
-                local_ip = net.src_ip
+                global_ip = nat.global_ip if nat is not None else net.src_ip
+                local_ip = nat.local_ip if nat is not None else net.src_ip
             message = (
                 f"Built {direction} ICMP connection for faddr "
                 f"{foreign_ip}/{icmp_type} "
@@ -548,42 +622,26 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             # ASA format: iface:real_ip/port (mapped_ip/port)
             # For inbound static NAT: dst main=real_ip, dst parens=VIP
             # For outbound PAT: src main=real_ip, src parens=mapped_ip
-            nat = event.nat
-            pre_nat_dst_ip = getattr(nat, "pre_nat_dst_ip", "") if nat is not None else ""
-            pre_nat_dst_port = getattr(nat, "pre_nat_dst_port", 0) if nat is not None else 0
-            is_inbound_nat = (
-                nat is not None
-                and nat.nat_type == "static"
-                and (
-                    (nat.mapped_dst_ip and nat.mapped_dst_ip != net.dst_ip) or bool(pre_nat_dst_ip)
-                )
-            )
-            if is_inbound_nat and pre_nat_dst_ip:
-                # Canonical tuple is already post-NAT. Keep the real IP as
-                # the ASA local address and render the public VIP in parens.
-                display_dst_ip, display_dst_port = net.dst_ip, net.dst_port
-                paren_dst_ip = pre_nat_dst_ip
-                paren_dst_port = pre_nat_dst_port or net.dst_port
-            elif is_inbound_nat:
-                # Inbound: dst shows real_ip (post-NAT) as main, VIP in parens
-                display_dst_ip, display_dst_port = nat.mapped_dst_ip, nat.mapped_dst_port
-                paren_dst_ip, paren_dst_port = net.dst_ip, net.dst_port
+            if nat is not None and nat.direction == "destination":
+                display_dst_ip, display_dst_port = nat.local_ip, nat.local_port
+                paren_dst_ip, paren_dst_port = nat.global_ip, nat.global_port
             else:
                 display_dst_ip, display_dst_port = net.dst_ip, net.dst_port
-                paren_dst_ip = nat.mapped_dst_ip if nat else net.dst_ip
-                paren_dst_port = nat.mapped_dst_port if nat else net.dst_port
-            m_src_ip = nat.mapped_src_ip if nat else net.src_ip
-            m_src_port = nat.mapped_src_port if nat else net.src_port
+                paren_dst_ip, paren_dst_port = net.dst_ip, net.dst_port
+            if nat is not None and nat.direction == "source":
+                mapped_src_ip, mapped_src_port = nat.global_ip, nat.global_port
+            else:
+                mapped_src_ip, mapped_src_port = net.src_ip, net.src_port
             message = (
                 f"Built {direction} {proto_upper} connection {conn_id} for "
                 f"{src_iface}:{net.src_ip}/{net.src_port} "
-                f"({m_src_ip}/{m_src_port}) to "
+                f"({mapped_src_ip}/{mapped_src_port}) to "
                 f"{dst_iface}:{display_dst_ip}/{display_dst_port} "
                 f"({paren_dst_ip}/{paren_dst_port})"
             )
 
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": timestamp,
             "hostname": fw_hostname,
             "severity": 6,
             "msg_id": msg_id,
@@ -595,7 +653,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_teardown(
         self,
-        event: SecurityEvent,
+        timestamp: datetime,
         net: Any,
         protocol: str,
         conn_id: int,
@@ -604,15 +662,16 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostname: str,
         fw_hostname: str,
         observation: Any | None = None,
+        nat: NatSensorObservation | None = None,
     ) -> bool:
         """Emit a Teardown connection record (302014/302016/302021)."""
         if observation is not None and observation.firewall_teardown_time is not None:
             reason = observation.firewall_teardown_reason
             teardown_ts = observation.firewall_teardown_time
-            duration_seconds = max(0.0, (teardown_ts - event.timestamp).total_seconds())
+            duration_seconds = max(0.0, (teardown_ts - timestamp).total_seconds())
         else:
             reason, duration_seconds = self._compatibility_teardown_plan(net, protocol)
-            teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
+            teardown_ts = timestamp + timedelta(seconds=duration_seconds)
         duration = self._format_duration(duration_seconds)
         total_bytes = self._teardown_byte_count(net, protocol, conn_id)
 
@@ -622,12 +681,12 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             direction = "inbound" if src_iface == "outside" else "outbound"
             if direction == "inbound":
                 foreign_ip = net.src_ip
-                global_ip = net.dst_ip
-                local_ip = net.dst_ip
+                global_ip = nat.global_ip if nat is not None else net.dst_ip
+                local_ip = nat.local_ip if nat is not None else net.dst_ip
             else:
                 foreign_ip = net.dst_ip
-                global_ip = net.src_ip
-                local_ip = net.src_ip
+                global_ip = nat.global_ip if nat is not None else net.src_ip
+                local_ip = nat.local_ip if nat is not None else net.src_ip
             message = (
                 f"Teardown ICMP connection for faddr "
                 f"{foreign_ip}/{icmp_type} "
@@ -638,15 +697,9 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             msg_id = 302014 if protocol == "tcp" else 302016
             proto_upper = protocol.upper()
             # Inbound static NAT: teardown shows real (post-NAT) dst IP
-            nat = event.nat
-            is_inbound_nat = (
-                nat is not None
-                and nat.nat_type == "static"
-                and nat.mapped_dst_ip
-                and nat.mapped_dst_ip != net.dst_ip
-            )
-            td_dst_ip = nat.mapped_dst_ip if is_inbound_nat else net.dst_ip
-            td_dst_port = nat.mapped_dst_port if is_inbound_nat else net.dst_port
+            is_inbound_nat = nat is not None and nat.direction == "destination"
+            td_dst_ip = nat.local_ip if is_inbound_nat else net.dst_ip
+            td_dst_port = nat.local_port if is_inbound_nat else net.dst_port
             message = (
                 f"Teardown {proto_upper} connection {conn_id} for "
                 f"{src_iface}:{net.src_ip}/{net.src_port} to "
@@ -670,7 +723,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_deny(
         self,
-        event: SecurityEvent,
+        timestamp: datetime,
         net: Any,
         fw: Any,
         src_iface: str,
@@ -701,7 +754,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             )
 
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": timestamp,
             "hostname": fw_hostname,
             "severity": 4,
             "msg_id": fw.msg_id if fw and fw.msg_id > 0 else 106023,
@@ -711,7 +764,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         }
         self._dispatch(event_data)
         # Check threat detection thresholds after each deny
-        self._check_threat_detection(net.src_ip, event.timestamp, sensor_hostname, fw_hostname)
+        self._check_threat_detection(net.src_ip, timestamp, sensor_hostname, fw_hostname)
 
     def _should_suppress_outside_private_deny(
         self,
@@ -733,30 +786,25 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_nat_built(
         self,
-        event: SecurityEvent,
         net: Any,
         protocol: str,
         src_iface: str,
         dst_iface: str,
         sensor_hostname: str,
         fw_hostname: str,
+        nat: NatSensorObservation,
     ) -> None:
         """Emit a NAT translation Built record (305011)."""
-        nat = event.nat
-        if nat is None:
-            return
         nat_label = "dynamic" if nat.nat_type == "dynamic_pat" else "static"
         proto_upper = protocol.upper()
-        # Determine if source or destination was translated
-        is_src_nat = nat.mapped_src_ip != net.src_ip
-        if is_src_nat:
+        if nat.direction == "source":
             mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
                 "_default", "outside"
             )
             message = (
                 f"Built {nat_label} {proto_upper} translation from "
-                f"{src_iface}:{net.src_ip}/{net.src_port} to "
-                f"{mapped_src_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port}"
+                f"{src_iface}:{nat.local_ip}/{nat.local_port} to "
+                f"{mapped_src_iface}:{nat.global_ip}/{nat.global_port}"
             )
         else:
             # Destination NAT (static inbound): public IP is on outside,
@@ -764,14 +812,14 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             public_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
                 "_default", "outside"
             )
-            real_iface = self._resolve_interface(nat.mapped_dst_ip, sensor_hostname)
+            real_iface = self._resolve_interface(nat.local_ip, sensor_hostname)
             message = (
                 f"Built {nat_label} {proto_upper} translation from "
-                f"{public_iface}:{net.dst_ip}/{net.dst_port} to "
-                f"{real_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port}"
+                f"{public_iface}:{nat.global_ip}/{nat.global_port} to "
+                f"{real_iface}:{nat.local_ip}/{nat.local_port}"
             )
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": nat.built_time,
             "hostname": fw_hostname,
             "severity": 6,
             "msg_id": 305011,
@@ -783,33 +831,27 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_nat_teardown(
         self,
-        event: SecurityEvent,
         net: Any,
         protocol: str,
         src_iface: str,
         dst_iface: str,
         sensor_hostname: str,
         fw_hostname: str,
+        nat: NatSensorObservation,
     ) -> None:
         """Emit a NAT translation Teardown record (305012)."""
-        nat = event.nat
-        if nat is None:
-            return
         nat_label = "dynamic" if nat.nat_type == "dynamic_pat" else "static"
         proto_upper = protocol.upper()
-        duration = self._format_duration(net.duration)
-        teardown_ts = event.timestamp
-        if net.duration and net.duration > 0:
-            teardown_ts = event.timestamp + timedelta(seconds=net.duration)
-        is_src_nat = nat.mapped_src_ip != net.src_ip
-        if is_src_nat:
+        teardown_ts = nat.teardown_time or nat.built_time
+        duration = self._format_duration((teardown_ts - nat.built_time).total_seconds())
+        if nat.direction == "source":
             mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
                 "_default", "outside"
             )
             message = (
                 f"Teardown {nat_label} {proto_upper} translation from "
-                f"{src_iface}:{net.src_ip}/{net.src_port} to "
-                f"{mapped_src_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port} "
+                f"{src_iface}:{nat.local_ip}/{nat.local_port} to "
+                f"{mapped_src_iface}:{nat.global_ip}/{nat.global_port} "
                 f"duration {duration}"
             )
         else:
@@ -817,11 +859,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             public_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
                 "_default", "outside"
             )
-            real_iface = self._resolve_interface(nat.mapped_dst_ip, sensor_hostname)
+            real_iface = self._resolve_interface(nat.local_ip, sensor_hostname)
             message = (
                 f"Teardown {nat_label} {proto_upper} translation from "
-                f"{public_iface}:{net.dst_ip}/{net.dst_port} to "
-                f"{real_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} "
+                f"{public_iface}:{nat.global_ip}/{nat.global_port} to "
+                f"{real_iface}:{nat.local_ip}/{nat.local_port} "
                 f"duration {duration}"
             )
         event_data = {

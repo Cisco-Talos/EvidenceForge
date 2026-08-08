@@ -214,7 +214,7 @@ class ParseabilityScorer(DimensionScorer):
                 else:
                     passing += 1
 
-        score = (100.0 * passing / total) if total > 0 else 100.0
+        score = 100.0 * passing / total if total > 0 else 0.0
         return SubScore(
             name="Spec Conformance",
             key="spec_conformance",
@@ -295,7 +295,7 @@ class ParseabilityScorer(DimensionScorer):
                     total += 1
                     passing += 1
 
-        score = (100.0 * passing / total) if total > 0 else 100.0
+        score = 100.0 * passing / total if total > 0 else 0.0
         return SubScore(
             name="Format Constraints",
             key="format_constraints",

@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import LogParser, ParsedRecord, register_parser
+from . import LogParser, ParsedRecord, iter_bounded_text_lines, register_parser
 
 
 @register_parser
@@ -39,12 +39,11 @@ class EcarParser(LogParser):
         return path.name == "ecar.json"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
-        with path.open(encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                yield self._parse_line(line, line_num)
+        for line_num, line in iter_bounded_text_lines(path):
+            line = line.strip()
+            if not line:
+                continue
+            yield self._parse_line(line, line_num)
 
     def _parse_line(self, raw: str, line_num: int) -> ParsedRecord:
         fields: dict[str, Any] = {}

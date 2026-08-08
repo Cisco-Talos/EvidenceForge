@@ -175,7 +175,9 @@ class TestVipSegmentRegistration:
             "zeek_conn": Mock(),
             "cisco_asa": Mock(),
         }
-        emitters["web_access"].can_handle.side_effect = lambda event: event.http is not None
+        emitters["web_access"].can_handle.side_effect = lambda event: (
+            event.protocol.http is not None
+        )
         emitters["zeek_conn"].can_handle.side_effect = lambda event: event.network is not None
         emitters["cisco_asa"].can_handle.side_effect = lambda event: event.network is not None
         dispatcher = EventDispatcher(state_manager, emitters, visibility_engine=visibility)
@@ -208,7 +210,11 @@ class TestVipSegmentRegistration:
             conn_state="SF",
         )
 
-        web_event = emitters["web_access"].emit.call_args.args[0]
+        web_event = next(
+            call.args[0]
+            for call in emitters["web_access"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_ip == "203.0.113.5"
+        )
         assert web_event.dst_host is not None
         assert web_event.dst_host.hostname == "WEB-01"
         assert web_event.network.dst_ip == "203.0.113.5"

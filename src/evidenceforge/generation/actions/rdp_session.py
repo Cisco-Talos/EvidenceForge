@@ -23,7 +23,7 @@
 """RDP session action bundle.
 
 The RDP bundle models a remote interactive Windows session above individual
-SecurityEvents. It owns the source client, transport connection, target logon,
+canonical occurrences. It owns the source client, transport connection, target logon,
 and source-visible ordering for a single RDP activity while using the current
 activity generator as the runtime adapter for shared state and dispatch.
 """
@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.events.contexts import IdsContext
+from evidenceforge.events.contexts import IdsAlertPlan
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTuple
@@ -73,7 +73,7 @@ class RdpSessionRequest:
     logon_id: str = ""
     preserve_explicit_source: bool = False
     session_end_plan: SessionEndPlan | None = None
-    ids_alerts: list[IdsContext] = field(default_factory=list)
+    ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property
@@ -276,7 +276,7 @@ class RdpSessionActionBundle:
             conn_state="SF",
             parent_action_group_id=remote_request.stable_id,
             preserve_start_time=True,
-            ids_alerts=list(self._request.ids_alerts),
+            ids_alerts=tuple(self._request.ids_alerts),
             source="rdp_session",
         )
         transaction_id = network_request.stable_id

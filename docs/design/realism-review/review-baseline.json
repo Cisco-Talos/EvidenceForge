@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "review": "complete-evidenceforge-code-and-realism-review",
+  "baseline": {
+    "requested_ref": "dev",
+    "commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+    "worktree_state_at_freeze": "clean",
+    "worktree_head_mode": "detached-at-dev",
+    "frozen_on": "2026-08-05"
+  },
+  "scope": {
+    "deterministic_pipeline": "included",
+    "phase_1_authoring_skills": "excluded-except-scenario-schema-contract",
+    "security_surfaces": "included-after-architecture-gate",
+    "generated_datasets": "untracked"
+  },
+  "constraints": {
+    "generator_fixes_during_review": false,
+    "public_api_changes_during_review": false,
+    "schema_migrations_during_review": false,
+    "version_bump_during_review": false,
+    "pause_after_architecture_gate": true,
+    "contract_implementation_requires_user_approval": true
+  },
+  "phase_status": {
+    "baseline_freeze": "complete",
+    "architecture_object_model": "accepted_2026-08-05",
+    "event_context_path_census": "in_progress",
+    "cross_cutting_audits": "not_started",
+    "empirical_campaign": "not_started",
+    "blind_reviews": "not_started",
+    "security_review": "not_started",
+    "final_report": "not_started"
+  },
+  "approvals": {
+    "architecture_course": "approved_2026-08-05",
+    "remaining_review_campaign": "approved_2026-08-05",
+    "contract_implementation": "requires_future_user_approval"
+  },
+  "environment": {
+    "platform": "macOS-arm64",
+    "uv_version": "0.12.1",
+    "project_python": "3.12.12"
+  }
+}

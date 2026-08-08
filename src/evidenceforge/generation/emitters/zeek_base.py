@@ -64,6 +64,17 @@ def zeek_format_observed(event: Any, format_name: str) -> bool:
     return not observed_formats or format_name in observed_formats
 
 
+def planned_zeek_connection_interval(
+    event: Any,
+) -> tuple[datetime, datetime | None] | None:
+    """Return the sealed canonical interval used for per-sensor projection."""
+
+    network = getattr(event, "network", None)
+    if not getattr(event, "network_observations_planned", False) or network is None:
+        return None
+    return network.started_at, network.closed_at
+
+
 def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     """Apply a per-sensor NAT IP view to Zeek list-valued host fields."""
     if (
@@ -100,6 +111,8 @@ def _normalize_zeek_float_precision(value: Any) -> Any:
 
 def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
     """Keep conn.log byte counters compatible with same-transaction http.log facts."""
+    if render_data.pop("_sensor_traffic_observed", False):
+        return
     request_body = render_data.get("_http_request_body_len")
     response_body = render_data.get("_http_response_body_len")
     if isinstance(request_body, int) and request_body >= 0:
@@ -211,8 +224,8 @@ class SensorMultiplexEmitter(LogEmitter):
 
     Subclasses implement:
     - _render_event(): Convert event data dict to NDJSON string
-    - can_handle(): Filter SecurityEvents by type + required contexts
-    - emit(): Extract fields from SecurityEvent and call emit_to_sensors()
+    - can_handle(): Filter canonical occurrences by type + required contexts
+    - emit(): Extract fields from CanonicalOccurrence and call emit_to_sensors()
     """
 
     _log_filename: str = "output.json"  # Override in subclasses (e.g., "conn.json")
@@ -325,8 +338,8 @@ class SensorMultiplexEmitter(LogEmitter):
         if not targets:
             targets = event._sensor_hostnames_by_format.get(format_name, [])
         canonical_start = None
-        if event.network is not None and event.network.transaction is not None:
-            canonical_start = event.network.transaction.started_at
+        if event.network is not None:
+            canonical_start = event.network.started_at
         return {
             "_sensor_hostnames": targets,
             "_network_sensor_observations": observations,
@@ -335,7 +348,6 @@ class SensorMultiplexEmitter(LogEmitter):
                 "network_observations_planned",
                 False,
             ),
-            "_nat_swaps_by_sensor": getattr(event, "_nat_swaps_by_sensor", {}),
             "_canonical_network_start": canonical_start,
         }
 
@@ -346,6 +358,8 @@ class SensorMultiplexEmitter(LogEmitter):
         canonical_start: datetime | None,
     ) -> None:
         """Project a frozen observation into source-native Zeek fields."""
+
+        render_data["_sensor_traffic_observed"] = True
 
         original_src_ip = render_data.get("id.orig_h") or render_data.get("_id.orig_h")
         original_dst_ip = render_data.get("id.resp_h") or render_data.get("_id.resp_h")
@@ -398,13 +412,48 @@ class SensorMultiplexEmitter(LogEmitter):
         timestamp_field = "ts" if "ts" in render_data else "timestamp"
         ts = render_data.get(timestamp_field)
         if canonical_start is not None and isinstance(ts, datetime):
-            render_data[timestamp_field] = observation.observed_start_time + (ts - canonical_start)
+            projected_ts: datetime | float = observation.observed_start_time + (
+                ts - canonical_start
+            )
         elif canonical_start is not None and isinstance(ts, (int, float)):
-            render_data[timestamp_field] = (
+            projected_ts = (
                 observation.observed_start_time.timestamp()
                 + float(ts)
                 - canonical_start.timestamp()
             )
+        else:
+            projected_ts = ts
+        if isinstance(projected_ts, datetime):
+            projected_ts = max(projected_ts, observation.observed_start_time)
+            if observation.observed_close_time is not None:
+                projected_ts = min(projected_ts, observation.observed_close_time)
+        elif isinstance(projected_ts, (int, float)):
+            projected_ts = max(projected_ts, observation.observed_start_time.timestamp())
+            if observation.observed_close_time is not None:
+                projected_ts = min(projected_ts, observation.observed_close_time.timestamp())
+        if projected_ts is not None:
+            render_data[timestamp_field] = projected_ts
+
+        if self.format_def.name != "zeek_conn" and observation.observed_close_time is not None:
+            remaining_seconds = None
+            if isinstance(projected_ts, datetime):
+                remaining_seconds = max(
+                    0.0,
+                    (observation.observed_close_time - projected_ts).total_seconds(),
+                )
+            elif isinstance(projected_ts, (int, float)):
+                remaining_seconds = max(
+                    0.0,
+                    observation.observed_close_time.timestamp() - float(projected_ts),
+                )
+            if remaining_seconds is not None:
+                for interval_field in ("duration", "rtt"):
+                    interval = render_data.get(interval_field)
+                    if isinstance(interval, (int, float)):
+                        render_data[interval_field] = min(
+                            max(0.0, float(interval)),
+                            remaining_seconds,
+                        )
 
         if self.format_def.name == "zeek_conn":
             ledger = observation.traffic
@@ -418,8 +467,26 @@ class SensorMultiplexEmitter(LogEmitter):
                     "orig_ip_bytes": ledger.orig.ip_bytes,
                     "resp_ip_bytes": ledger.resp.ip_bytes,
                     "missed_bytes": ledger.missed_bytes,
+                    "history": observation.history,
                 }
             )
+        elif self.format_def.name == "zeek_http":
+            if observation.http_request_body_len is not None:
+                render_data["request_body_len"] = observation.http_request_body_len
+            if observation.http_response_body_len is not None:
+                render_data["response_body_len"] = observation.http_response_body_len
+
+        original_file_id = render_data.get("fuid") or render_data.get("id")
+        if isinstance(original_file_id, str):
+            file_observation = observation.file_observation(original_file_id)
+            if file_observation is not None and self.format_def.name == "zeek_files":
+                render_data["seen_bytes"] = file_observation.seen_bytes
+                render_data["total_bytes"] = file_observation.total_bytes
+                render_data["missing_bytes"] = file_observation.missing_bytes
+                if not file_observation.analyzers_visible:
+                    render_data["analyzers"] = None
+                    for hash_field in ("md5", "sha1", "sha256"):
+                        render_data[hash_field] = None
 
         original_uid = render_data.get("uid")
         if isinstance(original_uid, str):
@@ -437,7 +504,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 render_data[fuid_field] = observation.file_id(original_fuid)
         for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
             fuid_values = render_data.get(fuid_list_field)
-            if isinstance(fuid_values, list):
+            if isinstance(fuid_values, (list, tuple)):
                 render_data[fuid_list_field] = [
                     observation.file_id(fuid) if isinstance(fuid, str) else fuid
                     for fuid in fuid_values
@@ -455,7 +522,6 @@ class SensorMultiplexEmitter(LogEmitter):
         observations = event_data.pop("_network_sensor_observations", {})
         observations_planned = event_data.pop("_network_observations_planned", False)
         canonical_start = event_data.pop("_canonical_network_start", None)
-        compatibility_nat_swaps = event_data.pop("_nat_swaps_by_sensor", None)
         event_data.pop("_allow_sensor_observation_variance", None)
         targets = (
             sensor_hostnames if observations_planned else sensor_hostnames or self._sensor_hostnames
@@ -486,45 +552,6 @@ class SensorMultiplexEmitter(LogEmitter):
                         observation,
                         canonical_start,
                     )
-                elif compatibility_nat_swaps and hostname in compatibility_nat_swaps:
-                    swaps = compatibility_nat_swaps[hostname]
-                    original_src_ip = render_data.get(
-                        "id.orig_h",
-                        render_data.get("_id.orig_h"),
-                    )
-                    original_dst_ip = render_data.get(
-                        "id.resp_h",
-                        render_data.get("_id.resp_h"),
-                    )
-                    for field, rendered_field in {
-                        "src_ip": "id.orig_h",
-                        "src_port": "id.orig_p",
-                        "dst_ip": "id.resp_h",
-                        "dst_port": "id.resp_p",
-                        "local_orig": "local_orig",
-                        "local_resp": "local_resp",
-                    }.items():
-                        if field in swaps and (
-                            not field.startswith("local_") or rendered_field in render_data
-                        ):
-                            internal_field = f"_{rendered_field}"
-                            target_field = (
-                                internal_field if internal_field in render_data else rendered_field
-                            )
-                            render_data[target_field] = swaps[field]
-                    for hosts_field in ("tx_hosts", "rx_hosts"):
-                        if hosts_field not in render_data:
-                            continue
-                        render_data[hosts_field] = _swap_host_list_value(
-                            render_data.get(hosts_field),
-                            original_src_ip,
-                            swaps.get("src_ip"),
-                        )
-                        render_data[hosts_field] = _swap_host_list_value(
-                            render_data.get(hosts_field),
-                            original_dst_ip,
-                            swaps.get("dst_ip"),
-                        )
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)
                 rendered = self._render_event(render_data)

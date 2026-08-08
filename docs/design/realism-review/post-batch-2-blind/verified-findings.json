@@ -1,0 +1,167 @@
+{
+  "schema_version": "evidenceforge-realism-finding-dispositions/v1",
+  "assessment": "post-batch-2-blind",
+  "gate": "failed_pending_sibling_remediation",
+  "findings": [
+    {
+      "id": "PB2-001",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "linux_pid_chronology",
+      "recurrence": "both_linux_hosts",
+      "evidence": "PROXY creates PID 233855 then 232295; WEB creates 749498 then 749092 without a plausible wrap",
+      "owner": "StateManager._allocate_linux_pid",
+      "planned_slice": "post_batch_2_gate_repair"
+    },
+    {
+      "id": "PB2-002",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "ssh_process_observation_order",
+      "recurrence": "PROXY 14/14 and WEB 43/44 matched SSH PIDs",
+      "evidence": "PROXY PID 233723 syslog starts 2024-05-14T12:10:03.573531Z; eCAR create is 12:10:06.016Z",
+      "owner": "SSH action bundle and SourceTimingPlanner",
+      "planned_slice": "post_batch_2_gate_repair"
+    },
+    {
+      "id": "PB2-003",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "windows_module_lifecycle",
+      "recurrence": "52/56 ntdll loads and 605/708 visible module loads exceed ten minutes after create",
+      "evidence": "kubectl.exe PID 6820 creates at 12:21:35.537 and loads ntdll.dll at 13:13:24.372",
+      "owner": "baseline hourly module-load planning and EDR module compatibility pools",
+      "planned_slice": "post_batch_2_gate_repair"
+    },
+    {
+      "id": "PB2-004",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "windows_record_id_rate",
+      "recurrence": "multiple Security and Sysmon channels across hosts",
+      "evidence": "NKAPOOR Security EventRecordID 940529 to 953735 in 8.999 ms",
+      "owner": "WindowsRecordIdSequence",
+      "planned_slice": "post_batch_2_gate_repair"
+    },
+    {
+      "id": "PB2-005",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "kerberos_transport_and_cache",
+      "recurrence": "852/852 proximal matches inverted; 629/1484 KDC audits lack exact Zeek transport",
+      "evidence": "DC Event 4768 record 15387546 precedes exact-tuple 5156 record 15387547 by 1.179 seconds",
+      "owner": "baseline Kerberos orchestration and network/auth action contracts",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PB2-006",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "http_head_body_semantics",
+      "recurrence": "10/10 HEAD transactions",
+      "evidence": "HEAD responses carry 136-478 transferred body bytes in Zeek HTTP and web access",
+      "owner": "canonical HTTP response normalization",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PB2-007",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "tcp_state_history",
+      "recurrence": "one verified UID",
+      "evidence": "UID CK1AnxAfXo2jJQtCB6 combines S1 with ShR, 2/1 packets, and zero application bytes",
+      "owner": "network transaction outcome planning",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PB2-008",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "sensor_clock_stability",
+      "recurrence": "repeated consecutive ICMP observations",
+      "evidence": "IDS-to-Zeek relative offsets flip sign by tens of milliseconds between adjacent observations",
+      "owner": "observation profile and source timing",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PB2-009",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "ocsp_object_stability",
+      "recurrence": "repeated identical request identity",
+      "evidence": "same OCSP request, certificate serial, and validity renders response sizes from 902 to 2277 bytes",
+      "owner": "canonical protocol payload identity",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PB2-010",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "recursive_dns_ttl_state",
+      "recurrence": "25/28 within-TTL repeats",
+      "evidence": "internal non-authoritative PTR responses repeatedly reset to TTL 86400",
+      "owner": "resolver cache observation state",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PB2-011",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "dhcp_lease_state",
+      "recurrence": "dataset-wide renewals",
+      "evidence": "each renewal independently jitters T1 and transaction morphology instead of retaining one lease policy",
+      "owner": "DHCP lease action bundle",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PB2-012",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "linux_daemon_state",
+      "recurrence": "both Linux hosts",
+      "evidence": "one long-lived rsyslog PID repeatedly reacquires its journal socket and reloads configuration",
+      "owner": "baseline daemon lifecycle",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PB2-013",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "host_hardware_inventory",
+      "recurrence": "both Linux hosts",
+      "evidence": "identical VMware, Mellanox, virtio, NVMe, and AHCI message vocabulary appears on each host",
+      "owner": "world capability and host inventory state",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PB2-014",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "snort_classification_projection",
+      "recurrence": "dataset-wide alerts",
+      "evidence": "fast alerts render classtype keys rather than configured native descriptions",
+      "owner": "Snort source-native emitter",
+      "planned_slice": "batch_5"
+    },
+    {
+      "id": "PB2-R01",
+      "priority": null,
+      "disposition": "rejected",
+      "family": "test_net_rdp_source",
+      "recurrence": "isolated",
+      "evidence": "documentation-range addressing is compatible with dataset sanitization and has no contradictory companion evidence",
+      "owner": null,
+      "planned_slice": null
+    },
+    {
+      "id": "PB2-G01",
+      "priority": null,
+      "disposition": "proof_gap",
+      "family": "kubectl_without_visible_flow",
+      "recurrence": "isolated",
+      "evidence": "a missing flow can reflect collection scope; required transport visibility was not established",
+      "owner": null,
+      "planned_slice": null
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 """Compiled world-model and session/activity planners.
 
-The canonical event model guarantees field consistency once a SecurityEvent
+The canonical event model guarantees field consistency once a OccurrenceBuilder
 exists. This module adds the missing "why would this happen here?" layer:
 
 - resolve authoritative host capabilities and infrastructure roles once
@@ -14,12 +14,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
-from evidenceforge.generation.activity.network_params import public_ntp_ips
+from evidenceforge.generation.activity.network_params import public_dns_resolver_ips, public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
@@ -28,7 +29,7 @@ from evidenceforge.utils.time import ensure_utc
 if TYPE_CHECKING:
     import random
 
-    from evidenceforge.events.contexts import IdsContext
+    from evidenceforge.events.contexts import IdsAlertPlan
     from evidenceforge.generation.activity.generator import ActivityGenerator
     from evidenceforge.generation.state_manager import StateManager
     from evidenceforge.models.scenario import Scenario, System, User
@@ -43,6 +44,8 @@ _ROLE_ALIASES = {
     "db": "database",
     "db_server": "database",
     "dc": "domain_controller",
+    "dhcp": "dhcp_server",
+    "dhcp_server": "dhcp_server",
     "dns": "dns_server",
     "email": "mail_server",
     "exchange": "mail_server",
@@ -97,6 +100,18 @@ _DNS_SERVER_SERVICES = {
     "ad-ds",
 }
 
+_DHCP_SERVER_SERVICES = {
+    "dhcp",
+    "dhcp-server",
+    "dhcp_server",
+    "dhcpd",
+    "isc-dhcp-server",
+    "windows-dhcp-server",
+}
+
+_SSH_RECEIVER_SERVICES = {"ssh", "sshd", "openssh-server"}
+_RDP_RECEIVER_SERVICES = {"rdp", "remote-desktop", "remote_desktop", "termservice"}
+
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
 _LINUX_SSH_ADMIN_PERSONAS = {"sysadmin"}
 _LINUX_SSH_ADMIN_GROUPS = {
@@ -150,7 +165,13 @@ def normalize_database_service(service: str | None) -> str | None:
     if not service:
         return None
     normalized = service.lower().replace("_", "-")
-    return _DB_SERVICE_ALIASES.get(normalized)
+    direct = _DB_SERVICE_ALIASES.get(normalized)
+    if direct is not None:
+        return direct
+    for alias, canonical in sorted(_DB_SERVICE_ALIASES.items(), key=lambda item: -len(item[0])):
+        if normalized.startswith(f"{alias}-") or normalized.startswith(f"{alias} "):
+            return canonical
+    return None
 
 
 def database_services_for_host(
@@ -203,6 +224,18 @@ def known_topology_roles() -> set[str]:
     return roles
 
 
+class HostCapability(StrEnum):
+    """Closed host capabilities used by action preflight and world planning."""
+
+    DHCP_SERVER = "dhcp_server"
+    DNS_RESOLVER = "dns_resolver"
+    DOMAIN_CONTROLLER = "domain_controller"
+    FORWARD_PROXY = "forward_proxy"
+    RDP_CLIENT = "rdp_client"
+    RDP_RECEIVER = "rdp_receiver"
+    SSH_RECEIVER = "ssh_receiver"
+
+
 @dataclass(frozen=True, slots=True)
 class HostWorld:
     """Canonical capabilities for a single system."""
@@ -211,9 +244,25 @@ class HostWorld:
     os_category: str
     canonical_roles: tuple[str, ...]
     services: tuple[str, ...]
+    capabilities: frozenset[HostCapability]
     is_server: bool
-    supports_ssh: bool
-    supports_rdp: bool
+
+    def supports(self, capability: HostCapability) -> bool:
+        """Return whether this host owns the requested capability."""
+
+        return capability in self.capabilities
+
+    @property
+    def supports_ssh(self) -> bool:
+        """Compatibility view for SSH receiver capability."""
+
+        return self.supports(HostCapability.SSH_RECEIVER)
+
+    @property
+    def supports_rdp(self) -> bool:
+        """Compatibility view for RDP receiver capability."""
+
+        return self.supports(HostCapability.RDP_RECEIVER)
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,8 +332,9 @@ class WorldModel:
             user.username: self._compile_user(user) for user in scenario.environment.users
         }
         self.db_servers: list[DatabaseEndpoint] = self._collect_db_servers()
-        self.dns_servers: list[System] = self._collect_role_systems("dns_server")
-        self.domain_controllers: list[System] = self._collect_role_systems("domain_controller")
+        self.dhcp_servers = self._collect_capability_systems(HostCapability.DHCP_SERVER)
+        self.dns_servers = self._collect_capability_systems(HostCapability.DNS_RESOLVER)
+        self.domain_controllers = self._collect_capability_systems(HostCapability.DOMAIN_CONTROLLER)
         self.mail_servers: list[System] = self._collect_role_systems("mail_server")
         self.ntp_ips: list[str] = self._resolve_ntp_ips()
 
@@ -319,17 +369,35 @@ class WorldModel:
             if any(hint in hostname_lower for hint in hints):
                 roles.add(role_name)
 
-        supports_ssh = os_category == "linux"
-        supports_rdp = os_category == "windows" and system.type in ("server", "domain_controller")
+        capabilities: set[HostCapability] = set()
+        if "domain_controller" in roles:
+            capabilities.add(HostCapability.DOMAIN_CONTROLLER)
+        if "dns_server" in roles:
+            capabilities.add(HostCapability.DNS_RESOLVER)
+        if "forward_proxy" in roles:
+            capabilities.add(HostCapability.FORWARD_PROXY)
+        if "dhcp_server" in roles or normalized_services.intersection(_DHCP_SERVER_SERVICES):
+            capabilities.add(HostCapability.DHCP_SERVER)
+        if os_category == "windows":
+            capabilities.add(HostCapability.RDP_CLIENT)
+        if os_category == "linux" and (
+            system.type in ("server", "domain_controller")
+            or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
+        ):
+            capabilities.add(HostCapability.SSH_RECEIVER)
+        if os_category == "windows" and (
+            system.type in ("server", "domain_controller")
+            or normalized_services.intersection(_RDP_RECEIVER_SERVICES)
+        ):
+            capabilities.add(HostCapability.RDP_RECEIVER)
 
         return HostWorld(
             system=system,
             os_category=os_category,
             canonical_roles=tuple(sorted(roles)),
             services=service_values,
+            capabilities=frozenset(capabilities),
             is_server=system.type in ("server", "domain_controller"),
-            supports_ssh=supports_ssh,
-            supports_rdp=supports_rdp,
         )
 
     def _index_systems_by_role(self) -> dict[str, list[System]]:
@@ -357,7 +425,7 @@ class WorldModel:
         return ["dns-client", "ntp-client", "syslog"]
 
     def _build_proxy_routes(self) -> dict[str, list[System]]:
-        proxies = self.systems_by_role.get("forward_proxy", [])
+        proxies = self._collect_capability_systems(HostCapability.FORWARD_PROXY)
         if not proxies:
             return {}
         proxy = proxies[0]
@@ -403,6 +471,40 @@ class WorldModel:
     def _collect_role_systems(self, role: str) -> list[System]:
         return list(self.systems_by_role.get(role, []))
 
+    def _collect_capability_systems(self, capability: HostCapability) -> list[System]:
+        """Return modeled systems that own a capability in scenario order."""
+
+        return [
+            system
+            for system in self.scenario.environment.systems
+            if self.hosts[system.hostname].supports(capability)
+        ]
+
+    def systems_with_capability(
+        self,
+        capability: HostCapability,
+        *,
+        distinct_from: System | str | None = None,
+    ) -> list[System]:
+        """Return capability owners, optionally excluding one host or IP."""
+
+        excluded_hostname = ""
+        excluded_ip = ""
+        if distinct_from is not None:
+            if hasattr(distinct_from, "hostname"):
+                excluded_hostname = distinct_from.hostname
+                excluded_ip = distinct_from.ip
+            else:
+                excluded_hostname = distinct_from
+                excluded_ip = distinct_from
+        return [
+            host.system
+            for host in self.hosts.values()
+            if host.supports(capability)
+            and host.system.hostname != excluded_hostname
+            and host.system.ip != excluded_ip
+        ]
+
     def _collect_db_servers(self) -> list[DatabaseEndpoint]:
         endpoints: list[DatabaseEndpoint] = []
         for system in self.systems_by_role.get("database", []):
@@ -440,10 +542,11 @@ class WorldModel:
 
     def to_infrastructure_ips(self) -> dict[str, str | list[Any]]:
         return {
-            "dns": [system.ip for system in self.dns_servers] or ["10.0.0.1"],
+            "dhcp": [system.ip for system in self.dhcp_servers],
+            "dns": [system.ip for system in self.dns_servers] or public_dns_resolver_ips(),
             "ntp": list(self.ntp_ips),
-            "dc": [system.ip for system in self.domain_controllers] or ["10.0.0.1"],
-            "dc_hostnames": [system.hostname for system in self.domain_controllers] or ["DC-01"],
+            "dc": [system.ip for system in self.domain_controllers],
+            "dc_hostnames": [system.hostname for system in self.domain_controllers],
             "db_servers": [
                 {
                     "ip": endpoint.system.ip,
@@ -489,7 +592,7 @@ class WorldModel:
             windows_workstations = [
                 system
                 for system in candidates
-                if self.hosts[system.hostname].os_category == "windows"
+                if self.hosts[system.hostname].supports(HostCapability.RDP_CLIENT)
             ]
             if windows_workstations:
                 return rng.choice(windows_workstations)
@@ -874,7 +977,7 @@ class WorldPlanner:
         storyline_protected: bool = False,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
@@ -964,6 +1067,19 @@ class WorldPlanner:
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
+            if storyline_protected and session_end_plan is None and required_until is None:
+                scenario_end = getattr(self.activity_generator, "_scenario_end_time", None)
+                if isinstance(scenario_end, datetime):
+                    close_margin_seconds = 180 + (
+                        _stable_seed(
+                            "storyline_ssh_close_margin:"
+                            f"{user.username}:{target_system.hostname}:{logon_time.isoformat()}"
+                        )
+                        % 421
+                    )
+                    required_until = ensure_utc(scenario_end) - timedelta(
+                        seconds=close_margin_seconds
+                    )
             result = self._bootstrap_ssh_session(
                 user,
                 plan,
@@ -1242,7 +1358,7 @@ class WorldPlanner:
         rng: random.Random,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         source_os = (
             self.world_model.hosts[plan.source_system.hostname].os_category
@@ -1272,6 +1388,8 @@ class WorldPlanner:
             source_system=plan.source_system,
             source_port=source_port,
             min_duration=min_duration,
+            emit_session_close=True,
+            defer_session_close=True,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
         )
@@ -1308,7 +1426,7 @@ class WorldPlanner:
         activity_time: datetime,
         rng: random.Random,
         session_end_plan: SessionEndPlan | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
         source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))

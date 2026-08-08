@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "review_baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "parent_commit": "c139c77a",
+  "recorded_at": "2026-08-07",
+  "branch": "codex/batch6-input-safety-budgets",
+  "remediation_batch": 6,
+  "scope": {
+    "finding_ids": [
+      "REAL-013",
+      "REAL-014",
+      "SEC-001",
+      "SEC-002",
+      "SEC-003",
+      "SEC-004",
+      "SEC-005",
+      "SEC-006",
+      "SEC-007",
+      "SEC-008",
+      "SEC-009",
+      "SEC-010",
+      "SEC-DEFER-001"
+    ],
+    "contracts": [
+      "duplicate-rejecting safe YAML and bounded include expansion",
+      "contained no-follow scenario assets and exclusive artifact writes",
+      "allocation-free generation and email-expansion preflight budgets",
+      "requested-target-proportional CIDR sampling",
+      "one public uint64 generation seed propagated through worker contexts",
+      "linear bounded parser records and a measured evaluator capacity envelope",
+      "no-symlink Splunk staging and stream-counted archive extraction"
+    ]
+  },
+  "commands": {
+    "capacity_probe": "UV_CACHE_DIR=/private/tmp/eforge-uv-cache uv run python scripts/evaluator_capacity_probe.py --output docs/design/realism-review/evaluator-capacity-results.json",
+    "fixture_validation": "uv run pytest --no-cov -q tests/unit/test_validation.py::test_all_scenario_fixtures_pass_schema_and_semantic_validation",
+    "seed_contract": "uv run pytest --no-cov -q tests/integration/test_deterministic_generation.py",
+    "tests_non_slow": "uv run pytest --no-cov -q",
+    "lint": "uv run ruff check .",
+    "format_check": "uv run ruff format --check .",
+    "diff_check": "git diff --check"
+  },
+  "yaml_contract": {
+    "production_boundaries": "all scenario, include, overlay, persona, activity-pool, configuration-validation, and email-corpus YAML reads use DuplicateKeySafeLoader",
+    "shipped_yaml_documents_scanned": 102,
+    "duplicate_documents_before_repair": [
+      {
+        "path": "src/evidenceforge/config/activity/site_maps.yaml",
+        "mapping_keys": ["github.com", "stackoverflow.com", "www.reddit.com"]
+      }
+    ],
+    "repair": "reconciled each shadowed site definition into one mapping while retaining the previously effective routes and restoring the unreachable route definitions",
+    "include_defaults": {
+      "max_depth": 32,
+      "max_files": 256,
+      "max_source_bytes": 16777216,
+      "max_expanded_nodes": 1000000
+    },
+    "fixture_result": "all 9 shipped scenario fixtures pass schema and semantic validation after built-in persona composition"
+  },
+  "generation_capacity_contract": {
+    "max_primary_duration_days": 31,
+    "max_warmup_days": 7,
+    "max_periodic_event_occurrences": 1000000,
+    "max_explicit_occurrences": 5000000,
+    "max_canonical_occurrences": 20000000,
+    "max_rendered_records": 200000000,
+    "max_attachment_bytes": 26214400,
+    "max_message_attachment_bytes": 36700160,
+    "max_email_payload_bytes": 268435456,
+    "override": "allow_large_workload is explicit in validator, generator, and CLI boundaries and is recorded in collection metadata",
+    "safety_note": "the resource override never bypasses path, file-type, or YAML ambiguity checks"
+  },
+  "generation_seed_contract": {
+    "range": "0..18446744073709551615",
+    "compatibility_seed": 42,
+    "entrypoints": ["scenario generation_seed", "eforge generate --seed", "GenerationEngine generation_seed"],
+    "metadata": "effective generation_seed is recorded in collection_profile.json",
+    "verification": "default repeat and identical explicit seeds are byte-identical; distinct explicit seeds change rendered output"
+  },
+  "evaluation_capacity_contract": {
+    "max_corpus_bytes": 536870912,
+    "max_files": 10000,
+    "max_records": 500000,
+    "max_record_bytes": 16777216,
+    "max_observed_rss_growth_bytes_per_record": 2958.62,
+    "projected_parse_growth_at_500k_records_bytes": 1479311360,
+    "rejected_2m_proposal_projected_growth_bytes": 5917245440,
+    "measurements": "docs/design/realism-review/evaluator-capacity-results.json",
+    "override": "allow_large_evaluation is an explicit evaluator and CLI decision"
+  },
+  "splunk_contract": {
+    "max_archive_members": 10000,
+    "max_total_expanded_bytes": 2147483648,
+    "max_member_bytes": 536870912,
+    "max_compression_ratio": 200,
+    "result": "supported logs, app directories, ZIP files, and TAR files reject symlinks and special members; archives are preflighted and stream-counted with partial-tree cleanup",
+    "external_runtime": "licensed Splunk/Docker integration remained unavailable; static, unit filesystem, archive, and loopback harness controls passed"
+  },
+  "quality_gates": [
+    {
+      "name": "malicious_and_control_regressions",
+      "status": "passed",
+      "result": "paired rejection/control tests cover duplicate YAML, include nodes, corpus paths, artifact paths and overwrite, workload and attachment budgets, huge CIDRs, record/corpus limits, and Splunk symlink/archive inputs"
+    },
+    {
+      "name": "fixture_validation",
+      "status": "passed",
+      "result": "9 of 9 shipped scenario fixtures have zero semantic errors"
+    },
+    {
+      "name": "non_slow_tests",
+      "status": "passed",
+      "result": "5227 passed, 41 skipped in 251.50 seconds on the unrestricted final run"
+    },
+    {
+      "name": "ruff_and_format",
+      "status": "passed",
+      "result": "All checks passed; 460 files already formatted"
+    },
+    {
+      "name": "json_and_diff_integrity",
+      "status": "passed",
+      "result": "finding and empirical JSON ledgers parse; git diff --check reports no whitespace errors"
+    }
+  ],
+  "limitations": [
+    "The licensed Splunk external parser runtime was unavailable, so runtime ingestion is not claimed.",
+    "The evaluator measurement isolates retained eCAR parse objects; scorer working sets require additional headroom and the default 500,000-record cap is intentionally conservative.",
+    "Reconciled duplicate site-map routes can change default generated browsing output because formerly unreachable authored routes now participate in selection.",
+    "Generated datasets and temporary capacity corpora remain untracked."
+  ]
+}

@@ -25,23 +25,23 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     DnsContext,
     FileTransferContext,
     FirewallContext,
     HttpContext,
-    IdsContext,
-    NetworkContext,
+    IdsAlertPlan,
     OcspContext,
     PeContext,
     ProxyContext,
 )
 from evidenceforge.events.cryptography import OcspTransactionPlan
+from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
@@ -87,7 +87,6 @@ class ProxyTransactionRequest:
     source_system: System | None
     conn_state: str | None
     dns: DnsContext | None
-    ids: IdsContext | None
     http: HttpContext | None
     file_transfer: FileTransferContext | None
     ocsp: OcspContext | None
@@ -102,7 +101,7 @@ class ProxyTransactionRequest:
     ocsp_transaction: OcspTransactionPlan | None = None
     parent_action_group_id: str | None = None
     source: str = "activity_generator"
-    ids_alerts: list[IdsContext] = field(default_factory=list)
+    ids_alerts: tuple[IdsAlertPlan, ...] = ()
 
     @property
     def stable_id(self) -> str:
@@ -241,8 +240,7 @@ class ProxyTransactionExecutor(Protocol):
         source_system: System | None = None,
         conn_state: str | None = None,
         dns: DnsContext | None = None,
-        ids: IdsContext | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
         http: HttpContext | None = None,
         file_transfer: FileTransferContext | None = None,
         pe: PeContext | None = None,
@@ -308,8 +306,8 @@ class ProxyTransactionActionBundle:
             time=request.time,
         )
         if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
-            self._shape_failed_connect(proxy_context)
-        self._finalize_proxy_byte_semantics(proxy_context)
+            proxy_context = self._shape_failed_connect(proxy_context)
+        proxy_context = self._finalize_proxy_byte_semantics(proxy_context)
         tunnel_key = (
             request.src_ip,
             proxy_sys.ip,
@@ -322,7 +320,7 @@ class ProxyTransactionActionBundle:
             request.dst_port == 443
             and request.http is not None
             and request.dns is None
-            and request.ids is None
+            and not any(alert.origin == "built_in" for alert in request.ids_alerts)
             and request.firewall is None
             and request.proxy is None
             and proxy_context.status_code < 400
@@ -337,12 +335,16 @@ class ProxyTransactionActionBundle:
                         ProxyPhasePlanner,
                     )
 
-                    proxy_context.transaction = ProxyPhasePlanner().plan_reused(
+                    reused_transaction = ProxyPhasePlanner().plan_reused(
                         request,
                         proxy_context,
                         request.time,
                     )
-                    proxy_context.time_taken = proxy_context.transaction.time_taken_ms
+                    proxy_context = replace(
+                        proxy_context,
+                        transaction=reused_transaction,
+                        time_taken=reused_transaction.time_taken_ms,
+                    )
                     executor._explicit_proxy_tunnels[tunnel_key] = (request.time, cached_uid)
                     self._dispatch_reused_tunnel_proxy_request(
                         proxy_context=proxy_context,
@@ -401,8 +403,11 @@ class ProxyTransactionActionBundle:
         from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
 
         phase_plan = ProxyPhasePlanner().plan(request, proxy_context, client_time)
-        proxy_context.transaction = phase_plan
-        proxy_context.time_taken = phase_plan.time_taken_ms
+        proxy_context = replace(
+            proxy_context,
+            transaction=phase_plan,
+            time_taken=phase_plan.time_taken_ms,
+        )
         client_http = self._build_client_http(proxy_context)
         client_orig_bytes = max(1, proxy_context.cs_bytes or request.orig_bytes or 1)
         client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
@@ -436,13 +441,18 @@ class ProxyTransactionActionBundle:
             else None
         )
         if egress_http is not None:
-            egress_http.canonical_request_time = phase_plan.origin_request_at
+            egress_http = replace(
+                egress_http,
+                canonical_request_time=phase_plan.origin_request_at,
+            )
         client_file_transfer: FileTransferContext | None = None
         client_pe: PeContext | None = None
         egress_file_transfer = request.file_transfer
         egress_pe: PeContext | None = None
         if egress_http is not None and request.file_transfer is None and egress_time is not None:
             (
+                client_http,
+                egress_http,
                 client_file_transfer,
                 client_pe,
                 egress_file_transfer,
@@ -476,7 +486,6 @@ class ProxyTransactionActionBundle:
             pid=client_pid,
             source_system=request.source_system,
             conn_state=request.conn_state or "SF",
-            ids=request.ids,
             ids_alerts=list(request.ids_alerts),
             http=client_http,
             file_transfer=client_file_transfer,
@@ -530,7 +539,6 @@ class ProxyTransactionActionBundle:
             source_system=proxy_sys,
             conn_state=phase_plan.origin_conn_state,
             dns=request.dns,
-            ids=request.ids,
             ids_alerts=list(request.ids_alerts),
             http=egress_http,
             file_transfer=egress_file_transfer,
@@ -564,10 +572,16 @@ class ProxyTransactionActionBundle:
         request = self.request
         transaction = proxy_context.transaction
         event_time = transaction.request_at if transaction is not None else request.time
-        reused_event = SecurityEvent(
+        reused_event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="connection",
-            network=NetworkContext(
+            network=NetworkTransactionPlan(
+                stable_id=self.anchor.stable_id,
+                hostname=proxy_context.host,
+                outcome="success",
+                phase_times=(("application_request", event_time),),
+                started_at=event_time,
+                closed_at=None,
                 src_ip=request.src_ip,
                 src_port=request.src_port or 0,
                 dst_ip=proxy_sys.ip,
@@ -575,7 +589,11 @@ class ProxyTransactionActionBundle:
                 protocol="tcp",
                 service="http",
                 zeek_uid=cached_uid,
+                conn_id="",
+                duration=None,
                 conn_state="SF",
+                history="",
+                traffic=NetworkTrafficLedger(),
                 local_orig=True,
                 local_resp=True,
                 application_layer_only=True,
@@ -588,7 +606,7 @@ class ProxyTransactionActionBundle:
                 parent_group_id=cached_uid,
             ),
         )
-        self.executor.dispatcher.dispatch(reused_event)
+        self.executor.dispatcher.dispatch_builder(reused_event)
 
     def _build_client_http(self, proxy_context: ProxyContext) -> HttpContext:
         """Build the client-to-proxy HTTP context."""
@@ -689,21 +707,27 @@ class ProxyTransactionActionBundle:
     def _shape_failed_connect(
         self,
         proxy_context: ProxyContext,
-    ) -> None:
+    ) -> ProxyContext:
         """Plan bounded wire/body accounting for a failed CONNECT request."""
 
         rng = random.Random(_stable_seed(f"proxy_failed_connect:{self.request.stable_id}"))
         host_len = len(proxy_context.host or "")
-        proxy_context.cs_bytes = rng.randint(180 + host_len, 520 + host_len)
-        proxy_context.sc_bytes = rng.randint(250, 2000)
-        proxy_context.request_body_bytes = 0
-        proxy_context.response_body_bytes = max(
+        cs_bytes = rng.randint(180 + host_len, 520 + host_len)
+        sc_bytes = rng.randint(250, 2000)
+        response_body_bytes = max(
             0,
-            proxy_context.sc_bytes - rng.randint(120, min(320, proxy_context.sc_bytes)),
+            sc_bytes - rng.randint(120, min(320, sc_bytes)),
         )
-        proxy_context.tunnel_status_code = proxy_context.status_code
+        return replace(
+            proxy_context,
+            cs_bytes=cs_bytes,
+            sc_bytes=sc_bytes,
+            request_body_bytes=0,
+            response_body_bytes=response_body_bytes,
+            tunnel_status_code=proxy_context.status_code,
+        )
 
-    def _finalize_proxy_byte_semantics(self, proxy_context: ProxyContext) -> None:
+    def _finalize_proxy_byte_semantics(self, proxy_context: ProxyContext) -> ProxyContext:
         """Separate HTTP entity bodies from proxy transfer totals once."""
 
         request = self.request
@@ -740,12 +764,15 @@ class ProxyTransactionActionBundle:
                 http=request.http,
             )
 
-        proxy_context.request_body_bytes = request_body
-        proxy_context.response_body_bytes = response_body
         request_overhead = 0 if request_body == 0 and proxy_context.cs_bytes > 0 else 80
         response_overhead = 0 if response_body == 0 and proxy_context.sc_bytes > 0 else 50
-        proxy_context.cs_bytes = max(proxy_context.cs_bytes, request_body + request_overhead)
-        proxy_context.sc_bytes = max(proxy_context.sc_bytes, response_body + response_overhead)
+        return replace(
+            proxy_context,
+            request_body_bytes=request_body,
+            response_body_bytes=response_body,
+            cs_bytes=max(proxy_context.cs_bytes, request_body + request_overhead),
+            sc_bytes=max(proxy_context.sc_bytes, response_body + response_overhead),
+        )
 
     def _resolve_client_process(
         self,
@@ -803,6 +830,8 @@ class ProxyTransactionActionBundle:
         egress_dst_ip: str,
         proxy_context: ProxyContext,
     ) -> tuple[
+        HttpContext,
+        HttpContext,
         FileTransferContext | None,
         PeContext | None,
         FileTransferContext | None,
@@ -813,7 +842,16 @@ class ProxyTransactionActionBundle:
         """Build paired file metadata for a proxied HTTP MISS response body."""
 
         if not self._http_file_transfer_required(client_http, egress_http):
-            return None, None, None, None, client_duration, egress_duration
+            return (
+                client_http,
+                egress_http,
+                None,
+                None,
+                None,
+                None,
+                client_duration,
+                egress_duration,
+            )
 
         request = self.request
         proxy_sys = request.proxy_chain[0]
@@ -869,27 +907,41 @@ class ProxyTransactionActionBundle:
             )
             % 29
         )
-        client_result.file_transfer.observation_not_before = client_not_before
+        client_file_transfer = replace(
+            client_result.file_transfer,
+            observation_not_before=client_not_before,
+        )
         available_client_duration = (
             max(0.001, (phase_plan.close_at - client_not_before).total_seconds() - 0.002)
             if phase_plan is not None
-            else client_duration or client_result.file_transfer.duration
+            else client_duration or client_file_transfer.duration
         )
-        client_result.file_transfer.duration = min(
-            max(
-                client_result.file_transfer.duration,
-                egress_result.file_transfer.duration,
+        client_file_transfer = replace(
+            client_file_transfer,
+            duration=min(
+                max(
+                    client_file_transfer.duration,
+                    egress_result.file_transfer.duration,
+                ),
+                available_client_duration,
             ),
-            available_client_duration,
         )
 
-        client_http.resp_fuids = [client_result.file_transfer.fuid]
-        client_http.resp_mime_types = [client_result.file_transfer.mime_type]
-        egress_http.resp_fuids = [egress_result.file_transfer.fuid]
-        egress_http.resp_mime_types = [egress_result.file_transfer.mime_type]
+        client_http = replace(
+            client_http,
+            resp_fuids=(client_file_transfer.fuid,),
+            resp_mime_types=(client_file_transfer.mime_type,),
+        )
+        egress_http = replace(
+            egress_http,
+            resp_fuids=(egress_result.file_transfer.fuid,),
+            resp_mime_types=(egress_result.file_transfer.mime_type,),
+        )
 
         return (
-            client_result.file_transfer,
+            client_http,
+            egress_http,
+            client_file_transfer,
             client_result.pe,
             egress_result.file_transfer,
             egress_result.pe,

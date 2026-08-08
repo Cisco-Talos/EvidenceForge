@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
-from . import LogParser, ParsedRecord, register_parser
+from . import LogParser, ParsedRecord, iter_bounded_text_lines, register_parser
 
 # Apache/Nginx combined log format:
 # client_ip - username [timestamp] "method path protocol" status bytes "referer" "user_agent"
@@ -53,12 +53,11 @@ class WebAccessParser(LogParser):
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         hostname = self._source_host_from_path(path)
-        with path.open(encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                yield self._parse_line(line, line_num, hostname=hostname)
+        for line_num, line in iter_bounded_text_lines(path):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            yield self._parse_line(line, line_num, hostname=hostname)
 
     @staticmethod
     def _source_host_from_path(path: Path) -> str | None:

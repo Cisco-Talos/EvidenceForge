@@ -17,8 +17,7 @@ from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.plausibility import (
     _score_cryptographic_protocol_consistency,
 )
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.generation.actions.ocsp_transaction import (
     OcspTransactionPlanner,
     OcspTransactionRequest,
@@ -27,6 +26,7 @@ from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlann
 from evidenceforge.generation.activity.dns_txt import stable_dns_txt_record
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.models.scenario import DnsQueryEventSpec
+from tests.network_factories import network_plan
 
 _EVENT_TIME = datetime(2024, 10, 14, 12, 0, tzinfo=UTC)
 _ISSUER = "CN=R3, O=Let's Encrypt, C=US"
@@ -57,11 +57,11 @@ def _presentation(
     )
 
 
-def _tls_event(presentation, *, timestamp: datetime = _EVENT_TIME) -> SecurityEvent:
-    return SecurityEvent(
+def _tls_event(presentation, *, timestamp: datetime = _EVENT_TIME) -> OccurrenceBuilder:
+    return OccurrenceBuilder(
         timestamp=timestamp,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.10.25",
             src_port=51000,
             dst_ip="93.184.216.34",

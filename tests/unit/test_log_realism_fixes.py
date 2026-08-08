@@ -12,18 +12,18 @@ import random
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     DnsContext,
-    IdsContext,
+    IdsAlertPlan,
     NatContext,
-    NetworkContext,
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import IdsAlertActionBundle, IdsAlertRequest
 from evidenceforge.generation.activity.generator import _TLS_VERSION_VALUES, _TLS_VERSION_WEIGHTS
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.utils.rng import _stable_seed
+from tests.network_factories import network_plan
 
 T0 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
 
@@ -33,11 +33,11 @@ T0 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
 
 class TestSnortRevField:
     def test_ids_context_default_rev(self):
-        ctx = IdsContext(sid=10001, message="test", classification="test")
+        ctx = IdsAlertPlan(sid=10001, message="test", classification="test")
         assert ctx.rev == 1
 
     def test_ids_context_custom_rev(self):
-        ctx = IdsContext(sid=10001, message="test", classification="test", rev=14)
+        ctx = IdsAlertPlan(sid=10001, message="test", classification="test", rev=14)
         assert ctx.rev == 14
 
     def test_snort_emitter_renders_rev(self, tmp_path):
@@ -48,22 +48,24 @@ class TestSnortRevField:
             sensor_hostnames=["ids-01"],
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="185.70.41.45",
                 src_port=12345,
                 dst_ip="10.10.3.10",
                 dst_port=80,
                 protocol="tcp",
             ),
-            ids=IdsContext(
-                sid=2002677,
-                rev=14,
-                message="ET SCAN Nikto Web App Scan in Progress",
-                classification="web-application-attack",
-                priority=2,
+            ids_alerts=(
+                IdsAlertPlan(
+                    sid=2002677,
+                    rev=14,
+                    message="ET SCAN Nikto Web App Scan in Progress",
+                    classification="web-application-attack",
+                    priority=2,
+                ),
             ),
         )
         event._sensor_hostnames_by_format = {"snort_alert": ["ids-01"]}
@@ -82,20 +84,22 @@ class TestSnortRevField:
             sensor_hostnames=["ids-01"],
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=54321,
                 dst_ip="10.0.0.2",
                 dst_port=22,
                 protocol="tcp",
             ),
-            ids=IdsContext(
-                sid=384,
-                message="PROTOCOL-ICMP PING",
-                classification="icmp-event",
+            ids_alerts=(
+                IdsAlertPlan(
+                    sid=384,
+                    message="PROTOCOL-ICMP PING",
+                    classification="icmp-event",
+                ),
             ),
         )
         event._sensor_hostnames_by_format = {"snort_alert": ["ids-01"]}
@@ -201,7 +205,7 @@ class TestIdsAlertActionBundle:
 
         result = IdsAlertActionBundle(request).execute_with_result()
 
-        assert result.ids.sid == 2027758
+        assert result.alert.sid == 2027758
         assert result.dns is not None
         assert result.dns.query == "host-abcd.corp.example"
 
@@ -501,10 +505,10 @@ class TestEcarNatAwareIp:
         dst_host.os = "Ubuntu 22.04"
         dst_host.os_category = "linux"
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="185.70.41.45",
                 src_port=12345,
                 dst_ip="198.51.100.10",

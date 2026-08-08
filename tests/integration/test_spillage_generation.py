@@ -160,7 +160,7 @@ class TestSpillageGeneration:
             "http_referrer",
         }
         for r in recs:
-            assert r["kind"] == "spillage" and r["schema_version"] == 1
+            assert r["kind"] == "spillage" and r["schema_version"] == 2
             assert r["surface"] in (
                 "shell_history",
                 "process_command_line",
@@ -171,6 +171,20 @@ class TestSpillageGeneration:
             if r["family"]:  # synthesized values match their family regex
                 rx = get_family(r["family"])["regex"]
                 assert re.search(rx, r["value"]), f"{r['family']}: {r['value']!r} !~ {rx}"
+
+    def test_ground_truth_reconciles_every_authored_spill(self, spillage_scenario, tmp_path):
+        """Every typed spill remains linked to its independent authored intent."""
+
+        out = _generate(spillage_scenario, tmp_path / "out")
+        document = _document(out)
+        reconciliation = document["intent_reconciliation"]
+
+        assert reconciliation["complete"] is True
+        assert reconciliation["expected_count"] == 8
+        assert reconciliation["planned_count"] == 8
+        assert reconciliation["missing_intent_ids"] == []
+        assert reconciliation["unexpected_intent_ids"] == []
+        assert len({record["intent_id"] for record in document["events"]}) == 8
 
     def test_values_are_varied_not_repeated_literals(self, spillage_scenario, tmp_path):
         out = _generate(spillage_scenario, tmp_path / "out")
@@ -249,13 +263,18 @@ class TestSpillageGeneration:
 
 
 class TestSpillageEval:
-    def test_eval_acceptance_passes(self, spillage_scenario, tmp_path):
+    def test_eval_rejects_unlinkable_storyline(self, spillage_scenario, tmp_path):
         out = _generate(spillage_scenario, tmp_path / "out")
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**spillage_scenario)).run()
-        hard = [c for c in report.acceptance_criteria if c.level == "hard" and c.passed is not None]
-        assert hard and all(c.passed for c in hard), [
-            (c.name, c.actual) for c in hard if not c.passed
-        ]
+        failed = {
+            criterion.sub_score_key: criterion
+            for criterion in report.acceptance_criteria
+            if criterion.passed is False
+        }
+
+        assert report.acceptance_passed is False
+        assert failed["pivot_linkability"].actual is not None
+        assert failed["pivot_linkability"].actual < failed["pivot_linkability"].threshold
 
     def test_eval_reads_canonical_ground_truth_not_synthesis(self, spillage_scenario, tmp_path):
         # Eval must rely on GROUND_TRUTH.json; with it removed, spillage cannot be matched.

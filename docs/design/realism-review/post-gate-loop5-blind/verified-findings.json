@@ -1,0 +1,87 @@
+{
+  "schema_version": "evidenceforge-realism-finding-dispositions/v1",
+  "assessment": "post-gate-loop5-blind",
+  "gate": "passed_bounded_post_batch_2_gate",
+  "findings": [
+    {
+      "id": "PGL5-001",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "nat_connection_lifecycle",
+      "recurrence": "five dynamic translations in the reviewed output",
+      "evidence": "ASA tears down PAT at build time while the owning S0 connection remains until its 30-second SYN timeout.",
+      "owner": "network sensor observation and ASA projection of canonical teardown time",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGL5-002",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "ids_payload_and_protocol_prerequisites",
+      "recurrence": "three proven PHP-upload alerts on zero-body GET requests plus prior payload contradictions",
+      "evidence": "SID 2012647 is attached to GET /, GET /dashboard, and GET /assets/main.css with request_body_len 0.",
+      "owner": "canonical IDS attachment after network/HTTP outcome planning",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGL5-003",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "icmp_static_nat_projection",
+      "recurrence": "repeated inbound ICMP records",
+      "evidence": "ASA 302020/302021 renders the public VIP as both gaddr and laddr while all sibling sources show the private translated destination.",
+      "owner": "ASA projection consuming canonical NAT tuple views",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGL5-004",
+      "priority": "P2",
+      "disposition": "proof_gap",
+      "family": "zeek_service_confirmation",
+      "recurrence": "multiple payload-free OTH/Cc connections",
+      "evidence": "Zero-payload bad-checksum rows carry port-associated services including ssl, krb, smb, and ldap.",
+      "owner": "network outcome planning and Zeek source projection",
+      "planned_slice": "batch_3_reference_check"
+    },
+    {
+      "id": "PGL5-005",
+      "priority": "P1",
+      "disposition": "accepted",
+      "family": "windows_file_activity_process_ownership",
+      "recurrence": "multiple hosts, processes, and protected component path families",
+      "evidence": "Baseline ambient churn chooses an arbitrary running process before drawing from a generic Windows path pool, producing lsass/Defender and winlogon/Windows Update pairings.",
+      "owner": "world/process capability and ambient file-activity planning",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PGL5-006",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "provider_timestamp_texture",
+      "recurrence": "593 matched Security 4688/Sysmon Event 1 pairs",
+      "evidence": "Security-minus-Sysmon timestamp displacement ranges approximately -1.018 to +0.812 seconds with a bounded bidirectional profile.",
+      "owner": "SourceTimingPlanner provider clock model",
+      "planned_slice": "batch_3"
+    },
+    {
+      "id": "PGL5-007",
+      "priority": "P2",
+      "disposition": "accepted",
+      "family": "world_and_population_coherence",
+      "recurrence": "fleet-wide and across the six-hour public/server populations",
+      "evidence": "Software placement, Webex/Slack arguments, scanner TCP profiles, daemon messages, web outcomes, and SSH demand retain pool-shaped combinations.",
+      "owner": "world capability planning and lifecycle-aware distribution state",
+      "planned_slice": "batch_4"
+    },
+    {
+      "id": "PGL5-008",
+      "priority": null,
+      "disposition": "rejected_as_gate_regression",
+      "family": "windows_startup_module_profile",
+      "recurrence": "same-executable dependency similarity only",
+      "evidence": "The panel did not reproduce the old cross-executable nine-module template; the rendered probe reports zero template-concentration and cadence-repetition findings.",
+      "owner": "process startup-module profile and SourceTimingPlanner",
+      "planned_slice": "none_gate_closed"
+    }
+  ]
+}
