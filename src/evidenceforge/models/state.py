@@ -119,6 +119,7 @@ class RunningProcess:
     primary_tid: int = -1
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
+    end_time: datetime | None = None
 
 
 @dataclass

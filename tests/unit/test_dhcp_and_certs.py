@@ -12,8 +12,8 @@ import pytest
 import yaml
 
 from evidenceforge.config.schemas import TlsRealismConfig
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext, X509Context
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import HttpContext, X509Context
 from evidenceforge.generation.activity.generator import (
     ActivityGenerator,
     _bound_certificate_validity_to_issuer_window,
@@ -45,6 +45,7 @@ from evidenceforge.generation.activity.tls_realism import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System
+from tests.network_factories import network_plan
 
 # ---------------------------------------------------------------------------
 # Theme 4: Certificate realism tests
@@ -263,10 +264,10 @@ class TestTlsIssuers:
         monkeypatch.setattr(generator_module, "_TLS_VERSION_VALUES", ("TLSv12",))
         monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (1,))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.101",
                 src_port=50123,
                 dst_ip="93.184.216.34",
@@ -292,9 +293,9 @@ class TestTlsIssuers:
             rng=ZeroRandom(),
         )
 
-        assert event.tls_presentation is not None
-        assert event.tls_presentation.leaf.subject_name == "CN=edge42.example.net"
-        assert event.ocsp_transaction is None
+        assert event.protocol.tls_presentation is not None
+        assert event.protocol.tls_presentation.leaf.subject_name == "CN=edge42.example.net"
+        assert event.protocol.ocsp_transaction is None
 
     def test_ocsp_request_path_uses_long_encoded_der_shape(self):
         """OCSP-over-HTTP GET paths should not look like short synthetic tokens."""
@@ -901,10 +902,10 @@ class TestTlsIssuers:
             type="server",
         )
         generator._ip_to_system[web_system.ip] = web_system
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.3",
                 src_port=50123,
                 dst_ip=web_system.ip,
@@ -923,10 +924,13 @@ class TestTlsIssuers:
             allow_failure=False,
         )
 
-        assert event.x509 is not None
-        assert event.x509.certificate_subject == "CN=web01.example.com"
-        assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
-        assert event.x509.san_dns == ["web01.example.com", "web01"]
+        assert event.protocol.leaf_certificate is not None
+        assert event.protocol.leaf_certificate.certificate_subject == "CN=web01.example.com"
+        assert (
+            event.protocol.leaf_certificate.certificate_issuer
+            == "CN=Example Enterprise Issuing CA, O=Example, C=US"
+        )
+        assert event.protocol.leaf_certificate.san_dns == ("web01.example.com", "web01")
 
     def test_internal_tls_explicit_sni_controls_enterprise_sans(self):
         """Explicit internal SNI should not get overwritten by dst host canonical name."""
@@ -939,10 +943,10 @@ class TestTlsIssuers:
             type="domain_controller",
         )
         generator._ip_to_system[dc_system.ip] = dc_system
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.3",
                 src_port=50123,
                 dst_ip=dc_system.ip,
@@ -963,18 +967,21 @@ class TestTlsIssuers:
 
         assert event.ssl is not None
         assert event.ssl.server_name == "srv-05.example.com"
-        assert event.x509 is not None
-        assert event.x509.certificate_subject == "CN=srv-05.example.com"
-        assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
-        assert event.x509.san_dns == ["srv-05.example.com", "srv-05"]
+        assert event.protocol.leaf_certificate is not None
+        assert event.protocol.leaf_certificate.certificate_subject == "CN=srv-05.example.com"
+        assert (
+            event.protocol.leaf_certificate.certificate_issuer
+            == "CN=Example Enterprise Issuing CA, O=Example, C=US"
+        )
+        assert event.protocol.leaf_certificate.san_dns == ("srv-05.example.com", "srv-05")
 
     def test_raw_ip_tls_certificate_avoids_public_ca_dnsless_identity(self):
         """Raw-IP TLS should not render a public-CA CN-only certificate."""
         generator = ActivityGenerator(StateManager(), {})
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.1",
                 src_port=50123,
                 dst_ip="45.33.32.30",
@@ -993,19 +1000,19 @@ class TestTlsIssuers:
             allow_failure=False,
         )
 
-        assert event.x509 is not None
-        assert event.x509.certificate_subject == "CN=45.33.32.30"
-        assert event.x509.certificate_issuer == "CN=45.33.32.30"
-        assert event.x509.san_dns == []
-        assert event.x509_chain == [event.x509]
+        assert event.protocol.leaf_certificate is not None
+        assert event.protocol.leaf_certificate.certificate_subject == "CN=45.33.32.30"
+        assert event.protocol.leaf_certificate.certificate_issuer == "CN=45.33.32.30"
+        assert event.protocol.leaf_certificate.san_dns == ()
+        assert event.protocol.x509_chain == (event.protocol.leaf_certificate,)
 
     def test_tls_validity_window_is_not_observation_second_anchored(self):
         """Leaf cert validity should not reveal the exact first observation timestamp."""
         generator = ActivityGenerator(StateManager(), {})
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 34, 56, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.101",
                 src_port=50123,
                 dst_ip="142.250.190.99",
@@ -1024,9 +1031,9 @@ class TestTlsIssuers:
             allow_failure=False,
         )
 
-        assert event.x509 is not None
+        assert event.protocol.leaf_certificate is not None
         observed_epoch = int(event.timestamp.timestamp())
-        age_seconds = observed_epoch - event.x509.certificate_not_valid_before
+        age_seconds = observed_epoch - event.protocol.leaf_certificate.certificate_not_valid_before
         assert age_seconds > 0
         assert age_seconds % 86400 != 0
 
@@ -1154,10 +1161,10 @@ class TestTlsIssuers:
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""
         generator = ActivityGenerator(StateManager(), {})
-        first = SecurityEvent(
+        first = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.101",
                 src_port=50123,
                 dst_ip="142.250.190.99",
@@ -1166,10 +1173,10 @@ class TestTlsIssuers:
                 zeek_uid="CTestExternalTls1",
             ),
         )
-        second = SecurityEvent(
+        second = OccurrenceBuilder(
             timestamp=datetime(2024, 10, 14, 12, 5, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.30.40.102",
                 src_port=50124,
                 dst_ip="142.250.190.99",
@@ -1189,14 +1196,29 @@ class TestTlsIssuers:
                 allow_failure=False,
             )
 
-        assert first.x509 is not None
-        assert second.x509 is not None
-        assert len(first.x509.fingerprint) == 40
-        assert first.x509.fingerprint == second.x509.fingerprint
-        assert {len(first.x509.fuid), len(second.x509.fuid)} <= {17, 18, 19}
-        assert first.x509.certificate_issuer == second.x509.certificate_issuer
-        assert first.x509.certificate_key_type == second.x509.certificate_key_type
-        assert first.x509.certificate_key_length == second.x509.certificate_key_length
+        assert first.protocol.leaf_certificate is not None
+        assert second.protocol.leaf_certificate is not None
+        assert len(first.protocol.leaf_certificate.fingerprint) == 40
+        assert (
+            first.protocol.leaf_certificate.fingerprint
+            == second.protocol.leaf_certificate.fingerprint
+        )
+        assert {
+            len(first.protocol.leaf_certificate.fuid),
+            len(second.protocol.leaf_certificate.fuid),
+        } <= {17, 18, 19}
+        assert (
+            first.protocol.leaf_certificate.certificate_issuer
+            == second.protocol.leaf_certificate.certificate_issuer
+        )
+        assert (
+            first.protocol.leaf_certificate.certificate_key_type
+            == second.protocol.leaf_certificate.certificate_key_type
+        )
+        assert (
+            first.protocol.leaf_certificate.certificate_key_length
+            == second.protocol.leaf_certificate.certificate_key_length
+        )
 
     def test_intermediate_ca_profile_is_stable_across_leaf_certificates(self):
         """The same intermediate CA subject/issuer should not get many cert identities."""
@@ -1490,10 +1512,10 @@ class TestTlsIssuers:
         event = None
 
         for seed in range(1, 100):
-            candidate = SecurityEvent(
+            candidate = OccurrenceBuilder(
                 timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.30.40.101",
                     src_port=50123 + seed,
                     dst_ip="142.250.190.99",
@@ -1511,14 +1533,19 @@ class TestTlsIssuers:
                 rng=random.Random(seed),
                 allow_failure=False,
             )
-            if candidate.x509 is not None:
+            if candidate.protocol.leaf_certificate is not None:
                 event = candidate
                 break
 
-        assert event is not None and event.x509 is not None
-        assert event.x509.certificate_issuer == "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
-        expected = signature_algorithm_for_issuer(event.x509.certificate_issuer)
-        assert event.x509.certificate_sig_alg == expected
+        assert event is not None and event.protocol.leaf_certificate is not None
+        assert (
+            event.protocol.leaf_certificate.certificate_issuer
+            == "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
+        )
+        expected = signature_algorithm_for_issuer(
+            event.protocol.leaf_certificate.certificate_issuer
+        )
+        assert event.protocol.leaf_certificate.certificate_sig_alg == expected
 
 
 class TestDnsRtt:

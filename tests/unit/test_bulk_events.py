@@ -1325,7 +1325,7 @@ class TestWebScanPresets:
         http = captured[0]["http"]
         assert http.method == "HEAD"
         assert http.response_body_len == 0
-        assert http.resp_mime_types == []
+        assert http.resp_mime_types == ()
 
     def test_web_scan_paths_are_shuffled_between_passes(self):
         import inspect

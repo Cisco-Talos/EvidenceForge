@@ -20,8 +20,9 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for the canonical event model types (SecurityEvent, contexts, RawLogEntry)."""
+"""Tests for the canonical event model types (OccurrenceBuilder, contexts, RawProjectionRequest)."""
 
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 
 import pytest
@@ -31,28 +32,28 @@ from evidenceforge.events import (
     DnsContext,
     FileContext,
     HostContext,
-    IdsContext,
-    NetworkContext,
+    IdsAlertPlan,
+    OccurrenceBuilder,
     ProcessContext,
-    RawLogEntry,
+    RawProjectionRequest,
     RegistryContext,
-    SecurityEvent,
 )
+from tests.network_factories import network_plan
 
 
-class TestSecurityEvent:
-    """Tests for SecurityEvent dataclass."""
+class TestOccurrenceBuilder:
+    """Tests for OccurrenceBuilder dataclass."""
 
     def test_minimal_event(self):
-        """SecurityEvent requires only timestamp and event_type."""
+        """OccurrenceBuilder requires only timestamp and event_type."""
         ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
-        event = SecurityEvent(timestamp=ts, event_type="logon")
+        event = OccurrenceBuilder(timestamp=ts, event_type="logon")
         assert event.timestamp == ts
         assert event.event_type == "logon"
 
     def test_contexts_default_to_none(self):
         """All optional context fields default to None."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime.now(UTC),
             event_type="logon",
         )
@@ -64,12 +65,12 @@ class TestSecurityEvent:
         assert event.dns is None
         assert event.file is None
         assert event.registry is None
-        assert event.ids is None
+        assert event.ids_alerts == ()
 
     def test_with_all_contexts(self):
-        """SecurityEvent can hold all context types simultaneously."""
+        """OccurrenceBuilder can hold all context types simultaneously."""
         ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="logon",
             dst_host=HostContext(
@@ -87,7 +88,7 @@ class TestSecurityEvent:
                 command_line="cmd.exe /c dir",
                 username="alice",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.50",
                 src_port=54321,
                 dst_ip="10.0.1.100",
@@ -97,7 +98,7 @@ class TestSecurityEvent:
             dns=DnsContext(query="example.com"),
             file=FileContext(path="C:\\temp\\test.txt", action="create"),
             registry=RegistryContext(key="HKLM\\Software\\Test"),
-            ids=IdsContext(sid=1000001, message="Test alert", classification="misc"),
+            ids_alerts=(IdsAlertPlan(sid=1000001, message="Test alert", classification="misc"),),
         )
         assert event.dst_host.hostname == "WS-01"
         assert event.auth.username == "alice"
@@ -106,10 +107,10 @@ class TestSecurityEvent:
         assert event.dns.query == "example.com"
         assert event.file.path == "C:\\temp\\test.txt"
         assert event.registry.key == "HKLM\\Software\\Test"
-        assert event.ids.sid == 1000001
+        assert event.ids_alerts[0].sid == 1000001
 
     def test_src_dst_host_fields(self):
-        """SecurityEvent supports dual src_host/dst_host fields."""
+        """OccurrenceBuilder supports dual src_host/dst_host fields."""
         host_a = HostContext(
             hostname="SRC",
             ip="10.0.0.1",
@@ -124,7 +125,7 @@ class TestSecurityEvent:
             os_category="linux",
             system_type="server",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime.now(UTC),
             event_type="connection",
             src_host=host_a,
@@ -228,11 +229,11 @@ class TestProcessContext:
         assert ctx.mandatory_label == ""
 
 
-class TestNetworkContext:
-    """Tests for NetworkContext dataclass."""
+class TestNetworkTransactionPlan:
+    """Tests for NetworkTransactionPlan dataclass."""
 
     def test_defaults(self):
-        ctx = NetworkContext(
+        ctx = network_plan(
             src_ip="10.0.1.50",
             src_port=54321,
             dst_ip="10.0.1.100",
@@ -243,8 +244,8 @@ class TestNetworkContext:
         assert ctx.zeek_uid == ""
         assert ctx.conn_id == ""
         assert ctx.duration is None
-        assert ctx.orig_bytes is None
-        assert ctx.resp_bytes is None
+        assert ctx.orig_bytes == 0
+        assert ctx.resp_bytes == 0
         assert ctx.orig_pkts == 0
         assert ctx.resp_pkts == 0
         assert ctx.conn_state == ""
@@ -253,28 +254,30 @@ class TestNetworkContext:
         assert ctx.local_resp is False
 
 
-class TestRawLogEntry:
-    """Tests for RawLogEntry escape hatch."""
+class TestRawProjectionRequest:
+    """Tests for RawProjectionRequest escape hatch."""
 
     def test_construction(self):
         ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
-        entry = RawLogEntry(
+        entry = RawProjectionRequest(
             timestamp=ts,
-            target_emitter="syslog",
+            target_format="syslog",
             data={"message": "test", "hostname": "srv-01"},
         )
         assert entry.timestamp == ts
-        assert entry.target_emitter == "syslog"
+        assert entry.target_format == "syslog"
         assert entry.data["message"] == "test"
 
     def test_slots_prevents_dynamic_attributes(self):
-        entry = RawLogEntry(
+        entry = RawProjectionRequest(
             timestamp=datetime.now(UTC),
-            target_emitter="syslog",
+            target_format="syslog",
             data={},
         )
-        with pytest.raises(AttributeError):
+        with pytest.raises((AttributeError, TypeError)):
             entry.bogus = "fail"
+        with pytest.raises(FrozenInstanceError):
+            entry.target_format = "zeek_conn"
 
 
 class TestKerberosContext:
@@ -321,13 +324,13 @@ class TestShellContext:
         assert ctx.command == "ls -la"
 
 
-class TestSecurityEventNewContexts:
-    """Tests for SecurityEvent with kerberos and shell contexts."""
+class TestOccurrenceBuilderContexts:
+    """Tests for OccurrenceBuilder with kerberos and shell contexts."""
 
     def test_kerberos_slot(self):
         from evidenceforge.events.contexts import KerberosContext
 
-        evt = SecurityEvent(
+        evt = OccurrenceBuilder(
             timestamp=datetime.now(UTC),
             event_type="kerberos_tgt",
             kerberos=KerberosContext(target_username="alice", target_domain="CORP"),
@@ -338,7 +341,7 @@ class TestSecurityEventNewContexts:
     def test_shell_slot(self):
         from evidenceforge.events.contexts import ShellContext
 
-        evt = SecurityEvent(
+        evt = OccurrenceBuilder(
             timestamp=datetime.now(UTC),
             event_type="bash_command",
             shell=ShellContext(command="ls"),

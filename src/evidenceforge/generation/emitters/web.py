@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.spillage import web_server_supported_schemes
@@ -85,7 +85,7 @@ def _int_value(value: object, default: int = 0) -> int:
         return default
 
 
-def _response_time_microseconds(event: SecurityEvent) -> int:
+def _response_time_microseconds(event: CanonicalOccurrence) -> int:
     """Return an approximate web response time for Apache TA JSON records."""
     duration = event.network.duration if event.network else None
     if duration is None or duration <= 0:
@@ -98,7 +98,7 @@ class WebEmitter(HostMultiplexEmitter):
 
     Per-host FQDN directory routing: each web server gets its own access log.
 
-    Handles SecurityEvents with HttpContext (fan-out from connection events
+    Handles canonical occurrences with an aggregate HTTP protocol plan (fan-out from connections
     to web servers) and raw dict events from baseline web traffic generation.
     """
 
@@ -128,7 +128,7 @@ class WebEmitter(HostMultiplexEmitter):
             return (datetime.max, line)
         return (ts, line)
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle connection events that carry an HttpContext and target a web server.
 
         Only fires when dst_host has the 'web_server' role.  Two earlier
@@ -141,14 +141,14 @@ class WebEmitter(HostMultiplexEmitter):
         """
         return (
             event.event_type in self._supported_types
-            and event.http is not None
+            and event.protocol.http is not None
             and event.dst_host is not None
             and bool(web_server_supported_schemes(event.dst_host))
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render HttpContext to the configured web access format."""
-        http = event.http
+        http = event.protocol.http
         # Web access logs are written on the web server (dst_host)
         host = event.dst_host
         net = event.network

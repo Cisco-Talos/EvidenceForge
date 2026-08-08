@@ -35,8 +35,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import IdsContext, NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import IdsAlertPlan
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.snort import SnortEmitter
@@ -48,6 +48,7 @@ from evidenceforge.models.scenario import (
     NetworkSensor,
     System,
 )
+from tests.network_factories import network_plan
 
 T0 = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
 
@@ -295,16 +296,18 @@ def test_snort_direct_emission_preserves_canonical_timestamps(tmp_path):
     # Emit several events with different timestamps
     for i in range(5):
         ts = T0 + timedelta(seconds=i * 60)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
-            ids=IdsContext(
-                sid=2000000 + i,
-                message=f"Test alert {i}",
-                classification="Attempted Information Leak",
-                priority=2,
+            ids_alerts=(
+                IdsAlertPlan(
+                    sid=2000000 + i,
+                    message=f"Test alert {i}",
+                    classification="Attempted Information Leak",
+                    priority=2,
+                ),
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=40000 + i,
                 dst_ip="192.168.1.1",
@@ -358,10 +361,10 @@ def test_asa_output_sorted(tmp_path):
     # The Teardown for the first connection lands AFTER the Built for the second connection
     for i in range(5):
         ts = T0 + timedelta(seconds=i * 10)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=40000 + i,
                 dst_ip="8.8.8.8",

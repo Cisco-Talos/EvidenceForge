@@ -26,9 +26,10 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HostContext, NetworkContext
+from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
+from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.source_timing import (
@@ -94,7 +95,7 @@ def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
 
 
 def _ecar_flow_endpoint_properties(
-    net: NetworkContext,
+    net: NetworkTransactionPlan,
     *,
     dst_ip: str | None = None,
     direction: str,
@@ -116,7 +117,7 @@ def _ecar_flow_endpoint_properties(
     return properties
 
 
-def _ecar_remote_auth_transport_properties(event: SecurityEvent) -> dict[str, Any]:
+def _ecar_remote_auth_transport_properties(event: CanonicalOccurrence) -> dict[str, Any]:
     """Return the exact primary transport view for a remote authentication."""
 
     remote_auth = event.remote_auth
@@ -133,7 +134,7 @@ def _ecar_remote_auth_transport_properties(event: SecurityEvent) -> dict[str, An
     }
 
 
-def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
+def _ecar_non_windows_session_type(event: CanonicalOccurrence) -> str:
     """Return an OS-native session label for non-Windows eCAR sessions."""
     if event.event_type == "ssh_session":
         return "ssh"
@@ -156,7 +157,7 @@ def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
     return "session"
 
 
-def _ecar_session_source_ip(event: SecurityEvent) -> str:
+def _ecar_session_source_ip(event: CanonicalOccurrence) -> str:
     """Return a source IP suitable for endpoint USER_SESSION telemetry."""
     source_ip = str(getattr(event.auth, "source_ip", "") or "")
     if not source_ip or source_ip == "-":
@@ -204,7 +205,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "service_installed",
     }
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """eCAR handles events regardless of OS (cross-platform EDR).
 
         Firewall deny events are excluded — the firewall blocked the
@@ -220,7 +221,7 @@ class EcarEmitter(HostMultiplexEmitter):
             return False
         return event.event_type in self._supported_types
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Dispatch to per-type render method."""
         renderer = {
             "logon": self._render_logon,
@@ -259,8 +260,8 @@ class EcarEmitter(HostMultiplexEmitter):
         return host.hostname if host else ""
 
     @staticmethod
-    def _apply_edr_context(event_data: dict[str, Any], event: SecurityEvent) -> None:
-        """Project canonical identity roles into eCAR and retained compatibility fields."""
+    def _apply_edr_context(event_data: dict[str, Any], event: CanonicalOccurrence) -> None:
+        """Project canonical identity roles into eCAR."""
         plan = event.identity_plan
         if plan is not None:
             if plan.object_id:
@@ -280,19 +281,11 @@ class EcarEmitter(HostMultiplexEmitter):
             ):
                 event_data["tid"] = plan.subject.primary_thread.tid
             EcarEmitter._apply_explicit_identity_roles(event_data, event)
-            return
-        if event.edr is not None:
-            if event.edr.object_id:
-                event_data["objectID"] = event.edr.object_id
-            if event.edr.actor_id:
-                event_data["actorID"] = event.edr.actor_id
-            if event.edr.tid >= 0:
-                event_data["tid"] = event.edr.tid
 
     @staticmethod
     def _apply_explicit_identity_roles(
         event_data: dict[str, Any],
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
     ) -> None:
         """Render optional symmetric source/target process identity fields."""
 
@@ -346,7 +339,7 @@ class EcarEmitter(HostMultiplexEmitter):
         event_data["actorID"] = process.object_id
 
     @staticmethod
-    def _apply_session_properties(event_data: dict[str, Any], event: SecurityEvent) -> None:
+    def _apply_session_properties(event_data: dict[str, Any], event: CanonicalOccurrence) -> None:
         """Copy durable source-native session identifiers onto session-owned rows."""
         auth = event.auth
         process = event.process
@@ -394,15 +387,15 @@ class EcarEmitter(HostMultiplexEmitter):
     def _emit_canonical_event(
         self,
         event_data: dict[str, Any],
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
     ) -> None:
         """Render one eCAR observation from its canonical occurrence identity."""
 
-        if event.event_id:
-            event_data["_event_id"] = event.event_id
+        if event.occurrence_id:
+            event_data["_occurrence_id"] = event.occurrence_id
         self.emit_event(event_data)
 
-    def _render_logon(self, event: SecurityEvent) -> None:
+    def _render_logon(self, event: CanonicalOccurrence) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
         event_data = {
@@ -426,7 +419,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_logoff(self, event: SecurityEvent) -> None:
+    def _render_logoff(self, event: CanonicalOccurrence) -> None:
         """Render eCAR USER_SESSION/LOGOUT event (logged on dst_host)."""
         host = event.dst_host
         event_data = {
@@ -450,7 +443,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_failed_logon(self, event: SecurityEvent) -> None:
+    def _render_failed_logon(self, event: CanonicalOccurrence) -> None:
         """Render eCAR failed USER_SESSION/LOGIN attempt on dst_host."""
         host = event.dst_host
         event_data = {
@@ -478,7 +471,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _session_timestamp(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         host: HostContext | None,
         lifecycle: str,
     ) -> datetime:
@@ -491,7 +484,7 @@ class EcarEmitter(HostMultiplexEmitter):
             event.timestamp,
         )
 
-    def _render_process_create(self, event: SecurityEvent) -> None:
+    def _render_process_create(self, event: CanonicalOccurrence) -> None:
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
         host = event.src_host
         proc = event.process
@@ -518,7 +511,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_process_terminate(self, event: SecurityEvent) -> None:
+    def _render_process_terminate(self, event: CanonicalOccurrence) -> None:
         """Render eCAR PROCESS/TERMINATE event (logged on src_host)."""
         host = event.src_host
         proc = event.process
@@ -540,7 +533,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_file_event(self, event: SecurityEvent) -> None:
+    def _render_file_event(self, event: CanonicalOccurrence) -> None:
         """Render eCAR FILE event from canonical FileContext (logged on src_host)."""
         host = event.src_host
         proc = event.process
@@ -569,7 +562,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_registry_event(self, event: SecurityEvent) -> None:
+    def _render_registry_event(self, event: CanonicalOccurrence) -> None:
         """Render eCAR REGISTRY event from canonical RegistryContext (logged on src_host)."""
         host = event.src_host
         proc = event.process
@@ -593,7 +586,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_module_event(self, event: SecurityEvent) -> None:
+    def _render_module_event(self, event: CanonicalOccurrence) -> None:
         """Render eCAR MODULE/LOAD event from canonical ImageLoadContext."""
         host = event.src_host
         proc = event.process
@@ -628,7 +621,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_connection(self, event: SecurityEvent) -> None:
+    def _render_connection(self, event: CanonicalOccurrence) -> None:
         """Render eCAR FLOW/CONNECT events -- OUTBOUND on src_host, INBOUND on dst_host.
 
         For internal-to-internal connections, emits TWO records (one per host).
@@ -766,7 +759,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _flow_source_time(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         *,
         seed_parts: tuple[Any, ...],
         not_before: datetime | None = None,
@@ -780,11 +773,11 @@ class EcarEmitter(HostMultiplexEmitter):
         hostname = str(seed_parts[1]) if len(seed_parts) > 1 else ""
         plan = event.source_timing
         if plan is None:
-            timestamp = event.network.source_visible_start_time or event.timestamp
+            timestamp = event.network.started_at
             return timestamp, not_before is None or not_before <= timestamp
         timestamp = plan.finalized_times.get(
             ecar_flow_render_key(direction, hostname),
-            event.network.source_visible_start_time or event.timestamp,
+            event.network.started_at,
         )
         identity_safe = plan.finalized_flags.get(
             ecar_flow_identity_key(direction, hostname),
@@ -793,7 +786,7 @@ class EcarEmitter(HostMultiplexEmitter):
         return timestamp, identity_safe
 
     @staticmethod
-    def _flow_identity_deadline(event: SecurityEvent) -> datetime:
+    def _flow_identity_deadline(event: CanonicalOccurrence) -> datetime:
         """Return the latest normal FLOW source time before process identity should be omitted."""
 
         window = get_timing_window(
@@ -806,7 +799,7 @@ class EcarEmitter(HostMultiplexEmitter):
         return event.timestamp + timedelta(milliseconds=window.max_ms + 1)
 
     @staticmethod
-    def _flow_connection_failed(net: NetworkContext | None) -> bool:
+    def _flow_connection_failed(net: NetworkTransactionPlan | None) -> bool:
         """Return whether source-native FLOW should expose a failed connection outcome."""
         if net is None:
             return False
@@ -815,7 +808,7 @@ class EcarEmitter(HostMultiplexEmitter):
         return net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR", "OTH"}
 
     @staticmethod
-    def _inbound_listener_observed(event: SecurityEvent) -> bool:
+    def _inbound_listener_observed(event: CanonicalOccurrence) -> bool:
         """Return whether destination EDR should attribute the flow to a listener process."""
         net = event.network
         if net is None:
@@ -831,7 +824,7 @@ class EcarEmitter(HostMultiplexEmitter):
         # progressed far enough for an application listener to own it.
         return any(marker in history for marker in ("h", "a", "d", "r", "f"))
 
-    def _render_create_remote_thread(self, event: SecurityEvent) -> None:
+    def _render_create_remote_thread(self, event: CanonicalOccurrence) -> None:
         """Render eCAR THREAD/REMOTE_CREATE event (logged on src_host).
 
         Maps Sysmon Event 8 (CreateRemoteThread) to eCAR format.
@@ -910,7 +903,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_process_access(self, event: SecurityEvent) -> None:
+    def _render_process_access(self, event: CanonicalOccurrence) -> None:
         """Render eCAR PROCESS/OPEN event (logged on src_host).
 
         Maps Sysmon Event 10 (ProcessAccess) to eCAR format.
@@ -970,7 +963,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _process_create_timestamp(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         proc: Any,
     ) -> datetime:
         """Return the eCAR render timestamp for a process-create observation."""
@@ -995,7 +988,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _after_process_create_timestamp(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         proc: Any,
     ) -> datetime:
         """Clamp dependent eCAR observations after their PROCESS/CREATE record."""
@@ -1036,7 +1029,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _process_identity_not_before_timestamp(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         proc: Any,
     ) -> datetime:
         """Return the earliest eCAR time that can safely claim a process identity."""
@@ -1049,7 +1042,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     def _process_terminate_timestamp(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         proc: Any,
     ) -> datetime:
         """Return an eCAR terminate timestamp preserving rendered process lifetime."""
@@ -1074,7 +1067,7 @@ class EcarEmitter(HostMultiplexEmitter):
             not_before=max(event.timestamp, process_create_ts + canonical_lifetime),
         )
 
-    def _render_service_installed(self, event: SecurityEvent) -> None:
+    def _render_service_installed(self, event: CanonicalOccurrence) -> None:
         """Render eCAR SERVICE/CREATE event (logged on src_host)."""
         host = event.src_host
         service = event.service

@@ -35,7 +35,7 @@ from typing import Any
 
 from jinja2 import Template
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.utils.paths import sanitize_path_component
@@ -146,14 +146,14 @@ class BashHistoryEmitter(LogEmitter):
 
     _supported_types: set[str] = {"bash_command"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Bash history only for Linux hosts."""
         return event.event_type in self._supported_types and (
             event.src_host is not None and event.src_host.os_category == "linux"
         )
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Extract fields from SecurityEvent and delegate to existing dispatch."""
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Extract fields from CanonicalOccurrence and delegate to existing dispatch."""
         host = event.src_host
         event_data = {
             "timestamp": event.timestamp,

@@ -117,7 +117,7 @@ from evidenceforge.generation.world_model import (
     normalize_database_service,
 )
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
-from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -2567,7 +2567,7 @@ class BaselineMixin:
         if _get_os_category(system.os) != "windows":
             return
 
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, ProcessContext, RegistryContext
         from evidenceforge.generation.activity.edr_pools import (
             get_registry_keys_hklm,
@@ -2625,8 +2625,8 @@ class BaselineMixin:
                 if reg_proc.start_time and reg_ts <= reg_proc.start_time:
                     reg_ts = reg_proc.start_time + timedelta(milliseconds=1)
             target = f"{key}\\{value_name}"
-            self.activity_generator.dispatcher.dispatch(
-                SecurityEvent(
+            self.activity_generator.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
                     timestamp=reg_ts,
                     event_type="registry_modify",
                     src_host=_host_ctx,
@@ -6488,10 +6488,8 @@ class BaselineMixin:
         rng: Any,
     ) -> None:
         """Emit eCAR file operations that make SMB sessions look like file work."""
-        import uuid
-
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import AuthContext, EdrContext, FileContext
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import AuthContext, FileContext
 
         host_ctx = self.activity_generator._build_host_context(file_server)
         username = getattr(user, "username", "unknown")
@@ -6536,8 +6534,8 @@ class BaselineMixin:
             stem = rng.choice(stems)
             ext = rng.choice(extensions)
             file_path = rf"\\{file_server.hostname}\{share}\{client_name}\{stem}-{rng.randint(1, 99):02d}.{ext}"
-            self.activity_generator.dispatcher.dispatch(
-                SecurityEvent(
+            self.activity_generator.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
                     timestamp=time + timedelta(milliseconds=idx * rng.randint(200, 1500)),
                     event_type=event_type,
                     src_host=host_ctx,
@@ -6547,7 +6545,6 @@ class BaselineMixin:
                         action=event_type.removeprefix("file_"),
                         pid=4,
                     ),
-                    edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
                 )
             )
 
@@ -6561,10 +6558,9 @@ class BaselineMixin:
     ) -> None:
         """Emit ordinary endpoint FILE telemetry from running baseline processes."""
         from evidenceforge.config.schemas import MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import (
             AuthContext,
-            EdrContext,
             FileContext,
             ProcessContext,
         )
@@ -6615,7 +6611,7 @@ class BaselineMixin:
         assigned_user = getattr(system, "assigned_user", None) or ""
         hour_end = current_hour + timedelta(hours=1)
 
-        for idx in range(count):
+        for _idx in range(count):
             process = rng.choice(processes)
             process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
             if is_service_account(os_cat, process_username):
@@ -6653,17 +6649,8 @@ class BaselineMixin:
                 continue
 
             event_type = f"file_{file_action}"
-            object_id = stable_uuid(
-                "baseline.ecar.file",
-                system.hostname,
-                process.pid,
-                file_path,
-                file_action,
-                current_hour.isoformat(),
-                idx,
-            )
-            self.activity_generator.dispatcher.dispatch(
-                SecurityEvent(
+            self.activity_generator.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
                     timestamp=ts,
                     event_type=event_type,
                     src_host=host_ctx,
@@ -6683,7 +6670,6 @@ class BaselineMixin:
                         start_time=process.start_time,
                     ),
                     file=FileContext(path=file_path, action=file_action, pid=process.pid),
-                    edr=EdrContext(object_id=object_id, actor_id=process.ecar_object_id),
                 )
             )
 
@@ -7853,7 +7839,7 @@ class BaselineMixin:
             # generates hundreds-thousands of Event 12/13 per hour. We emit
             # 15-40 per host per hour to provide realistic background volume.
             if os_cat == "windows":
-                from evidenceforge.events.base import SecurityEvent
+                from evidenceforge.events.base import OccurrenceBuilder
                 from evidenceforge.events.contexts import (
                     AuthContext,
                     ProcessContext,
@@ -7961,8 +7947,8 @@ class BaselineMixin:
                     # Sysmon value writes are Event 13. Event 12 is reserved for key-only
                     # create/delete contexts, not the value-name pools used here.
                     _reg_action = "modify"
-                    self.activity_generator.dispatcher.dispatch(
-                        SecurityEvent(
+                    self.activity_generator.dispatcher.dispatch_builder(
+                        OccurrenceBuilder(
                             timestamp=_reg_ts,
                             event_type="registry_modify",
                             src_host=_host_ctx,
@@ -8746,7 +8732,7 @@ class BaselineMixin:
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
                         )
                         # UFW block: connection (→ Zeek conn S0) + syslog (→ kernel UFW)
-                        # Both on the same SecurityEvent for cross-source correlation
+                        # Both on the same OccurrenceBuilder for cross-source correlation
 
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
@@ -9457,7 +9443,7 @@ class BaselineMixin:
                         conn_state=ids_conn_state,
                         source_system=source_system,
                         dns=ids_result.dns,
-                        ids=ids_result.ids,
+                        ids_alerts=[ids_result.alert],
                         firewall=firewall,
                     )
 

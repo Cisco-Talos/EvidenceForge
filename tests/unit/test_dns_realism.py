@@ -21,14 +21,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import DnsContext, FirewallContext, NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import DnsContext, FirewallContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
+from tests.network_factories import network_plan
 
 
 @pytest.fixture
@@ -130,12 +131,12 @@ class TestHostnameConsistency:
         )
 
         # Check SSL SNI on the main connection event dispatched to zeek_conn
-        # (SSL context is attached to the connection SecurityEvent)
+        # (SSL context is attached to the connection OccurrenceBuilder)
         if mock_emitters["zeek_conn"].emit.called:
             conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-            if conn_event.ssl is not None:
-                assert conn_event.ssl.server_name == domain, (
-                    f"SNI '{conn_event.ssl.server_name}' != expected domain '{domain}'"
+            if conn_event.protocol.ssl is not None:
+                assert conn_event.protocol.ssl.server_name == domain, (
+                    f"SNI '{conn_event.protocol.ssl.server_name}' != expected domain '{domain}'"
                 )
             else:
                 pytest.skip("conn_state was not SF — SSL context not generated")
@@ -173,8 +174,8 @@ class TestHostnameConsistency:
 
         conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert conn_event.network.dst_ip in get_domain_ips(hostname)
-        assert conn_event.ssl is not None
-        assert conn_event.ssl.server_name == hostname
+        assert conn_event.protocol.ssl is not None
+        assert conn_event.protocol.ssl.server_name == hostname
 
     def test_unregistered_hostname_uses_dns_derived_destination(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -199,8 +200,8 @@ class TestHostnameConsistency:
         expected_ip = resolve_domain_ip(hostname, src_host="10.0.1.50")
         conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert conn_event.network.dst_ip == expected_ip
-        assert conn_event.ssl is not None
-        assert conn_event.ssl.server_name == hostname
+        assert conn_event.protocol.ssl is not None
+        assert conn_event.protocol.ssl.server_name == hostname
 
     def test_connection_dns_prerequisite_contains_tcp_destination(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
@@ -267,8 +268,8 @@ class TestHostnameConsistency:
         conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
 
         assert address_events
-        assert conn_event.ssl is not None
-        assert conn_event.ssl.server_name == hostname
+        assert conn_event.protocol.ssl is not None
+        assert conn_event.protocol.ssl.server_name == hostname
         assert conn_event.network.dst_ip in address_events[0].dns.answers
 
     def test_registered_multi_ip_prerequisite_orders_connected_ip_first(
@@ -1007,7 +1008,7 @@ class TestHostnameConsistency:
         ssl_event = next(
             call.args[0]
             for call in mock_emitters["zeek_ssl"].emit.call_args_list
-            if call.args[0].ssl and call.args[0].ssl.server_name == hostname
+            if call.args[0].protocol.ssl and call.args[0].protocol.ssl.server_name == hostname
         )
         assert address_events[0].timestamp < ssl_event.timestamp
 
@@ -1043,8 +1044,8 @@ class TestNoReverseDnsHostnames:
 
             if mock_emitters["zeek_ssl"].emit.called:
                 ssl_event = mock_emitters["zeek_ssl"].emit.call_args[0][0]
-                if ssl_event.ssl:
-                    sni = ssl_event.ssl.server_name
+                if ssl_event.protocol.ssl:
+                    sni = ssl_event.protocol.ssl.server_name
                     ip_dashed = ip.replace(".", "-")
                     if ip_dashed in sni:
                         violations.append(f"SNI '{sni}' contains embedded IP {ip}")
@@ -1620,10 +1621,10 @@ class TestWeirdProtocolConstraint:
             output_path=tmp_path,
             sensor_hostnames=["zeek-a", "zeek-b"],
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=timestamp,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.50",
                 src_port=53000,
                 dst_ip="10.0.0.1",

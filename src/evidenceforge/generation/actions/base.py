@@ -22,7 +22,7 @@
 
 """Base types for action bundles.
 
-Action bundles model real-world activities above individual SecurityEvents. A
+Action bundles model real-world activities above individual canonical occurrences. A
 bundle may emit multiple canonical events while owning lifecycle, timing,
 observation, and durable identity constraints for the activity as a whole.
 """

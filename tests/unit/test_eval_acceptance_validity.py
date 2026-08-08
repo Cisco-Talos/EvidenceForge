@@ -17,6 +17,7 @@ from evidenceforge.evaluation.engine import (
 from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
 from evidenceforge.events.observation_manifest import ObservationManifest
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
@@ -178,7 +179,14 @@ def test_intent_reconciliation_rejects_reported_unexpected_intent(
     execution = IntentExecutionLedger(authored)
     for intent in authored.intents:
         execution.mark_planned(intent.intent_id)
-    execution.record_occurrence("unexpected-intent", "event-1", None)
+    execution.record_occurrence(
+        "unexpected-intent",
+        SemanticOccurrenceKey(
+            action_id="unexpected-action",
+            role=OccurrenceRole.PRIMARY,
+            instance_key="unexpected-instance",
+        ),
+    )
     ground_truth = GroundTruthGenerator(
         authored_scenario,
         [],

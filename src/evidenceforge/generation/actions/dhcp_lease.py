@@ -29,7 +29,7 @@ from datetime import datetime
 from random import Random
 from typing import Protocol
 
-from evidenceforge.events.contexts import IdsContext
+from evidenceforge.events.contexts import IdsAlertPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
@@ -55,7 +55,7 @@ class DhcpLeaseRequest:
     msg_types: list[str] | None = None
     domain: str | None = None
     renewal_interval: float | None = None
-    ids_alerts: list[IdsContext] = field(default_factory=list)
+    ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property

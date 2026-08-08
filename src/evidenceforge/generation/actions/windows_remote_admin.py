@@ -29,10 +29,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
-    EdrContext,
     FileContext,
     HostContext,
     ProcessContext,
@@ -43,7 +42,7 @@ from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 _LINUX_LOCAL_ACCOUNTS = {
@@ -290,7 +289,7 @@ class ExplicitCredentialUseActionBundle:
             )
         if network_source_ip not in {"", "-"} and network_source_port <= 0:
             network_source_port = self._sample_source_port()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="explicit_credentials",
             dst_host=self._executor._build_host_context(self._request.system),
@@ -315,7 +314,7 @@ class ExplicitCredentialUseActionBundle:
                 source_port=network_source_port,
             ),
         )
-        self._executor.dispatcher.dispatch(event)
+        self._executor.dispatcher.dispatch_builder(event)
 
     def _resolve_process_pid(self, subject_user: User, subject_logon_id: str) -> int:
         """Return or materialize the caller process for the 4648 event."""
@@ -394,7 +393,7 @@ class WindowsServiceInstallActionBundle:
             0x2E0,
         )
         host = self._executor._build_host_context(self._request.system)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=self._request.time,
             event_type="service_installed",
             src_host=host,
@@ -418,7 +417,7 @@ class WindowsServiceInstallActionBundle:
                 service_account=self._request.service_account,
             ),
         )
-        self._executor.dispatcher.dispatch(event)
+        self._executor.dispatcher.dispatch_builder(event)
 
     def _emit_payload_file_create(self) -> None:
         """Emit dropped service binary evidence when the service path is not preexisting."""
@@ -441,13 +440,9 @@ class WindowsServiceInstallActionBundle:
             "services",
             0x2BC,
         )
-        services_obj_id = self._executor.state_manager.get_process_object_id(
-            self._request.system.hostname,
-            services_pid,
-        )
         file_time = self._request.time - timedelta(milliseconds=250)
-        self._executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=file_time,
                 event_type="file_create",
                 src_host=self._executor._build_host_context(self._request.system),
@@ -465,15 +460,5 @@ class WindowsServiceInstallActionBundle:
                     logon_id="0x3e7",
                 ),
                 file=FileContext(path=service_path, action="create", pid=services_pid),
-                edr=EdrContext(
-                    object_id=stable_uuid(
-                        "service-install-file-edr",
-                        self._request.system.hostname,
-                        services_pid,
-                        service_path,
-                        file_time.isoformat(),
-                    ),
-                    actor_id=services_obj_id,
-                ),
             )
         )

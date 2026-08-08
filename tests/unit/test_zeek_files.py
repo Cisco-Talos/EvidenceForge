@@ -30,11 +30,10 @@ from pathlib import Path
 
 import yaml
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     FileTransferContext,
     HttpContext,
-    NetworkContext,
     PeContext,
     SslContext,
     X509Context,
@@ -51,6 +50,7 @@ from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
+from tests.network_factories import network_plan
 
 
 class _AlwaysPeRandom(random.Random):
@@ -137,10 +137,10 @@ class TestFilesFormatAccuracy:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
             emitter.emit(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                     event_type="connection",
-                    network=NetworkContext(
+                    network=network_plan(
                         zeek_uid="CInboundSmtpFile1",
                         src_ip="198.51.100.77",
                         src_port=25,
@@ -160,10 +160,10 @@ class TestFilesFormatAccuracy:
                 )
             )
             emitter.emit(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
                     event_type="connection",
-                    network=NetworkContext(
+                    network=network_plan(
                         zeek_uid="COutboundSmtpFile1",
                         src_ip="10.55.20.25",
                         src_port=25,
@@ -203,10 +203,10 @@ class TestFilesCanHandle:
     def test_accepts_connection_with_file_transfer(self):
         fmt = load_format("zeek_files")
         emitter = ZeekFilesEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
             file_transfer=FileTransferContext(fuid="FTest12345678901", source="HTTP"),
@@ -216,10 +216,10 @@ class TestFilesCanHandle:
     def test_accepts_smb_file_transfer_source(self):
         fmt = load_format("zeek_files")
         emitter = ZeekFilesEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="10.0.0.10",
@@ -238,10 +238,10 @@ class TestFilesCanHandle:
     def test_rejects_without_file_transfer(self):
         fmt = load_format("zeek_files")
         emitter = ZeekFilesEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
         )
@@ -258,10 +258,10 @@ class TestFilesUidCorrelation:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="8.8.8.8",
@@ -291,10 +291,10 @@ class TestFilesUidCorrelation:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -325,10 +325,10 @@ class TestFilesUidCorrelation:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -362,10 +362,10 @@ class TestFilesUidCorrelation:
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
             emitter = ZeekEmitter(conn_fmt, out_dir, sensor_hostnames=["core", "dmz"])
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -411,10 +411,10 @@ class TestFilesUidCorrelation:
             files_output = Path(tmpdir) / "files.json"
             http_emitter = ZeekHttpEmitter(http_fmt, http_output)
             files_emitter = ZeekFilesEmitter(files_fmt, files_output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -458,7 +458,7 @@ class TestFilesUidCorrelation:
             files_output = Path(tmpdir) / "files.json"
             http_emitter = ZeekHttpEmitter(http_fmt, http_output)
             files_emitter = ZeekFilesEmitter(files_fmt, files_output)
-            network = NetworkContext(
+            network = network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="10.0.0.10",
@@ -468,7 +468,7 @@ class TestFilesUidCorrelation:
                 zeek_uid="CHttpUIDShared1",
                 duration=2.0,
             )
-            first = SecurityEvent(
+            first = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, 500000, tzinfo=UTC),
                 event_type="connection",
                 network=network,
@@ -478,7 +478,7 @@ class TestFilesUidCorrelation:
                     trans_depth=1,
                 ),
             )
-            second = SecurityEvent(
+            second = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
                 network=network,
@@ -522,10 +522,10 @@ class TestFilesUidCorrelation:
             http_emitter = ZeekHttpEmitter(http_fmt, http_output)
             files_emitter = ZeekFilesEmitter(files_fmt, files_output)
             pe_emitter = ZeekPeEmitter(pe_fmt, pe_output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, 138017, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -604,7 +604,7 @@ class TestFilesUidCorrelation:
         assert ft.missing_bytes > 0
         assert ft.seen_bytes == request.response_body_len - ft.missing_bytes
         assert ft.total_bytes == request.response_body_len
-        assert ft.analyzers == []
+        assert ft.analyzers == ()
         assert ft.sha1 == ""
         assert result.pe is None
 
@@ -623,10 +623,10 @@ class TestFilesUidCorrelation:
                 certificate_subject="CN=updates.example.test",
                 certificate_issuer="CN=Example Issuer",
             )
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -667,10 +667,10 @@ class TestFilesUidCorrelation:
                 certificate_subject="CN=short.example.test",
                 certificate_issuer="CN=Example Issuer",
             )
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=base_ts,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -722,10 +722,10 @@ class TestFilesUidCorrelation:
                 certificate_issuer="CN=Example Root",
                 host_cert=False,
             )
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -763,10 +763,10 @@ class TestFilesUidCorrelation:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
             for idx, fuid in enumerate(("Fcert11111111111", "Fcert22222222222")):
-                event = SecurityEvent(
+                event = OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 0, idx, tzinfo=UTC),
                     event_type="connection",
-                    network=NetworkContext(
+                    network=network_plan(
                         src_ip="10.0.0.1",
                         src_port=50000 + idx,
                         dst_ip="8.8.8.8",
@@ -802,10 +802,10 @@ class TestFilesUidCorrelation:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
             for idx, name in enumerate(("api.example.com", "cdn.example.net", "login.example.org")):
-                event = SecurityEvent(
+                event = OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 0, idx, tzinfo=UTC),
                     event_type="connection",
-                    network=NetworkContext(
+                    network=network_plan(
                         src_ip="10.0.0.1",
                         src_port=50000 + idx,
                         dst_ip="8.8.8.8",
@@ -835,10 +835,10 @@ class TestFilesUidCorrelation:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -873,10 +873,10 @@ class TestFilesUidCorrelation:
             output = Path(tmpdir) / "files.json"
             emitter = ZeekFilesEmitter(fmt, output)
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -934,7 +934,7 @@ class TestFilesUidCorrelation:
         assert ft.timedout is True
         assert ft.missing_bytes > 0
         assert ft.seen_bytes == request.transfer_bytes - ft.missing_bytes
-        assert ft.analyzers == []
+        assert ft.analyzers == ()
         assert ft.md5 == ""
         assert ft.sha1 == ""
 

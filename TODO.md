@@ -85,10 +85,12 @@ without turning `TODO.md` back into a high-conflict work journal.
   event aliases, refresh the path census, and reconcile architecture/scenario/evaluation/security
   documentation. See the [Batch 7 worklog](docs/worklog/2026-08-07-compatibility-documentation.md)
   and [results](docs/design/realism-review/batch7-results.json).
-- [ ] **P2** Plan and separately approve Batch 7b migrations before removing live mutable carrier
-  and context compatibility views (`SecurityEvent.event_type`, flat `NetworkContext`,
-  `EdrContext`, TLS/X.509/OCSP/proxy/file views, and singular/list IDS inputs). These changes affect
-  live consumers or public/internal construction contracts and are not behavior-preserving cleanup.
+- [x] **P2** Implement the approved direct Batch 7b migration: replace the mutable event carrier,
+  flat `NetworkContext`, `EdrContext` identity fields, TLS/X.509/OCSP/proxy/file views, singular IDS
+  input, and sequence-derived event IDs without internal compatibility layers. Preserve the CLI,
+  authored schema, and source formats; version the ground-truth schema. Optimize indexed lookup
+  speed while proving duration-stable retained state. See the Batch 7 worklog for the approved
+  implementation contract and [Batch 7b results](docs/design/realism-review/batch7b-results.json).
 - The complete dependency order and acceptance boundaries remain in the
   [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
   exact evidence, owners, remediation, and tests remain in

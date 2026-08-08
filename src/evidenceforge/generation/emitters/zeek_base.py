@@ -70,13 +70,9 @@ def planned_zeek_connection_interval(
     """Return the sealed canonical interval used for per-sensor projection."""
 
     network = getattr(event, "network", None)
-    if (
-        not getattr(event, "network_observations_planned", False)
-        or network is None
-        or network.transaction is None
-    ):
+    if not getattr(event, "network_observations_planned", False) or network is None:
         return None
-    return network.transaction.started_at, network.transaction.closed_at
+    return network.started_at, network.closed_at
 
 
 def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
@@ -226,8 +222,8 @@ class SensorMultiplexEmitter(LogEmitter):
 
     Subclasses implement:
     - _render_event(): Convert event data dict to NDJSON string
-    - can_handle(): Filter SecurityEvents by type + required contexts
-    - emit(): Extract fields from SecurityEvent and call emit_to_sensors()
+    - can_handle(): Filter canonical occurrences by type + required contexts
+    - emit(): Extract fields from CanonicalOccurrence and call emit_to_sensors()
     """
 
     _log_filename: str = "output.json"  # Override in subclasses (e.g., "conn.json")
@@ -340,8 +336,8 @@ class SensorMultiplexEmitter(LogEmitter):
         if not targets:
             targets = event._sensor_hostnames_by_format.get(format_name, [])
         canonical_start = None
-        if event.network is not None and event.network.transaction is not None:
-            canonical_start = event.network.transaction.started_at
+        if event.network is not None:
+            canonical_start = event.network.started_at
         return {
             "_sensor_hostnames": targets,
             "_network_sensor_observations": observations,
@@ -486,7 +482,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 render_data[fuid_field] = observation.file_id(original_fuid)
         for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
             fuid_values = render_data.get(fuid_list_field)
-            if isinstance(fuid_values, list):
+            if isinstance(fuid_values, (list, tuple)):
                 render_data[fuid_list_field] = [
                     observation.file_id(fuid) if isinstance(fuid, str) else fuid
                     for fuid in fuid_values

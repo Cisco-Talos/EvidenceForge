@@ -6,19 +6,19 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
 from evidenceforge.events import HostContext
-from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder, RawProjectionRequest
 from evidenceforge.events.contexts import (
     DnsContext,
     HttpContext,
-    IdsContext,
+    IdsAlertPlan,
     NatContext,
-    NetworkContext,
     SyslogContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
@@ -42,8 +42,19 @@ from evidenceforge.models.scenario import (
     NetworkSegment,
     NetworkSensor,
 )
+from tests.network_factories import network_plan
 
 T0 = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
+
+
+def _assert_published_once(mock: MagicMock, builder: OccurrenceBuilder) -> CanonicalOccurrence:
+    """Assert one call received the sealed occurrence derived from ``builder``."""
+
+    mock.assert_called_once()
+    occurrence = mock.call_args.args[0]
+    assert isinstance(occurrence, CanonicalOccurrence)
+    assert occurrence.occurrence_id == builder.occurrence_id
+    return occurrence
 
 
 def _visibility_engine(
@@ -89,9 +100,9 @@ def _network_event(
     start: datetime = T0,
     stable_id: str = "network:test-transaction",
     protocol: str = "udp",
-) -> SecurityEvent:
+) -> OccurrenceBuilder:
     duration = 2.5
-    network = NetworkContext(
+    network = network_plan(
         src_ip="10.0.1.25",
         src_port=51000,
         dst_ip="10.0.2.40",
@@ -113,18 +124,19 @@ def _network_event(
         history="Dd",
         ip_proto=6 if protocol == "tcp" else 17,
     )
-    transaction = network.finalize_transaction(
-        stable_id,
+    transaction = replace(
+        network,
+        stable_id=stable_id,
         hostname="resolver.corp.local",
         phase_times=(
             ("transport_start", start),
             ("transport_close", start + timedelta(seconds=duration)),
         ),
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=start,
         event_type="connection",
-        network=network,
+        network=transaction,
         dns=DnsContext(
             query="updates.example.com",
             answers=["10.0.2.40"],
@@ -173,8 +185,8 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
     assert first == second
     assert observations["source-tap"].path_role == "source_side"
     assert observations["destination-tap"].path_role == "destination_side"
-    assert observations["source-tap"].traffic is event.network.transaction.traffic
-    assert observations["destination-tap"].traffic is event.network.transaction.traffic
+    assert observations["source-tap"].traffic is event.network.traffic
+    assert observations["destination-tap"].traffic is event.network.traffic
     assert observations["source-tap"].traffic == observations["destination-tap"].traffic
     assert observations["source-tap"].tuple_view.src_ip == "10.0.1.25"
     assert observations["destination-tap"].tuple_view.src_ip == "198.51.100.25"
@@ -212,7 +224,7 @@ def test_inbound_static_nat_sensor_views_come_from_topology_and_nat_context() ->
             ),
         ],
     )
-    network = NetworkContext(
+    network = network_plan(
         src_ip="198.51.100.25",
         src_port=51000,
         dst_ip="203.0.113.80",
@@ -234,12 +246,13 @@ def test_inbound_static_nat_sensor_views_come_from_topology_and_nat_context() ->
         local_orig=False,
         local_resp=True,
     )
-    network.finalize_transaction(
-        "network:inbound-nat-view",
+    network = replace(
+        network,
+        stable_id="network:inbound-nat-view",
         hostname="web.corp.local",
         phase_times=(("transport_start", T0), ("transport_close", T0 + timedelta(seconds=2))),
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=T0,
         event_type="connection",
         network=network,
@@ -324,7 +337,7 @@ def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatc
 
     first = planner.plan(event, {"zeek_conn"})[0]
     second = planner.plan(event, {"zeek_conn"})[0]
-    canonical = event.network.transaction.traffic
+    canonical = event.network.traffic
 
     assert first == second
     assert first.capture_profile == "lossy_span"
@@ -472,21 +485,20 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
 
     event = _network_event(start=T0, stable_id="network:short-dns")
     event.timestamp = T0 + timedelta(milliseconds=2)
-    event.network.duration = 0.000744
-    event.network.source_visible_close_time = T0 + timedelta(seconds=0.000744)
-    event.network.orig_bytes = 52
-    event.network.resp_bytes = 83
-    event.network.orig_pkts = 1
-    event.network.resp_pkts = 1
-    event.network.orig_ip_bytes = 80
-    event.network.resp_ip_bytes = 111
-    event.network.transaction = None
-    event.network.finalize_transaction(
-        "network:short-dns",
+    short_close = T0 + timedelta(seconds=0.000744)
+    event.network = replace(
+        event.network,
+        stable_id="network:short-dns",
         hostname="resolver.corp.local",
+        duration=0.000744,
+        closed_at=short_close,
+        traffic=NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(52, 1, 80),
+            resp=DirectionalTrafficLedger(83, 1, 111),
+        ),
         phase_times=(
             ("transport_start", T0),
-            ("transport_close", T0 + timedelta(seconds=0.000744)),
+            ("transport_close", short_close),
         ),
     )
     event.dns.rtt = 0.000744
@@ -531,7 +543,7 @@ def test_http_companion_never_precedes_planned_sensor_connection(tmp_path) -> No
 
     event = _network_event(stable_id="network:http-observation-order")
     event.dns = None
-    event.network.service = "http"
+    event.network = replace(event.network, service="http")
     event.http = HttpContext(
         method="GET",
         host="updates.example.com",
@@ -575,10 +587,12 @@ def test_snort_consumes_planned_sensor_timestamp_and_tuple(tmp_path) -> None:
     """Snort renders observation-owned clock and NAT views without local jitter."""
 
     event = _network_event()
-    event.ids = IdsContext(
-        sid=2_000_001,
-        message="Planned observation alert",
-        classification="Attempted Information Leak",
+    event.ids_alerts = (
+        IdsAlertPlan(
+            sid=2_000_001,
+            message="Planned observation alert",
+            classification="Attempted Information Leak",
+        ),
     )
     event._sensor_hostnames_by_format = {"snort_alert": ["destination-tap"]}
     event.nat = NatContext(
@@ -626,7 +640,7 @@ def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
             )
         ],
     )
-    network = NetworkContext(
+    network = network_plan(
         src_ip="198.51.100.25",
         src_port=51000,
         dst_ip="10.0.2.40",
@@ -640,13 +654,14 @@ def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
         orig_ip_bytes=40,
         source_visible_start_time=T0,
     )
-    network.finalize_transaction(
-        "network:firewall-timeout",
+    network = replace(
+        network,
+        stable_id="network:firewall-timeout",
         hostname="web.corp.local",
         outcome="failure",
         phase_times=(("transport_start", T0),),
     )
-    event = SecurityEvent(timestamp=T0, event_type="connection", network=network)
+    event = OccurrenceBuilder(timestamp=T0, event_type="connection", network=network)
     event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
 
     observation = NetworkObservationPlanner(NetworkVisibilityEngine(config, systems=[])).plan(
@@ -677,7 +692,7 @@ def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> N
             )
         ],
     )
-    network = NetworkContext(
+    network = network_plan(
         src_ip="10.0.2.40",
         src_port=51000,
         dst_ip="198.51.100.25",
@@ -691,13 +706,14 @@ def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> N
         orig_ip_bytes=40,
         source_visible_start_time=T0,
     )
-    network.finalize_transaction(
-        "network:nat-timeout",
+    network = replace(
+        network,
+        stable_id="network:nat-timeout",
         hostname="edge.example",
         outcome="failure",
         phase_times=(("transport_start", T0),),
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=T0,
         event_type="connection",
         network=network,
@@ -727,7 +743,7 @@ def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> N
 def test_firewall_observation_owns_inbound_static_nat_address_roles() -> None:
     """Inbound translation records distinguish the public VIP from the local host."""
 
-    network = NetworkContext(
+    network = network_plan(
         src_ip="198.51.100.25",
         src_port=0,
         dst_ip="203.0.113.5",
@@ -745,8 +761,9 @@ def test_firewall_observation_owns_inbound_static_nat_address_roles() -> None:
         source_visible_start_time=T0,
         source_visible_close_time=T0 + timedelta(seconds=1),
     )
-    network.finalize_transaction(
-        "network:inbound-icmp",
+    network = replace(
+        network,
+        stable_id="network:inbound-icmp",
         hostname="web.corp.local",
         outcome="success",
         phase_times=(
@@ -754,7 +771,7 @@ def test_firewall_observation_owns_inbound_static_nat_address_roles() -> None:
             ("transport_close", T0 + timedelta(seconds=1)),
         ),
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=T0,
         event_type="connection",
         network=network,
@@ -794,7 +811,7 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
         ],
     )
     close = T0 + timedelta(milliseconds=250)
-    network = NetworkContext(
+    network = network_plan(
         src_ip="10.0.3.20",
         src_port=51000,
         dst_ip="198.51.100.40",
@@ -812,13 +829,14 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
         source_visible_start_time=T0,
         source_visible_close_time=close,
     )
-    network.finalize_transaction(
-        "network:firewall-fragment",
+    network = replace(
+        network,
+        stable_id="network:firewall-fragment",
         hostname="edge.example",
         outcome="success",
         phase_times=(("transport_start", T0), ("transport_close", close)),
     )
-    event = SecurityEvent(timestamp=T0, event_type="connection", network=network)
+    event = OccurrenceBuilder(timestamp=T0, event_type="connection", network=network)
     event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
 
     observation = NetworkObservationPlanner(NetworkVisibilityEngine(config, systems=[])).plan(
@@ -863,10 +881,10 @@ def _lifecycle_event(
     canonical_start: datetime,
     phase: str,
     parent_group_id: str | None = None,
-) -> SecurityEvent:
+) -> OccurrenceBuilder:
     """Return a contract-valid source-local event for admission-boundary tests."""
 
-    return SecurityEvent(
+    return OccurrenceBuilder(
         timestamp=timestamp,
         event_type="syslog",
         src_host=HostContext(
@@ -916,8 +934,8 @@ def test_half_open_end_suppresses_group_start_and_dependents_but_updates_state()
         phase="dependent",
     )
 
-    dispatcher.dispatch(start)
-    dispatcher.dispatch(dependent)
+    dispatcher.dispatch_builder(start)
+    dispatcher.dispatch_builder(dependent)
 
     assert state_manager.apply.call_count == 2
     emitter.emit.assert_not_called()
@@ -947,10 +965,10 @@ def test_closure_tail_is_admitted_only_when_group_started_before_end() -> None:
         phase="closure",
     )
 
-    dispatcher.dispatch(admitted)
-    dispatcher.dispatch(suppressed)
+    dispatcher.dispatch_builder(admitted)
+    dispatcher.dispatch_builder(suppressed)
 
-    emitter.emit.assert_called_once_with(admitted)
+    _assert_published_once(emitter.emit, admitted)
     assert state_manager.apply.call_count == 2
 
 
@@ -979,10 +997,10 @@ def test_nested_child_action_has_independent_admission() -> None:
         parent_group_id="proxy-parent",
     )
 
-    dispatcher.dispatch(parent_closure)
-    dispatcher.dispatch(child_start)
+    dispatcher.dispatch_builder(parent_closure)
+    dispatcher.dispatch_builder(child_start)
 
-    emitter.emit.assert_called_once_with(parent_closure)
+    _assert_published_once(emitter.emit, parent_closure)
 
 
 def test_sensor_observation_at_end_is_suppressed_without_emitter_fallback() -> None:
@@ -1015,12 +1033,11 @@ def test_sensor_observation_at_end_is_suppressed_without_emitter_fallback() -> N
     )
     dispatcher.network_observation_planner.plan = MagicMock(return_value=(planned_at_end,))
 
-    dispatcher.dispatch(event)
+    identifiers = dispatcher.dispatch_builder(event)
 
-    state_manager.apply.assert_called_once_with(event)
+    _assert_published_once(state_manager.apply, event)
     emitter.emit.assert_not_called()
-    assert event.network_observations_planned is True
-    assert event.network_observations == ()
+    assert identifiers == {"zeek_conn": ""}
 
 
 def test_raw_entry_at_end_is_suppressed() -> None:
@@ -1033,6 +1050,6 @@ def test_raw_entry_at_end_is_suppressed() -> None:
         output_end_time=T0,
     )
 
-    dispatcher.dispatch_raw(RawLogEntry(T0, "syslog", {"message": "at end"}))
+    dispatcher.dispatch_raw(RawProjectionRequest(T0, "syslog", {"message": "at end"}))
 
     emitter.emit_raw.assert_not_called()

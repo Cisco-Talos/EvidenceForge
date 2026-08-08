@@ -147,7 +147,7 @@ class GroundTruthGenerator:
         accounted_ids = {
             snapshot.intent_id
             for snapshot in self.intent_execution_snapshot
-            if snapshot.planned or snapshot.dispatched_event_ids or snapshot.source_observations
+            if snapshot.planned or snapshot.occurrence_ids or snapshot.source_observations
         }
         reconciliation = self.authored_intent_ledger.reconcile(accounted_ids)
         rows = []
@@ -167,13 +167,10 @@ class GroundTruthGenerator:
                     "planned": bool(execution and execution.planned),
                     "action_ids": list(execution.action_ids) if execution else [],
                     "occurrence_ids": list(execution.occurrence_ids) if execution else [],
-                    "dispatched_event_ids": (
-                        list(execution.dispatched_event_ids) if execution else []
-                    ),
                     "source_status": execution.source_status if execution else {},
                 }
             )
-        occurred_count = sum(bool(row["dispatched_event_ids"]) for row in rows)
+        occurred_count = sum(bool(row["occurrence_ids"]) for row in rows)
         observed_count = sum(
             any(
                 statuses.get("visible", 0) > 0 or statuses.get("delayed", 0) > 0

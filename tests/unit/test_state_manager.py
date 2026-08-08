@@ -28,7 +28,7 @@ from itertools import pairwise
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
@@ -1298,6 +1298,37 @@ class TestCanonicalIdentityState:
         with pytest.raises(StateError, match="owning process object is not live"):
             sm.create_thread("WS-01", process.object_id, tid=7000, kind="remote")
 
+    def test_ended_identity_indexes_plateau_across_45_days(self) -> None:
+        """Late-reference indexes retain 48 hours, not all elapsed process history."""
+
+        sm = StateManager()
+        start = datetime(2024, 1, 1, tzinfo=UTC)
+        first_object_id = ""
+        latest_object_id = ""
+
+        for hour in range(45 * 24):
+            event_time = start + timedelta(hours=hour)
+            sm.set_current_time(event_time)
+            pid = sm.create_process(
+                system="WS-01",
+                parent_pid=0,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line=f"cmd.exe /c echo {hour}",
+                username="analyst",
+                integrity_level="Medium",
+            )
+            identity = sm.get_process_identity("WS-01", pid)
+            assert identity is not None
+            first_object_id = first_object_id or identity.object_id
+            latest_object_id = identity.object_id
+            sm.end_process("WS-01", pid, event_time + timedelta(seconds=1))
+
+        assert len(sm._ended_processes_by_object_id) <= 49
+        assert len(sm._ended_processes_by_key) <= 49
+        assert len(sm._ended_threads) <= 49
+        assert sm.get_process_identity_by_object_id(first_object_id) is None
+        assert sm.get_process_identity_by_object_id(latest_object_id) is not None
+
 
 class TestProcessManagement:
     """Tests for process lifecycle."""
@@ -1565,7 +1596,7 @@ class TestProcessManagement:
         pid = sm.create_process("WS-01", 0, "proc.exe", "proc.exe", "jdoe", "Medium")
 
         sm.apply(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=activity_time,
                 event_type="process_access",
                 src_host=HostContext(
@@ -1600,7 +1631,7 @@ class TestProcessManagement:
         assert actor is not None
 
         sm.apply(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=activity_time,
                 event_type="connection",
                 identity_plan=EventIdentityPlan(actor=actor),

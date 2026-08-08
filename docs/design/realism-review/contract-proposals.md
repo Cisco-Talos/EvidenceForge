@@ -8,6 +8,19 @@ These contracts are the smallest coherent set that addresses the review's root c
 authorizes incremental implementation on feature branches; it does not authorize an unreviewed
 public schema migration or one campaign-long change set.
 
+Batch 7b implementation amendment, approved 2026-08-08:
+
+- EvidenceForge has no supported public Python API. Internal constructors, carriers, and context
+  views migrate directly to the approved end state without deprecation periods or compatibility
+  layers.
+- The supported boundary for this migration is the CLI, authored scenario schema, and source-native
+  output contracts. The ground-truth artifact may advance to a new schema version and remove the
+  redundant sequence-derived dispatch identifier.
+- Runtime identity and lifecycle indexes optimize hot lookup latency first when lookup speed and
+  memory conflict. They must nevertheless remain duration-stable: lookup cost may not grow with
+  elapsed scenario duration, and retained history must have an explicit bounded or referenced
+  lifetime.
+
 ## Approved decisions
 
 The user approved the package with six binding amendments:
@@ -334,8 +347,8 @@ uses a named explicit override recorded in the manifest; it does not bypass path
 ## Incremental migration order
 
 1. Land the registry, semantic occurrence-key scaffolding, authored-intent ledger scaffolding, and
-   seal validation in shadow/assert-only mode; generate closure checks from the current matrix and
-   fail CI only for inventory drift.
+   seal validation; generate closure checks from the current matrix and fail CI for inventory
+   drift or invalid dispatch admission.
 2. Establish shared safe-path and workload-budget boundaries early, with compatibility defaults
    and explicit manifests, before expanding the input surface further.
 3. Introduce typed time domains and stop observation-to-state feedback.
@@ -352,13 +365,18 @@ uses a named explicit override recorded in the manifest; it does not bypass path
 9. Reconcile authored intent, action, occurrence, observation, and ground-truth ledgers; harden
    evaluator acceptance without treating declared partial visibility as a failure.
 10. Complete remaining workload budgets and external-parser staging constraints.
-11. Remove compatibility fields and legacy event names only after all consumers migrate; treat any
-    public schema/API change as a separately approved migration.
+11. Replace internal compatibility fields and legacy event names directly once their consumers are
+    migrated. Do not retain internal aliases. Treat CLI, authored scenario-schema, or source-output
+    contract changes as separately approved migrations; version ground-truth schema changes.
 
 ## Implementation boundary
 
-Implementation proceeds as bounded feature-branch batches. The first batch establishes contracts
-in behavior-preserving shadow/assert-only mode and does not change public scenario schemas or
-replace existing event IDs. Enforcement, compatibility removal, behavior changes, and each public
-migration require their own reviewed batch. One campaign-long implementation branch is explicitly
-out of scope.
+Implementation proceeds as bounded commits on the cumulative feature branch. The foundation batch
+established contracts without changing public scenario schemas. Batch 7b may now enforce the final
+internal contracts directly, replace sequence-derived internal event IDs, and advance the
+ground-truth schema. It must not change CLI syntax, authored scenario schemas, or source-native
+format contracts without separate approval.
+
+Batch 7b implemented this approved boundary on 2026-08-08. Reproducible hashes, duration-scaling
+measurements, generation comparisons, and verification results are recorded in
+`batch7b-results.json`.

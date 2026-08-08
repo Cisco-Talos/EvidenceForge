@@ -142,14 +142,13 @@ def test_execution_snapshot_links_occurrence_and_observation() -> None:
     )
 
     execution.mark_planned(intent.intent_id)
-    execution.record_occurrence(intent.intent_id, "event-1", occurrence_key)
+    execution.record_occurrence(intent.intent_id, occurrence_key)
     execution.record_observation(intent.intent_id, "windows_security", "visible")
     snapshot = next(item for item in execution.snapshot() if item.intent_id == intent.intent_id)
 
     assert snapshot.planned
     assert snapshot.action_ids == ("action-1",)
     assert snapshot.occurrence_ids == (occurrence_key.occurrence_id,)
-    assert snapshot.dispatched_event_ids == ("event-1",)
     assert snapshot.source_status == {"windows_security": {"visible": 1}}
 
 
@@ -159,12 +158,17 @@ def test_execution_snapshot_retains_unexpected_evidence() -> None:
     authored = AuthoredIntentLedger.from_scenario(_scenario(LogonEventSpec(logon_type=3)))
     execution = IntentExecutionLedger(authored)
 
-    execution.record_occurrence("unexpected-intent", "event-1", None)
+    occurrence_key = SemanticOccurrenceKey(
+        action_id="unexpected-action",
+        role=OccurrenceRole.PRIMARY,
+        instance_key="unexpected-occurrence",
+    )
+    execution.record_occurrence("unexpected-intent", occurrence_key)
     execution.record_observation("unexpected-intent", "ecar", "visible")
 
     unexpected = next(
         snapshot for snapshot in execution.snapshot() if snapshot.intent_id == "unexpected-intent"
     )
     assert unexpected.planned is False
-    assert unexpected.dispatched_event_ids == ("event-1",)
+    assert unexpected.occurrence_ids == (occurrence_key.occurrence_id,)
     assert unexpected.source_status == {"ecar": {"visible": 1}}

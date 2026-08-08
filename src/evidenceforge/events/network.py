@@ -281,6 +281,11 @@ class NetworkTransactionPlan:
     traffic: NetworkTrafficLedger
     initiating_pid: int = -1
     responding_pid: int = -1
+    local_orig: bool = True
+    local_resp: bool = False
+    ip_proto: int = 6
+    link_local: bool = False
+    application_layer_only: bool = False
 
     def __post_init__(self) -> None:
         """Validate interval and tuple invariants at the canonical boundary."""
@@ -320,3 +325,45 @@ class NetworkTransactionPlan:
                 raise ValueError("Network transaction duration does not match its interval")
         elif self.duration is not None:
             raise ValueError("Network transaction duration requires a close timestamp")
+
+    @property
+    def orig_bytes(self) -> int:
+        """Return canonical originator payload bytes."""
+
+        return self.traffic.orig.payload_bytes
+
+    @property
+    def resp_bytes(self) -> int:
+        """Return canonical responder payload bytes."""
+
+        return self.traffic.resp.payload_bytes
+
+    @property
+    def orig_pkts(self) -> int:
+        """Return canonical originator packet count."""
+
+        return self.traffic.orig.packets
+
+    @property
+    def resp_pkts(self) -> int:
+        """Return canonical responder packet count."""
+
+        return self.traffic.resp.packets
+
+    @property
+    def orig_ip_bytes(self) -> int:
+        """Return canonical originator IP-byte count."""
+
+        return self.traffic.orig.ip_bytes
+
+    @property
+    def resp_ip_bytes(self) -> int:
+        """Return canonical responder IP-byte count."""
+
+        return self.traffic.resp.ip_bytes
+
+    @property
+    def missed_bytes(self) -> int:
+        """Return canonical sensor-independent missed-byte budget."""
+
+        return self.traffic.missed_bytes

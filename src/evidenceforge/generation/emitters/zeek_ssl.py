@@ -25,7 +25,7 @@
 from datetime import timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     planned_zeek_connection_interval,
@@ -39,7 +39,7 @@ _SOURCE_TIMING = SourceTimingPlanner()
 class ZeekSslEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek ssl.log format (NDJSON).
 
-    Generates SSL/TLS handshake logs. Requires both NetworkContext and SslContext.
+    Generates SSL/TLS handshake logs. Requires both NetworkTransactionPlan and SslContext.
     Shares conn.log UID via event.network.zeek_uid.
     """
 
@@ -47,17 +47,17 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_ssl.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         return (
             event.event_type in self._supported_types
             and event.network is not None
             and event.network.conn_state == "SF"
-            and event.ssl is not None
+            and event.protocol.ssl is not None
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
-        ssl = event.ssl
+        ssl = event.protocol.ssl
         planned_interval = planned_zeek_connection_interval(event)
         if planned_interval is not None:
             conn_ts, planned_close = planned_interval

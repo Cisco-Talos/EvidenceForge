@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.contexts import FileTransferContext, HostContext
+from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.actions import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
@@ -99,7 +100,7 @@ class TestStorylineCommandNetworks:
             visibility_engine = None
 
             @staticmethod
-            def dispatch(event: Any) -> None:
+            def dispatch_builder(event: Any) -> None:
                 captured.append(event)
 
         state = StateManager()
@@ -809,7 +810,7 @@ class TestStorylineCommandNetworks:
 
         class _CapturingDispatcher:
             @staticmethod
-            def dispatch(event: Any) -> None:
+            def dispatch_builder(event: Any) -> None:
                 if event.event_type == "process_create":
                     captured["event"] = event
 
@@ -862,7 +863,7 @@ class TestStorylineCommandNetworks:
 
         class _CapturingDispatcher:
             @staticmethod
-            def dispatch(event: Any) -> None:
+            def dispatch_builder(event: Any) -> None:
                 if event.event_type == "process_create":
                     captured["event"] = event
 
@@ -914,7 +915,7 @@ class TestStorylineCommandNetworks:
             visibility_engine = None
 
             @staticmethod
-            def dispatch(event: Any) -> None:
+            def dispatch_builder(event: Any) -> None:
                 captured.append(event)
 
             @staticmethod
@@ -1242,6 +1243,21 @@ class _FakeStateManager:
     def get_process_object_id(self, hostname: str, pid: int) -> str:
         return f"{hostname}:{pid}"
 
+    def get_process_identity(self, hostname: str, pid: int) -> ProcessIdentity:
+        process = self.get_process(hostname, pid)
+        return ProcessIdentity(
+            hostname=hostname,
+            object_id=self.get_process_object_id(hostname, pid),
+            pid=pid,
+            parent_pid=int(getattr(process, "parent_pid", 0)),
+            image=str(getattr(process, "image", "process")),
+            command_line=str(getattr(process, "command_line", "")),
+            principal=str(getattr(process, "username", "")),
+            logon_id=str(getattr(process, "logon_id", "")),
+            started_at=getattr(process, "start_time", datetime(2020, 1, 1, tzinfo=UTC)),
+            lifecycle_group_id=f"{hostname}:{pid}:lifecycle",
+        )
+
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
 
@@ -1526,7 +1542,7 @@ class TestFileTransferActionBundles:
         target = System(hostname="APP-INT-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server")
         actor = User(username="root", full_name="Root", email="root@example.local")
         activity = ActivityGenerator(state, {})
-        activity.dispatcher = SimpleNamespace(dispatch=lambda event: None)
+        activity.dispatcher = SimpleNamespace(dispatch_builder=lambda event: None)
         state.set_current_time(timestamp)
         source_pid = state.create_process(
             source.hostname,
@@ -1540,7 +1556,7 @@ class TestFileTransferActionBundles:
         dispatched: list[Any] = []
         executor = SimpleNamespace(
             activity_generator=activity,
-            dispatcher=SimpleNamespace(dispatch=dispatched.append),
+            dispatcher=SimpleNamespace(dispatch_builder=dispatched.append),
             state_manager=state,
         )
 
@@ -1569,7 +1585,7 @@ class TestFileTransferActionBundles:
         assert source_read.file.path == "/tmp/rpt.sql.gz"
         assert source_read.file.action == "read"
         assert source_read.process.pid == source_pid
-        assert source_read.edr.actor_id == source_object_id
+        assert source_read.identity_plan.actor_id == source_object_id
         assert receiver_create.src_host.hostname == target.hostname
         assert receiver_create.file.path == "/tmp/rpt.sql.gz"
         assert receiver_create.file.action == "create"
@@ -1598,7 +1614,7 @@ class TestStorylineScpCorrelation:
         dispatched: list[Any] = []
         engine.dispatcher = SimpleNamespace(
             visibility_engine=None,
-            dispatch=dispatched.append,
+            dispatch_builder=dispatched.append,
         )
         event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
         visible_process_time = event_time + timedelta(seconds=4)
@@ -2005,7 +2021,7 @@ class TestStorylineCommandSideEffects:
         dispatched: list[Any] = []
         engine.dispatcher = SimpleNamespace(
             visibility_engine=None,
-            dispatch=dispatched.append,
+            dispatch_builder=dispatched.append,
         )
         smb_logons: list[dict[str, Any]] = []
 
@@ -2199,7 +2215,7 @@ class TestStorylineCommandSideEffects:
         dispatched: list[Any] = []
         engine.dispatcher = SimpleNamespace(
             visibility_engine=None,
-            dispatch=dispatched.append,
+            dispatch_builder=dispatched.append,
         )
         smb_logons: list[dict[str, Any]] = []
 
@@ -2335,7 +2351,7 @@ class TestStorylineCommandSideEffects:
         engine.activity_generator = _FakeActivityGenerator()
         file_events: list[Any] = []
         engine.dispatcher = SimpleNamespace(
-            dispatch=lambda event: (
+            dispatch_builder=lambda event: (
                 file_events.append(event) if event.event_type == "file_create" else None
             )
         )
@@ -2383,7 +2399,7 @@ class TestStorylineCommandSideEffects:
         engine.activity_generator = _FakeActivityGenerator()
         file_events: list[Any] = []
         engine.dispatcher = SimpleNamespace(
-            dispatch=lambda event: (
+            dispatch_builder=lambda event: (
                 file_events.append(event) if event.event_type == "file_create" else None
             )
         )
@@ -2434,7 +2450,7 @@ class TestStorylineCommandSideEffects:
         engine.activity_generator = _FakeActivityGenerator()
         file_events: list[Any] = []
         engine.dispatcher = SimpleNamespace(
-            dispatch=lambda event: (
+            dispatch_builder=lambda event: (
                 file_events.append(event) if event.event_type == "file_create" else None
             )
         )
@@ -2525,7 +2541,10 @@ class TestStorylineCommandSideEffects:
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
         engine.activity_generator.process_source_termination_offset = timedelta(seconds=20)
-        engine.dispatcher = SimpleNamespace(visibility_engine=None, dispatch=lambda event: None)
+        engine.dispatcher = SimpleNamespace(
+            visibility_engine=None,
+            dispatch_builder=lambda event: None,
+        )
         engine.malicious_events = []
         start_time = datetime(2026, 5, 11, 17, 15, tzinfo=UTC)
         specs = [

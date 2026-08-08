@@ -22,7 +22,7 @@
 
 """Tests for baseline canonical event migration.
 
-Verifies that baseline activities dispatch through SecurityEvent to
+Verifies that baseline activities dispatch through OccurrenceBuilder to
 multiple emitters, producing correlated cross-source records.
 """
 
@@ -34,7 +34,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from evidenceforge.events.contexts import HostContext, HttpContext, IdsContext
+from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dll_load_profiles import (
@@ -76,6 +76,7 @@ from evidenceforge.generation.engine.baseline import (
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 from evidenceforge.models.exceptions import StateError
+from tests.network_factories import network_plan
 
 
 @pytest.fixture
@@ -742,7 +743,7 @@ class TestIdsAlertCorrelation:
     def test_ids_connection_dispatches_to_snort(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """generate_connection() with IdsContext should dispatch to snort emitter."""
+        """generate_connection() with IdsAlertPlan should dispatch to snort emitter."""
         activity_gen.generate_connection(
             src_ip="203.0.113.50",
             dst_ip="10.0.10.1",
@@ -753,23 +754,24 @@ class TestIdsAlertCorrelation:
             duration=0.5,
             orig_bytes=500,
             resp_bytes=200,
-            ids=IdsContext(
-                sid=10001,
-                message="ET SCAN potential SSH scan",
-                classification="Attempted Information Leak",
-                priority=2,
-            ),
+            ids_alerts=[
+                IdsAlertPlan(
+                    sid=10001,
+                    message="ET SCAN potential SSH scan",
+                    classification="Attempted Information Leak",
+                    priority=2,
+                )
+            ],
         )
 
-        # Snort emitter should receive the event with IdsContext
+        # Snort emitter should receive the event with IdsAlertPlan
         snort = mock_emitters["snort_alert"]
         assert snort.emit.called
         event = snort.emit.call_args[0][0]
-        assert event.ids is not None
-        assert event.ids.sid == 10001
+        assert event.ids_alerts[0].sid == 10001
         assert event.network is not None
-        assert event.network.transaction is not None
-        event.network.validate_finalized_transaction()
+        assert event.network is not None
+        assert event.network.stable_id
 
     def test_ufw_block_packet_profile_is_valid_and_stable(self):
         """UFW blocked SYN metadata should be valid and path-stable by source."""
@@ -826,12 +828,14 @@ class TestIdsAlertCorrelation:
             duration=1.0,
             orig_bytes=100,
             resp_bytes=50,
-            ids=IdsContext(
-                sid=10002,
-                message="ET SCAN SSH scan",
-                classification="Attempted Recon",
-                priority=3,
-            ),
+            ids_alerts=[
+                IdsAlertPlan(
+                    sid=10002,
+                    message="ET SCAN SSH scan",
+                    classification="Attempted Recon",
+                    priority=3,
+                )
+            ],
         )
 
         # Zeek conn should also receive the connection
@@ -1105,8 +1109,8 @@ class TestIdsAlertCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.ssl is not None
-        assert event.x509 is not None
+        assert event.protocol.ssl is not None
+        assert event.protocol.leaf_certificate is not None
         assert event.network.duration > 0.8
 
 
@@ -1174,9 +1178,9 @@ class TestWebAccessCorrelation:
         web = mock_emitters["web_access"]
         assert web.emit.called
         event = web.emit.call_args[0][0]
-        assert event.http is not None
-        assert event.http.method == "GET"
-        assert event.http.status_code == 200
+        assert event.protocol.http is not None
+        assert event.protocol.http.method == "GET"
+        assert event.protocol.http.status_code == 200
 
     def test_http_connection_also_dispatches_to_zeek_http(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1211,7 +1215,7 @@ class TestWebAccessCorrelation:
         zeek_http = mock_emitters["zeek_http"]
         assert zeek_http.emit.called
         event = zeek_http.emit.call_args[0][0]
-        assert event.http.uri == "/api/v1/data"
+        assert event.protocol.http.uri == "/api/v1/data"
 
     def test_caller_http_context_not_overwritten(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1245,9 +1249,9 @@ class TestWebAccessCorrelation:
         web = mock_emitters["web_access"]
         event = web.emit.call_args[0][0]
         # Should be our custom context, not auto-generated
-        assert event.http.method == "DELETE"
-        assert event.http.uri == "/api/v1/resource/42"
-        assert event.http.status_code == 204
+        assert event.protocol.http.method == "DELETE"
+        assert event.protocol.http.uri == "/api/v1/resource/42"
+        assert event.protocol.http.status_code == 204
 
     def test_static_zero_body_success_normalizes_to_not_modified(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1279,10 +1283,10 @@ class TestWebAccessCorrelation:
         )
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
-        assert event.http.status_code == 304
-        assert event.http.status_msg == "Not Modified"
-        assert event.http.response_body_len == 0
-        assert event.http.resp_mime_types == []
+        assert event.protocol.http.status_code == 304
+        assert event.protocol.http.status_msg == "Not Modified"
+        assert event.protocol.http.response_body_len == 0
+        assert event.protocol.http.resp_mime_types == ()
 
     def test_auto_http_static_resource_uses_stable_response_size(
         self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
@@ -1317,16 +1321,16 @@ class TestWebAccessCorrelation:
         )
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
-        assert event.http.uri == "/favicon.ico"
-        assert event.http.response_body_len == apply_transfer_size_variance(
+        assert event.protocol.http.uri == "/favicon.ico"
+        assert event.protocol.http.response_body_len == apply_transfer_size_variance(
             response_size_for_status(200, "portal.example.com", "/favicon.ico"),
             status_code=200,
             host="portal.example.com",
             uri="/favicon.ico",
             content_type="image/x-icon",
-            variant_key=f"10.0.10.50:{event.http.user_agent}",
+            variant_key=f"10.0.10.50:{event.protocol.http.user_agent}",
         )
-        assert event.http.resp_mime_types == ["image/x-icon"]
+        assert event.protocol.http.resp_mime_types == ("image/x-icon",)
 
     def test_server_like_auto_http_uses_service_user_agent(
         self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
@@ -1368,10 +1372,10 @@ class TestWebAccessCorrelation:
         event = next(
             call.args[0]
             for call in mock_emitters["zeek_http"].emit.call_args_list
-            if call.args[0].event_type == "connection" and call.args[0].http is not None
+            if call.args[0].event_type == "connection" and call.args[0].protocol.http is not None
         )
-        assert event.http is not None
-        assert "Mozilla/" not in event.http.user_agent
+        assert event.protocol.http is not None
+        assert "Mozilla/" not in event.protocol.http.user_agent
         if event.process is not None:
             assert not re.search(
                 r"(?i)\\(msedge|chrome|firefox|iexplore)\.exe$",
@@ -1400,12 +1404,12 @@ class TestSmbFileTransferCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.file_transfer is not None
-        assert event.file_transfer.source == "SMB"
-        assert event.file_transfer.fuid.startswith("F")
-        assert event.file_transfer.is_orig is False
-        assert event.file_transfer.seen_bytes <= 250000
-        assert event.file_transfer.total_bytes == 250000
+        assert event.protocol.primary_file_transfer is not None
+        assert event.protocol.primary_file_transfer.source == "SMB"
+        assert event.protocol.primary_file_transfer.fuid.startswith("F")
+        assert event.protocol.primary_file_transfer.is_orig is False
+        assert event.protocol.primary_file_transfer.seen_bytes <= 250000
+        assert event.protocol.primary_file_transfer.total_bytes == 250000
 
     def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1425,7 +1429,7 @@ class TestSmbFileTransferCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.file_transfer is None
+        assert event.protocol.primary_file_transfer is None
 
 
 class TestSystemProcessCanonical:
@@ -1741,16 +1745,16 @@ class TestSyslogContext:
 
 
 class TestWeirdContext:
-    """Weird events attach to connection SecurityEvents."""
+    """Weird events attach to canonical connection occurrences."""
 
     def test_weird_context_on_connection(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
         """Connection events can carry WeirdContext for zeek_weird emitter."""
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import HostContext, NetworkContext, WeirdContext
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import HostContext, WeirdContext
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=timestamp,
             event_type="connection",
             src_host=HostContext(
@@ -1760,7 +1764,7 @@ class TestWeirdContext:
                 os_category="linux",
                 system_type="server",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -2122,7 +2126,7 @@ class TestAnonymousLogon:
         assert event.remote_auth is not None
         assert event.remote_auth.primary_transport is not None
         assert event.remote_auth.primary_transport.transaction_id == (
-            network_event.network.transaction.stable_id
+            network_event.network.stable_id
         )
         assert event.lifecycle is not None
         assert event.lifecycle.group_id == event.remote_auth.stable_id
@@ -2151,7 +2155,7 @@ class TestAnonymousLogon:
         )
         identity = state_manager.get_session_identity(event.auth.logon_id)
         assert identity is not None
-        assert identity.object_id == event.edr.object_id
+        assert identity.object_id == event.identity_plan.object_id
         assert identity.logon_guid == "{00000000-0000-0000-0000-000000000000}"
 
     def test_anonymous_logon_plans_transport_without_source_host_metadata(
@@ -2212,10 +2216,10 @@ class TestAnonymousLogon:
         assert win_events[1].auth.username == "ANONYMOUS LOGON"
         assert win_events[1].auth.logon_id == win_events[0].auth.logon_id
         assert win_events[1].auth.logon_type == 3
-        assert ecar_events[0].edr is not None
-        assert ecar_events[1].edr is not None
-        assert ecar_events[0].edr.object_id
-        assert ecar_events[1].edr.object_id == ecar_events[0].edr.object_id
+        assert ecar_events[0].identity_plan is not None
+        assert ecar_events[1].identity_plan is not None
+        assert ecar_events[0].identity_plan.object_id
+        assert ecar_events[1].identity_plan.object_id == ecar_events[0].identity_plan.object_id
         assert ecar_events[1].auth.logon_id == ecar_events[0].auth.logon_id
         assert ecar_events[0].lifecycle is not None
         assert ecar_events[1].lifecycle is not None
@@ -2435,7 +2439,7 @@ class TestBaselineRegistryRealism:
         fake_activity_generator = SimpleNamespace(
             _build_host_context=Mock(return_value=host_context),
             _get_sid=Mock(return_value="S-1-5-20"),
-            dispatcher=SimpleNamespace(dispatch=dispatched.append),
+            dispatcher=SimpleNamespace(dispatch_builder=dispatched.append),
         )
         baseline = SimpleNamespace(
             emitters={"windows_event_sysmon": Mock()},
@@ -2548,7 +2552,7 @@ class TestSensorStartup:
     def test_generate_sensor_startup_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """generate_sensor_startup() should dispatch SecurityEvent."""
+        """generate_sensor_startup() should dispatch OccurrenceBuilder."""
         activity_gen.generate_sensor_startup(
             sensor_hostname="fw01",
             time=timestamp,
@@ -3142,12 +3146,12 @@ class TestWebAccessExternalVisitors:
         by_uri = {kw["http"].uri: kw["http"] for kw in collected}
         assert by_uri["/assets/css/main.063cbaf5.css"].status_code == 304
         assert by_uri["/assets/css/main.063cbaf5.css"].response_body_len == 0
-        assert by_uri["/assets/css/main.063cbaf5.css"].resp_mime_types == []
+        assert by_uri["/assets/css/main.063cbaf5.css"].resp_mime_types == ()
         assert by_uri["/assets/js/app.bundle.bf9655b3.js"].status_code == 206
         assert by_uri["/assets/js/app.bundle.bf9655b3.js"].response_body_len == 1152
-        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == [
-            "application/javascript"
-        ]
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == (
+            "application/javascript",
+        )
         root_row = next(kw for kw in collected if kw["http"].uri == "/")
         assert root_row["http"].trans_depth == 1
         assert root_row["duration"] >= 0.2

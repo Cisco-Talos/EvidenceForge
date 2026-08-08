@@ -157,6 +157,7 @@ def _build_ids_alert_contexts(
                     source=source,
                     direction=str(signature.get("direction", "")),
                     policy=attachment.policy,
+                    origin="authored_attachment",
                 )
             ).execute()
         )
@@ -3480,19 +3481,17 @@ class StorylineMixin:
                     )
                     output_file = f"{home}/{output_file[2:]}"
                 file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
-                from evidenceforge.events.base import SecurityEvent
+                from evidenceforge.events.base import OccurrenceBuilder
                 from evidenceforge.events.contexts import (
                     AuthContext,
-                    EdrContext,
                     FileContext,
                     ProcessContext,
                 )
 
                 host_ctx = self.activity_generator._build_host_context(system)
                 running_proc = self.state_manager.get_process(system.hostname, pid)
-                proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
-                self.dispatcher.dispatch(
-                    SecurityEvent(
+                self.dispatcher.dispatch_builder(
+                    OccurrenceBuilder(
                         timestamp=file_time,
                         event_type="file_create",
                         src_host=host_ctx,
@@ -3509,16 +3508,6 @@ class StorylineMixin:
                             else None,
                         ),
                         file=FileContext(path=output_file, action="create", pid=pid),
-                        edr=EdrContext(
-                            object_id=stable_uuid(
-                                "storyline-output-file-edr",
-                                system.hostname,
-                                pid,
-                                output_file,
-                                file_time.isoformat(),
-                            ),
-                            actor_id=proc_obj_id,
-                        ),
                         storyline_origin=True,
                     )
                 )
@@ -4026,7 +4015,7 @@ class StorylineMixin:
                         not (spec.user_agent or "").strip()
                         or (http_ctx.user_agent or "").strip().lower() == "mozilla/5.0"
                     ):
-                        http_ctx.user_agent = upload_user_agent
+                        http_ctx = replace(http_ctx, user_agent=upload_user_agent)
                 self._emit_storyline_archive_transfer_before_exfil(
                     actor=actor,
                     source_ip=source_ip,
@@ -6458,8 +6447,10 @@ class StorylineMixin:
                 http=http_for_conn,
                 hostname=scan_host if spec.hostname else None,
                 pid=story_pid,
-                ids=ids_ctx,
-                ids_alerts=authored_ids_alerts,
+                ids_alerts=[
+                    *([ids_ctx] if ids_ctx is not None else []),
+                    *authored_ids_alerts,
+                ],
             )
             request_count += 1
 

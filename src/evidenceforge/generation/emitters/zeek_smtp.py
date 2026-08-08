@@ -8,7 +8,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     planned_zeek_connection_interval,
@@ -26,7 +26,7 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_smtp.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         return (
             event.event_type in self._supported_types
             and event.network is not None
@@ -34,7 +34,7 @@ class ZeekSmtpEmitter(SensorMultiplexEmitter):
             and event.network.service == "smtp"
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
         smtp = event.smtp
         planned_interval = planned_zeek_connection_interval(event)

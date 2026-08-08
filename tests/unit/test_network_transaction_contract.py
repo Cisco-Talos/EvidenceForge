@@ -22,28 +22,31 @@
 
 """Tests for the canonical network transaction and traffic-ledger contract."""
 
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import IdsContext, NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
+    NetworkTransactionPlan,
     SignaturePredicate,
 )
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System
+from tests.network_factories import network_plan
 
 
-def _network_context(start: datetime) -> NetworkContext:
+def _network_context(start: datetime) -> NetworkTransactionPlan:
     """Return a complete network context ready for transaction finalization."""
 
-    return NetworkContext(
+    return network_plan(
         src_ip="10.0.0.10",
         src_port=49152,
         dst_ip="203.0.113.10",
@@ -96,13 +99,14 @@ def test_directional_traffic_ledger_rejects_impossible_accounting(
 
 
 def test_network_context_finalizes_one_canonical_transaction() -> None:
-    """Legacy fields and the immutable transaction should agree exactly."""
+    """The finalized immutable transaction carries all shared network truth."""
 
     start = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
     network = _network_context(start)
 
-    transaction = network.finalize_transaction(
-        "network-connection-test",
+    transaction = replace(
+        network,
+        stable_id="network-connection-test",
         hostname="api.example.test",
         outcome="success",
         phase_times=(
@@ -122,26 +126,22 @@ def test_network_context_finalizes_one_canonical_transaction() -> None:
     assert transaction.closed_at == start + timedelta(seconds=1.25)
     assert transaction.traffic.orig == DirectionalTrafficLedger(512, 7, 792)
     assert transaction.traffic.resp == DirectionalTrafficLedger(4096, 11, 4536)
-    assert network.traffic_ledger is transaction.traffic
-    network.validate_finalized_transaction()
+    assert network.traffic is transaction.traffic
 
 
 def test_network_context_detects_post_finalization_counter_drift() -> None:
-    """Downstream code may not rewrite finalized canonical accounting."""
+    """Downstream code cannot rewrite finalized canonical accounting."""
 
     network = _network_context(datetime(2026, 7, 14, 12, 0, tzinfo=UTC))
-    network.finalize_transaction("network-connection-test")
 
-    network.orig_pkts += 1
-
-    with pytest.raises(ValueError, match="changed after canonical"):
-        network.validate_finalized_transaction()
+    with pytest.raises(FrozenInstanceError):
+        network.traffic = NetworkTrafficLedger()  # type: ignore[misc]
 
 
 def test_direct_context_without_transaction_has_compatibility_ledger() -> None:
-    """Direct test/raw contexts remain readable before migration to action bundles."""
+    """Direct canonical plans expose one immutable directional ledger."""
 
-    network = NetworkContext(
+    network = network_plan(
         src_ip="10.0.0.10",
         src_port=53000,
         dst_ip="10.0.0.53",
@@ -155,8 +155,7 @@ def test_direct_context_without_transaction_has_compatibility_ledger() -> None:
         resp_ip_bytes=124,
     )
 
-    assert network.transaction is None
-    assert network.traffic_ledger == NetworkTrafficLedger(
+    assert network.traffic == NetworkTrafficLedger(
         orig=DirectionalTrafficLedger(48, 1, 76),
         resp=DirectionalTrafficLedger(96, 1, 124),
     )
@@ -177,8 +176,11 @@ def test_state_manager_persists_finalized_transaction_ledger() -> None:
         close_time=start + timedelta(seconds=1.25),
     )
     network = _network_context(start)
-    network.conn_id = conn_id
-    transaction = network.finalize_transaction("network-connection-state-test")
+    transaction = replace(
+        network,
+        stable_id="network-connection-state-test",
+        conn_id=conn_id,
+    )
 
     assert manager.update_connection_transaction(conn_id, transaction)
 
@@ -207,14 +209,17 @@ def test_state_manager_accumulates_persistent_application_transactions() -> None
         "tcp",
     )
     first = _network_context(start)
-    first.conn_id = conn_id
-    first.dst_port = 80
-    first.service = "http"
-    first.finalize_transaction("network-connection-first")
-    manager.apply(SecurityEvent(timestamp=start, event_type="connection", network=first))
+    first = replace(
+        first,
+        stable_id="network-connection-first",
+        conn_id=conn_id,
+        dst_port=80,
+        service="http",
+    )
+    manager.apply(OccurrenceBuilder(timestamp=start, event_type="connection", network=first))
 
     second_start = start + timedelta(milliseconds=500)
-    second = NetworkContext(
+    second = network_plan(
         src_ip=first.src_ip,
         src_port=first.src_port,
         dst_ip=first.dst_ip,
@@ -236,8 +241,10 @@ def test_state_manager_accumulates_persistent_application_transactions() -> None
         history="ShADadfF",
         application_layer_only=True,
     )
-    second.finalize_transaction("network-connection-second")
-    manager.apply(SecurityEvent(timestamp=second_start, event_type="connection", network=second))
+    second = replace(second, stable_id="network-connection-second")
+    manager.apply(
+        OccurrenceBuilder(timestamp=second_start, event_type="connection", network=second)
+    )
 
     connection = manager.get_connection(conn_id)
     assert connection is not None
@@ -303,8 +310,8 @@ def test_process_owned_connection_is_capped_before_authoritative_session_end() -
         for call in emitter.emit.call_args_list
         if call.args[0].event_type == "connection"
     )
-    assert event.network.source_visible_close_time is not None
-    assert event.network.source_visible_close_time <= deadline - timedelta(milliseconds=100)
+    assert event.network.closed_at is not None
+    assert event.network.closed_at <= deadline - timedelta(milliseconds=100)
     assert event.network.duration < 600
     process = state.get_process(source.hostname, pid)
     assert process is not None
@@ -378,7 +385,7 @@ def test_network_planner_filters_ids_only_after_final_transport_outcome() -> Non
     emitter = Mock()
     emitter.can_handle.return_value = True
     generator = ActivityGenerator(state, {"zeek_conn": emitter})
-    alert = IdsContext(
+    alert = IdsAlertPlan(
         sid=2012647,
         message="upload",
         classification="web-application-attack",
@@ -407,13 +414,13 @@ def test_network_planner_filters_ids_only_after_final_transport_outcome() -> Non
         orig_bytes=200,
         resp_bytes=500,
         conn_state="S0",
-        ids=alert,
+        ids_alerts=[alert],
     )
 
     event = next(call.args[0] for call in emitter.emit.call_args_list)
-    assert event.network.transaction is not None
-    assert event.network.transaction.conn_state == "S0"
-    assert event.ids is None
+    assert event.network is not None
+    assert event.network.conn_state == "S0"
+    assert event.ids_alerts == ()
 
 
 def test_network_planner_clears_unconfirmed_service_without_payload() -> None:
@@ -442,11 +449,11 @@ def test_network_planner_clears_unconfirmed_service_without_payload() -> None:
     )
 
     event = next(call.args[0] for call in emitter.emit.call_args_list)
-    assert event.network.transaction is not None
-    assert event.network.transaction.traffic.orig.payload_bytes == 0
-    assert event.network.transaction.traffic.resp.payload_bytes == 0
+    assert event.network is not None
+    assert event.network.traffic.orig.payload_bytes == 0
+    assert event.network.traffic.resp.payload_bytes == 0
     assert event.network.service == ""
-    assert event.network.transaction.service == ""
+    assert event.network.service == ""
 
 
 def test_network_planner_retains_service_with_modeled_payload() -> None:
@@ -475,5 +482,5 @@ def test_network_planner_retains_service_with_modeled_payload() -> None:
     )
 
     event = next(call.args[0] for call in emitter.emit.call_args_list)
-    assert event.network.transaction is not None
-    assert event.network.transaction.service == "smb"
+    assert event.network is not None
+    assert event.network.service == "smb"

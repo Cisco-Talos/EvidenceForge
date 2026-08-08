@@ -179,7 +179,7 @@ class TestGroundTruthGenerator:
     def test_build_document_reconciles_authored_intent_ledgers(
         self, minimal_scenario, malicious_events
     ):
-        """Ground truth links independent intent to dispatched and observed evidence."""
+        """Ground truth v2 links independent intent to occurrences and observations."""
 
         authored = AuthoredIntentLedger.from_scenario(minimal_scenario)
         execution = IntentExecutionLedger(authored)
@@ -191,7 +191,7 @@ class TestGroundTruthGenerator:
             role=OccurrenceRole.PRIMARY,
             instance_key="process-1",
         )
-        execution.record_occurrence(first.intent_id, "event-1", occurrence_key)
+        execution.record_occurrence(first.intent_id, occurrence_key)
         execution.record_observation(first.intent_id, "windows_security", "visible")
         events = [dict(event) for event in malicious_events]
         events[0]["intent_id"] = first.intent_id
@@ -203,6 +203,14 @@ class TestGroundTruthGenerator:
             intent_execution_snapshot=execution.snapshot(),
         ).build_document()
 
+        assert document.schema_version == 2
+        with pytest.raises(ValueError, match="Input should be 2"):
+            type(document).model_validate(
+                {
+                    **document.model_dump(mode="python"),
+                    "schema_version": 1,
+                }
+            )
         reconciliation = document.intent_reconciliation
         assert reconciliation is not None
         assert reconciliation.complete

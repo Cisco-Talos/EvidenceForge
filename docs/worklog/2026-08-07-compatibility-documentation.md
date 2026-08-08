@@ -116,3 +116,71 @@ that distinction; Batch 7b remains an approval-gated migration.
   format, review JSON parsing, and `git diff --check` pass. Optional Docker/licensed external
   parser tests remain skipped by their existing dependency gates; the local Splunk harness unit
   suite passed with loopback access. Exact evidence is in `batch7-results.json`.
+
+## Batch 7b approval and implementation contract
+
+Approved 2026-08-08 for direct implementation on the cumulative feature branch:
+
+- There is no supported public Python API. Remove internal mutable carriers, compatibility context
+  views, aliases, and sequence-derived IDs directly after migrating their consumers; do not add a
+  deprecation period or compatibility adapter.
+- Preserve CLI commands/options, authored scenario YAML, and source-native format contracts.
+  Ground-truth JSON may advance to a new schema version and remove redundant legacy dispatch IDs.
+- Use frozen aggregate plans per real-world action, composed from typed domain subplans. Do not
+  create one plan per emitted event or one universal plan with ambiguous optional fields.
+- Optimize identity and lifecycle indexes for lookup speed when memory and latency trade off. Hot
+  primary lookups are expected O(1), temporal queries O(log n + k), and retained state must remain
+  duration-stable. The migration gate includes fixed 24-hour/seven-day comparisons plus a 30-day
+  plateau check for retained identity counts and late-run hourly cost.
+- The current Batch 7 branch is cumulative: all prior review/remediation batch tips are ancestors,
+  so the completed campaign will require one PR to `dev`, not one PR per checkpoint branch.
+
+## Batch 7b implementation
+
+### Final internal contracts
+
+- Replaced `SecurityEvent` with a private mutable `OccurrenceBuilder` and an immutable, slotted
+  `CanonicalOccurrence`. The dispatcher is the only publication boundary: it plans identity,
+  validates the contract seal, derives semantic occurrence identity, seals the builder, and gives
+  only the immutable snapshot to state, observation, and emitters.
+- Closed published `event_type` to `EventKind`; removed dispatch-sequence IDs. Occurrence IDs now
+  derive from action-relative semantic keys and are independent of unrelated dispatch order.
+- Removed flat canonical `NetworkContext`, `EdrContext`, singular IDS ownership, and raw canonical
+  entries. Frozen `NetworkTransactionPlan`, `EventIdentityPlan`, `EntityIdentity`, tuple-valued
+  `IdsAlertPlan`, and aggregate `ProtocolTransactionPlan` own those facts. `RawProjectionRequest`
+  routes through `dispatch_raw` and never enters cross-source consistency guarantees.
+- Moved sealed protocol consumers to the one aggregate plan, composed from typed TLS, HTTP, file,
+  X.509, OCSP, PE, and proxy subplans. Publication validates file/certificate references and
+  rejects contradictory compositions.
+- Advanced ground-truth JSON to schema v2, removed redundant dispatch identity, and documented the
+  separation between semantic occurrence IDs and source-native record/event IDs.
+
+### Lookup and retention performance
+
+- Ended process/object/thread identities use direct indexes for hot O(1) lookup and deadline heaps
+  for expiry. Cap trimming uses earliest-deadline heap removal instead of repeatedly sorting the
+  complete retained map.
+- `scripts/batch7b_state_probe.py` exercises fixed 24-hour, seven-day, and 30-day workloads at 64
+  process lifecycles/hour. Retained state plateaus at 3,072 entries after 48 hours; the 30-day
+  late-hour cost is 1.0551x and lookup cost is 1.0067x the 24-hour measurement.
+
+### Rendered evidence and regression found by the gate
+
+- Two Batch 7b branch-office generations are byte-identical across all 45 output files. Against
+  Batch 7a, all 40 data files and parsed record counts are preserved, while 26 files intentionally
+  change source timing/accounting or identity-bearing projections because those deterministic
+  values now key from semantic occurrence identity. Ground truth intentionally advances to v2.
+- Both Batch 7a and Batch 7b rendered probes report zero invariant findings, with identical parsed
+  counts of 26,328 JSON and 13,553 XML records.
+- The first empirical run caught a projection-boundary regression: the ASA emitter rebuilt a
+  canonical network plan with sensor-observed bytes and triggered the canonical MTU invariant.
+  ASA now uses a private immutable source projection, preserving observation-owned byte totals
+  without reconstructing shared canonical truth; a focused regression test covers the path.
+
+### Final verification
+
+- Complete non-slow suite: 5,234 passed, 41 skipped in 320.71 seconds.
+- Deterministic generation, rendered realism probes, ground-truth v2 validation, external-ID
+  guardrails, and duration-scaled lookup/retention probes pass.
+- Exact hashes, commands, performance measurements, limitations, and the generation regression
+  disposition are recorded in `docs/design/realism-review/batch7b-results.json`.

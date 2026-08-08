@@ -17,7 +17,7 @@ from urllib.parse import quote
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509.ocsp import OCSPRequestBuilder, load_der_ocsp_request
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import FileTransferContext, HttpContext, OcspContext
 from evidenceforge.events.cryptography import (
     CertificateAuthorityMaterial,
@@ -37,7 +37,7 @@ from evidenceforge.utils.rng import _stable_seed
 class OcspTransactionRequest:
     """Intent to query the status of one presented certificate."""
 
-    tls_event: SecurityEvent
+    tls_event: OccurrenceBuilder
     certificate: CertificateIdentityPlan
     issuer: CertificateAuthorityMaterial
     cert_name: str
@@ -47,7 +47,7 @@ class OcspTransactionRequest:
         """Return the durable OCSP action-group identity."""
 
         net = self.tls_event.network
-        transaction_id = net.transaction.stable_id if net and net.transaction else ""
+        transaction_id = net.stable_id if net is not None else ""
         seed = _stable_seed(
             "action_bundle:ocsp_transaction:"
             f"{transaction_id}:{self.certificate.fingerprint}:{self.certificate.serial_number}"

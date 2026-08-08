@@ -32,15 +32,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
-    EdrContext,
     FileContext,
     FileTransferContext,
     PeContext,
     ProcessContext,
 )
+from evidenceforge.events.identity import EntityIdentity, EventIdentityPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.smb_file_transfers import (
@@ -51,6 +51,27 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
+
+
+def _file_identity_plan(
+    state_manager: StateManager,
+    system: System,
+    pid: int,
+    path: str,
+) -> EventIdentityPlan:
+    """Return canonical file ownership and its state-backed process actor."""
+
+    semantic_key = f"{system.hostname}:{path.casefold()}"
+    return EventIdentityPlan(
+        subject=EntityIdentity(
+            object_id=stable_uuid("file-identity", semantic_key),
+            kind="file",
+            hostname=system.hostname,
+            semantic_key=semantic_key,
+        ),
+        actor=state_manager.get_process_identity(system.hostname, pid),
+    )
+
 
 _HTTP_HASH_ANALYZER_MIME_TYPES = {
     "application/octet-stream",
@@ -754,10 +775,6 @@ class StagedArchiveSmbReadActionBundle:
             self._request.source_pid,
         )
         parent_pid = running_source.parent_pid if running_source is not None else 0
-        source_actor_id = self._executor.state_manager.get_process_object_id(
-            self._request.source_system.hostname,
-            self._request.source_pid,
-        )
         file_time = transfer_time + timedelta(milliseconds=self._rng.randint(80, 240))
         source_time_getter = getattr(
             self._executor.activity_generator,
@@ -776,8 +793,8 @@ class StagedArchiveSmbReadActionBundle:
         if file_time >= self._request.exfil_time:
             return None
 
-        self._executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=file_time,
                 event_type="file_create",
                 src_host=self._executor.activity_generator._build_host_context(
@@ -796,15 +813,11 @@ class StagedArchiveSmbReadActionBundle:
                     action="create",
                     pid=self._request.source_pid,
                 ),
-                edr=EdrContext(
-                    object_id=stable_uuid(
-                        "staged-archive-local-create-edr",
-                        self._request.source_system.hostname,
-                        self._request.source_pid,
-                        source_path,
-                        self._request.exfil_time.isoformat(),
-                    ),
-                    actor_id=source_actor_id,
+                identity_plan=_file_identity_plan(
+                    self._executor.state_manager,
+                    self._request.source_system,
+                    self._request.source_pid,
+                    source_path,
                 ),
                 storyline_origin=True,
             )
@@ -867,10 +880,6 @@ class StagedArchiveSmbReadActionBundle:
             self._reader_pid(),
         )
         parent_pid = running_source.parent_pid if running_source is not None else 0
-        source_actor_id = self._executor.state_manager.get_process_object_id(
-            self._request.source_system.hostname,
-            self._reader_pid(),
-        )
         file_time = transfer_time + timedelta(milliseconds=self._rng.randint(420, 1400))
         source_time_getter = getattr(
             self._executor.activity_generator,
@@ -891,8 +900,8 @@ class StagedArchiveSmbReadActionBundle:
         if file_time >= self._request.exfil_time:
             return
 
-        self._executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=file_time,
                 event_type="file_read",
                 src_host=self._executor.activity_generator._build_host_context(
@@ -911,15 +920,11 @@ class StagedArchiveSmbReadActionBundle:
                     action="read",
                     pid=self._reader_pid(),
                 ),
-                edr=EdrContext(
-                    object_id=stable_uuid(
-                        "staged-archive-source-file-read-edr",
-                        self._request.source_system.hostname,
-                        self._reader_pid(),
-                        source_path,
-                        self._request.exfil_time.isoformat(),
-                    ),
-                    actor_id=source_actor_id,
+                identity_plan=_file_identity_plan(
+                    self._executor.state_manager,
+                    self._request.source_system,
+                    self._reader_pid(),
+                    source_path,
                 ),
                 storyline_origin=True,
             )
@@ -1039,10 +1044,6 @@ class ScpReceiverFileActionBundle:
         self._executor.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
         self._emit_source_file_read()
         sshd_pid = self._ensure_responder_process()
-        sshd_actor_id = self._executor.state_manager.get_process_object_id(
-            self._request.target_system.hostname,
-            sshd_pid,
-        )
         parent_pid = self._executor.activity_generator._get_system_pid(
             self._request.target_system.hostname,
             "sshd",
@@ -1077,8 +1078,8 @@ class ScpReceiverFileActionBundle:
             if isinstance(ready_time, datetime) and file_time <= ready_time:
                 file_time = ready_time + timedelta(milliseconds=self._rng.randint(120, 900))
 
-        self._executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=file_time,
                 event_type="file_create",
                 src_host=self._executor.activity_generator._build_host_context(
@@ -1097,15 +1098,11 @@ class ScpReceiverFileActionBundle:
                     action="create",
                     pid=sshd_pid,
                 ),
-                edr=EdrContext(
-                    object_id=stable_uuid(
-                        "scp-receiver-file-edr",
-                        self._request.target_system.hostname,
-                        sshd_pid,
-                        self._request.target_path,
-                        file_time.isoformat(),
-                    ),
-                    actor_id=sshd_actor_id,
+                identity_plan=_file_identity_plan(
+                    self._executor.state_manager,
+                    self._request.target_system,
+                    sshd_pid,
+                    self._request.target_path,
                 ),
                 storyline_origin=True,
             )
@@ -1121,10 +1118,6 @@ class ScpReceiverFileActionBundle:
             self._request.source_pid,
         )
         parent_pid = running_source.parent_pid if running_source is not None else 0
-        source_actor_id = self._executor.state_manager.get_process_object_id(
-            self._request.source_system.hostname,
-            self._request.source_pid,
-        )
         file_time = self._request.transfer_time + timedelta(
             milliseconds=self._rng.randint(180, 850)
         )
@@ -1143,8 +1136,8 @@ class ScpReceiverFileActionBundle:
                     milliseconds=self._rng.randint(250, 950)
                 )
 
-        self._executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=file_time,
                 event_type="file_read",
                 src_host=self._executor.activity_generator._build_host_context(
@@ -1163,15 +1156,11 @@ class ScpReceiverFileActionBundle:
                     action="read",
                     pid=self._request.source_pid,
                 ),
-                edr=EdrContext(
-                    object_id=stable_uuid(
-                        "scp-source-file-read-edr",
-                        self._request.source_system.hostname,
-                        self._request.source_pid,
-                        self._request.source_path,
-                        self._request.transfer_time.isoformat(),
-                    ),
-                    actor_id=source_actor_id,
+                identity_plan=_file_identity_plan(
+                    self._executor.state_manager,
+                    self._request.source_system,
+                    self._request.source_pid,
+                    self._request.source_path,
                 ),
                 storyline_origin=True,
             )

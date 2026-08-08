@@ -30,8 +30,8 @@ from threading import Barrier, Thread
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import DnsContext, HttpContext, NetworkContext, X509Context
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import DnsContext, HttpContext, X509Context
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkSensorObservation,
@@ -45,6 +45,7 @@ from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
+from tests.network_factories import network_plan
 
 
 class TestPerSensorDirectoryRouting:
@@ -93,10 +94,10 @@ class TestPerSensorDirectoryRouting:
             x509_emitter = ZeekX509Emitter(x509_fmt, base, sensor_hostnames=["core", "dmz"])
             files_emitter = ZeekFilesEmitter(files_fmt, base, sensor_hostnames=["core", "dmz"])
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="8.8.8.8",
@@ -368,10 +369,10 @@ class TestPerSensorDirectoryRouting:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(conn_fmt, base, sensor_hostnames=["core", "dmz"])
             dns_emitter = ZeekDnsEmitter(dns_fmt, base, sensor_hostnames=["core", "dmz"])
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=41710,
                     dst_ip="10.0.0.53",
@@ -775,10 +776,10 @@ class TestPerSensorDirectoryRouting:
             emitter = ZeekEmitter(fmt, base, sensor_hostnames=["dmz"])
 
             emitter.emit(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                     event_type="connection",
-                    network=NetworkContext(
+                    network=network_plan(
                         src_ip="10.0.0.1",
                         src_port=50000,
                         dst_ip="8.8.8.8",

@@ -19,7 +19,7 @@ from evidenceforge.utils.time import resolve_time_window
 logger = logging.getLogger(__name__)
 
 GROUND_TRUTH_JSON_FILENAME = "GROUND_TRUTH.json"
-GROUND_TRUTH_SCHEMA_VERSION = 1
+GROUND_TRUTH_SCHEMA_VERSION = 2
 MAX_GROUND_TRUTH_BYTES = 8_388_608
 
 GroundTruthSection = Literal["storyline", "red_herring"]
@@ -557,7 +557,6 @@ class GroundTruthIntentEvidence(BaseModel):
     planned: bool
     action_ids: list[str] = Field(default_factory=list)
     occurrence_ids: list[str] = Field(default_factory=list)
-    dispatched_event_ids: list[str] = Field(default_factory=list)
     source_status: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
@@ -604,7 +603,7 @@ class GroundTruthIntentReconciliation(BaseModel):
             raise ValueError("reconciled intent IDs must be unique")
         if self.planned_count != sum(intent.planned for intent in self.intents):
             raise ValueError("planned_count does not match reconciled intent rows")
-        if self.occurred_count != sum(bool(intent.dispatched_event_ids) for intent in self.intents):
+        if self.occurred_count != sum(bool(intent.occurrence_ids) for intent in self.intents):
             raise ValueError("occurred_count does not match reconciled intent rows")
         observed_count = sum(
             any(
@@ -682,7 +681,7 @@ class IdsEvaluationSummary(BaseModel):
 class GroundTruthDocument(BaseModel):
     """Canonical machine-readable ground-truth document."""
 
-    schema_version: int = GROUND_TRUTH_SCHEMA_VERSION
+    schema_version: Literal[2] = GROUND_TRUTH_SCHEMA_VERSION
     scenario_name: str
     scenario_description: str
     generated_at: datetime

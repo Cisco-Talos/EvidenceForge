@@ -254,7 +254,7 @@ GenerationEngine (hour-by-hour orchestration)
 WorldModel / WorldPlanner (compile host roles, user placement, session bootstrap)
     |
     v
-ActivityGenerator (builds SecurityEvents with composable contexts)
+ActivityGenerator (builds canonical occurrences with composable contexts)
     |
     v
 EventDispatcher (routes to StateManager + matching emitters)
@@ -276,7 +276,7 @@ emitters apply it only where file shape differs.
 
 `WorldModel` compiles authoritative host and user capabilities from scenario fields like `primary_system`, `roles`, `services`, and workstation assignments. `WorldPlanner` then chooses realistic interactive, network, SSH, and RDP session paths before `ActivityGenerator` emits the correlated evidence.
 
-See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive including the world-model layer, SecurityEvent model, state management, and emitter system.
+See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive including the world-model layer, CanonicalOccurrence model, state management, and emitter system.
 
 ## Development
 
@@ -331,7 +331,7 @@ full-dataset runner command, and failure report details.
 ### Design Documents
 
 - [PRD](docs/design/PRD.md) — Product requirements and specifications
-- [Event Model Design](docs/design/event-model-prd.md) — Canonical SecurityEvent architecture
+- [Event Model Design](docs/design/event-model-prd.md) — Canonical occurrence architecture
 - [Data Quality Design](docs/design/data-quality-prd.md) — Evaluation framework design
 - [Research Report](docs/design/synthetic-log-generation-research.md) — Analysis of existing tools
 

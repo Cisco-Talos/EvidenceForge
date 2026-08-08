@@ -26,7 +26,7 @@ import random
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import HttpContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.browser_session import (
@@ -42,16 +42,16 @@ from evidenceforge.models import System
 class _CollectorEmitter:
     """Minimal emitter that records events matching a predicate."""
 
-    def __init__(self, predicate: Callable[[SecurityEvent], bool]) -> None:
+    def __init__(self, predicate: Callable[[CanonicalOccurrence], bool]) -> None:
         self._predicate = predicate
-        self.events: list[SecurityEvent] = []
+        self.events: list[CanonicalOccurrence] = []
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Return whether this collector should record the event."""
 
         return self._predicate(event)
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Record one event."""
 
         self.events.append(event)
@@ -73,10 +73,12 @@ def _activity_generator_with_collectors() -> tuple[
         )
     )
     http_emitter = _CollectorEmitter(
-        lambda event: event.event_type == "connection" and event.http is not None
+        lambda event: event.event_type == "connection" and event.protocol.http is not None
     )
     files_emitter = _CollectorEmitter(
-        lambda event: event.event_type == "connection" and event.file_transfer is not None
+        lambda event: (
+            event.event_type == "connection" and event.protocol.primary_file_transfer is not None
+        )
     )
     emitters = {
         "zeek_conn": conn_emitter,
@@ -169,7 +171,7 @@ def test_browser_session_reuses_parent_http_uid_for_same_host_subresources(monke
     assert first_http.network.zeek_uid == second_http.network.zeek_uid
     assert second_http.network.src_port == first_http.network.src_port
     assert second_http.network.application_layer_only is True
-    assert [event.http.trans_depth for event in http_emitter.events] == [1, 2]
+    assert [event.protocol.http.trans_depth for event in http_emitter.events] == [1, 2]
 
 
 def test_caller_http_large_download_attaches_zeek_file_transfer():
@@ -210,12 +212,13 @@ def test_caller_http_large_download_attaches_zeek_file_transfer():
     assert len(http_emitter.events) == 1
     assert len(files_emitter.events) == 1
     event = http_emitter.events[0]
-    assert event is files_emitter.events[0]
-    assert event.file_transfer is not None
-    assert event.file_transfer.source == "HTTP"
-    assert event.file_transfer.mime_type == "application/x-msdownload"
-    assert event.file_transfer.analyzers == ["SHA1"]
-    assert event.file_transfer.sha1
-    assert event.file_transfer.seen_bytes == response_body_len
-    assert event.http.resp_fuids == [event.file_transfer.fuid]
-    assert event.http.resp_mime_types == [event.file_transfer.mime_type]
+    assert event.occurrence_id == files_emitter.events[0].occurrence_id
+    assert event.protocol == files_emitter.events[0].protocol
+    assert event.protocol.primary_file_transfer is not None
+    assert event.protocol.primary_file_transfer.source == "HTTP"
+    assert event.protocol.primary_file_transfer.mime_type == "application/x-msdownload"
+    assert event.protocol.primary_file_transfer.analyzers == ("SHA1",)
+    assert event.protocol.primary_file_transfer.sha1
+    assert event.protocol.primary_file_transfer.seen_bytes == response_body_len
+    assert event.protocol.http.resp_fuids == (event.protocol.primary_file_transfer.fuid,)
+    assert event.protocol.http.resp_mime_types == (event.protocol.primary_file_transfer.mime_type,)

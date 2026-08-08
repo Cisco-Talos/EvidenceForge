@@ -200,7 +200,7 @@ the same common event envelope as every other event, with spillage-specific
 scoring fields nested under `attributes`. Each emitted spillage event looks like:
 
 ```json
-{"schema_version":1,
+{"schema_version":2,
  "scenario_name":"spill-demo",
  "events":[
    {"record_id":"spill-aws-bash#0","kind":"spillage",

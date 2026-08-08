@@ -24,7 +24,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
@@ -34,7 +34,7 @@ from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
-    from evidenceforge.events.base import SecurityEvent
+    from evidenceforge.events.base import OccurrenceBuilder
     from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
     from evidenceforge.generation.activity.generator import ActivityGenerator
 
@@ -45,7 +45,7 @@ class _NetworkOccurrenceDraft:
 
     Protocol and source metadata sometimes need to repair the initial transport
     estimates. Keeping those mutations on an action-owned draft prevents an
-    incompletely planned ``SecurityEvent`` from escaping into state or renderers.
+    incompletely planned ``OccurrenceBuilder`` from escaping into state or renderers.
     """
 
     timestamp: datetime
@@ -54,11 +54,9 @@ class _NetworkOccurrenceDraft:
     local_only: bool = False
     process: Any = None
     network: Any = None
-    edr: Any = None
     dns: Any = None
     email: Any = None
     smtp: Any = None
-    ids: Any = None
     ids_alerts: list[Any] = field(default_factory=list)
     ssl: Any = None
     http: Any = None
@@ -75,7 +73,7 @@ class _NetworkOccurrenceDraft:
     firewall: Any = None
     parent_action_group_id: str | None = None
 
-    def build_event(self, generator_module: ModuleType) -> SecurityEvent:
+    def build_event(self, generator_module: ModuleType) -> OccurrenceBuilder:
         """Construct the canonical event only after the transaction is frozen."""
 
         if self.network is None or self.network.transaction is None:
@@ -83,20 +81,18 @@ class _NetworkOccurrenceDraft:
         from evidenceforge.events.lifecycle import ActionLifecycleContext
 
         transaction = self.network.transaction
-        return generator_module.SecurityEvent(
+        return generator_module.OccurrenceBuilder(
             timestamp=self.timestamp,
             event_type="connection",
             src_host=self.src_host,
             dst_host=self.dst_host,
             local_only=self.local_only,
             process=self.process,
-            network=self.network,
-            edr=self.edr,
+            network=transaction,
             dns=self.dns,
             email=self.email,
             smtp=self.smtp,
-            ids=self.ids,
-            ids_alerts=self.ids_alerts,
+            ids_alerts=tuple(self.ids_alerts),
             ssl=self.ssl,
             http=self.http,
             file_transfer=self.file_transfer,
@@ -210,7 +206,6 @@ class NetworkTransactionPlanner:
         smtp = request.smtp
         x509 = request.x509
         x509_chain = request.x509_chain
-        ids = request.ids
         ids_alerts = list(request.ids_alerts)
         http = request.http
         caller_supplied_http = http is not None
@@ -236,7 +231,7 @@ class NetworkTransactionPlanner:
         preserve_start_time = request.preserve_start_time
         caller_supplied_pid = pid > 0
 
-        from evidenceforge.events.contexts import NetworkContext
+        from evidenceforge.events.contexts import NetworkTransactionDraft
 
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
@@ -519,7 +514,6 @@ class NetworkTransactionPlanner:
                 source_system=source_system,
                 conn_state=conn_state,
                 dns=dns,
-                ids=ids,
                 ids_alerts=ids_alerts,
                 http=http,
                 file_transfer=file_transfer,
@@ -1449,7 +1443,7 @@ class NetworkTransactionPlanner:
             service = ""
 
         # Phase 2: Resolve event-side ownership into an action-owned draft. The
-        # canonical SecurityEvent is constructed only after the transaction is
+        # canonical OccurrenceBuilder is constructed only after the transaction is
         # finalized below.
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
         src_host_ctx = None
@@ -1465,13 +1459,9 @@ class NetworkTransactionPlanner:
             if real_dst_ip and real_dst_ip in executor._ip_to_system:
                 dst_host_ctx = executor._build_host_context(executor._ip_to_system[real_dst_ip])
 
-        # Resolve eCAR actor_id from initiating process (if pid is known)
-        conn_actor_id = ""
+        # Resolve the canonical initiating process when its PID is known.
         process_ctx = None
         if pid > 0 and resolved_source_system:
-            conn_actor_id = executor.state_manager.get_process_object_id(
-                resolved_source_system.hostname, pid
-            )
             running = resolved_process or executor.state_manager.get_process(
                 resolved_source_system.hostname, pid
             )
@@ -1545,7 +1535,7 @@ class NetworkTransactionPlanner:
             dst_host=dst_host_ctx,
             local_only=local_only,
             process=process_ctx,
-            network=NetworkContext(
+            network=NetworkTransactionDraft(
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
@@ -1571,23 +1561,9 @@ class NetworkTransactionPlanner:
                 responding_pid=responding_pid,
                 application_layer_only=http_application_layer_only,
             ),
-            edr=generator_module.EdrContext(
-                object_id=generator_module.stable_uuid(
-                    "connection-edr",
-                    src_ip,
-                    src_port,
-                    dst_ip,
-                    dst_port,
-                    proto,
-                    time.isoformat(),
-                ),
-                actor_id=conn_actor_id,
-            ),
         )
 
         # Caller-provided context overrides
-        if ids is not None:
-            event.ids = ids
         if ids_alerts:
             event.ids_alerts = list(ids_alerts)
         if email is not None:
@@ -1612,7 +1588,10 @@ class NetworkTransactionPlanner:
             )
             event.x509 = event.x509_chain[0]
             if event.ssl is not None:
-                event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
+                event.ssl = replace(
+                    event.ssl,
+                    cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
+                )
         if http is not None:
             event.http = http
         if file_transfer is not None:
@@ -2419,7 +2398,7 @@ class NetworkTransactionPlanner:
         # Finalize the canonical source-visible interval only after every protocol,
         # payload, and process-visibility adjustment has settled. Dispatch creates
         # source-local event copies with collection delay, so the immutable interval
-        # must live on NetworkContext rather than be re-derived from those copies.
+        # must live on the finalized transaction rather than be re-derived from those copies.
         event.network.duration = self._cap_to_owning_session(
             start=event.timestamp,
             duration=event.network.duration,
@@ -2476,7 +2455,10 @@ class NetworkTransactionPlanner:
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),
         )
-        from evidenceforge.generation.actions.ids_alert import ids_alert_matches_transaction
+        from evidenceforge.generation.actions.ids_alert import (
+            ids_alert_matches_transaction,
+            normalize_ids_alerts,
+        )
 
         transaction = event.network.transaction
         if transaction is None:
@@ -2486,27 +2468,22 @@ class NetworkTransactionPlanner:
             for candidate in (event.file_transfer, *event.file_transfers)
             if candidate is not None
         )
-        if event.ids is not None and not ids_alert_matches_transaction(
-            event.ids,
-            transaction,
-            http=event.http,
-            dns=event.dns,
-            ssl=event.ssl,
-            file_transfers=attached_files,
-        ):
-            event.ids = None
-        event.ids_alerts = [
-            alert
-            for alert in event.ids_alerts
-            if ids_alert_matches_transaction(
-                alert,
-                transaction,
-                http=event.http,
-                dns=event.dns,
-                ssl=event.ssl,
-                file_transfers=attached_files,
+        event.ids_alerts = list(
+            normalize_ids_alerts(
+                [
+                    alert
+                    for alert in event.ids_alerts
+                    if ids_alert_matches_transaction(
+                        alert,
+                        transaction,
+                        http=event.http,
+                        dns=event.dns,
+                        ssl=event.ssl,
+                        file_transfers=attached_files,
+                    )
+                ]
             )
-        ]
+        )
         event = event.build_event(generator_module)
 
         # Automatic weird.log synthesis is intentionally disabled for now. The
@@ -2553,8 +2530,8 @@ class NetworkTransactionPlanner:
                 event.network.protocol,
             )
             executor._last_connection_effective_time = event.timestamp
-            executor._last_connection_effective_transaction_id = event.network.transaction.stable_id
-        network_identifiers_by_format = executor.dispatcher.dispatch(event) or {}
+            executor._last_connection_effective_transaction_id = event.network.stable_id
+        network_identifiers_by_format = executor.dispatcher.dispatch_builder(event) or {}
         executor._maybe_emit_ocsp_transaction(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:
             executor._emit_generic_ssh_preauth_failure_syslog(
@@ -2585,14 +2562,9 @@ class NetworkTransactionPlanner:
             executor.generate_wfp_connection(
                 system=wfp_system,
                 time=time,
-                src_ip=src_ip,
-                src_port=src_port,
-                dst_ip=dst_ip,
-                dst_port=dst_port,
-                protocol=proto,
+                network=event.network,
                 pid=pid,
                 application=wfp_application,
-                transport_transaction_id=request.stable_id,
                 parent_action_group_id=parent_action_group_id,
             )
 
@@ -2612,14 +2584,9 @@ class NetworkTransactionPlanner:
             executor.generate_wfp_connection(
                 system=target_system,
                 time=time,
-                src_ip=src_ip,
-                src_port=src_port,
-                dst_ip=target_system.ip,
-                dst_port=dst_port,
-                protocol=proto,
+                network=event.network,
                 pid=inbound_pid,
                 application=inbound_application,
-                transport_transaction_id=request.stable_id,
                 parent_action_group_id=parent_action_group_id,
             )
 

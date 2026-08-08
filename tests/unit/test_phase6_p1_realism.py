@@ -260,7 +260,7 @@ class TestMachineAccountLogon:
             dc_ip="10.10.100.10",
             time=ts,
         )
-        # machine_logon dispatched via SecurityEvent
+        # machine_logon dispatched via OccurrenceBuilder
         events = [
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]

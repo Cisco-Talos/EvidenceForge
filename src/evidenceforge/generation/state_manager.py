@@ -32,7 +32,7 @@ import random
 from datetime import datetime, timedelta
 from threading import RLock
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTransactionPlan
@@ -64,6 +64,9 @@ _HOST_LOGON_BUCKET_STEP = 131071
 _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 _LINUX_PID_BLOCK_SECONDS = 300
 _LINUX_PID_RATE_DENOMINATOR = 10
+_ENDED_IDENTITY_RETENTION = timedelta(hours=48)
+_MAX_RETAINED_PROCESS_IDENTITIES = 500_000
+_MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -198,7 +201,11 @@ class StateManager:
         )
         self._process_object_ids: dict[tuple[str, int], str] = {}
         self._processes_by_object_id: dict[str, RunningProcess] = {}
-        self._ended_threads: dict[tuple[str, str, int], RunningThread] = {}
+        self._ended_processes_by_key: ExpiringIndex[tuple[str, int], RunningProcess] = (
+            ExpiringIndex()
+        )
+        self._ended_processes_by_object_id: ExpiringIndex[str, RunningProcess] = ExpiringIndex()
+        self._ended_threads: ExpiringIndex[tuple[str, str, int], RunningThread] = ExpiringIndex()
 
     # ========================================
     # Session Management
@@ -1352,6 +1359,7 @@ class StateManager:
             self.state.running_processes[(system, pid)] = process
             self._process_object_ids[(system, pid)] = object_id
             self._processes_by_object_id[object_id] = process
+            self._ended_processes_by_key.pop((system, pid), None)
             primary_tid = (
                 pid
                 if os_category == "linux"
@@ -1495,6 +1503,7 @@ class StateManager:
             self.state.running_processes[key] = process
             self._process_object_ids[key] = ecar_object_id
             self._processes_by_object_id[ecar_object_id] = process
+            self._ended_processes_by_key.pop(key, None)
             primary_tid = (
                 pid
                 if self._pid_os.get(system) == "linux"
@@ -1687,14 +1696,19 @@ class StateManager:
                 return False
             effective_end = end_time or self.state.current_time
             thread.end_time = ensure_utc(effective_end) if effective_end is not None else None
-            self._ended_threads[key] = thread
+            if thread.end_time is not None:
+                deadline = (thread.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
+                self._ended_threads.set(key, thread, deadline)
+                self._trim_retained_thread_identities()
             return True
 
     def get_process_identity(self, system: str, pid: int) -> ProcessIdentity | None:
-        """Return an immutable snapshot for the currently live process at a host-local PID."""
+        """Return the latest immutable process identity at a host-local PID."""
 
         with self._lock:
             process = self.state.running_processes.get((system, pid))
+            if process is None:
+                process = self._ended_processes_by_key.get((system, pid))
             if process is None:
                 return None
             return self._process_identity(process)
@@ -1703,7 +1717,9 @@ class StateManager:
         """Resolve a live or ended process by its durable process object identity."""
 
         with self._lock:
-            process = self._processes_by_object_id.get(object_id)
+            process = self._processes_by_object_id.get(
+                object_id
+            ) or self._ended_processes_by_object_id.get(object_id)
             return self._process_identity(process) if process is not None else None
 
     def _process_identity(self, process: RunningProcess) -> ProcessIdentity:
@@ -1763,7 +1779,8 @@ class StateManager:
             proc = self.state.running_processes.get(key)
             if proc:
                 return proc.ecar_object_id
-            return self._process_object_ids.get(key, "")
+            ended = self._ended_processes_by_key.get(key)
+            return ended.ecar_object_id if ended is not None else ""
 
     def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for a running process."""
@@ -1869,6 +1886,9 @@ class StateManager:
             key = (system, pid)
             process = self.state.running_processes.get(key)
             if process is not None:
+                effective_end = ensure_utc(
+                    end_time or self.state.current_time or process.start_time
+                )
                 thread_keys = [
                     (thread.hostname, thread.process_object_id, thread.tid)
                     for thread in self._running_threads.find(
@@ -1877,12 +1897,53 @@ class StateManager:
                     )
                 ]
                 for thread_key in thread_keys:
-                    self.end_thread(*thread_key, end_time=end_time)
+                    self.end_thread(*thread_key, end_time=effective_end)
                 del self.state.running_processes[key]
+                process.end_time = effective_end
+                self._process_object_ids.pop(key, None)
+                self._processes_by_object_id.pop(process.ecar_object_id, None)
+                deadline = (effective_end + _ENDED_IDENTITY_RETENTION).timestamp()
+                self._ended_processes_by_key.set(key, process, deadline)
+                self._ended_processes_by_object_id.set(
+                    process.ecar_object_id,
+                    process,
+                    deadline,
+                )
+                self._trim_retained_process_identities()
                 self._clear_session_process_references(system, pid)
                 logger.debug(f"Ended process {pid} on {system}")
                 return True
             return False
+
+    def _trim_retained_process_identities(self) -> None:
+        """Enforce a hard cap while preserving the newest ended process identities."""
+
+        removed = self._ended_processes_by_object_id.trim_earliest(
+            _MAX_RETAINED_PROCESS_IDENTITIES,
+        )
+        for _object_id, process in removed:
+            key = (process.system, process.pid)
+            if self._ended_processes_by_key.get(key) is process:
+                self._ended_processes_by_key.pop(key, None)
+
+    def _trim_retained_thread_identities(self) -> None:
+        """Enforce a hard cap while preserving the newest ended thread identities."""
+
+        self._ended_threads.trim_earliest(_MAX_RETAINED_THREAD_IDENTITIES)
+
+    def _expire_retained_identities(self, current_time: datetime) -> None:
+        """Expire ended identity snapshots outside the explicit late-reference window."""
+
+        cutoff = ensure_utc(current_time).timestamp()
+        expired = self._ended_processes_by_object_id.expire_before(cutoff, inclusive=True)
+        for _object_id, process in expired:
+            key = (process.system, process.pid)
+            if self._ended_processes_by_key.get(key) is process:
+                self._ended_processes_by_key.pop(key, None)
+        for _key, process in self._ended_processes_by_key.expire_before(cutoff, inclusive=True):
+            if self._ended_processes_by_object_id.get(process.ecar_object_id) is process:
+                self._ended_processes_by_object_id.pop(process.ecar_object_id, None)
+        self._ended_threads.expire_before(cutoff, inclusive=True)
 
     def _clear_session_process_references(self, system: str, pid: int) -> None:
         """Clear active-session pointers to a process that has ended."""
@@ -2291,6 +2352,7 @@ class StateManager:
         """
         with self._lock:
             self.state.current_time = dt
+            self._expire_retained_identities(dt)
             logger.debug(f"Set current time to {dt}")
 
     def get_current_time(self) -> datetime | None:
@@ -2316,6 +2378,7 @@ class StateManager:
                 raise StateError("Cannot advance time: current_time not set")
 
             self.state.current_time += delta
+            self._expire_retained_identities(self.state.current_time)
             logger.debug(f"Advanced time by {delta} to {self.state.current_time}")
 
     # ========================================
@@ -2407,12 +2470,12 @@ class StateManager:
     # Event Application
     # ========================================
 
-    def apply(self, event: SecurityEvent) -> None:
-        """Record state changes from a fully-constructed SecurityEvent.
+    def apply(self, event: CanonicalOccurrence) -> None:
+        """Record state changes from a fully-constructed CanonicalOccurrence.
 
         IDs (logon_id, pid, conn_id, zeek_uid) are already allocated by the
         caller via create_session(), create_process(), open_connection() before
-        building the SecurityEvent. This method handles only teardown (logoff,
+        building the CanonicalOccurrence. This method handles only teardown (logoff,
         process termination) and updates (connection bytes).
         """
         with self._lock:
@@ -2430,8 +2493,8 @@ class StateManager:
                 proc = self.state.running_processes.get((process_host, process_pid))
                 if proc is not None:
                     activity_time = ensure_utc(event.timestamp)
-                    if event.network is not None and event.network.transaction is not None:
-                        closed_at = event.network.transaction.closed_at
+                    if event.network is not None:
+                        closed_at = event.network.closed_at
                         if closed_at is not None:
                             activity_time = max(activity_time, ensure_utc(closed_at))
                     if proc.last_activity_time is None or activity_time > proc.last_activity_time:
@@ -2442,68 +2505,52 @@ class StateManager:
             elif event.event_type == "process_terminate" and event.process and event.src_host:
                 self.end_process(event.src_host.hostname, event.process.pid, event.timestamp)
             elif event.event_type == "connection" and event.network:
-                event.network.validate_finalized_transaction()
                 if event.network.conn_id:
                     conn = self.state.open_connections.get(event.network.conn_id)
                     if conn is not None:
-                        transaction = event.network.transaction
-                        if transaction is not None:
-                            conn.transaction_id = transaction.stable_id
-                            if event.network.application_layer_only:
-                                conn.traffic_ledger = conn.traffic_ledger.accumulate(
-                                    transaction.traffic
-                                )
-                            else:
-                                conn.traffic_ledger = transaction.traffic
-                            conn.bytes_sent = transaction.traffic.orig.payload_bytes
-                            conn.bytes_received = transaction.traffic.resp.payload_bytes
-                            if event.network.application_layer_only:
-                                conn.bytes_sent = conn.traffic_ledger.orig.payload_bytes
-                                conn.bytes_received = conn.traffic_ledger.resp.payload_bytes
-                                if transaction.closed_at is not None and (
-                                    conn.close_time is None
-                                    or ensure_utc(transaction.closed_at) > conn.close_time
-                                ):
-                                    conn.close_time = ensure_utc(transaction.closed_at)
-                                if conn.close_time is not None:
-                                    conn.duration = max(
-                                        0.0,
-                                        (conn.close_time - conn.start_time).total_seconds(),
-                                    )
-                            else:
-                                conn.history = transaction.history
-                                conn.duration = transaction.duration
-                                conn.start_time = ensure_utc(transaction.started_at)
-                                conn.close_time = (
-                                    ensure_utc(transaction.closed_at)
-                                    if transaction.closed_at is not None
-                                    else None
-                                )
-                                conn.conn_state = transaction.conn_state
-                                conn.state = (
-                                    "closed"
-                                    if transaction.closed_at is not None
-                                    else transaction.conn_state
+                        transaction = event.network
+                        conn.transaction_id = transaction.stable_id
+                        if transaction.application_layer_only:
+                            conn.traffic_ledger = conn.traffic_ledger.accumulate(
+                                transaction.traffic
+                            )
+                            conn.bytes_sent = conn.traffic_ledger.orig.payload_bytes
+                            conn.bytes_received = conn.traffic_ledger.resp.payload_bytes
+                            if transaction.closed_at is not None and (
+                                conn.close_time is None
+                                or ensure_utc(transaction.closed_at) > conn.close_time
+                            ):
+                                conn.close_time = ensure_utc(transaction.closed_at)
+                            if conn.close_time is not None:
+                                conn.duration = max(
+                                    0.0,
+                                    (conn.close_time - conn.start_time).total_seconds(),
                                 )
                         else:
-                            if event.network.orig_bytes is not None:
-                                conn.bytes_sent = event.network.orig_bytes
-                            if event.network.resp_bytes is not None:
-                                conn.bytes_received = event.network.resp_bytes
-                        conn.initiating_pid = event.network.initiating_pid
+                            conn.traffic_ledger = transaction.traffic
+                            conn.bytes_sent = transaction.traffic.orig.payload_bytes
+                            conn.bytes_received = transaction.traffic.resp.payload_bytes
+                            conn.history = transaction.history
+                            conn.duration = transaction.duration
+                            conn.start_time = ensure_utc(transaction.started_at)
+                            conn.close_time = (
+                                ensure_utc(transaction.closed_at)
+                                if transaction.closed_at is not None
+                                else None
+                            )
+                            conn.conn_state = transaction.conn_state
+                            conn.state = (
+                                "closed"
+                                if transaction.closed_at is not None
+                                else transaction.conn_state
+                            )
+                        conn.initiating_pid = transaction.initiating_pid
                         if event.src_host is not None:
                             conn.source_system = event.src_host.hostname
                             conn.source_hostname = event.src_host.fqdn or event.src_host.hostname
-                        if event.http is not None and event.http.host:
-                            conn.hostname = event.http.host
-                        if event.ssl is not None and event.ssl.server_name:
-                            conn.hostname = event.ssl.server_name
-                        if transaction is None and event.network.duration is not None:
-                            conn.close_time = event.timestamp + timedelta(
-                                seconds=event.network.duration
-                            )
-                            conn.state = "closed"
-                        elif transaction is None and event.network.conn_state:
-                            conn.state = event.network.conn_state
+                        if event.protocol.http is not None and event.protocol.http.host:
+                            conn.hostname = event.protocol.http.host
+                        if event.protocol.ssl is not None and event.protocol.ssl.server_name:
+                            conn.hostname = event.protocol.ssl.server_name
                         self._open_connections.refresh(conn.conn_id)
                         self._refresh_connection_lifecycle(conn)

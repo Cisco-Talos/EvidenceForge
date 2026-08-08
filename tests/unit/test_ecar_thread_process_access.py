@@ -28,7 +28,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
     HostContext,
@@ -74,7 +74,7 @@ class TestCreateRemoteThread:
 
     def test_object_action(self, emitter, ts, windows_host, tmp_path):
         """THREAD/REMOTE_CREATE has correct object and action."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="create_remote_thread",
             src_host=windows_host,
@@ -135,7 +135,7 @@ class TestCreateRemoteThread:
             started_at=ts,
             kind="remote",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="create_remote_thread",
             src_host=windows_host,
@@ -169,7 +169,7 @@ class TestCreateRemoteThread:
 
     def test_top_level_pid_is_source(self, emitter, ts, windows_host, tmp_path):
         """Top-level pid should be the source process PID."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="create_remote_thread",
             src_host=windows_host,
@@ -196,7 +196,7 @@ class TestCreateRemoteThread:
 
     def test_properties_all_strings(self, emitter, ts, windows_host, tmp_path):
         """All property values must be strings per eCAR spec."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="create_remote_thread",
             src_host=windows_host,
@@ -223,7 +223,7 @@ class TestCreateRemoteThread:
 
     def test_can_handle_create_remote_thread(self, emitter, ts, windows_host):
         """eCAR emitter should handle create_remote_thread events."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="create_remote_thread",
             src_host=windows_host,
@@ -259,7 +259,7 @@ class TestProcessAccess:
 
     def test_object_action(self, emitter, ts, windows_host, tmp_path):
         """PROCESS/OPEN has correct object and action."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -285,7 +285,7 @@ class TestProcessAccess:
 
     def test_granted_access_in_properties(self, emitter, ts, windows_host, tmp_path):
         """Properties should include granted_access mask."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -311,7 +311,7 @@ class TestProcessAccess:
 
     def test_target_process_fields_are_explicit(self, emitter, ts, windows_host, tmp_path):
         """Target process details should not be overloaded into command_line."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -365,7 +365,7 @@ class TestProcessAccess:
             started_at=ts,
             lifecycle_group_id="target-lifecycle",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -401,7 +401,7 @@ class TestProcessAccess:
         self, emitter, ts, windows_host, tmp_path
     ):
         """PROCESS/OPEN parent_image_path should preserve the source process parent."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -427,7 +427,7 @@ class TestProcessAccess:
 
     def test_source_image_in_properties(self, emitter, ts, windows_host, tmp_path):
         """image_path in properties should be the source process image."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -452,7 +452,7 @@ class TestProcessAccess:
 
     def test_can_handle_process_access(self, emitter, ts, windows_host):
         """eCAR emitter should handle process_access events."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,
@@ -468,7 +468,7 @@ class TestProcessAccess:
 
     def test_properties_all_strings(self, emitter, ts, windows_host, tmp_path):
         """All property values must be strings per eCAR spec."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="process_access",
             src_host=windows_host,

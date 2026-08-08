@@ -22,7 +22,7 @@
 
 """SSH session action bundle.
 
-The SSH bundle sits above individual SecurityEvents. It owns the ordered SSH
+The SSH bundle sits above individual canonical occurrences. It owns the ordered SSH
 activity lifecycle and uses the current activity generator as a runtime adapter
 for shared state, host context construction, source timing, and dispatch.
 """
@@ -36,12 +36,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
-    EdrContext,
     HostContext,
-    IdsContext,
+    IdsAlertPlan,
     ProcessContext,
     SyslogContext,
 )
@@ -123,7 +122,7 @@ class SshSessionRequest:
     public_key_hash: str = ""
     emit_session_close: bool = False
     session_end_plan: SessionEndPlan | None = None
-    ids_alerts: list[IdsContext] = field(default_factory=list)
+    ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
 
     @property
@@ -379,7 +378,7 @@ class SshSessionActionBundle:
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             self._mark_edr_login_readiness(state, event, auth_state)
-        self.executor.dispatcher.dispatch(event)
+        self.executor.dispatcher.dispatch_builder(event)
         if auth_state is not None:
             self._dispatch_linux_auth_messages(state, event, auth_state)
             if self.request.emit_session_close:
@@ -691,7 +690,7 @@ class SshSessionActionBundle:
         self,
         state: _SshTransportState,
         auth_state: _SshLinuxAuthState | None = None,
-    ) -> SecurityEvent:
+    ) -> OccurrenceBuilder:
         """Build the canonical SSH session occurrence.
 
         The TCP transport is a separate canonical ``connection`` occurrence owned by
@@ -700,7 +699,7 @@ class SshSessionActionBundle:
         """
 
         request = self.request
-        return SecurityEvent(
+        return OccurrenceBuilder(
             timestamp=request.time,
             event_type="ssh_session",
             src_host=state.src_host,
@@ -714,13 +713,12 @@ class SshSessionActionBundle:
                 logon_type=10,
             ),
             process=state.source_process,
-            edr=EdrContext(object_id=state.session_obj_id),
         )
 
     def _plan_linux_auth(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         plan: _SshLinuxAuthPlan | None,
     ) -> _SshLinuxAuthState | None:
         """Plan Linux SSH auth evidence and destination-side sshd ownership."""
@@ -804,7 +802,7 @@ class SshSessionActionBundle:
     def _resolve_linux_auth_lifecycle(
         self,
         *,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         responder_pid: int,
         syslog_seed: tuple[Any, ...],
         conn_delay_ms: int,
@@ -922,7 +920,7 @@ class SshSessionActionBundle:
     def _extend_transport_close_after(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         earliest_close_time: datetime,
     ) -> None:
         """Extend too-short SSH transport lifetimes to satisfy lifecycle ordering."""
@@ -1002,14 +1000,14 @@ class SshSessionActionBundle:
     def _dispatch_linux_connection_message(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Dispatch the pre-auth sshd connection syslog message."""
 
         request = self.request
-        self.executor.dispatcher.dispatch(
-            SecurityEvent(
+        self.executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.connection_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1037,7 +1035,7 @@ class SshSessionActionBundle:
     def _mark_edr_login_readiness(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Record when EDR/session-owned child evidence may appear."""
@@ -1097,7 +1095,7 @@ class SshSessionActionBundle:
     def _dispatch_linux_auth_messages(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Dispatch accepted-auth, PAM session-open, and logind session messages."""
@@ -1112,8 +1110,8 @@ class SshSessionActionBundle:
             )
         else:
             user_uid = _linux_uid_for_user(request.user.username)
-        executor.dispatcher.dispatch(
-            SecurityEvent(
+        executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.accepted_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1134,8 +1132,8 @@ class SshSessionActionBundle:
                 ),
             )
         )
-        executor.dispatcher.dispatch(
-            SecurityEvent(
+        executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.pam_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1162,8 +1160,8 @@ class SshSessionActionBundle:
         )
         hostname = request.target_system.hostname
         session_id = auth_state.logind_session_id
-        executor.dispatcher.dispatch(
-            SecurityEvent(
+        executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=auth_state.logind_time,
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -1207,15 +1205,15 @@ class SshSessionActionBundle:
     def _dispatch_linux_session_close_lifecycle(
         self,
         state: _SshTransportState,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         auth_state: _SshLinuxAuthState,
     ) -> None:
         """Dispatch source-native close/logout evidence for a modeled SSH session."""
 
         request = self.request
         close_time = self._source_native_session_close_time(state, auth_state)
-        self.executor.dispatcher.dispatch(
-            SecurityEvent(
+        self.executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=close_time,
                 event_type="logoff",
                 dst_host=event.dst_host,
@@ -1227,7 +1225,6 @@ class SshSessionActionBundle:
                     session_id=auth_state.logind_session_id,
                     logon_type=10,
                 ),
-                edr=EdrContext(object_id=state.session_obj_id),
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=auth_state.sshd_pid,
@@ -1239,8 +1236,8 @@ class SshSessionActionBundle:
                 ),
             )
         )
-        self.executor.dispatcher.dispatch(
-            SecurityEvent(
+        self.executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=self._source_native_logind_removed_time(state, auth_state, close_time),
                 event_type="syslog",
                 src_host=event.dst_host,

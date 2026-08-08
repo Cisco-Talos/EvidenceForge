@@ -36,7 +36,7 @@ from threading import Lock, local
 from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
@@ -157,7 +157,7 @@ class SysmonEventEmitter(LogEmitter):
     # are fixed. All Event 10 events on the same host share the same offsets.
     _call_trace_cache: dict[str, list[str]] = {}
 
-    def _event_rng(self, event: SecurityEvent, salt: str = "") -> random.Random:
+    def _event_rng(self, event: CanonicalOccurrence, salt: str = "") -> random.Random:
         """Return a deterministic renderer-local RNG for incidental Sysmon fields."""
         host = event.src_host or event.dst_host
         parts: list[object] = [
@@ -764,7 +764,7 @@ class SysmonEventEmitter(LogEmitter):
             if proc is not None and proc.start_time <= fallback_timestamp:
                 ts = proc.start_time
         rendered_create_time = _SOURCE_TIMING.source_time(
-            SecurityEvent(timestamp=ts, event_type="process_create"),
+            OccurrenceBuilder(timestamp=ts, event_type="process_create"),
             "source.sysmon_process_create",
             seed_parts=(hostname, pid, ts),
             not_before=ts,
@@ -772,7 +772,7 @@ class SysmonEventEmitter(LogEmitter):
         base_guid = self._generate_process_guid(hostname, pid, rendered_create_time)
         return self._final_process_guids.get((hostname, pid, base_guid), base_guid)
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
         if event.event_type not in self._supported_types:
             return False
@@ -780,7 +780,7 @@ class SysmonEventEmitter(LogEmitter):
             return False
         return True
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Dispatch to per-type render method, applying Sysmon filters."""
         self._emission_context.host_type = (
             event.src_host.system_type if event.src_host is not None else ""
@@ -841,7 +841,7 @@ class SysmonEventEmitter(LogEmitter):
         rid = 1000 + (_stable_seed(f"sysmon_hku_sid:{normalized.lower()}") % 50000)
         return f"S-1-5-21-0-0-0-{rid}"
 
-    def _native_registry_target_object(self, target_object: str, event: SecurityEvent) -> str:
+    def _native_registry_target_object(self, target_object: str, event: CanonicalOccurrence) -> str:
         """Render user-hive aliases as Sysmon-native HKU\\SID paths."""
         if not target_object.startswith("HKCU\\"):
             return target_object
@@ -927,7 +927,7 @@ class SysmonEventEmitter(LogEmitter):
                 return identity.logon_guid
         return "{00000000-0000-0000-0000-000000000000}"
 
-    def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
+    def _render_sysmon_process_create(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
         proc = event.process
         auth = event.auth
@@ -1061,7 +1061,7 @@ class SysmonEventEmitter(LogEmitter):
         )
         return timedelta(milliseconds=offset)
 
-    def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
+    def _render_sysmon_process_terminate(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""
         proc = event.process
         auth = event.auth
@@ -1129,7 +1129,7 @@ class SysmonEventEmitter(LogEmitter):
             return auth.session_id
         return self._terminal_session_ids_by_logon.get(key, 0)
 
-    def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
+    def _render_sysmon_create_remote_thread(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
         host = event.src_host
         proc = event.process  # Source process
@@ -1181,7 +1181,7 @@ class SysmonEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_sysmon_process_access(self, event: SecurityEvent) -> None:
+    def _render_sysmon_process_access(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 10 (ProcessAccess).
 
         Primary detection for credential dumping (e.g., mimikatz accessing lsass.exe).
@@ -1258,7 +1258,7 @@ class SysmonEventEmitter(LogEmitter):
             self._filters = load_sysmon_filters()
         return self._filters
 
-    def _passes_event3_filter(self, event: SecurityEvent) -> bool:
+    def _passes_event3_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if a connection event passes the Event 3 (NetworkConnect) filter."""
         cfg = self._get_filters().get("network_connect", {})
         if not cfg.get("enabled", True):
@@ -1279,7 +1279,7 @@ class SysmonEventEmitter(LogEmitter):
         # Check include rules — pass if image matches OR dest port matches.
         # Resolve image from ProcessContext first, then fall back to PID lookup
         # via StateManager (connection events often lack ProcessContext but carry
-        # initiating_pid on NetworkContext).
+        # initiating_pid on NetworkTransactionPlan).
         image = ""
         if event.process:
             image = event.process.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
@@ -1326,7 +1326,7 @@ class SysmonEventEmitter(LogEmitter):
 
         return False
 
-    def _passes_event7_filter(self, event: SecurityEvent) -> bool:
+    def _passes_event7_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if an image_load event passes the Event 7 (ImageLoaded) filter."""
         cfg = self._get_filters().get("image_loaded", {})
         if not cfg.get("enabled", True):
@@ -1349,7 +1349,7 @@ class SysmonEventEmitter(LogEmitter):
                     return False
         return True
 
-    def _passes_event11_filter(self, event: SecurityEvent) -> bool:
+    def _passes_event11_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if a file event passes the Event 11 (FileCreate) filter."""
         cfg = self._get_filters().get("file_create", {})
         if not cfg.get("enabled", True):
@@ -1376,7 +1376,7 @@ class SysmonEventEmitter(LogEmitter):
 
         return False
 
-    def _passes_event12_13_filter(self, event: SecurityEvent) -> bool:
+    def _passes_event12_13_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if a registry event passes the Events 12/13 filter."""
         cfg = self._get_filters().get("registry_event", {})
         if not cfg.get("enabled", True):
@@ -1401,7 +1401,7 @@ class SysmonEventEmitter(LogEmitter):
 
         return False
 
-    def _passes_event22_filter(self, event: SecurityEvent) -> bool:
+    def _passes_event22_filter(self, event: CanonicalOccurrence) -> bool:
         """Check if a DNS event passes the Event 22 (DNSQuery) filter."""
         cfg = self._get_filters().get("dns_query", {})
         if not cfg.get("enabled", True):
@@ -1419,7 +1419,7 @@ class SysmonEventEmitter(LogEmitter):
 
     # --- New render methods for Events 3, 7, 11, 12/13, 22 ---
 
-    def _render_sysmon_network_connect(self, event: SecurityEvent) -> None:
+    def _render_sysmon_network_connect(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 3 (NetworkConnect)."""
         host = event.src_host
         net = event.network
@@ -1505,7 +1505,7 @@ class SysmonEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_sysmon_image_loaded(self, event: SecurityEvent) -> None:
+    def _render_sysmon_image_loaded(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 7 (ImageLoaded)."""
         rng = self._event_rng(event)
         host = event.src_host
@@ -1581,7 +1581,7 @@ class SysmonEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_sysmon_file_create(self, event: SecurityEvent) -> None:
+    def _render_sysmon_file_create(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 11 (FileCreate)."""
         host = event.src_host
         proc = event.process
@@ -1622,7 +1622,7 @@ class SysmonEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_sysmon_registry_event(self, event: SecurityEvent) -> None:
+    def _render_sysmon_registry_event(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 12 (CreateKey/DeleteKey) or 13 (SetValue)."""
         reg = event.registry
         if not self._passes_event12_13_filter(event):
@@ -1686,7 +1686,7 @@ class SysmonEventEmitter(LogEmitter):
 
         self.emit_event(event_data)
 
-    def _render_sysmon_dns_query(self, event: SecurityEvent) -> None:
+    def _render_sysmon_dns_query(self, event: CanonicalOccurrence) -> None:
         """Render Sysmon Event 22 (DNSQuery)."""
         host = event.src_host
         dns = event.dns

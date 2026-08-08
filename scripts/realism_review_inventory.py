@@ -166,7 +166,7 @@ class SourceIndexVisitor(ast.NodeVisitor):
         self.event_fields = event_fields
         self.payload_fields = payload_fields
         self.scope: list[str] = []
-        self.security_event_constructors: list[dict[str, Any]] = []
+        self.occurrence_builder_constructors: list[dict[str, Any]] = []
         self.context_constructors: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.bundle_calls: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.generate_calls: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -202,7 +202,7 @@ class SourceIndexVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         short_name = _short_call_name(node)
         record = self._call_record(node)
-        if short_name == "SecurityEvent":
+        if short_name == "OccurrenceBuilder":
             event_type_node: ast.AST | None = None
             for keyword in node.keywords:
                 if keyword.arg == "event_type":
@@ -215,7 +215,7 @@ class SourceIndexVisitor(ast.NodeVisitor):
                 for keyword in node.keywords
                 if keyword.arg is not None and keyword.arg in self.payload_fields
             )
-            self.security_event_constructors.append(
+            self.occurrence_builder_constructors.append(
                 {
                     **record,
                     "event_type_expression": _json_expression(event_type_node),
@@ -229,7 +229,7 @@ class SourceIndexVisitor(ast.NodeVisitor):
             self.bundle_calls[short_name].append(record)
         if short_name.startswith("generate_"):
             self.generate_calls[short_name].append(record)
-        if short_name in {"dispatch", "dispatch_raw"}:
+        if short_name in {"dispatch", "dispatch_builder", "dispatch_raw"}:
             self.dispatch_calls[short_name].append(record)
         if isinstance(node.func, ast.Attribute):
             receiver = _json_expression(node.func.value)
@@ -307,13 +307,13 @@ def _dataclass_inventory(path: Path, root: Path) -> list[dict[str, Any]]:
     return result
 
 
-def _event_fields(root: Path) -> list[dict[str, Any]]:
+def _builder_fields(root: Path) -> list[dict[str, Any]]:
     path = root / "src/evidenceforge/events/base.py"
     tree = _read_tree(path)
     event_class = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "SecurityEvent"
+        if isinstance(node, ast.ClassDef) and node.name == "OccurrenceBuilder"
     )
     fields = []
     for node in event_class.body:
@@ -518,7 +518,7 @@ def _bundle_inventory(
                 record = {"call": _call_name(item), "line": item.lineno}
                 if short.startswith("_execute_"):
                     delegate_calls.append(record)
-                if short in {"dispatch", "dispatch_raw"}:
+                if short in {"dispatch", "dispatch_builder", "dispatch_raw"}:
                     dispatch_calls.append(record)
                 if short.startswith("generate_"):
                     generation_calls.append(record)
@@ -653,7 +653,7 @@ def _build_inventory(
     src_files = sorted((root / "src/evidenceforge").rglob("*.py"))
     test_files = sorted((root / "tests").rglob("*.py"))
     all_python_files = [*src_files, *test_files]
-    fields = _event_fields(root)
+    fields = _builder_fields(root)
     field_names = {field["name"] for field in fields}
     payload_field_names = {
         field["name"]
@@ -683,7 +683,7 @@ def _build_inventory(
         item
         for visitor in visitors
         if visitor.path in src_files
-        for item in visitor.security_event_constructors
+        for item in visitor.occurrence_builder_constructors
     ]
     context_constructors: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     bundle_calls: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -746,7 +746,7 @@ def _build_inventory(
                 "emitter_file": entry["file"] if entry is not None else None,
                 "emitter_line": entry["line"] if entry is not None else None,
                 "supported_event_types": supported_types,
-                "security_event_fields_consumed": consumed_fields,
+                "occurrence_builder_fields_consumed": consumed_fields,
                 "evaluator_files": evaluation_refs.get(format_name, []),
                 "test_files": sorted(string_tests.get(format_name, set())),
                 "review_status": "static_inventory_complete",
@@ -826,7 +826,7 @@ def _build_inventory(
         contexts.append(
             {
                 **row,
-                "security_event_slots": event_slots,
+                "occurrence_builder_slots": event_slots,
                 "constructors": context_constructors.get(row["name"], []),
                 "emitter_consumers": sorted(
                     {
@@ -849,6 +849,7 @@ def _build_inventory(
         root / "src/evidenceforge/events/authentication.py",
         root / "src/evidenceforge/events/cryptography.py",
         root / "src/evidenceforge/events/proxy.py",
+        root / "src/evidenceforge/events/protocol.py",
         root / "src/evidenceforge/generation/world_model.py",
         root / "src/evidenceforge/generation/timing/constraint_graph.py",
         root / "src/evidenceforge/generation/source_timing.py",
@@ -884,7 +885,7 @@ def _build_inventory(
             plans.append(
                 {
                     **row,
-                    "security_event_slots": event_slots,
+                    "occurrence_builder_slots": event_slots,
                     "constructors": context_constructors.get(row["name"], []),
                     "test_files": sorted(name_tests.get(row["name"], set())),
                     "review_status": "static_inventory_complete",
@@ -923,7 +924,7 @@ def _build_inventory(
         classification_gaps[section] = {"missing": missing, "unknown": unknown}
 
     inventory = {
-        "schema_version": "evidenceforge-realism-review-paths/v1",
+        "schema_version": "evidenceforge-realism-review-paths/v2",
         "baseline_commit": _git_commit(root),
         "method": "python-ast-static-inventory",
         "review_scope": {
@@ -932,7 +933,7 @@ def _build_inventory(
             "phase_1_skills": "excluded_except_schema_contract",
             "raw_cross_source_guarantee": "excluded",
         },
-        "security_event": {
+        "occurrence_builder": {
             "file": "src/evidenceforge/events/base.py",
             "fields": fields,
             "payload_field_names": sorted(payload_field_names),
@@ -989,15 +990,15 @@ def _build_inventory(
         ],
     }
     coverage = {
-        "schema_version": "evidenceforge-realism-review-coverage/v1",
+        "schema_version": "evidenceforge-realism-review-coverage/v2",
         "baseline_commit": inventory["baseline_commit"],
         "counts": {
             "authored_event_specs": len(authored),
             "discovered_event_types": len(event_rows),
             "literal_internal_event_types": len(constructor_types),
-            "dynamic_security_event_constructors": len(dynamic_constructors),
-            "security_event_constructors": len(constructors),
-            "security_event_fields": len(fields),
+            "dynamic_occurrence_builder_constructors": len(dynamic_constructors),
+            "occurrence_builder_constructors": len(constructors),
+            "occurrence_builder_fields": len(fields),
             "mutable_context_dataclasses": len(contexts),
             "plans_and_identities": len(plans),
             "concrete_action_bundles": len(bundles),

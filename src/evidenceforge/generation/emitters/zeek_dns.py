@@ -25,7 +25,7 @@
 from datetime import timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     planned_zeek_connection_interval,
@@ -41,7 +41,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
     Generates Zeek DNS query/response logs. Each record represents a DNS
     transaction with query name, type, response code, and answers.
 
-    Handles SecurityEvents with DnsContext (fan-out from connection events)
+    Handles canonical occurrences with DnsContext (fan-out from connection events)
     and also retains emit_raw() for backward compatibility.
     """
 
@@ -49,7 +49,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_dns.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle connection events that carry a DnsContext."""
         return (
             event.event_type in self._supported_types
@@ -57,8 +57,8 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             and event.dns is not None
         )
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Render DnsContext + NetworkContext to Zeek dns.log NDJSON."""
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Render DnsContext + NetworkTransactionPlan to Zeek dns.log NDJSON."""
         net = event.network
         dns = event.dns
         planned_interval = planned_zeek_connection_interval(event)

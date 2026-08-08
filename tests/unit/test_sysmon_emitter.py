@@ -338,8 +338,8 @@ class TestSysmonEventEmitter:
         assert names(13)[-3:] == ["TargetObject", "Details", "User"]
 
     def test_emit_sysmon_process_terminate_via_event(self, format_def, tmp_path):
-        """Test Sysmon Event 5 via SecurityEvent dispatch."""
-        from evidenceforge.events.base import SecurityEvent
+        """Test Sysmon Event 5 via OccurrenceBuilder dispatch."""
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -356,7 +356,7 @@ class TestSysmonEventEmitter:
             fqdn="WKS-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_terminate",
             src_host=host,
@@ -394,7 +394,7 @@ class TestSysmonEventEmitter:
 
     def test_process_create_uses_state_session_logon_guid(self, format_def, tmp_path):
         """Sysmon Event 1 should share the canonical session LogonGuid with Security 4624."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
         from evidenceforge.generation.state_manager import StateManager
 
@@ -418,7 +418,7 @@ class TestSysmonEventEmitter:
             fqdn="WKS-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 5, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -443,7 +443,7 @@ class TestSysmonEventEmitter:
 
     def test_create_remote_thread_uses_canonical_context_values(self, format_def, tmp_path):
         """Sysmon Event 8 should not derive fields independently from eCAR."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import (
             AuthContext,
             HostContext,
@@ -465,7 +465,7 @@ class TestSysmonEventEmitter:
             fqdn="WKS-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="create_remote_thread",
             src_host=host,
@@ -500,7 +500,7 @@ class TestSysmonEventEmitter:
 
     def test_process_terminate_guid_uses_process_create_render_time(self, format_def, tmp_path):
         """Event 5 ProcessGuid should match Event 1 even after process state is removed."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -519,7 +519,7 @@ class TestSysmonEventEmitter:
         )
         start_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
         terminate_time = datetime(2024, 1, 15, 10, 35, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=terminate_time,
             event_type="process_terminate",
             src_host=host,
@@ -593,7 +593,7 @@ class TestSysmonEventEmitter:
 
     def test_interactive_process_without_canonical_session_uses_zero(self, format_def, tmp_path):
         """Sysmon must not invent a terminal session when canonical state is unavailable."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -610,7 +610,7 @@ class TestSysmonEventEmitter:
             fqdn="WKS-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -635,7 +635,7 @@ class TestSysmonEventEmitter:
 
     def test_process_create_prefers_canonical_auth_session_id(self, format_def, tmp_path):
         """Sysmon TerminalSessionId should reuse the StateManager-owned session ID."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -652,7 +652,7 @@ class TestSysmonEventEmitter:
             fqdn="WKS-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -680,7 +680,7 @@ class TestSysmonEventEmitter:
 
     def test_process_create_keeps_terminal_session_stable_per_logon_id(self, format_def, tmp_path):
         """Sysmon TerminalSessionId should not drift for children in the same logon."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -698,7 +698,7 @@ class TestSysmonEventEmitter:
             netbios_domain="CORP",
         )
         logon_id = "0xabc123"
-        parent = SecurityEvent(
+        parent = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -712,7 +712,7 @@ class TestSysmonEventEmitter:
             ),
             auth=AuthContext(username="jsmith", logon_id=logon_id, session_id=2, logon_type=2),
         )
-        child = SecurityEvent(
+        child = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -737,7 +737,7 @@ class TestSysmonEventEmitter:
 
     def test_canonical_session_supersedes_earlier_unknown_value(self, format_def, tmp_path):
         """A later canonical session ID must not be masked by emitter fallback state."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -756,7 +756,7 @@ class TestSysmonEventEmitter:
         logon_id = "0xabc123"
         for index, session_id in enumerate((0, 4)):
             emitter.emit(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 30, index, tzinfo=UTC),
                     event_type="process_create",
                     src_host=host,
@@ -784,7 +784,7 @@ class TestSysmonEventEmitter:
 
     def test_process_create_renders_current_directory_from_context(self, format_def, tmp_path):
         """Sysmon Event 1 should preserve the process working directory."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -801,7 +801,7 @@ class TestSysmonEventEmitter:
             fqdn="WKS-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -825,7 +825,7 @@ class TestSysmonEventEmitter:
 
     def test_process_create_parent_guid_uses_context_parent_start_time(self, format_def, tmp_path):
         """ParentProcessGuid should not be recomputed from a later reused parent PID."""
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
 
         output_dir = tmp_path / "output"
@@ -845,7 +845,7 @@ class TestSysmonEventEmitter:
         parent_start = datetime(2024, 1, 15, 9, 59, 0, tzinfo=UTC)
         child_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         later_reused_parent_start = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=child_start,
             event_type="process_create",
             src_host=host,

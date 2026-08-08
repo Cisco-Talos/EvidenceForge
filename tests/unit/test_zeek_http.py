@@ -27,11 +27,12 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import FileTransferContext, HttpContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
+from tests.network_factories import network_plan
 
 
 class TestHttpFormatAccuracy:
@@ -196,10 +197,10 @@ class TestHttpFormatAccuracy:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "http.json"
             emitter = ZeekHttpEmitter(fmt, output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -233,10 +234,10 @@ class TestHttpFormatAccuracy:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "http.json"
             emitter = ZeekHttpEmitter(fmt, output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="93.184.216.34",
@@ -256,6 +257,13 @@ class TestHttpFormatAccuracy:
                     resp_fuids=["FHttpFileAbsent1"],
                     resp_mime_types=["text/html"],
                 ),
+                file_transfer=FileTransferContext(
+                    fuid="FHttpFileAbsent1",
+                    source="HTTP",
+                    mime_type="text/html",
+                    seen_bytes=2048,
+                    total_bytes=2048,
+                ),
                 _observed_formats={"zeek_conn", "zeek_http"},
             )
 
@@ -274,10 +282,10 @@ class TestHttpCanHandle:
     def test_accepts_connection_with_http(self):
         fmt = load_format("zeek_http")
         emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
             http=HttpContext(method="GET", host="example.com", uri="/"),
@@ -287,10 +295,10 @@ class TestHttpCanHandle:
     def test_rejects_without_http_context(self):
         fmt = load_format("zeek_http")
         emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
         )
@@ -299,10 +307,10 @@ class TestHttpCanHandle:
     def test_accepts_application_layer_transactions(self):
         fmt = load_format("zeek_http")
         emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -318,10 +326,10 @@ class TestHttpCanHandle:
     def test_conn_emitter_rejects_application_layer_transactions(self):
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -343,10 +351,10 @@ class TestHttpRenderTiming:
         output = tmp_path / "http.json"
         emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=base_ts,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="93.184.216.34",
@@ -384,11 +392,11 @@ class TestHttpRenderTiming:
             fake_source_time,
         )
 
-        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
-            return SecurityEvent(
+        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> OccurrenceBuilder:
+            return OccurrenceBuilder(
                 timestamp=timestamp,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="93.184.216.34",
@@ -432,11 +440,11 @@ class TestHttpRenderTiming:
             fake_source_time,
         )
 
-        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
-            return SecurityEvent(
+        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> OccurrenceBuilder:
+            return OccurrenceBuilder(
                 timestamp=timestamp,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="93.184.216.34",

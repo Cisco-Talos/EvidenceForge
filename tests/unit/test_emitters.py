@@ -29,13 +29,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
     DhcpContext,
     HostContext,
     KerberosContext,
-    NetworkContext,
     ProcessContext,
     ProcessTargetSecurityContext,
 )
@@ -51,6 +50,7 @@ from evidenceforge.generation.emitters.windows import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
+from tests.network_factories import network_plan
 
 
 class TestWindowsEventEmitter:
@@ -182,7 +182,7 @@ class TestWindowsEventEmitter:
             fqdn="WIN-TEST-01.corp.local",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
             event_type="logon",
             dst_host=host,
@@ -289,7 +289,7 @@ class TestWindowsEventEmitter:
     def test_network_logon_workstation_name_uses_source_host(self, format_def, temp_output):
         """Network 4624 events should name the source workstation, not the destination."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
             event_type="logon",
             src_host=HostContext(
@@ -338,7 +338,7 @@ class TestWindowsEventEmitter:
     ):
         """Native Kerberos type-3 4624 often leaves WorkstationName unset."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 45, tzinfo=UTC),
             event_type="logon",
             src_host=HostContext(
@@ -398,7 +398,7 @@ class TestWindowsEventEmitter:
             ("admin", True, "0x222"),
         ]:
             emitter.emit(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
                     event_type="logon",
                     dst_host=host,
@@ -435,7 +435,7 @@ class TestWindowsEventEmitter:
             system_type="server",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
             event_type="logon",
             dst_host=host,
@@ -683,7 +683,7 @@ class TestWindowsEventEmitter:
             system_type="workstation",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="process_terminate",
             src_host=host,
@@ -717,7 +717,7 @@ class TestWindowsEventEmitter:
             system_type="workstation",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="process_terminate",
             src_host=host,
@@ -754,7 +754,7 @@ class TestWindowsEventEmitter:
             system_type="workstation",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type=event_type,
             src_host=host,
@@ -798,7 +798,7 @@ class TestWindowsEventEmitter:
             system_type="workstation",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -2169,7 +2169,7 @@ class TestWindowsEventEmitter:
             system_type="server",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="failed_logon",
             dst_host=host,
@@ -2212,7 +2212,7 @@ class TestWindowsEventEmitter:
             system_type="server",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="logon",
             dst_host=host,
@@ -2352,7 +2352,7 @@ class TestWindowsEventEmitter:
         """4648 should render unavailable IpAddress and IpPort consistently."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             event_type="explicit_credentials",
             dst_host=HostContext(
@@ -2391,7 +2391,7 @@ class TestWindowsEventEmitter:
         """4624 should render the per-session winlogon PID supplied by the logon bundle."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         emitter._system_pids = {"WKS-01": {"winlogon": 6000}}
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="logon",
             dst_host=HostContext(
@@ -2512,7 +2512,7 @@ class TestWindowsEventEmitter:
         )
         emitter._state_manager = state_manager
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
             event_type="wfp_connection",
             src_host=HostContext(
@@ -2523,7 +2523,7 @@ class TestWindowsEventEmitter:
                 system_type="workstation",
                 fqdn="WKS-01.corp.local",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49263,
                 dst_ip="93.184.216.34",
@@ -2547,7 +2547,7 @@ class TestWindowsEventEmitter:
         """WFP 5156 should render with a host-audit offset from the canonical connection."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
         event_time = datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="wfp_connection",
             src_host=HostContext(
@@ -2558,7 +2558,7 @@ class TestWindowsEventEmitter:
                 system_type="workstation",
                 fqdn="WKS-01.corp.local",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49263,
                 dst_ip="93.184.216.34",
@@ -2582,7 +2582,7 @@ class TestWindowsEventEmitter:
         event_time = datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC)
 
         def make_event(src_port: int, dst_ip: str, dst_port: int, protocol: str = "tcp"):
-            return SecurityEvent(
+            return OccurrenceBuilder(
                 timestamp=event_time,
                 event_type="wfp_connection",
                 src_host=HostContext(
@@ -2593,7 +2593,7 @@ class TestWindowsEventEmitter:
                     system_type="workstation",
                     fqdn="WKS-01.corp.local",
                 ),
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.50",
                     src_port=src_port,
                     dst_ip=dst_ip,
@@ -2617,7 +2617,7 @@ class TestWindowsEventEmitter:
         """WFP 5156 for PID 4 should render System, not a synthetic svchost path."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
             event_type="wfp_connection",
             src_host=HostContext(
@@ -2628,7 +2628,7 @@ class TestWindowsEventEmitter:
                 system_type="workstation",
                 fqdn="WKS-01.corp.local",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49263,
                 dst_ip="93.184.216.34",
@@ -2650,7 +2650,7 @@ class TestWindowsEventEmitter:
         """Target-side WFP rows should render inbound direction and local service PID."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
             event_type="wfp_connection",
             src_host=HostContext(
@@ -2669,7 +2669,7 @@ class TestWindowsEventEmitter:
                 username="SYSTEM",
                 start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49263,
                 dst_ip="10.0.0.10",
@@ -2694,7 +2694,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         emitter._system_pids = {"WKS-01": {"svchost_local_svc": 1184}}
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
             event_type="wfp_connection",
             src_host=HostContext(
@@ -2705,7 +2705,7 @@ class TestWindowsEventEmitter:
                 system_type="workstation",
                 fqdn="WKS-01.corp.local",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49263,
                 dst_ip="10.0.0.10",
@@ -2729,7 +2729,7 @@ class TestWindowsEventEmitter:
         """WFP 5156 should not invent an Application value for unknown non-system PIDs."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
             event_type="wfp_connection",
             src_host=HostContext(
@@ -2740,7 +2740,7 @@ class TestWindowsEventEmitter:
                 system_type="workstation",
                 fqdn="WKS-01.corp.local",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49263,
                 dst_ip="93.184.216.34",
@@ -2851,7 +2851,7 @@ class TestWindowsEventEmitter:
             system_type="domain_controller",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="kerberos_service",
             dst_host=host,
@@ -2924,7 +2924,7 @@ class TestWindowsEventEmitter:
             system_type="domain_controller",
             netbios_domain="CORP",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="kerberos_preauth_failed",
             dst_host=host,
@@ -3111,7 +3111,7 @@ class TestWindowsEventEmitter:
             logon_id="0x4f2a1b",
         )
         emitter.emit(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
                 event_type="workstation_locked",
                 dst_host=host,
@@ -3119,7 +3119,7 @@ class TestWindowsEventEmitter:
             )
         )
         emitter.emit(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 35, 0, 0, tzinfo=UTC),
                 event_type="workstation_unlocked",
                 dst_host=host,
@@ -3151,7 +3151,7 @@ class TestWindowsEventEmitter:
             "user_sid": "S-1-5-21-123-456-789-1001",
         }
         emitter.emit(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
                 event_type="workstation_locked",
                 dst_host=host,
@@ -3159,7 +3159,7 @@ class TestWindowsEventEmitter:
             )
         )
         emitter.emit(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 35, 0, 0, tzinfo=UTC),
                 event_type="workstation_unlocked",
                 dst_host=host,
@@ -3653,7 +3653,7 @@ class TestZeekEmitter:
     def test_can_handle_ssh_transport_only_as_connection(self, format_def, temp_output):
         """SSH transport rows must come from canonical connection events."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
-        network = NetworkContext(
+        network = network_plan(
             src_ip="10.0.1.10",
             src_port=51111,
             dst_ip="10.0.2.20",
@@ -3664,12 +3664,12 @@ class TestZeekEmitter:
             conn_state="SF",
         )
 
-        connection_event = SecurityEvent(
+        connection_event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
             network=network,
         )
-        ssh_session_event = SecurityEvent(
+        ssh_session_event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="ssh_session",
             network=network,
@@ -3751,10 +3751,10 @@ class TestZeekEmitter:
     ):
         """conn.service should use Zeek analyzer vocabulary."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=49152,
                 dst_ip="10.0.0.10",
@@ -3834,10 +3834,10 @@ class TestZeekEmitter:
     def test_emit_icmp_uses_zeek_type_code_ports(self, format_def, temp_output):
         """ICMP conn rows should render type/code semantics, not all-zero ports."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 5, 654321, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.50",
                 src_port=0,
                 dst_ip="8.8.8.8",
@@ -3870,10 +3870,10 @@ class TestZeekEmitter:
     def test_dhcp_discover_renders_unassigned_client_tuple(self, format_def, temp_output):
         """Initial DHCP acquisition should not render the assigned lease as originator."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="dhcp_lease",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.2",
                 src_port=68,
                 dst_ip="10.0.10.1",

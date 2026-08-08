@@ -5,7 +5,7 @@
 
 The first migration stage is deliberately non-enforcing. ``shadow_seal`` takes an immutable
 snapshot of the event-kind and context boundary, reports contract violations, and leaves the
-legacy ``SecurityEvent`` untouched so existing generation and projection remain byte-compatible.
+legacy ``OccurrenceBuilder`` untouched so existing generation and projection remain byte-compatible.
 """
 
 from __future__ import annotations
@@ -71,14 +71,13 @@ class EventKind(StrEnum):
 
 
 class ContextKind(StrEnum):
-    """Typed semantic context fields carried by ``SecurityEvent``."""
+    """Typed semantic context fields carried by ``OccurrenceBuilder``."""
 
     ACCOUNT_MANAGEMENT = "account_management"
     AUTH = "auth"
     DHCP = "dhcp"
     DNS = "dns"
     DST_HOST = "dst_host"
-    EDR = "edr"
     EMAIL = "email"
     FILE = "file"
     FILE_TRANSFER = "file_transfer"
@@ -86,7 +85,6 @@ class ContextKind(StrEnum):
     FIREWALL = "firewall"
     GROUP_MEMBERSHIP = "group_membership"
     HTTP = "http"
-    IDS = "ids"
     IDS_ALERTS = "ids_alerts"
     IMAGE_LOAD = "image_load"
     KERBEROS = "kerberos"
@@ -100,7 +98,6 @@ class ContextKind(StrEnum):
     PROCESS = "process"
     PROCESS_ACCESS = "process_access"
     PROXY = "proxy"
-    RAW = "raw"
     REGISTRY = "registry"
     REMOTE_AUTH = "remote_auth"
     REMOTE_THREAD = "remote_thread"
@@ -296,7 +293,6 @@ class ShadowSealResult:
 
     occurrence: CanonicalOccurrenceSnapshot | None
     violations: tuple[ContractViolation, ...]
-    raw_escape_hatch: bool = False
 
     @property
     def valid(self) -> bool:
@@ -315,7 +311,6 @@ class _EventLike(Protocol):
 
 
 _CURRENT_PRODUCERS = frozenset(ProducerKind)
-_RAW_ONLY = frozenset({ContextKind.RAW})
 
 
 def _contexts(*values: ContextKind) -> frozenset[ContextKind]:
@@ -342,7 +337,7 @@ def _contract(
         kind=kind,
         required_contexts=required,
         optional_contexts=optional,
-        forbidden_contexts=_RAW_ONLY,
+        forbidden_contexts=frozenset(),
         source_host_role=src,
         destination_host_role=dst,
         identity_requirement=identity,
@@ -360,7 +355,7 @@ _WINDOWS_ENDPOINT = _formats(
     FormatKind.WINDOWS_EVENT_SYSMON,
 )
 _ECAR_SYSMON = _formats(FormatKind.ECAR, FormatKind.WINDOWS_EVENT_SYSMON)
-_FILE_OPTIONAL = _contexts(ContextKind.AUTH, ContextKind.EDR, ContextKind.PROCESS)
+_FILE_OPTIONAL = _contexts(ContextKind.AUTH, ContextKind.PROCESS)
 _ACCOUNT_REQUIRED = _contexts(
     ContextKind.ACCOUNT_MANAGEMENT,
     ContextKind.AUTH,
@@ -406,13 +401,11 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         optional=_contexts(
             ContextKind.DNS,
             ContextKind.DST_HOST,
-            ContextKind.EDR,
             ContextKind.EMAIL,
             ContextKind.FILE_TRANSFER,
             ContextKind.FILE_TRANSFERS,
             ContextKind.FIREWALL,
             ContextKind.HTTP,
-            ContextKind.IDS,
             ContextKind.IDS_ALERTS,
             ContextKind.LIFECYCLE,
             ContextKind.NAT,
@@ -457,7 +450,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.CREATE_REMOTE_THREAD: _contract(
         EventKind.CREATE_REMOTE_THREAD,
         required=_contexts(ContextKind.PROCESS, ContextKind.REMOTE_THREAD, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,
@@ -483,7 +476,6 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.FAILED_LOGON: _contract(
         EventKind.FAILED_LOGON,
         required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
-        optional=_contexts(ContextKind.EDR),
         dst=HostSemantic.TARGET,
         state=StateEffect.READ,
         emitters=_formats(FormatKind.ECAR, FormatKind.WINDOWS_EVENT_SECURITY),
@@ -530,7 +522,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.IMAGE_LOAD: _contract(
         EventKind.IMAGE_LOAD,
         required=_contexts(ContextKind.IMAGE_LOAD, ContextKind.PROCESS, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,
@@ -562,7 +554,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.LOGOFF: _contract(
         EventKind.LOGOFF,
         required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
-        optional=_contexts(ContextKind.EDR, ContextKind.LIFECYCLE, ContextKind.SYSLOG),
+        optional=_contexts(ContextKind.LIFECYCLE, ContextKind.SYSLOG),
         dst=HostSemantic.TARGET,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.CLOSURE,
@@ -573,7 +565,6 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         EventKind.LOGON,
         required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
         optional=_contexts(
-            ContextKind.EDR,
             ContextKind.LIFECYCLE,
             ContextKind.REMOTE_AUTH,
             ContextKind.SRC_HOST,
@@ -588,7 +579,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.MACHINE_LOGON: _contract(
         EventKind.MACHINE_LOGON,
         required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
-        optional=_contexts(ContextKind.EDR, ContextKind.LIFECYCLE, ContextKind.REMOTE_AUTH),
+        optional=_contexts(ContextKind.LIFECYCLE, ContextKind.REMOTE_AUTH),
         dst=HostSemantic.TARGET,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.START,
@@ -619,7 +610,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_ACCESS: _contract(
         EventKind.PROCESS_ACCESS,
         required=_contexts(ContextKind.PROCESS, ContextKind.PROCESS_ACCESS, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,
@@ -629,7 +620,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_CREATE: _contract(
         EventKind.PROCESS_CREATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.START,
@@ -639,7 +630,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_TERMINATE: _contract(
         EventKind.PROCESS_TERMINATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.CLOSURE,
@@ -649,7 +640,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.REGISTRY_MODIFY: _contract(
         EventKind.REGISTRY_MODIFY,
         required=_contexts(ContextKind.PROCESS, ContextKind.REGISTRY, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.OPTIONAL,
         lifecycle=LifecycleRole.DEPENDENT,
@@ -689,7 +680,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.SSH_SESSION: _contract(
         EventKind.SSH_SESSION,
         required=_contexts(ContextKind.AUTH, ContextKind.DST_HOST),
-        optional=_contexts(ContextKind.EDR, ContextKind.PROCESS, ContextKind.SRC_HOST),
+        optional=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
         src=HostSemantic.TRANSPORT_SOURCE,
         dst=HostSemantic.TARGET,
         identity=IdentityRequirement.REQUIRED,
@@ -708,7 +699,7 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.SYSTEM_PROCESS_CREATE: _contract(
         EventKind.SYSTEM_PROCESS_CREATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.AUTH, ContextKind.EDR),
+        optional=_contexts(ContextKind.AUTH),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.START,
@@ -742,9 +733,6 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
 }
 
 
-RAW_EVENT_TYPE = "raw"
-
-
 def contract_for(event_type: str) -> EventKindContract | None:
     """Return the registered contract for an event type, if it is canonical."""
 
@@ -767,9 +755,6 @@ def _present_contexts(event: _EventLike) -> frozenset[ContextKind]:
 
 def shadow_seal(event: _EventLike) -> ShadowSealResult:
     """Build an immutable occurrence snapshot and report, but do not enforce, violations."""
-
-    if event.event_type == RAW_EVENT_TYPE:
-        return ShadowSealResult(occurrence=None, violations=(), raw_escape_hatch=True)
 
     contract = contract_for(event.event_type)
     if contract is None:

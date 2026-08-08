@@ -5,14 +5,14 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import HttpContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
@@ -21,6 +21,7 @@ from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.proxy_phase_profiles import proxy_resolver_profiles
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System
+from tests.network_factories import network_plan
 
 _BASE_TIME = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
 
@@ -59,7 +60,6 @@ def _request(index: int = 0, *, duration: float | None = 1.0) -> ProxyTransactio
         source_system=workstation,
         conn_state="SF",
         dns=None,
-        ids=None,
         http=HttpContext(
             method="POST",
             host="example.com",
@@ -244,7 +244,7 @@ def test_output_window_admits_transport_but_suppresses_late_proxy_request() -> N
     request = _request(33)
     proxy = _proxy_context(cache_result="HIT")
     plan = ProxyPhasePlanner().plan(request, proxy, request.time)
-    proxy.transaction = plan
+    proxy = replace(proxy, transaction=plan)
     connection_emitter = Mock()
     connection_emitter.can_handle.return_value = True
     proxy_emitter = Mock()
@@ -254,10 +254,10 @@ def test_output_window_admits_transport_but_suppresses_late_proxy_request() -> N
         {"zeek_conn": connection_emitter, "proxy_access": proxy_emitter},
         output_end_time=plan.request_at,
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=plan.client_connect_at,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.1.10",
             src_port=52000,
             dst_ip="10.0.3.10",
@@ -277,7 +277,7 @@ def test_output_window_admits_transport_but_suppresses_late_proxy_request() -> N
         ),
     )
 
-    dispatcher.dispatch(event)
+    dispatcher.dispatch_builder(event)
 
     connection_emitter.emit.assert_called_once()
     proxy_emitter.emit.assert_not_called()

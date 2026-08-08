@@ -175,7 +175,9 @@ class TestVipSegmentRegistration:
             "zeek_conn": Mock(),
             "cisco_asa": Mock(),
         }
-        emitters["web_access"].can_handle.side_effect = lambda event: event.http is not None
+        emitters["web_access"].can_handle.side_effect = lambda event: (
+            event.protocol.http is not None
+        )
         emitters["zeek_conn"].can_handle.side_effect = lambda event: event.network is not None
         emitters["cisco_asa"].can_handle.side_effect = lambda event: event.network is not None
         dispatcher = EventDispatcher(state_manager, emitters, visibility_engine=visibility)

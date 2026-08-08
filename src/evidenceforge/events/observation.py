@@ -14,7 +14,7 @@ from evidenceforge.config.observation_profiles import (
     get_observation_profile,
     observation_profile_exists,
 )
-from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence, RawProjectionRequest
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
@@ -108,7 +108,7 @@ class ObservationPolicy:
         """Return True when the profile preserves perfect source coverage."""
         return self.profile_name == "complete"
 
-    def decide(self, format_name: str, event: SecurityEvent) -> ObservationDecision:
+    def decide(self, format_name: str, event: CanonicalOccurrence) -> ObservationDecision:
         """Return the source-observation decision for an event/emitter pair."""
         source = source_family_for_format(format_name)
         settings = self._settings_for_source(source)
@@ -131,15 +131,15 @@ class ObservationPolicy:
             return ObservationDecision(status="delayed", delay=delay)
         return ObservationDecision(status="visible")
 
-    def decide_raw(self, entry: RawLogEntry) -> ObservationDecision:
+    def decide_raw(self, entry: RawProjectionRequest) -> ObservationDecision:
         """Return the source-observation decision for a direct raw entry."""
-        source = source_family_for_format(entry.target_emitter)
+        source = source_family_for_format(entry.target_format)
         settings = self._settings_for_source(source)
         missingness = self._effective_missingness_for_host(
             source,
             "",
             settings,
-            format_name=entry.target_emitter,
+            format_name=entry.target_format,
         )
         identity = self._raw_identity(source, entry)
         drop_rng = random.Random(_stable_seed(f"observation.drop|{self.profile_name}|{identity}"))
@@ -182,7 +182,7 @@ class ObservationPolicy:
         return merged
 
     def _effective_missingness(
-        self, source: str, format_name: str, event: SecurityEvent, settings: dict[str, Any]
+        self, source: str, format_name: str, event: CanonicalOccurrence, settings: dict[str, Any]
     ) -> float:
         if self._preserve_ssh_session_lifecycle(source, event):
             return 0.0
@@ -234,12 +234,10 @@ class ObservationPolicy:
     def _sample_delay(
         self,
         source: str,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         settings: dict[str, Any],
         identity: str,
     ) -> timedelta:
-        if event.raw is not None:
-            return timedelta(0)
         delay = settings.get("delay_ms", {})
         if not isinstance(delay, dict):
             return timedelta(0)
@@ -260,7 +258,7 @@ class ObservationPolicy:
 
     @staticmethod
     def _coherent_process_delay(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         source: str,
         min_ms: int,
         max_ms: int,
@@ -288,7 +286,7 @@ class ObservationPolicy:
         self,
         source: str,
         format_name: str,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         *,
         force_format_specific: bool = False,
     ) -> str:
@@ -307,18 +305,18 @@ class ObservationPolicy:
             ]
         )
 
-    def _raw_identity(self, source: str, entry: RawLogEntry) -> str:
+    def _raw_identity(self, source: str, entry: RawProjectionRequest) -> str:
         timestamp = int(entry.timestamp.timestamp() * 1_000_000)
         return "|".join(
             [
                 source,
-                entry.target_emitter,
+                entry.target_format,
                 str(timestamp),
                 str(sorted(entry.data.items()))[:500],
             ]
         )
 
-    def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+    def _coherent_group_key(self, source: str, event: CanonicalOccurrence) -> str:
         if source == "ecar" and event.process and event.process.concurrency_group_id:
             return f"process-group:{event.process.concurrency_group_id}"
         if event.lifecycle is not None:
@@ -365,7 +363,7 @@ class ObservationPolicy:
             return f"registry:{event.registry.key}:{event.registry.value}"
         if event.file:
             return f"file:{event.file.path}:{event.file.action}"
-        ids_alerts = event.all_ids_alerts()
+        ids_alerts = event.ids_alerts
         if ids_alerts:
             return "ids:" + ",".join(
                 f"{alert.gid}:{alert.sid}:{alert.message}" for alert in ids_alerts
@@ -373,7 +371,7 @@ class ObservationPolicy:
         return "event"
 
     @staticmethod
-    def _ecar_remote_session_group_key(event: SecurityEvent) -> str:
+    def _ecar_remote_session_group_key(event: CanonicalOccurrence) -> str:
         """Return tuple-scoped eCAR grouping for remote session transport and login."""
         host = event.dst_host
         if host is None:
@@ -437,7 +435,7 @@ class ObservationPolicy:
         return False
 
     @staticmethod
-    def _syslog_ssh_session_group_key(event: SecurityEvent) -> str:
+    def _syslog_ssh_session_group_key(event: CanonicalOccurrence) -> str:
         """Return a shared syslog observation key for one SSH session lifecycle."""
         if event.syslog is None or event.auth is None:
             return ""
@@ -462,7 +460,7 @@ class ObservationPolicy:
         )
 
     @staticmethod
-    def _preserve_ssh_session_lifecycle(source: str, event: SecurityEvent) -> bool:
+    def _preserve_ssh_session_lifecycle(source: str, event: CanonicalOccurrence) -> bool:
         """Preserve SSH auth lifecycle rows that correlate with endpoint session rows."""
         if source != "syslog" or event.syslog is None:
             return False
@@ -479,7 +477,7 @@ class ObservationPolicy:
         )
 
     @staticmethod
-    def _preserve_logind_session_lifecycle(source: str, event: SecurityEvent) -> bool:
+    def _preserve_logind_session_lifecycle(source: str, event: CanonicalOccurrence) -> bool:
         """Preserve logind session rows that correlate with endpoint session rows."""
         if source != "syslog" or event.syslog is None:
             return False
@@ -489,13 +487,13 @@ class ObservationPolicy:
         return message.startswith("New session ") or message.startswith("Removed session ")
 
     @staticmethod
-    def _preserve_ecar_cron_process_lifecycle(source: str, event: SecurityEvent) -> bool:
+    def _preserve_ecar_cron_process_lifecycle(source: str, event: CanonicalOccurrence) -> bool:
         """Preserve eCAR cron process rows that are correlated with visible CRON syslog."""
         if source != "ecar" or event.process is None:
             return False
         return event.process.concurrency_group_id.startswith("cron:")
 
-    def _host_key_for_event(self, event: SecurityEvent) -> str:
+    def _host_key_for_event(self, event: CanonicalOccurrence) -> str:
         host = event.dst_host or event.src_host
         if host:
             return host.hostname or host.ip

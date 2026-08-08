@@ -415,7 +415,7 @@ class TestLogoffLinux:
         assert event.syslog.message == (
             "pam_unix(sshd:session): session closed for user alice.smith"
         )
-        assert ecar_event.edr.object_id == session_obj_id
+        assert ecar_event.identity_plan.object_id == session_obj_id
         assert ecar_event.auth.source_ip == "10.0.10.50"
         assert ecar_event.auth.source_port == 51111
         assert removed_event.timestamp > event.timestamp
@@ -698,5 +698,5 @@ class TestLogoffNoEcar:
         logon_id = gen.generate_logon(user, system, timestamp)
         gen.generate_logoff(user, system, timestamp, logon_id)
 
-        # Should not raise, logoff SecurityEvent dispatched
+        # Should not raise, logoff OccurrenceBuilder dispatched
         assert emitters["windows_event_security"].emit.called

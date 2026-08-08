@@ -28,13 +28,13 @@ import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from evidenceforge.config.schemas import IdsSignaturePredicateSpec
 from evidenceforge.events.contexts import (
     DnsContext,
+    IdsAlertPlan,
     IdsAlertPolicyContext,
-    IdsContext,
     IdsDetectionFilterContext,
     IdsEventFilterContext,
 )
@@ -77,6 +77,7 @@ class IdsAlertRequest:
     dns_context_factory: DnsContextFactory | None = None
     policy: IdsAlertPolicyOverride | None = None
     predicate: SignaturePredicate | None = None
+    origin: Literal["built_in", "authored_attachment"] = "built_in"
 
     @property
     def stable_id(self) -> str:
@@ -99,7 +100,7 @@ class IdsAlertRequest:
 class IdsAlertResult:
     """Canonical context payloads produced by an IDS alert bundle."""
 
-    ids: IdsContext
+    alert: IdsAlertPlan
     dns: DnsContext | None = None
 
 
@@ -124,7 +125,7 @@ class IdsAlertActionBundle:
 
         signature = dict(self.request.signature)
         policy = self._effective_policy(signature)
-        ids = IdsContext(
+        alert = IdsAlertPlan(
             sid=int(signature["sid"]),
             rev=int(signature.get("rev", 1)),
             message=str(signature["message"]),
@@ -134,6 +135,7 @@ class IdsAlertActionBundle:
             policy=self._policy_context(policy),
             predicate=self.request.predicate
             or _predicate_from_signature(signature, self.request.proto, self.request.dst_port),
+            origin=self.request.origin,
         )
         dns = None
         if (
@@ -147,7 +149,7 @@ class IdsAlertActionBundle:
                 ad_domain=self.request.ad_domain,
                 dns_server_ip=self.request.dns_server_ip,
             )
-        return IdsAlertResult(ids=ids, dns=dns)
+        return IdsAlertResult(alert=alert, dns=dns)
 
     def _effective_policy(self, signature: Mapping[str, Any]) -> IdsAlertPolicySpec | None:
         """Resolve scenario replacement policy over the signature default."""
@@ -184,10 +186,10 @@ class IdsAlertActionBundle:
             ),
         )
 
-    def execute(self) -> IdsContext:
+    def execute(self) -> IdsAlertPlan:
         """Return the canonical IDS context."""
 
-        return self.execute_with_result().ids
+        return self.execute_with_result().alert
 
 
 def _predicate_from_signature(
@@ -227,7 +229,7 @@ def _predicate_from_signature(
 
 
 def ids_alert_matches_transaction(
-    alert: IdsContext,
+    alert: IdsAlertPlan,
     transaction: NetworkTransactionPlan,
     *,
     http: Any = None,
@@ -305,3 +307,28 @@ def ids_alert_matches_transaction(
     if predicate.semantic_claim == "file_content" and not file_transfers:
         return False
     return True
+
+
+def normalize_ids_alerts(alerts: list[IdsAlertPlan]) -> tuple[IdsAlertPlan, ...]:
+    """Return one deterministic collection with authored attachments taking precedence."""
+
+    authored_keys = {
+        (alert.gid, alert.sid) for alert in alerts if alert.origin == "authored_attachment"
+    }
+    normalized: list[IdsAlertPlan] = []
+    seen: set[tuple[int, int]] = set()
+    ordered = [
+        *(
+            alert
+            for alert in alerts
+            if alert.origin == "built_in" and (alert.gid, alert.sid) not in authored_keys
+        ),
+        *(alert for alert in alerts if alert.origin == "authored_attachment"),
+    ]
+    for alert in ordered:
+        key = (alert.gid, alert.sid)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(alert)
+    return tuple(normalized)

@@ -163,7 +163,6 @@ class IntentExecutionSnapshot:
     planned: bool
     action_ids: tuple[str, ...]
     occurrence_ids: tuple[str, ...]
-    dispatched_event_ids: tuple[str, ...]
     source_observations: tuple[IntentSourceObservation, ...]
 
     @property
@@ -184,7 +183,6 @@ class IntentExecutionLedger:
         self._planned: set[str] = set()
         self._action_ids: dict[str, set[str]] = {}
         self._occurrence_ids: dict[str, set[str]] = {}
-        self._dispatched_event_ids: dict[str, set[str]] = {}
         self._source_counts: Counter[tuple[str, str, str]] = Counter()
         self._lock = RLock()
 
@@ -197,15 +195,11 @@ class IntentExecutionLedger:
     def record_occurrence(
         self,
         intent_id: str,
-        event_id: str,
-        occurrence_key: SemanticOccurrenceKey | None,
+        occurrence_key: SemanticOccurrenceKey,
     ) -> None:
-        """Record one dispatched event and any stable semantic occurrence identity."""
+        """Record one stable semantic occurrence identity."""
 
         with self._lock:
-            self._dispatched_event_ids.setdefault(intent_id, set()).add(event_id)
-            if occurrence_key is None:
-                return
             self._action_ids.setdefault(intent_id, set()).add(occurrence_key.action_id)
             self._occurrence_ids.setdefault(intent_id, set()).add(occurrence_key.occurrence_id)
 
@@ -227,11 +221,7 @@ class IntentExecutionLedger:
             known_ids = [intent.intent_id for intent in self._authored.intents]
             observed_ids = {intent_id for intent_id, _source, _status in self._source_counts}
             execution_ids = (
-                self._planned
-                | set(self._action_ids)
-                | set(self._occurrence_ids)
-                | set(self._dispatched_event_ids)
-                | observed_ids
+                self._planned | set(self._action_ids) | set(self._occurrence_ids) | observed_ids
             )
             unexpected_ids = sorted(execution_ids - set(known_ids))
             intent_ids = [*known_ids, *unexpected_ids]
@@ -248,9 +238,6 @@ class IntentExecutionLedger:
                         planned=intent_id in self._planned,
                         action_ids=tuple(sorted(self._action_ids.get(intent_id, set()))),
                         occurrence_ids=tuple(sorted(self._occurrence_ids.get(intent_id, set()))),
-                        dispatched_event_ids=tuple(
-                            sorted(self._dispatched_event_ids.get(intent_id, set()))
-                        ),
                         source_observations=observations,
                     )
                 )

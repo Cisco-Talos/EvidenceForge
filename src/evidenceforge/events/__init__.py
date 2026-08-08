@@ -30,21 +30,19 @@ from evidenceforge.events.authentication import (
     RemoteAuthenticationPlan,
     RemoteAuthenticationTransportPlan,
 )
-from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder, RawProjectionRequest
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
     EmailContext,
     FileContext,
     HostContext,
-    IdsContext,
+    IdsAlertPlan,
     ImageLoadContext,
     KerberosContext,
-    NetworkContext,
     ProcessAccessContext,
     ProcessContext,
     ProcessTargetSecurityContext,
-    RawContext,
     RegistryContext,
     ShellContext,
     SmtpContext,
@@ -60,11 +58,17 @@ from evidenceforge.events.contracts import (
     ShadowSealResult,
     shadow_seal,
 )
-from evidenceforge.events.network import NatSensorObservation, SignaturePredicate
+from evidenceforge.events.network import (
+    NatSensorObservation,
+    NetworkTransactionPlan,
+    SignaturePredicate,
+)
+from evidenceforge.events.protocol import ProtocolTransactionPlan
 
 __all__ = [
-    "SecurityEvent",
-    "RawLogEntry",
+    "OccurrenceBuilder",
+    "CanonicalOccurrence",
+    "RawProjectionRequest",
     "EventKind",
     "ContextKind",
     "EventKindContract",
@@ -81,17 +85,17 @@ __all__ = [
     "ProcessContext",
     "ProcessTargetSecurityContext",
     "ProcessAccessContext",
-    "NetworkContext",
+    "NetworkTransactionPlan",
+    "ProtocolTransactionPlan",
     "DnsContext",
     "EmailContext",
     "FileContext",
     "RegistryContext",
-    "IdsContext",
+    "IdsAlertPlan",
     "NatSensorObservation",
     "SignaturePredicate",
     "ImageLoadContext",
     "KerberosContext",
     "ShellContext",
     "SmtpContext",
-    "RawContext",
 ]

@@ -29,11 +29,12 @@ import pytest
 
 from evidenceforge.events import (
     AuthContext,
+    CanonicalOccurrence,
     HostContext,
-    NetworkContext,
+    NetworkTransactionPlan,
+    OccurrenceBuilder,
     ProcessContext,
-    RawLogEntry,
-    SecurityEvent,
+    RawProjectionRequest,
 )
 from evidenceforge.events.contexts import (
     FileTransferContext,
@@ -43,6 +44,7 @@ from evidenceforge.events.contexts import (
     SyslogContext,
     X509Context,
 )
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.observation import (
@@ -51,6 +53,7 @@ from evidenceforge.events.observation import (
     source_family_for_format,
 )
 from evidenceforge.generation.state_manager import StateManager
+from tests.network_factories import network_plan
 
 
 def _make_ts():
@@ -62,6 +65,17 @@ def _make_mock_emitter(name: str, handles: bool = False):
     emitter = MagicMock()
     emitter.can_handle.return_value = handles
     return emitter
+
+
+def _assert_published_once(mock: MagicMock, builder: OccurrenceBuilder) -> CanonicalOccurrence:
+    """Assert one call received the sealed occurrence derived from ``builder``."""
+
+    mock.assert_called_once()
+    occurrence = mock.call_args.args[0]
+    assert isinstance(occurrence, CanonicalOccurrence)
+    assert occurrence.occurrence_id == builder.occurrence_id
+    assert occurrence.event_type == builder.event_type
+    return occurrence
 
 
 def _host() -> HostContext:
@@ -76,10 +90,10 @@ def _host() -> HostContext:
     )
 
 
-def _syslog_event(timestamp: datetime | None = None) -> SecurityEvent:
+def _syslog_event(timestamp: datetime | None = None) -> OccurrenceBuilder:
     """Return a minimal valid source-local occurrence."""
 
-    return SecurityEvent(
+    return OccurrenceBuilder(
         timestamp=timestamp or _make_ts(),
         event_type="syslog",
         src_host=_host(),
@@ -93,10 +107,10 @@ def _syslog_event(timestamp: datetime | None = None) -> SecurityEvent:
     )
 
 
-def _network() -> NetworkContext:
+def _network() -> NetworkTransactionPlan:
     """Return a minimal valid connection context."""
 
-    return NetworkContext(
+    return network_plan(
         src_ip="10.0.0.10",
         src_port=51000,
         dst_ip="198.51.100.20",
@@ -115,10 +129,10 @@ class TestDispatchRouting:
         dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
-        emitter.emit.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
+        _assert_published_once(emitter.emit, event)
 
     def test_dispatch_skips_non_matching_emitters(self):
         """dispatch() skips emitters where can_handle() returns False."""
@@ -131,9 +145,9 @@ class TestDispatchRouting:
         )
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        matching.emit.assert_called_once_with(event)
+        _assert_published_once(matching.emit, event)
         non_matching.emit.assert_not_called()
 
     def test_dispatch_no_matching_emitters(self):
@@ -143,9 +157,9 @@ class TestDispatchRouting:
         dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
         emitter.emit.assert_not_called()
 
     def test_network_identifier_publication_retains_only_latest_connection(self):
@@ -170,36 +184,46 @@ class TestDispatchRouting:
         assert dispatcher.network_identifier_for_format("uid-99998", "zeek_conn") is None
         assert len(dispatcher._latest_network_identifiers_by_format) == 2
 
-    def test_dispatch_allocates_unique_deterministic_canonical_event_ids(self):
-        """Distinct occurrences receive stable IDs before state application and rendering."""
+    def test_dispatch_preserves_action_relative_semantic_occurrence_ids(self):
+        """Peer ordinals remain stable without depending on unrelated dispatch order."""
         first_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
         first_events = [
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts(),
                 event_type="failed_logon",
                 dst_host=_host(),
                 auth=AuthContext(username="alice", result="failure"),
+                occurrence_key=SemanticOccurrenceKey(
+                    action_id="failed-logon-action",
+                    role=OccurrenceRole.PRIMARY,
+                    instance_key=f"attempt:{ordinal}",
+                ),
             )
-            for _ in range(2)
+            for ordinal in range(2)
         ]
         for event in first_events:
-            first_dispatcher.dispatch(event)
+            first_dispatcher.dispatch_builder(event)
 
         second_dispatcher = EventDispatcher(state_manager=MagicMock(spec=StateManager), emitters={})
         second_events = [
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts(),
                 event_type="failed_logon",
                 dst_host=_host(),
                 auth=AuthContext(username="alice", result="failure"),
+                occurrence_key=SemanticOccurrenceKey(
+                    action_id="failed-logon-action",
+                    role=OccurrenceRole.PRIMARY,
+                    instance_key=f"attempt:{ordinal}",
+                ),
             )
-            for _ in range(2)
+            for ordinal in range(2)
         ]
         for event in second_events:
-            second_dispatcher.dispatch(event)
+            second_dispatcher.dispatch_builder(event)
 
-        first_ids = [event.event_id for event in first_events]
-        second_ids = [event.event_id for event in second_events]
+        first_ids = [event.occurrence_id for event in first_events]
+        second_ids = [event.occurrence_id for event in second_events]
         assert len(set(first_ids)) == 2
         assert first_ids == second_ids
 
@@ -211,7 +235,7 @@ class TestDispatchRouting:
         dispatcher.storyline_cluster_id = "story-001"
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         assert event.storyline_cluster_id == "story-001"
         assert event.storyline_origin is False
@@ -231,9 +255,9 @@ class TestObservationProfiles:
         dispatcher.storyline_cluster_id = "story-001"
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        emitter.emit.assert_called_once_with(event)
+        _assert_published_once(emitter.emit, event)
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"visible": 1}
 
     def test_empty_configured_profile_uses_default_visible_policy(self, monkeypatch):
@@ -247,7 +271,7 @@ class TestObservationProfiles:
         )
 
         policy = ObservationPolicy("empty_profile")
-        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        event = OccurrenceBuilder(timestamp=_make_ts(), event_type="process_create")
 
         assert policy.profile == {}
         assert policy.decide("windows_event_sysmon", event).status == "visible"
@@ -311,9 +335,9 @@ class TestObservationProfiles:
         dispatcher.storyline_cluster_id = "story-001"
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
         emitter.emit.assert_not_called()
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"dropped": 1}
 
@@ -345,9 +369,9 @@ class TestObservationProfiles:
         dispatcher.storyline_cluster_id = "story-001"
 
         event = _syslog_event()
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
         emitted_event = emitter.emit.call_args.args[0]
         assert emitted_event is not event
         assert emitted_event.timestamp == event.timestamp + timedelta(milliseconds=17)
@@ -389,7 +413,7 @@ class TestObservationProfiles:
             source_port=52267,
         )
         events = [
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts(),
                 event_type="syslog",
                 src_host=host,
@@ -402,7 +426,7 @@ class TestObservationProfiles:
                     message="Connection from 10.10.1.31 port 52267 on 10.10.3.20 port 22",
                 ),
             ),
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts() + timedelta(milliseconds=100),
                 event_type="syslog",
                 src_host=host,
@@ -415,7 +439,7 @@ class TestObservationProfiles:
                     message="Accepted password for marcus.chen from 10.10.1.31 port 52267 ssh2",
                 ),
             ),
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts() + timedelta(milliseconds=180),
                 event_type="syslog",
                 src_host=host,
@@ -431,7 +455,7 @@ class TestObservationProfiles:
                     ),
                 ),
             ),
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts() + timedelta(milliseconds=240),
                 event_type="syslog",
                 src_host=host,
@@ -444,7 +468,7 @@ class TestObservationProfiles:
                     message="New session 266599 of user marcus.chen.",
                 ),
             ),
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts() + timedelta(seconds=60),
                 event_type="logoff",
                 dst_host=host,
@@ -457,7 +481,7 @@ class TestObservationProfiles:
                     message="pam_unix(sshd:session): session closed for user marcus.chen",
                 ),
             ),
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=_make_ts() + timedelta(seconds=60, milliseconds=120),
                 event_type="syslog",
                 src_host=host,
@@ -516,7 +540,7 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("delayed_process_activity_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=timestamp + timedelta(minutes=5),
             event_type="connection",
             src_host=HostContext(
@@ -536,7 +560,7 @@ class TestObservationProfiles:
                 logon_id="0x100",
                 start_time=timestamp,
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=50123,
                 dst_ip="10.0.0.20",
@@ -546,7 +570,7 @@ class TestObservationProfiles:
             ),
         )
 
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         running = sm.get_process("WS-01", pid)
         assert running is not None
@@ -581,10 +605,10 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("zeek_delay_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 src_port=51111,
                 dst_ip="10.0.2.20",
@@ -593,7 +617,7 @@ class TestObservationProfiles:
                 zeek_uid="CUID123456789",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         conn_event = conn.emit.call_args.args[0]
         http_event = http.emit.call_args.args[0]
@@ -629,10 +653,10 @@ class TestObservationProfiles:
         )
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 src_port=51111,
                 dst_ip="10.0.2.20",
@@ -641,7 +665,7 @@ class TestObservationProfiles:
                 zeek_uid="CUID123456789",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         conn.emit.assert_called_once()
         http.emit.assert_not_called()
@@ -680,10 +704,10 @@ class TestObservationProfiles:
         )
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 src_port=51111,
                 dst_ip="10.0.2.20",
@@ -692,7 +716,7 @@ class TestObservationProfiles:
                 zeek_uid="CUID123456789",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         conn.emit.assert_called_once()
         http.emit.assert_called_once()
@@ -728,12 +752,12 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("zeek_x509_parent_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
             network=_network(),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         files.emit.assert_called_once()
         x509.emit.assert_called_once()
@@ -773,10 +797,10 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("zeek_tls_certificate_companion_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 src_port=51111,
                 dst_ip="203.0.113.10",
@@ -800,7 +824,7 @@ class TestObservationProfiles:
                 certificate_not_valid_after=1730000000.0,
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         ssl.emit.assert_called_once()
         files.emit.assert_called_once()
@@ -854,7 +878,7 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("zeek_ocsp_companion_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
             network=_network(),
@@ -870,7 +894,7 @@ class TestObservationProfiles:
             ),
             ocsp=OcspContext(id="Focspcompanion01"),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         http.emit.assert_called_once()
         files.emit.assert_called_once()
@@ -908,10 +932,10 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("zeek_child_delay_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 src_port=51111,
                 dst_ip="10.0.2.20",
@@ -920,7 +944,7 @@ class TestObservationProfiles:
                 zeek_uid="CUID123456789",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         conn_event = conn.emit.call_args.args[0]
         http_event = http.emit.call_args.args[0]
@@ -961,19 +985,19 @@ class TestObservationProfiles:
             username="www-data",
             start_time=_make_ts(),
         )
-        create = SecurityEvent(
+        create = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="process_create",
             src_host=host,
             process=process,
             storyline_cluster_id="evt-005",
         )
-        callback = SecurityEvent(
+        callback = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(seconds=1),
             event_type="connection",
             src_host=host,
             process=process,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.10.3.10",
                 src_port=53836,
                 dst_ip="45.33.32.30",
@@ -983,7 +1007,7 @@ class TestObservationProfiles:
             ),
             storyline_cluster_id="evt-005",
         )
-        terminate = SecurityEvent(
+        terminate = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(seconds=10),
             event_type="process_terminate",
             src_host=host,
@@ -1046,13 +1070,13 @@ class TestObservationProfiles:
             username=r"CORP\alice",
             start_time=_make_ts(),
         )
-        create = SecurityEvent(
+        create = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="process_create",
             src_host=host,
             process=process,
         )
-        terminate = SecurityEvent(
+        terminate = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(seconds=8),
             event_type="process_terminate",
             src_host=host,
@@ -1092,7 +1116,7 @@ class TestObservationProfiles:
             system_type="server",
         )
         group_id = "cron:APP-INT-01:debian-sa1:1710763200000"
-        shell = SecurityEvent(
+        shell = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="system_process_create",
             src_host=host,
@@ -1110,7 +1134,7 @@ class TestObservationProfiles:
                 concurrency_group_id=group_id,
             ),
         )
-        workload = SecurityEvent(
+        workload = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(milliseconds=120),
             event_type="system_process_create",
             src_host=host,
@@ -1160,7 +1184,7 @@ class TestObservationProfiles:
 
         for ordinal in range(400):
             start_time = _make_ts() + timedelta(milliseconds=ordinal * 3)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=start_time,
                 event_type="process_create",
                 src_host=host,
@@ -1209,7 +1233,7 @@ class TestObservationProfiles:
             os_category="linux",
             system_type="server",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="system_process_create",
             src_host=host,
@@ -1264,13 +1288,13 @@ class TestObservationProfiles:
             logon_id="0x123456",
             logon_type=2,
         )
-        logon = SecurityEvent(
+        logon = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="logon",
             dst_host=host,
             auth=auth,
         )
-        logoff = SecurityEvent(
+        logoff = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(hours=1),
             event_type="logoff",
             dst_host=host,
@@ -1310,7 +1334,7 @@ class TestObservationProfiles:
         )
         auth = AuthContext(username="WS-01$", logon_id="0x537dab7", logon_type=3)
         group_id = "machine-account-logon-test"
-        logon = SecurityEvent(
+        logon = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="machine_logon",
             dst_host=host,
@@ -1321,7 +1345,7 @@ class TestObservationProfiles:
                 phase="start",
             ),
         )
-        logoff = SecurityEvent(
+        logoff = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(seconds=8),
             event_type="logoff",
             dst_host=host,
@@ -1358,7 +1382,7 @@ class TestObservationProfiles:
             },
         )
         policy = ObservationPolicy("network_uid_delay_test")
-        network = NetworkContext(
+        network = network_plan(
             src_ip="10.0.1.10",
             src_port=51111,
             dst_ip="203.0.113.20",
@@ -1366,12 +1390,12 @@ class TestObservationProfiles:
             protocol="tcp",
             zeek_uid="CsharedUID123",
         )
-        first = SecurityEvent(
+        first = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
             network=network,
         )
-        second = SecurityEvent(
+        second = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(milliseconds=250),
             event_type="ids_alert",
             network=network,
@@ -1408,11 +1432,11 @@ class TestObservationProfiles:
             os_category="linux",
             system_type="server",
         )
-        transport = SecurityEvent(
+        transport = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
             dst_host=target,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.25",
                 src_port=55122,
                 dst_ip="10.0.3.10",
@@ -1421,7 +1445,7 @@ class TestObservationProfiles:
                 zeek_uid="CsshTransport123",
             ),
         )
-        login = SecurityEvent(
+        login = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(seconds=2),
             event_type="ssh_session",
             dst_host=target,
@@ -1465,11 +1489,11 @@ class TestObservationProfiles:
             os_category="windows",
             system_type="server",
         )
-        transport = SecurityEvent(
+        transport = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
             dst_host=target,
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.25",
                 src_port=55891,
                 dst_ip="10.0.2.20",
@@ -1478,7 +1502,7 @@ class TestObservationProfiles:
                 zeek_uid="CrdpTransport123",
             ),
         )
-        login = SecurityEvent(
+        login = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(seconds=2),
             event_type="logon",
             dst_host=target,
@@ -1528,10 +1552,10 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("rdp_transport_parent_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.25",
                 src_port=55891,
                 dst_ip="10.0.2.20",
@@ -1542,7 +1566,7 @@ class TestObservationProfiles:
                 conn_state="SF",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         ecar.emit.assert_called_once()
         conn.emit.assert_called_once()
@@ -1581,10 +1605,10 @@ class TestObservationProfiles:
             observation_policy=ObservationPolicy("failed_rdp_transport_gap_test"),
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.25",
                 src_port=55891,
                 dst_ip="10.0.2.20",
@@ -1595,7 +1619,7 @@ class TestObservationProfiles:
                 conn_state="S0",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         ecar.emit.assert_called_once()
         conn.emit.assert_not_called()
@@ -1626,7 +1650,7 @@ class TestObservationProfiles:
             os_category="linux",
             system_type="server",
         )
-        connection = SecurityEvent(
+        connection = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="syslog",
             src_host=host,
@@ -1636,7 +1660,7 @@ class TestObservationProfiles:
                 message='Connection from 10.0.1.10 port 52713 on 10.0.3.10 port 22 rdomain ""',
             ),
         )
-        accepted = SecurityEvent(
+        accepted = OccurrenceBuilder(
             timestamp=_make_ts() + timedelta(milliseconds=120),
             event_type="ssh_session",
             dst_host=host,
@@ -1688,7 +1712,7 @@ class TestObservationProfiles:
             os_category="linux",
             system_type="server",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="logoff",
             dst_host=host,
@@ -1734,7 +1758,7 @@ class TestObservationProfiles:
             os_category="linux",
             system_type="server",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="syslog",
             src_host=host,
@@ -1756,10 +1780,10 @@ class TestObservationProfiles:
         dispatcher = EventDispatcher(state_manager=sm, emitters={"zeek_conn": zeek})
         dispatcher.storyline_cluster_id = "story-001"
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.50",
                 src_port=54321,
                 dst_ip="10.0.1.50",
@@ -1768,7 +1792,7 @@ class TestObservationProfiles:
             ),
             local_only=True,
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         zeek.emit.assert_not_called()
         assert dispatcher.source_evidence_status["story-001"]["zeek"] == {"filtered": 1}
@@ -1813,10 +1837,10 @@ class TestNetworkVisibilityFiltering:
             visibility_engine=visibility,
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.50",
                 src_port=54321,
                 dst_ip="10.0.1.100",
@@ -1824,9 +1848,9 @@ class TestNetworkVisibilityFiltering:
                 protocol="tcp",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        zeek.emit.assert_called_once_with(event)
+        _assert_published_once(zeek.emit, event)
         snort.emit.assert_not_called()
 
     def test_host_event_bypasses_visibility(self):
@@ -1842,7 +1866,7 @@ class TestNetworkVisibilityFiltering:
             visibility_engine=visibility,
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="workstation_locked",
             dst_host=HostContext(
@@ -1854,11 +1878,11 @@ class TestNetworkVisibilityFiltering:
             ),
             auth=AuthContext(username="alice", logon_id="0x100"),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
         # Visibility engine should NOT be called for host events
         visibility.get_log_formats_for_connection.assert_not_called()
-        windows.emit.assert_called_once_with(event)
+        _assert_published_once(windows.emit, event)
 
     def test_no_visibility_engine_skips_filtering(self):
         """Without a visibility engine, all matching emitters receive events."""
@@ -1871,10 +1895,10 @@ class TestNetworkVisibilityFiltering:
             visibility_engine=None,
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.50",
                 src_port=54321,
                 dst_ip="10.0.1.100",
@@ -1882,13 +1906,13 @@ class TestNetworkVisibilityFiltering:
                 protocol="tcp",
             ),
         )
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        zeek.emit.assert_called_once_with(event)
+        _assert_published_once(zeek.emit, event)
 
 
 class TestDispatchRaw:
-    """Tests for RawLogEntry escape hatch."""
+    """Tests for RawProjectionRequest escape hatch."""
 
     def test_dispatch_raw_routes_to_named_emitter(self):
         """dispatch_raw() calls emit_raw() on the named emitter."""
@@ -1899,9 +1923,9 @@ class TestDispatchRaw:
             emitters={"syslog": syslog},
         )
 
-        entry = RawLogEntry(
+        entry = RawProjectionRequest(
             timestamp=_make_ts(),
-            target_emitter="syslog",
+            target_format="syslog",
             data={"message": "test"},
         )
         dispatcher.dispatch_raw(entry)
@@ -1913,9 +1937,9 @@ class TestDispatchRaw:
         sm = MagicMock(spec=StateManager)
         dispatcher = EventDispatcher(state_manager=sm, emitters={})
 
-        entry = RawLogEntry(
+        entry = RawProjectionRequest(
             timestamp=_make_ts(),
-            target_emitter="nonexistent",
+            target_format="nonexistent",
             data={},
         )
         with pytest.raises(KeyError, match="nonexistent"):
@@ -1940,7 +1964,7 @@ class TestStateManagerApply:
         assert sm.get_session(logon_id) is not None
 
         # Dispatch logoff event
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="logoff",
             auth=AuthContext(username="alice", logon_id=logon_id),
@@ -1967,7 +1991,7 @@ class TestStateManagerApply:
         assert sm.get_process("WS-01", pid) is not None
 
         # Dispatch terminate event
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="process_terminate",
             src_host=HostContext(
@@ -1993,7 +2017,7 @@ class TestStateManagerApply:
     def test_apply_logon_is_noop(self):
         """apply() with logon event is a no-op (IDs allocated before dispatch)."""
         sm = StateManager()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="logon",
             auth=AuthContext(username="alice", logon_id="0x12345"),
@@ -2013,10 +2037,10 @@ class TestStateManagerApply:
             protocol="tcp",
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.50",
                 src_port=54321,
                 dst_ip="10.0.1.100",
@@ -2041,7 +2065,7 @@ class TestCanHandleDefault:
     def test_base_can_handle_returns_false(self):
         """Base LogEmitter.can_handle() returns False for any event."""
 
-        event = SecurityEvent(timestamp=_make_ts(), event_type="logon")
+        event = OccurrenceBuilder(timestamp=_make_ts(), event_type="logon")
 
         # Can't instantiate ABC directly, but we can test via a concrete subclass
         # All current subclasses inherit the default can_handle() which returns False
@@ -2097,7 +2121,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         with tempfile.NamedTemporaryFile(suffix=".log") as f:
             emitter = SyslogEmitter(format_def, Path(f.name))
-            event = SecurityEvent(timestamp=_make_ts(), event_type="unsupported_type")
+            event = OccurrenceBuilder(timestamp=_make_ts(), event_type="unsupported_type")
             with pytest.raises(NotImplementedError, match="SyslogEmitter"):
                 emitter.emit(event)
 
@@ -2537,7 +2561,7 @@ class TestCanHandleDefault:
             os_category="linux",
             system_type="server",
         )
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=_make_ts(),
             event_type="ssh_session",
             src_host=src_host,
@@ -2687,9 +2711,9 @@ class TestWarmUpSuppression:
 
         # Event 1 hour before output start
         event = _syslog_event(datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC))
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
         emitter.emit.assert_not_called()
 
     def test_dispatch_emits_at_output_start(self):
@@ -2698,10 +2722,10 @@ class TestWarmUpSuppression:
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
 
         event = _syslog_event(datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC))
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
-        emitter.emit.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
+        _assert_published_once(emitter.emit, event)
 
     def test_dispatch_emits_after_output_start(self):
         """Events after output_start_time are emitted normally."""
@@ -2709,20 +2733,20 @@ class TestWarmUpSuppression:
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
 
         event = _syslog_event(datetime(2026, 3, 19, 11, 0, 0, tzinfo=UTC))
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
-        emitter.emit.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
+        _assert_published_once(emitter.emit, event)
 
     def test_dispatch_no_suppression_when_output_start_none(self):
         """Without output_start_time, all events are emitted (default behavior)."""
         dispatcher, sm, emitter = self._make_dispatcher(output_start_time=None)
 
         event = _syslog_event(datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC))
-        dispatcher.dispatch(event)
+        dispatcher.dispatch_builder(event)
 
-        sm.apply.assert_called_once_with(event)
-        emitter.emit.assert_called_once_with(event)
+        _assert_published_once(sm.apply, event)
+        _assert_published_once(emitter.emit, event)
 
     def test_dispatch_raw_suppressed_before_output_start(self):
         """dispatch_raw() skips emission for pre-window raw entries."""
@@ -2735,9 +2759,9 @@ class TestWarmUpSuppression:
             output_start_time=output_start,
         )
 
-        entry = RawLogEntry(
+        entry = RawProjectionRequest(
             timestamp=datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC),
-            target_emitter="syslog",
+            target_format="syslog",
             data={"message": "test"},
         )
         dispatcher.dispatch_raw(entry)
@@ -2755,9 +2779,9 @@ class TestWarmUpSuppression:
             output_start_time=output_start,
         )
 
-        entry = RawLogEntry(
+        entry = RawProjectionRequest(
             timestamp=datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC),
-            target_emitter="syslog",
+            target_format="syslog",
             data={"message": "test"},
         )
         dispatcher.dispatch_raw(entry)

@@ -35,13 +35,17 @@ import ipaddress
 import re
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.network import NatSensorObservation, NetworkSensorObservation
+from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.network import (
+    NatSensorObservation,
+    NetworkSensorObservation,
+    NetworkTransactionPlan,
+)
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.syslog_family import (
     bounded_syslog_int,
@@ -60,6 +64,51 @@ from evidenceforge.output_targets import OutputTarget
 _ASA_FACILITY = 20
 
 
+@dataclass(frozen=True, slots=True)
+class _AsaNetworkProjection:
+    """Source-local network values needed to render one ASA observation."""
+
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str
+    duration: float | None
+    conn_state: str
+    orig_bytes: int
+    resp_bytes: int
+    orig_ip_bytes: int
+    resp_ip_bytes: int
+
+    @classmethod
+    def from_observation(
+        cls,
+        canonical: NetworkTransactionPlan,
+        observation: NetworkSensorObservation,
+    ) -> "_AsaNetworkProjection":
+        """Project an observation without reconstructing canonical transaction truth."""
+
+        return cls(
+            src_ip=observation.tuple_view.src_ip,
+            src_port=observation.tuple_view.src_port,
+            dst_ip=observation.tuple_view.dst_ip,
+            dst_port=observation.tuple_view.dst_port,
+            protocol=observation.tuple_view.protocol,
+            duration=(
+                None
+                if observation.observed_close_time is None
+                else (
+                    observation.observed_close_time - observation.observed_start_time
+                ).total_seconds()
+            ),
+            conn_state=canonical.conn_state,
+            orig_bytes=observation.traffic.orig.payload_bytes,
+            resp_bytes=observation.traffic.resp.payload_bytes,
+            orig_ip_bytes=observation.traffic.orig.ip_bytes,
+            resp_ip_bytes=observation.traffic.resp.ip_bytes,
+        )
+
+
 class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
@@ -67,7 +116,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     per-sensor/year files so BSD-syslog archive consumers can infer years.
 
     Handles all connection events visible to firewall sensors. Unlike Snort
-    (which requires IdsContext), the ASA emitter renders every connection it
+    (which requires IdsAlertPlan), the ASA emitter renders every connection it
     sees -- either as a permit (Built/Teardown) or deny (Deny) record.
     """
 
@@ -372,7 +421,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             return int((orig_ip_bytes or orig_payload) + (resp_ip_bytes or resp_payload))
         return int(payload_total)
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle all connection events with network context."""
         return (
             event.event_type in self._supported_types
@@ -380,7 +429,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             and not event.network.application_layer_only
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render ASA syslog records from a connection event.
 
         For permitted connections: emits a Built record + Teardown record.
@@ -409,44 +458,22 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             sensor_hosts = self._sensor_hostnames or [""]
 
         for sensor_hostname in sensor_hosts:
-            sensor_event = event
+            sensor_timestamp = event.timestamp
             sensor_net = net
             observation = observations.get(sensor_hostname)
             if observation is not None:
-                ledger = observation.traffic
-                sensor_net = replace(
-                    net,
-                    src_ip=observation.tuple_view.src_ip,
-                    src_port=observation.tuple_view.src_port,
-                    dst_ip=observation.tuple_view.dst_ip,
-                    dst_port=observation.tuple_view.dst_port,
-                    protocol=observation.tuple_view.protocol,
-                    duration=observation.observed_duration,
-                    source_visible_start_time=observation.observed_start_time,
-                    source_visible_close_time=observation.observed_close_time,
-                    orig_bytes=ledger.orig.payload_bytes,
-                    resp_bytes=ledger.resp.payload_bytes,
-                    orig_pkts=ledger.orig.packets,
-                    resp_pkts=ledger.resp.packets,
-                    orig_ip_bytes=ledger.orig.ip_bytes,
-                    resp_ip_bytes=ledger.resp.ip_bytes,
-                    missed_bytes=ledger.missed_bytes,
-                )
-                sensor_event = replace(
-                    event,
-                    timestamp=observation.observed_start_time,
-                    network=sensor_net,
-                )
+                sensor_timestamp = observation.observed_start_time
+                sensor_net = _AsaNetworkProjection.from_observation(net, observation)
             src_iface = self._resolve_interface(sensor_net.src_ip, sensor_hostname)
             dst_iface = self._resolve_interface(sensor_net.dst_ip, sensor_hostname)
             if fw is not None:
                 src_iface = fw.src_interface or src_iface
                 dst_iface = fw.dst_interface or dst_iface
-            nat_view = self._nat_view(sensor_event, sensor_net, observation)
+            nat_view = self._nat_view(event, sensor_net, observation)
             conn_id = (
                 fw.connection_id
                 if fw is not None and fw.connection_id > 0
-                else self._next_conn_id(sensor_hostname, sensor_event.timestamp)
+                else self._next_conn_id(sensor_hostname, sensor_timestamp)
             )
             fw_hostname = sensor_hostname or "fw01"
 
@@ -458,7 +485,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 ):
                     continue
                 self._emit_deny(
-                    sensor_event,
+                    sensor_timestamp,
                     sensor_net,
                     fw,
                     src_iface,
@@ -470,7 +497,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 if src_iface == dst_iface and nat_view is None:
                     continue
                 self._emit_built(
-                    sensor_event,
+                    sensor_timestamp,
                     sensor_net,
                     protocol,
                     conn_id,
@@ -482,7 +509,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 )
                 if nat_view is not None and nat_view.nat_type != "static":
                     self._emit_nat_built(
-                        sensor_event,
                         sensor_net,
                         protocol,
                         src_iface,
@@ -492,7 +518,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                         nat_view,
                     )
                 teardown_emitted = self._emit_teardown(
-                    sensor_event,
+                    sensor_timestamp,
                     sensor_net,
                     protocol,
                     conn_id,
@@ -506,7 +532,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 if nat_view is not None and nat_view.nat_type != "static":
                     if teardown_emitted:
                         self._emit_nat_teardown(
-                            sensor_event,
                             sensor_net,
                             protocol,
                             src_iface,
@@ -518,7 +543,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     @staticmethod
     def _nat_view(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         net: Any,
         observation: NetworkSensorObservation | None,
     ) -> NatSensorObservation | None:
@@ -560,7 +585,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_built(
         self,
-        event: SecurityEvent,
+        timestamp: datetime,
         net: Any,
         protocol: str,
         conn_id: int,
@@ -616,7 +641,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             )
 
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": timestamp,
             "hostname": fw_hostname,
             "severity": 6,
             "msg_id": msg_id,
@@ -628,7 +653,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_teardown(
         self,
-        event: SecurityEvent,
+        timestamp: datetime,
         net: Any,
         protocol: str,
         conn_id: int,
@@ -643,10 +668,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if observation is not None and observation.firewall_teardown_time is not None:
             reason = observation.firewall_teardown_reason
             teardown_ts = observation.firewall_teardown_time
-            duration_seconds = max(0.0, (teardown_ts - event.timestamp).total_seconds())
+            duration_seconds = max(0.0, (teardown_ts - timestamp).total_seconds())
         else:
             reason, duration_seconds = self._compatibility_teardown_plan(net, protocol)
-            teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
+            teardown_ts = timestamp + timedelta(seconds=duration_seconds)
         duration = self._format_duration(duration_seconds)
         total_bytes = self._teardown_byte_count(net, protocol, conn_id)
 
@@ -698,7 +723,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_deny(
         self,
-        event: SecurityEvent,
+        timestamp: datetime,
         net: Any,
         fw: Any,
         src_iface: str,
@@ -729,7 +754,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             )
 
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": timestamp,
             "hostname": fw_hostname,
             "severity": 4,
             "msg_id": fw.msg_id if fw and fw.msg_id > 0 else 106023,
@@ -739,7 +764,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         }
         self._dispatch(event_data)
         # Check threat detection thresholds after each deny
-        self._check_threat_detection(net.src_ip, event.timestamp, sensor_hostname, fw_hostname)
+        self._check_threat_detection(net.src_ip, timestamp, sensor_hostname, fw_hostname)
 
     def _should_suppress_outside_private_deny(
         self,
@@ -761,7 +786,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_nat_built(
         self,
-        event: SecurityEvent,
         net: Any,
         protocol: str,
         src_iface: str,
@@ -807,7 +831,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _emit_nat_teardown(
         self,
-        event: SecurityEvent,
         net: Any,
         protocol: str,
         src_iface: str,

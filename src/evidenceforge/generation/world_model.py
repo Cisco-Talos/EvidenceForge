@@ -1,6 +1,6 @@
 """Compiled world-model and session/activity planners.
 
-The canonical event model guarantees field consistency once a SecurityEvent
+The canonical event model guarantees field consistency once a OccurrenceBuilder
 exists. This module adds the missing "why would this happen here?" layer:
 
 - resolve authoritative host capabilities and infrastructure roles once
@@ -29,7 +29,7 @@ from evidenceforge.utils.time import ensure_utc
 if TYPE_CHECKING:
     import random
 
-    from evidenceforge.events.contexts import IdsContext
+    from evidenceforge.events.contexts import IdsAlertPlan
     from evidenceforge.generation.activity.generator import ActivityGenerator
     from evidenceforge.generation.state_manager import StateManager
     from evidenceforge.models.scenario import Scenario, System, User
@@ -977,7 +977,7 @@ class WorldPlanner:
         storyline_protected: bool = False,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
@@ -1345,7 +1345,7 @@ class WorldPlanner:
         rng: random.Random,
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         source_os = (
             self.world_model.hosts[plan.source_system.hostname].os_category
@@ -1411,7 +1411,7 @@ class WorldPlanner:
         activity_time: datetime,
         rng: random.Random,
         session_end_plan: SessionEndPlan | None = None,
-        ids_alerts: list[IdsContext] | None = None,
+        ids_alerts: list[IdsAlertPlan] | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
         source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))

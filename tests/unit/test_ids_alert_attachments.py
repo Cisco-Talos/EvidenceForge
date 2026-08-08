@@ -10,14 +10,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     HttpContext,
+    IdsAlertPlan,
     IdsAlertPolicyContext,
-    IdsContext,
     IdsDetectionFilterContext,
     IdsEventFilterContext,
-    NetworkContext,
 )
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -30,6 +29,7 @@ from evidenceforge.generation.actions.ids_alert import (
     IdsAlertActionBundle,
     IdsAlertRequest,
     ids_alert_matches_transaction,
+    normalize_ids_alerts,
 )
 from evidenceforge.generation.activity.ids_signatures import (
     reset_ids_signatures_cache,
@@ -61,6 +61,7 @@ from evidenceforge.models.scenario import (
     WebScanEventSpec,
 )
 from evidenceforge.validation import ScenarioValidator
+from tests.network_factories import network_plan
 
 T0 = datetime(2026, 8, 3, tzinfo=UTC)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -202,7 +203,7 @@ def test_upload_signature_requires_successful_body_bearing_http_method() -> None
 def test_response_and_scan_predicates_distinguish_payload_free_attempts() -> None:
     """Response claims require response evidence while scan metadata may fire on S0."""
 
-    response_alert = IdsContext(
+    response_alert = IdsAlertPlan(
         sid=1,
         message="response claim",
         classification="misc-activity",
@@ -216,7 +217,7 @@ def test_response_and_scan_predicates_distinguish_payload_free_attempts() -> Non
             semantic_claim="response_content",
         ),
     )
-    scan_alert = IdsContext(
+    scan_alert = IdsAlertPlan(
         sid=2,
         message="scan",
         classification="attempted-recon",
@@ -240,7 +241,7 @@ def test_response_and_scan_predicates_distinguish_payload_free_attempts() -> Non
 def test_cleartext_content_predicate_rejects_opaque_tls() -> None:
     """A payload-content alert cannot inspect an opaque encrypted transaction."""
 
-    alert = IdsContext(
+    alert = IdsAlertPlan(
         sid=3,
         message="content",
         classification="policy-violation",
@@ -696,10 +697,10 @@ def test_snort_emitter_sorts_before_filtering_and_cleans_spool(tmp_path) -> None
         sensor_hostnames=["ids-01"],
     )
     for second in (2, 0, 1):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0 + timedelta(seconds=second),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.8",
                 src_port=50000 + second,
                 dst_ip="198.51.100.10",
@@ -707,7 +708,7 @@ def test_snort_emitter_sorts_before_filtering_and_cleans_spool(tmp_path) -> None
                 protocol="tcp",
             ),
             ids_alerts=[
-                IdsContext(
+                IdsAlertPlan(
                     sid=2028401,
                     message="test signature",
                     classification="misc-activity",
@@ -735,10 +736,10 @@ def test_snort_multiple_sids_are_independent(tmp_path) -> None:
         format_def=load_format("snort_alert"),
         output_path=tmp_path / "snort.log",
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=T0,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="2001:db8::1",
             src_port=55555,
             dst_ip="2001:db8::2",
@@ -746,8 +747,8 @@ def test_snort_multiple_sids_are_independent(tmp_path) -> None:
             protocol="tcp",
         ),
         ids_alerts=[
-            IdsContext(sid=1001, message="first", classification="misc-activity"),
-            IdsContext(sid=1002, message="second", classification="misc-activity"),
+            IdsAlertPlan(sid=1001, message="first", classification="misc-activity"),
+            IdsAlertPlan(sid=1002, message="second", classification="misc-activity"),
         ],
     )
     emitter.emit(event)
@@ -762,10 +763,10 @@ def test_snort_requires_both_network_and_ids_context() -> None:
         format_def=load_format("snort_alert"),
         output_path=Path("unused.log"),
     )
-    tuple_only = SecurityEvent(
+    tuple_only = OccurrenceBuilder(
         timestamp=T0,
         event_type="dhcp_lease",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.0.8",
             src_port=68,
             dst_ip="10.0.0.1",
@@ -773,16 +774,16 @@ def test_snort_requires_both_network_and_ids_context() -> None:
             protocol="udp",
         ),
     )
-    ids_only = SecurityEvent(
+    ids_only = OccurrenceBuilder(
         timestamp=T0,
         event_type="custom",
-        ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+        ids_alerts=[IdsAlertPlan(sid=1001, message="test", classification="misc-activity")],
     )
-    dhcp_alert = SecurityEvent(
+    dhcp_alert = OccurrenceBuilder(
         timestamp=T0,
         event_type="dhcp_lease",
         network=tuple_only.network,
-        ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+        ids_alerts=[IdsAlertPlan(sid=1001, message="test", classification="misc-activity")],
     )
     assert not emitter.can_handle(tuple_only)
     assert not emitter.can_handle(ids_only)
@@ -790,40 +791,41 @@ def test_snort_requires_both_network_and_ids_context() -> None:
 
 
 def test_authored_plural_ids_context_overrides_automatic_same_sid() -> None:
-    automatic = IdsContext(sid=1001, message="automatic", classification="misc-activity")
-    authored = IdsContext(
+    automatic = IdsAlertPlan(sid=1001, message="automatic", classification="misc-activity")
+    authored = IdsAlertPlan(
         sid=1001,
         message="authored",
         classification="misc-activity",
+        origin="authored_attachment",
         policy=IdsAlertPolicyContext(
             event_filter=IdsEventFilterContext(type="limit", track="by_src", count=1, seconds=60)
         ),
     )
-    event = SecurityEvent(
-        timestamp=T0, event_type="connection", ids=automatic, ids_alerts=[authored]
-    )
-    assert event.all_ids_alerts() == (authored,)
+    assert normalize_ids_alerts([automatic, authored]) == (authored,)
 
 
 def test_authored_same_sid_precedence_records_authored_origin(tmp_path) -> None:
-    automatic = IdsContext(sid=1001, message="automatic", classification="misc-activity")
-    authored = IdsContext(sid=1001, message="authored", classification="misc-activity")
+    authored = IdsAlertPlan(
+        sid=1001,
+        message="authored",
+        classification="misc-activity",
+        origin="authored_attachment",
+    )
     emitter = SnortEmitter(
         format_def=load_format("snort_alert"), output_path=tmp_path / "snort.log"
     )
     emitter.emit(
-        SecurityEvent(
+        OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.8",
                 src_port=50000,
                 dst_ip="198.51.100.10",
                 dst_port=443,
                 protocol="tcp",
             ),
-            ids=automatic,
-            ids_alerts=[authored],
+            ids_alerts=(authored,),
         )
     )
     emitter.close()
@@ -870,10 +872,10 @@ def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
         sensor_hostnames=["inside", "outside"],
     )
     for second in (0, 1):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0 + timedelta(seconds=second),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.8",
                 src_port=50000,
                 dst_ip="198.51.100.10",
@@ -881,7 +883,7 @@ def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
                 protocol="tcp",
             ),
             ids_alerts=[
-                IdsContext(
+                IdsAlertPlan(
                     sid=2028401,
                     message="test",
                     classification="misc-activity",
@@ -912,17 +914,17 @@ def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch
         format_def=load_format("snort_alert"),
         output_path=tmp_path / "snort.log",
     )
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=T0,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.0.8",
             src_port=50000,
             dst_ip="198.51.100.10",
             dst_port=443,
             protocol="tcp",
         ),
-        ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+        ids_alerts=[IdsAlertPlan(sid=1001, message="test", classification="misc-activity")],
     )
     emitter.emit(event)
     spool_path = emitter._spool_path
@@ -939,17 +941,17 @@ def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch
 
 def test_no_ids_sensor_creates_no_candidate_totals_or_output(tmp_path) -> None:
     emitter = SnortEmitter(format_def=load_format("snort_alert"), output_path=tmp_path)
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=T0,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.0.8",
             src_port=50000,
             dst_ip="198.51.100.10",
             dst_port=443,
             protocol="tcp",
         ),
-        ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+        ids_alerts=[IdsAlertPlan(sid=1001, message="test", classification="misc-activity")],
         storyline_cluster_id="no-sensor",
     )
     emitter.emit(event)
@@ -966,17 +968,17 @@ def test_threaded_and_non_threaded_snort_are_byte_equivalent(tmp_path) -> None:
             threaded=threaded,
         )
         for second in (4, 0, 2, 1, 3):
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=T0 + timedelta(seconds=second),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.8",
                     src_port=50000 + second,
                     dst_ip="198.51.100.10",
                     dst_port=443,
                     protocol="tcp",
                 ),
-                ids_alerts=[IdsContext(sid=1001, message="test", classification="misc-activity")],
+                ids_alerts=[IdsAlertPlan(sid=1001, message="test", classification="misc-activity")],
             )
             emitter.emit(event)
         emitter.barrier_flush()
@@ -997,10 +999,10 @@ def test_multi_day_candidates_remain_out_of_memory_buffers(tmp_path) -> None:
         output_path=tmp_path / "multi-day.log",
     )
     for minute in range(4_000):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0 + timedelta(minutes=minute),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.8",
                 src_port=50000 + minute % 1000,
                 dst_ip="198.51.100.10",
@@ -1008,7 +1010,7 @@ def test_multi_day_candidates_remain_out_of_memory_buffers(tmp_path) -> None:
                 protocol="tcp",
             ),
             ids_alerts=[
-                IdsContext(
+                IdsAlertPlan(
                     sid=1001,
                     message="test",
                     classification="misc-activity",

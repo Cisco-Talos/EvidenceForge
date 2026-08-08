@@ -24,7 +24,7 @@
 
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -41,7 +41,7 @@ _ZEEK_SERVICE_ALIASES: dict[str, str] = {
 _SOURCE_TIMING = SourceTimingPlanner()
 
 
-def _tls_completed_duration_floor(event: SecurityEvent, min_ms: int, max_ms: int) -> float:
+def _tls_completed_duration_floor(event: CanonicalOccurrence, min_ms: int, max_ms: int) -> float:
     """Return a deterministic TLS analyzer duration floor with source-native texture."""
     net = event.network
     if net is None:
@@ -67,7 +67,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_conn.json"
     _supported_types: set[str] = {"connection", "dhcp_lease"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Zeek conn emitter handles canonical network transport events."""
         return (
             event.event_type in self._supported_types
@@ -92,8 +92,8 @@ class ZeekEmitter(SensorMultiplexEmitter):
         normalized = service.strip().lower()
         return _ZEEK_SERVICE_ALIASES.get(normalized, normalized)
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Render SecurityEvent to Zeek conn.log format."""
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Render CanonicalOccurrence to Zeek conn.log format."""
         net = event.network
         duration = net.duration
         src_ip = net.src_ip
@@ -120,7 +120,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             net.protocol == "tcp"
             and net.dst_port == 443
             and net.conn_state == "SF"
-            and (event.ssl is not None or self._render_service_name(net.service) == "ssl")
+            and (event.protocol.ssl is not None or self._render_service_name(net.service) == "ssl")
         ):
             tls_min_window = get_timing_window(
                 "network.tls_completed_min_duration",
@@ -146,12 +146,12 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 )
                 canonical_duration = float(duration or 0.0)
                 duration = max(sampled_duration, canonical_duration + 0.001)
-        if event.network_observations_planned and net.transaction is not None:
+        if event.network_observations_planned:
             # The observation planner owns the sensor-visible connection start.
             # Protocol siblings are projected from this same canonical anchor by
             # SensorMultiplexEmitter, so applying another conn-only source delay
             # here can place HTTP/TLS rows before their parent connection.
-            event_ts = net.transaction.started_at
+            event_ts = net.started_at
         else:
             event_ts = _SOURCE_TIMING.source_time(
                 event,
@@ -178,9 +178,9 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "duration": duration,
             "_min_duration": event.dns.rtt if event.dns is not None else None,
             "_lock_duration": event.dns is not None
-            or event.file_transfer is not None
-            or event.x509 is not None
-            or bool(event.x509_chain),
+            or event.protocol.primary_file_transfer is not None
+            or event.protocol.leaf_certificate is not None
+            or bool(event.protocol.x509_chain),
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
             "conn_state": conn_state,
@@ -194,17 +194,17 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "resp_ip_bytes": net.resp_ip_bytes,
             "ip_proto": net.ip_proto,
             "_http_request_body_len": (
-                event.http.flow_request_body_len
-                if event.http and event.http.flow_request_body_len is not None
-                else event.http.request_body_len
-                if event.http
+                event.protocol.http.flow_request_body_len
+                if event.protocol.http and event.protocol.http.flow_request_body_len is not None
+                else event.protocol.http.request_body_len
+                if event.protocol.http
                 else None
             ),
             "_http_response_body_len": (
-                event.http.flow_response_body_len
-                if event.http and event.http.flow_response_body_len is not None
-                else event.http.response_body_len
-                if event.http
+                event.protocol.http.flow_response_body_len
+                if event.protocol.http and event.protocol.http.flow_response_body_len is not None
+                else event.protocol.http.response_body_len
+                if event.protocol.http
                 else None
             ),
             **self._sensor_metadata(event, self.format_def.name),

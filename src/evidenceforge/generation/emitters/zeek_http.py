@@ -25,7 +25,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     planned_zeek_connection_interval,
@@ -54,7 +54,7 @@ def _response_file_vectors(http: Any) -> tuple[list[str] | None, list[str] | Non
 class ZeekHttpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek http.log format (NDJSON).
 
-    Generates HTTP request/response logs. Requires both NetworkContext and HttpContext.
+    Generates HTTP request/response logs. Requires both NetworkTransactionPlan and HttpContext.
     Shares conn.log UID via event.network.zeek_uid.
     """
 
@@ -69,10 +69,10 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             tuple[str, str, int, str, int], tuple[datetime, datetime | None]
         ] = {}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         if event.event_type not in self._supported_types:
             return False
-        if event.network is None or event.http is None:
+        if event.network is None or event.protocol.http is None:
             return False
         # Standard Zeek cannot inspect TLS-encrypted traffic — only emit
         # http.log for unencrypted HTTP connections
@@ -82,9 +82,9 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             return False
         return True
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
-        http = event.http
+        http = event.protocol.http
         uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
         planned_interval = planned_zeek_connection_interval(event)
         if planned_interval is not None:

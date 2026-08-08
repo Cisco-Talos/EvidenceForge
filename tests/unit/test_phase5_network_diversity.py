@@ -177,7 +177,7 @@ class TestDnsLookupEmission:
             dst_ip="172.217.14.206",
             time=timestamp,
         )
-        # DNS now goes through SecurityEvent pipeline via emit() (DnsContext fan-out)
+        # DNS now goes through OccurrenceBuilder pipeline via emit() (DnsContext fan-out)
         assert mock_emitters["zeek_dns"].emit.called
         dns_se = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
         dns_ctx = dns_se.dns
@@ -238,12 +238,12 @@ class TestDnsLookupEmission:
             dst_ip="172.217.14.206",
             time=timestamp,
         )
-        # Both conn and dns now go through emit() on the SAME SecurityEvent
-        # Get the dns.log SecurityEvent
+        # Both conn and dns now go through emit() on the SAME OccurrenceBuilder
+        # Get the dns.log OccurrenceBuilder
         dns_se = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
         dns_uid = dns_se.network.zeek_uid
 
-        # Get the conn.log SecurityEvent
+        # Get the conn.log OccurrenceBuilder
         conn_se = mock_emitters["zeek_conn"].emit.call_args_list[0][0][0]
         conn_uid = conn_se.network.zeek_uid
 

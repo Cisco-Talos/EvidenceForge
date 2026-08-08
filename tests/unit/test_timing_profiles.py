@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import (
@@ -326,7 +326,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
     parent_visible_time = datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC)
     generator._process_source_create_times = {("WS-01", 1000): parent_visible_time}
     event_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=event_time,
         event_type="process_create",
         src_host=HostContext(
@@ -413,7 +413,7 @@ def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
     generator._process_source_terminate_times = {}
     start_time = datetime(2024, 3, 18, 17, 15, 41, tzinfo=UTC)
     terminate_time = start_time + timedelta(seconds=8)
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=terminate_time,
         event_type="process_terminate",
         src_host=HostContext(
@@ -450,7 +450,7 @@ def test_process_source_terminate_time_uses_stored_visible_create_anchor():
     visible_create_time = start_time + timedelta(milliseconds=350)
     generator._process_source_create_times = {("WS-01", 5396): visible_create_time}
     generator._process_source_terminate_times = {}
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=terminate_time,
         event_type="process_terminate",
         src_host=HostContext(

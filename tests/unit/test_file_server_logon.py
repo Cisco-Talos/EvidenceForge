@@ -138,7 +138,7 @@ class TestEmitSmbFileOperations:
             os_category="windows",
         )
         captured = []
-        obj.activity_generator.dispatcher.dispatch.side_effect = captured.append
+        obj.activity_generator.dispatcher.dispatch_builder.side_effect = captured.append
         method = BaselineMixin._emit_smb_file_operations.__get__(obj)
 
         user = SimpleNamespace(username="jdoe")

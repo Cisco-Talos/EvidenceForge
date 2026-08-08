@@ -28,7 +28,7 @@ from evidenceforge.utils.ids import _has_synthetic_marker
 from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
-    from evidenceforge.events.base import SecurityEvent
+    from evidenceforge.events.base import CanonicalOccurrence
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.models.scenario import NetworkSensor
 
@@ -59,15 +59,15 @@ class NetworkObservationPlanner:
 
     def plan(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         visible_formats: set[str],
     ) -> tuple[NetworkSensorObservation, ...]:
         """Return deterministic observations for every visible network sensor."""
 
         network = event.network
-        if network is None or network.transaction is None:
+        if network is None:
             return ()
-        transaction = network.transaction
+        transaction = network
         sensor_formats = self._sensor_formats(event, visible_formats)
         canonical_file_ids = self._canonical_file_ids(event)
         canonical_connection_ids = self._canonical_connection_ids(event)
@@ -166,7 +166,7 @@ class NetworkObservationPlanner:
 
     @staticmethod
     def _nat_observation(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         observed_start: datetime,
         observed_close: datetime | None,
         firewall_teardown: datetime | None,
@@ -175,9 +175,9 @@ class NetworkObservationPlanner:
 
         nat = event.nat
         network = event.network
-        if nat is None or network is None or network.transaction is None:
+        if nat is None or network is None:
             return None
-        transaction = network.transaction
+        transaction = network
         teardown_time = None
         if nat.nat_type == "dynamic_pat":
             teardown_time = firewall_teardown or observed_close
@@ -220,7 +220,7 @@ class NetworkObservationPlanner:
 
     @staticmethod
     def _firewall_teardown_plan(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         formats: set[str],
         sensor_identity: str,
         observed_start: datetime,
@@ -234,17 +234,9 @@ class NetworkObservationPlanner:
         if network is None or network.protocol != "tcp":
             return "", observed_close or observed_start
         timing: FirewallObservationTiming = firewall_observation_timing(sensor_identity)
-        state = (
-            network.transaction.conn_state
-            if network.transaction is not None
-            else network.conn_state
-        )
-        traffic = network.transaction.traffic if network.transaction is not None else None
-        payload_bytes = (
-            traffic.orig.payload_bytes + traffic.resp.payload_bytes
-            if traffic is not None
-            else max(0, network.orig_bytes or 0) + max(0, network.resp_bytes or 0)
-        )
+        state = network.conn_state
+        traffic = network.traffic
+        payload_bytes = traffic.orig.payload_bytes + traffic.resp.payload_bytes
         if state in {"S0", "S1", "SH", "SHR"} and payload_bytes == 0:
             return (
                 "SYN Timeout",
@@ -260,7 +252,7 @@ class NetworkObservationPlanner:
 
     @staticmethod
     def _sensor_formats(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         visible_formats: set[str],
     ) -> dict[str, set[str]]:
         sensor_formats: dict[str, set[str]] = {}
@@ -273,19 +265,19 @@ class NetworkObservationPlanner:
 
     def _sensor_view(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         sensor: NetworkSensor | None,
     ) -> tuple[NetworkTuple, bool, bool]:
         """Derive one sensor's tuple and locality directly from topology and NAT truth."""
 
         network = event.network
-        transaction = event.network.transaction
+        transaction = network
         tuple_view = NetworkTuple(
-            src_ip=transaction.src_ip,
-            src_port=transaction.src_port,
-            dst_ip=transaction.dst_ip,
-            dst_port=transaction.dst_port,
-            protocol=transaction.protocol,
+            src_ip=network.src_ip,
+            src_port=network.src_port,
+            dst_ip=network.dst_ip,
+            dst_port=network.dst_port,
+            protocol=network.protocol,
         )
         local_orig = network.local_orig
         local_resp = network.local_resp
@@ -331,39 +323,39 @@ class NetworkObservationPlanner:
         return tuple_view, local_orig, local_resp
 
     @staticmethod
-    def _canonical_file_ids(event: SecurityEvent) -> tuple[str, ...]:
+    def _canonical_file_ids(event: CanonicalOccurrence) -> tuple[str, ...]:
         values: list[str] = []
 
         def add(candidate: object) -> None:
             if isinstance(candidate, str) and candidate and candidate not in values:
                 values.append(candidate)
 
-        if event.file_transfer is not None:
-            add(event.file_transfer.fuid)
-        for transfer in event.file_transfers:
+        if event.protocol.primary_file_transfer is not None:
+            add(event.protocol.primary_file_transfer.fuid)
+        for transfer in event.protocol.file_transfers:
             add(transfer.fuid)
-        if event.ssl is not None:
-            for value in event.ssl.cert_chain_fuids:
+        if event.protocol.ssl is not None:
+            for value in event.protocol.ssl.cert_chain_fuids:
                 add(value)
-        if event.http is not None:
-            for value in event.http.resp_fuids:
+        if event.protocol.http is not None:
+            for value in event.protocol.http.resp_fuids:
                 add(value)
         if event.smtp is not None:
             for value in event.smtp.fuids:
                 add(value)
-        if event.x509 is not None:
-            add(event.x509.fuid)
-        for certificate in event.x509_chain:
+        if event.protocol.leaf_certificate is not None:
+            add(event.protocol.leaf_certificate.fuid)
+        for certificate in event.protocol.x509_chain:
             add(certificate.fuid)
-        if event.ocsp is not None:
-            add(event.ocsp.id)
-        if event.pe is not None:
-            add(event.pe.id)
+        if event.protocol.ocsp is not None:
+            add(event.protocol.ocsp.id)
+        if event.protocol.pe is not None:
+            add(event.protocol.pe.id)
         return tuple(values)
 
     @staticmethod
-    def _canonical_connection_ids(event: SecurityEvent) -> tuple[str, ...]:
-        values = [event.network.transaction.zeek_uid]
+    def _canonical_connection_ids(event: CanonicalOccurrence) -> tuple[str, ...]:
+        values = [event.network.zeek_uid]
         if event.dhcp is not None:
             values.extend(uid for uid in event.dhcp.uids if uid and uid not in values)
         return tuple(values)
