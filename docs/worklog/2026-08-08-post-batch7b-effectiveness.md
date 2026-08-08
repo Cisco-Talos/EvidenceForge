@@ -140,3 +140,25 @@ source format schemas remain unchanged.
   `False` for boundary-open callers; keep all close events in the bundle.
 - **Sibling risks:** sessions crossing the generation window, premature source-process
   termination, double close/logoff rows, failed authentication, and explicit session-end plans.
+
+## P1 closure outcome
+
+- Implementation commit: `2ab8e5e9` (`fix: close post-batch7b realism blockers`).
+- Definitive output: `/private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise`; repeat:
+  `/private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise-repeat`.
+- Primary/repeat data trees are byte-identical with digest
+  `994762e5995f822f6079e0ef7b17147d886602eebc25ff2387b965d4c6a79aae`.
+- The expanded probe reports zero findings, including SSH source-client termination and target
+  shell-before-logout checks added after two preliminary blind passes exposed those closure facets.
+- Evaluation parsed 51,317 records and scored 95.327312; acceptance still fails only on
+  `causality.pivot_linkability`.
+- Final verification: `5,243 passed, 41 skipped`; Ruff lint and format checks pass.
+- Definitive blind scores: Threat 96, Detection 86, Network 92, Host/EDR 99; average 93.25, spread
+  13, unanimous Synthetic, no deliberation trigger.
+
+The five P1 contracts are closed. Aggregate blind authenticity did not improve; new decisive
+signals concern process-to-artifact causality, foreground process lifetime, network timestamp/loss
+texture, and scenario-to-evidence bridges. These remain follow-on roadmap work rather than another
+blind-review-driven loop. See
+`docs/design/realism-review/post-batch7b-effectiveness/REPORT.md` and the reports under
+`post-p1-blockers/final/`.

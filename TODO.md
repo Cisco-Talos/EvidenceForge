@@ -91,11 +91,11 @@ without turning `TODO.md` back into a high-conflict work journal.
   authored schema, and source formats; version the ground-truth schema. Optimize indexed lookup
   speed while proving duration-stable retained state. See the Batch 7 worklog for the approved
   implementation contract and [Batch 7b results](docs/design/realism-review/batch7b-results.json).
-- [ ] **P1** Close the post-Batch-7b effectiveness gate before opening the cumulative PR to `dev`:
+- [x] **P1** Close the post-Batch-7b effectiveness gate before opening the cumulative PR to `dev`:
   repair the controlled SSH source-order regression, inbound Windows 5156 local-process ownership,
   file/application/transport loss accounting, clock-derived Linux PID allocation, and missing SSH
-  close ownership. Use invariant tests plus one integrated regression generation; a new blind panel
-  is optional, not part of this gate. See the
+  close ownership. The definitive repeat is byte-identical, the expanded probe is clean, and the
+  requested blind panel is complete. See the
   [effectiveness report](docs/design/realism-review/post-batch7b-effectiveness/REPORT.md).
 - The complete dependency order and acceptance boundaries remain in the
   [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
@@ -130,6 +130,12 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P1** Make process-to-file and process-to-registry effects actor-native by construction:
+  stop attaching Defender, WER, CBS, Office MRU, UserAssist, and shell-state artifacts to arbitrary
+  live or newly launched processes, and add ProcessGuid/PID causality probes for each family.
+- [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
+  `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
+  session teardown unless an explicit hung/long-running outcome owns that lifecycle.
 - [ ] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
@@ -177,6 +183,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   host history, and add realistic network collection imperfections such as
   occasional Zeek `missed_bytes`, incomplete TLS/x509 companion evidence, and
   less curated IDS alert clustering.
+- [ ] **P2** Remove source-native network timing and loss lattices: avoid preserving identical
+  microsecond residues through integer-millisecond protocol offsets, model directional capture gaps
+  more often than symmetric `Gg`, and render response-triggered IDS alerts with response direction.
 - [ ] **P2** Track SOF-ELK HTTPD parser handling of domain-qualified and
   machine-account proxy usernames. The SOF-ELK target currently strips the
   Windows domain prefix from `DOMAIN\user` and the trailing `$` from `machine$`

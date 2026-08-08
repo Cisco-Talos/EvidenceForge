@@ -1,33 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1760" viewBox="0 0 1600 1760">
 <rect x="0.00" y="0.00" width="1600.00" height="1760.00" fill="#f8fafc" stroke="none" opacity="1.0"/>
-<text x="86.00" y="48.00" font-family="Inter, Arial, sans-serif" font-size="34" fill="#111827" font-weight="700" text-anchor="start">Architecture Review: Effectiveness Dashboard</text>
-<text x="86.00" y="78.00" font-family="Inter, Arial, sans-serif" font-size="14" fill="#6b7280" font-weight="400" text-anchor="start">1 Pre-fix &#8226; 2 Post-Batch-2 &#8226; 3 Gate L3 &#8226; 4 Final Gate &#8226; 5 Post-Batch-7b. Blind synthetic confidence; lower is better.</text>
+<text x="86.00" y="48.00" font-family="Inter, Arial, sans-serif" font-size="34" fill="#111827" font-weight="700" text-anchor="start">EvidenceForge Realism: P1 Effectiveness Dashboard</text>
+<text x="86.00" y="78.00" font-family="Inter, Arial, sans-serif" font-size="14" fill="#6b7280" font-weight="400" text-anchor="start">1 Pre-fix &#8226; 2 Post-Batch-2 &#8226; 3 Gate L3 &#8226; 4 Final Gate &#8226; 5 Post-Batch-7b &#8226; 6 Post-P1. Lower is better.</text>
 <rect x="86.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
 <text x="102.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Checkpoints</text>
-<text x="102.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">1-5</text>
-<text x="102.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">5 frozen stages</text>
+<text x="102.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">1-6</text>
+<text x="102.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">6 frozen stages</text>
 <rect x="334.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
 <text x="350.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Latest blind avg</text>
-<text x="350.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">90.00</text>
-<text x="350.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Post-Batch-7b</text>
+<text x="350.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">93.25</text>
+<text x="350.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Post-P1 blockers</text>
 <rect x="582.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
-<text x="598.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Five-stage avg</text>
-<text x="598.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">89.55</text>
+<text x="598.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Latest 5-loop avg</text>
+<text x="598.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">89.85</text>
 <text x="598.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Trailing mean</text>
 <rect x="830.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
-<text x="846.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Best checkpoint</text>
+<text x="846.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Best loop</text>
 <text x="846.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">3: 78.75</text>
 <text x="846.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Lowest blind avg</text>
 <rect x="1078.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
-<text x="1094.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Worst checkpoint</text>
+<text x="1094.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Worst loop</text>
 <text x="1094.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">2: 96.50</text>
 <text x="1094.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Highest blind avg</text>
 <rect x="1326.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
 <text x="1342.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Widest spread</text>
 <text x="1342.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">5: 24</text>
 <text x="1342.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Reviewer disagreement</text>
-<text x="86.00" y="228.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">1. Blind reviewer scores and five-stage running average</text>
-<text x="720.00" y="228.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Blue band is reviewer range; black line is the running checkpoint average.</text>
+<text x="86.00" y="228.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">1. Blind reviewer scores and five-loop rolling average</text>
+<text x="606.00" y="228.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Blue band is min-max reviewer range; black line is trailing 5-loop blind average.</text>
 <rect x="86.00" y="260.00" width="1320.00" height="360.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
 <line x1="130.00" y1="582.00" x2="1362.00" y2="582.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
 <text x="120.00" y="586.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">0</text>
@@ -41,40 +41,46 @@
 <text x="120.00" y="347.60" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">80</text>
 <line x1="130.00" y1="284.00" x2="1362.00" y2="284.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
 <text x="120.00" y="288.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">100</text>
-<path d="M 130.00 292.94 L 438.00 286.98 L 746.00 328.70 L 1054.00 295.92 L 1362.00 295.92 L 1362.00 367.44 L 1054.00 328.70 L 746.00 367.44 L 438.00 301.88 L 130.00 325.72 Z" fill="#bfdbfe" opacity="0.40" stroke="none"/>
-<path d="M 130.00 319.76 L 438.00 289.96 L 746.00 367.44 L 1054.00 295.92 L 1362.00 367.44" fill="none" stroke="#dc2626" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 130.00 292.94 L 376.40 286.98 L 622.80 328.70 L 869.20 295.92 L 1115.60 295.92 L 1362.00 286.98 L 1362.00 325.72 L 1115.60 367.44 L 869.20 328.70 L 622.80 367.44 L 376.40 301.88 L 130.00 325.72 Z" fill="#bfdbfe" opacity="0.40" stroke="none"/>
+<path d="M 130.00 319.76 L 376.40 289.96 L 622.80 367.44 L 869.20 295.92 L 1115.60 367.44 L 1362.00 295.92" fill="none" stroke="#dc2626" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="130.00" cy="319.76" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 1 Threat: 88</title></circle>
-<circle cx="438.00" cy="289.96" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 2 Threat: 98</title></circle>
-<circle cx="746.00" cy="367.44" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 3 Threat: 72</title></circle>
-<circle cx="1054.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 4 Threat: 96</title></circle>
-<circle cx="1362.00" cy="367.44" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 5 Threat: 72</title></circle>
-<path d="M 130.00 295.92 L 438.00 298.90 L 746.00 361.48 L 1054.00 328.70 L 1362.00 295.92" fill="none" stroke="#7c3aed" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="376.40" cy="289.96" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 2 Threat: 98</title></circle>
+<circle cx="622.80" cy="367.44" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 3 Threat: 72</title></circle>
+<circle cx="869.20" cy="295.92" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 4 Threat: 96</title></circle>
+<circle cx="1115.60" cy="367.44" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 5 Threat: 72</title></circle>
+<circle cx="1362.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 6 Threat: 96</title></circle>
+<path d="M 130.00 295.92 L 376.40 298.90 L 622.80 361.48 L 869.20 328.70 L 1115.60 295.92 L 1362.00 325.72" fill="none" stroke="#7c3aed" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="130.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 1 Detection: 96</title></circle>
-<circle cx="438.00" cy="298.90" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 2 Detection: 95</title></circle>
-<circle cx="746.00" cy="361.48" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 3 Detection: 74</title></circle>
-<circle cx="1054.00" cy="328.70" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 4 Detection: 85</title></circle>
-<circle cx="1362.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 5 Detection: 96</title></circle>
-<path d="M 130.00 325.72 L 438.00 301.88 L 746.00 331.68 L 1054.00 295.92 L 1362.00 295.92" fill="none" stroke="#0891b2" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="376.40" cy="298.90" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 2 Detection: 95</title></circle>
+<circle cx="622.80" cy="361.48" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 3 Detection: 74</title></circle>
+<circle cx="869.20" cy="328.70" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 4 Detection: 85</title></circle>
+<circle cx="1115.60" cy="295.92" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 5 Detection: 96</title></circle>
+<circle cx="1362.00" cy="325.72" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 6 Detection: 86</title></circle>
+<path d="M 130.00 325.72 L 376.40 301.88 L 622.80 331.68 L 869.20 295.92 L 1115.60 295.92 L 1362.00 307.84" fill="none" stroke="#0891b2" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="130.00" cy="325.72" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 1 Network: 86</title></circle>
-<circle cx="438.00" cy="301.88" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 2 Network: 94</title></circle>
-<circle cx="746.00" cy="331.68" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 3 Network: 84</title></circle>
-<circle cx="1054.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 4 Network: 96</title></circle>
-<circle cx="1362.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 5 Network: 96</title></circle>
-<path d="M 130.00 292.94 L 438.00 286.98 L 746.00 328.70 L 1054.00 325.72 L 1362.00 295.92" fill="none" stroke="#ea580c" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="376.40" cy="301.88" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 2 Network: 94</title></circle>
+<circle cx="622.80" cy="331.68" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 3 Network: 84</title></circle>
+<circle cx="869.20" cy="295.92" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 4 Network: 96</title></circle>
+<circle cx="1115.60" cy="295.92" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 5 Network: 96</title></circle>
+<circle cx="1362.00" cy="307.84" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 6 Network: 92</title></circle>
+<path d="M 130.00 292.94 L 376.40 286.98 L 622.80 328.70 L 869.20 325.72 L 1115.60 295.92 L 1362.00 286.98" fill="none" stroke="#ea580c" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="130.00" cy="292.94" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 1 Host/EDR: 97</title></circle>
-<circle cx="438.00" cy="286.98" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 2 Host/EDR: 99</title></circle>
-<circle cx="746.00" cy="328.70" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 3 Host/EDR: 85</title></circle>
-<circle cx="1054.00" cy="325.72" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 4 Host/EDR: 86</title></circle>
-<circle cx="1362.00" cy="295.92" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 5 Host/EDR: 96</title></circle>
-<path d="M 130.00 308.58 L 438.00 301.51 L 746.00 316.78 L 1054.00 315.48 L 1362.00 315.14" fill="none" stroke="#111827" stroke-width="3.3" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="376.40" cy="286.98" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 2 Host/EDR: 99</title></circle>
+<circle cx="622.80" cy="328.70" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 3 Host/EDR: 85</title></circle>
+<circle cx="869.20" cy="325.72" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 4 Host/EDR: 86</title></circle>
+<circle cx="1115.60" cy="295.92" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 5 Host/EDR: 96</title></circle>
+<circle cx="1362.00" cy="286.98" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 6 Host/EDR: 99</title></circle>
+<path d="M 130.00 308.58 L 376.40 301.51 L 622.80 316.78 L 869.20 315.48 L 1115.60 315.14 L 1362.00 314.25" fill="none" stroke="#111827" stroke-width="3.3" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="130.00" cy="308.58" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 1 5-loop avg: 91.75</title></circle>
-<circle cx="438.00" cy="301.51" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 2 5-loop avg: 94.12</title></circle>
-<circle cx="746.00" cy="316.78" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 3 5-loop avg: 89.00</title></circle>
-<circle cx="1054.00" cy="315.48" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 4 5-loop avg: 89.44</title></circle>
-<circle cx="1362.00" cy="315.14" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 5 5-loop avg: 89.55</title></circle>
+<circle cx="376.40" cy="301.51" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 2 5-loop avg: 94.12</title></circle>
+<circle cx="622.80" cy="316.78" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 3 5-loop avg: 89.00</title></circle>
+<circle cx="869.20" cy="315.48" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 4 5-loop avg: 89.44</title></circle>
+<circle cx="1115.60" cy="315.14" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 5 5-loop avg: 89.55</title></circle>
+<circle cx="1362.00" cy="314.25" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 6 5-loop avg: 89.85</title></circle>
 <text x="130.00" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">1</text>
-<text x="746.00" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
-<text x="1362.00" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<text x="622.80" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
+<text x="1115.60" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<text x="1362.00" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">6</text>
 <line x1="1434.00" y1="297.00" x2="1462.00" y2="297.00" stroke="#dc2626" stroke-width="3" opacity="1.0"/>
 <text x="1472.00" y="302.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Threat</text>
 <line x1="1434.00" y1="325.00" x2="1462.00" y2="325.00" stroke="#7c3aed" stroke-width="3" opacity="1.0"/>
@@ -89,64 +95,75 @@
 <text x="331.00" y="668.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Red cells are higher synthetic-confidence scores.</text>
 <rect x="86.00" y="700.00" width="1320.00" height="250.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
 <text x="110.00" y="777.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Threat</text>
-<rect x="236.00" y="752.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Threat: 88</title></rect>
-<text x="348.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">88</text>
-<rect x="464.00" y="752.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Threat: 98</title></rect>
-<text x="576.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">98</text>
-<rect x="692.00" y="752.00" width="225.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Threat: 72</title></rect>
-<text x="804.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
-<rect x="920.00" y="752.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Threat: 96</title></rect>
-<text x="1032.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
-<rect x="1148.00" y="752.00" width="225.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Threat: 72</title></rect>
-<text x="1260.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
+<rect x="236.00" y="752.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Threat: 88</title></rect>
+<text x="329.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">88</text>
+<rect x="426.00" y="752.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Threat: 98</title></rect>
+<text x="519.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">98</text>
+<rect x="616.00" y="752.00" width="187.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Threat: 72</title></rect>
+<text x="709.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
+<rect x="806.00" y="752.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Threat: 96</title></rect>
+<text x="899.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="996.00" y="752.00" width="187.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Threat: 72</title></rect>
+<text x="1089.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
+<rect x="1186.00" y="752.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 6 Threat: 96</title></rect>
+<text x="1279.50" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
 <text x="110.00" y="817.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Detection</text>
-<rect x="236.00" y="792.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Detection: 96</title></rect>
-<text x="348.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
-<rect x="464.00" y="792.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Detection: 95</title></rect>
-<text x="576.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">95</text>
-<rect x="692.00" y="792.00" width="225.00" height="34.00" fill="rgb(208,60,54)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Detection: 74</title></rect>
-<text x="804.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">74</text>
-<rect x="920.00" y="792.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Detection: 85</title></rect>
-<text x="1032.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">85</text>
-<rect x="1148.00" y="792.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Detection: 96</title></rect>
-<text x="1260.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="236.00" y="792.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Detection: 96</title></rect>
+<text x="329.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="426.00" y="792.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Detection: 95</title></rect>
+<text x="519.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">95</text>
+<rect x="616.00" y="792.00" width="187.00" height="34.00" fill="rgb(208,60,54)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Detection: 74</title></rect>
+<text x="709.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">74</text>
+<rect x="806.00" y="792.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Detection: 85</title></rect>
+<text x="899.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">85</text>
+<rect x="996.00" y="792.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Detection: 96</title></rect>
+<text x="1089.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="1186.00" y="792.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 6 Detection: 86</title></rect>
+<text x="1279.50" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">86</text>
 <text x="110.00" y="857.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Network</text>
-<rect x="236.00" y="832.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Network: 86</title></rect>
-<text x="348.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">86</text>
-<rect x="464.00" y="832.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Network: 94</title></rect>
-<text x="576.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">94</text>
-<rect x="692.00" y="832.00" width="225.00" height="34.00" fill="rgb(169,5,39)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Network: 84</title></rect>
-<text x="804.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">84</text>
-<rect x="920.00" y="832.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Network: 96</title></rect>
-<text x="1032.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
-<rect x="1148.00" y="832.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Network: 96</title></rect>
-<text x="1260.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="236.00" y="832.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Network: 86</title></rect>
+<text x="329.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">86</text>
+<rect x="426.00" y="832.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Network: 94</title></rect>
+<text x="519.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">94</text>
+<rect x="616.00" y="832.00" width="187.00" height="34.00" fill="rgb(169,5,39)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Network: 84</title></rect>
+<text x="709.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">84</text>
+<rect x="806.00" y="832.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Network: 96</title></rect>
+<text x="899.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="996.00" y="832.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Network: 96</title></rect>
+<text x="1089.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="1186.00" y="832.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 6 Network: 92</title></rect>
+<text x="1279.50" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">92</text>
 <text x="110.00" y="897.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Host/EDR</text>
-<rect x="236.00" y="872.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Host/EDR: 97</title></rect>
-<text x="348.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">97</text>
-<rect x="464.00" y="872.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Host/EDR: 99</title></rect>
-<text x="576.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">99</text>
-<rect x="692.00" y="872.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Host/EDR: 85</title></rect>
-<text x="804.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">85</text>
-<rect x="920.00" y="872.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Host/EDR: 86</title></rect>
-<text x="1032.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">86</text>
-<rect x="1148.00" y="872.00" width="225.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Host/EDR: 96</title></rect>
-<text x="1260.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
-<text x="348.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">1</text>
-<text x="804.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
-<text x="1260.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
-<text x="86.00" y="998.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">3. Checkpoint-to-checkpoint change in blind average</text>
-<text x="690.00" y="998.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Negative bars are improvements; positive bars are regressions.</text>
+<rect x="236.00" y="872.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 1 Host/EDR: 97</title></rect>
+<text x="329.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">97</text>
+<rect x="426.00" y="872.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 2 Host/EDR: 99</title></rect>
+<text x="519.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">99</text>
+<rect x="616.00" y="872.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 3 Host/EDR: 85</title></rect>
+<text x="709.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">85</text>
+<rect x="806.00" y="872.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 4 Host/EDR: 86</title></rect>
+<text x="899.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">86</text>
+<rect x="996.00" y="872.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 5 Host/EDR: 96</title></rect>
+<text x="1089.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">96</text>
+<rect x="1186.00" y="872.00" width="187.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 6 Host/EDR: 99</title></rect>
+<text x="1279.50" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">99</text>
+<text x="329.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">1</text>
+<text x="709.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
+<text x="1089.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<text x="1279.50" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">6</text>
+<text x="86.00" y="998.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">3. Loop-to-loop change in blind average</text>
+<text x="496.00" y="998.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Negative bars are improvements; positive bars are regressions.</text>
 <rect x="86.00" y="1030.00" width="1320.00" height="275.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
 <line x1="130.00" y1="1167.50" x2="1362.00" y2="1167.50" stroke="#6b7280" stroke-width="1.4" opacity="1.0"/>
-<rect x="138.00" y="1165.50" width="190.94" height="4.00" fill="#9ca3af" stroke="none" opacity="1.0"><title>Loop 1: baseline</title></rect>
-<text x="233.47" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">1</text>
-<rect x="382.80" y="1141.94" width="190.94" height="25.56" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 2: delta +4.75</title></rect>
-<rect x="627.60" y="1167.50" width="190.94" height="95.50" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 3: delta -17.75</title></rect>
-<text x="723.07" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
-<rect x="872.40" y="1102.94" width="190.94" height="64.56" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 4: delta +12.00</title></rect>
-<rect x="1117.20" y="1167.50" width="190.94" height="4.04" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 5: delta -0.75</title></rect>
-<text x="1212.67" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<rect x="138.00" y="1165.50" width="159.12" height="4.00" fill="#9ca3af" stroke="none" opacity="1.0"><title>Loop 1: baseline</title></rect>
+<text x="217.56" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">1</text>
+<rect x="342.00" y="1141.94" width="159.12" height="25.56" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 2: delta +4.75</title></rect>
+<rect x="546.00" y="1167.50" width="159.12" height="95.50" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 3: delta -17.75</title></rect>
+<text x="625.56" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
+<rect x="750.00" y="1102.94" width="159.12" height="64.56" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 4: delta +12.00</title></rect>
+<rect x="954.00" y="1167.50" width="159.12" height="4.04" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 5: delta -0.75</title></rect>
+<text x="1033.56" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<rect x="1158.00" y="1150.01" width="159.12" height="17.49" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 6: delta +3.25</title></rect>
+<text x="1237.56" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">6</text>
 <text x="130.00" y="1064.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Max regression: loop 4 (+12.00)</text>
 <text x="130.00" y="1086.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Max recovery: loop 3 (-17.75)</text>
 <text x="86.00" y="1358.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">4. Reviewer disagreement band (#6)</text>
@@ -164,24 +181,26 @@
 <text x="120.00" y="1462.60" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">80</text>
 <line x1="130.00" y1="1414.00" x2="1362.00" y2="1414.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
 <text x="120.00" y="1418.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">100</text>
-<path d="M 130.00 1420.69 L 438.00 1416.23 L 746.00 1447.45 L 1054.00 1422.92 L 1362.00 1422.92" fill="none" stroke="#991b1b" stroke-width="2.6" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M 130.00 1445.22 L 438.00 1427.38 L 746.00 1476.44 L 1054.00 1447.45 L 1362.00 1476.44" fill="none" stroke="#166534" stroke-width="2.6" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M 130.00 1612.47 L 438.00 1625.85 L 746.00 1608.01 L 1054.00 1612.47 L 1362.00 1583.48" fill="none" stroke="#2563eb" stroke-width="2.8" opacity="1.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<path d="M 130.00 1420.69 L 376.40 1416.23 L 622.80 1447.45 L 869.20 1422.92 L 1115.60 1422.92 L 1362.00 1416.23" fill="none" stroke="#991b1b" stroke-width="2.6" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 130.00 1445.22 L 376.40 1427.38 L 622.80 1476.44 L 869.20 1447.45 L 1115.60 1476.44 L 1362.00 1445.22" fill="none" stroke="#166534" stroke-width="2.6" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 130.00 1612.47 L 376.40 1625.85 L 622.80 1608.01 L 869.20 1612.47 L 1115.60 1583.48 L 1362.00 1608.01" fill="none" stroke="#2563eb" stroke-width="2.8" opacity="1.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
 <circle cx="130.00" cy="1612.47" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 1 reviewer spread: 11</title></circle>
-<circle cx="438.00" cy="1625.85" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 2 reviewer spread: 5</title></circle>
-<circle cx="746.00" cy="1608.01" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 3 reviewer spread: 13</title></circle>
-<circle cx="1054.00" cy="1612.47" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 4 reviewer spread: 11</title></circle>
-<circle cx="1362.00" cy="1583.48" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 5 reviewer spread: 24</title></circle>
+<circle cx="376.40" cy="1625.85" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 2 reviewer spread: 5</title></circle>
+<circle cx="622.80" cy="1608.01" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 3 reviewer spread: 13</title></circle>
+<circle cx="869.20" cy="1612.47" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 4 reviewer spread: 11</title></circle>
+<circle cx="1115.60" cy="1583.48" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 5 reviewer spread: 24</title></circle>
+<circle cx="1362.00" cy="1608.01" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 6 reviewer spread: 13</title></circle>
 <text x="130.00" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">1</text>
-<text x="746.00" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
-<text x="1362.00" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<text x="622.80" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">3</text>
+<text x="1115.60" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">5</text>
+<text x="1362.00" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">6</text>
 <line x1="1434.00" y1="1435.00" x2="1462.00" y2="1435.00" stroke="#991b1b" stroke-width="3" opacity="1.0"/>
 <text x="1472.00" y="1440.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Max reviewer</text>
 <line x1="1434.00" y1="1465.00" x2="1462.00" y2="1465.00" stroke="#166534" stroke-width="3" opacity="1.0"/>
 <text x="1472.00" y="1470.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Min reviewer</text>
 <line x1="1434.00" y1="1495.00" x2="1462.00" y2="1495.00" stroke="#2563eb" stroke-width="3" opacity="1.0" stroke-dasharray="6 5"/>
 <text x="1472.00" y="1500.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Spread (#6)</text>
-<text x="1434.00" y="1556.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Latest spread: 24</text>
+<text x="1434.00" y="1556.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Latest spread: 13</text>
 <text x="1434.00" y="1578.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Widest: loop 5 (24)</text>
-<text x="86.00" y="1724.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Generated in the assessment-skill style from frozen checkpoint scores. Independent panels; directional comparison only. Lower is more realistic.</text>
+<text x="86.00" y="1724.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Generated from loop scores.json artifacts. Blind scores are synthetic-confidence values; lower is more realistic.</text>
 </svg>

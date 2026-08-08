@@ -80,12 +80,28 @@
         "score": 95.02557608408206,
         "records": 53548
       }
+    },
+    {
+      "index": 6,
+      "label": "Post-P1 blockers",
+      "source": "post-p1-blockers/scores.json",
+      "scores": {
+        "threat_hunter": 96,
+        "detection_engineer": 86,
+        "network_forensics": 92,
+        "host_forensics": 99,
+        "average": 93.25
+      },
+      "automated_eval": {
+        "score": 95.32731198016175,
+        "records": 51317
+      }
     }
   ],
   "latest_deltas": {
-    "versus_original_pre_fix": -1.75,
-    "versus_final_post_fix_gate": -0.75,
-    "versus_best_recorded_checkpoint": 11.25
+    "versus_original_pre_fix": 1.5,
+    "versus_final_post_fix_gate": 2.5,
+    "versus_best_recorded_checkpoint": 14.5
   },
   "comparability_limitations": [
     "The checkpoints are independent blind panels, not repeated ratings by the same reviewers.",

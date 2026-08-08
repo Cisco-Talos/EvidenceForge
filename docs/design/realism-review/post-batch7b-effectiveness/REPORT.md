@@ -1,39 +1,44 @@
-# Post-Batch-7b effectiveness assessment
+# Post-Batch-7b P1 effectiveness assessment
 
 ## Outcome
 
-The completed architecture and remediation work made real mechanical improvements, but this
-one-pass assessment does **not** demonstrate a material improvement in aggregate blind realism.
-The latest panel's average synthetic-confidence score is **90.0** (lower is better), compared with
-**91.75** before remediation and **90.75** at the final post-fix gate. The differences are too small
-and the panels too independent to support a causal claim of improvement.
+The five requested P1 blocker families are implemented and verified at commit `2ab8e5e9`:
 
-The branch is **not ready for its PR to `dev`**. A controlled Batch 7a versus Batch 7b run found a
-new deterministic SSH source-order regression, and the fresh panel identified four additional
-release-blocking shared-contract defects. Per the approved assessment scope, this report records
-those results without starting another fix/regenerate/review loop.
+1. Linux PID allocation no longer exposes a direct wall-clock slope.
+2. File/application/transport accounting and capture-loss ownership are reconciled before source
+   rendering.
+3. Inbound Windows 5156 projection uses the receiver's local PID/image pairing.
+4. SSH source ordering accounts for eCAR process visibility and collection delay.
+5. The SSH bundle owns source client, target shell, sshd, PAM/logind, and session closure.
+
+The definitive output is not byte-identical to the pre-fix output. It contains 51,317 parsed
+records and has relative data-tree digest
+`994762e5995f822f6079e0ef7b17147d886602eebc25ff2387b965d4c6a79aae`; an independent repeat is
+byte-identical to it. The expanded rendered-output probe reports zero findings.
+
+The fixes improved the targeted contracts, but the definitive blind panel did **not** show an
+aggregate realism improvement. Its average synthetic-origin confidence is **93.25** (lower is
+better), versus **90.00** after Batch 7b and **91.75** in the original pre-fix assessment. The
+panel now keys on different defects—primarily process-to-file/registry attribution, one-shot
+Windows process lifetimes, source timestamp texture, IDS direction, and capture-loss texture.
 
 ## Frozen measurement
 
-- Commit: `53934a16778c5eea22e389c0d7d80061103e730e` on
-  `codex/batch7-compatibility-docs`.
-- Benchmark: the frozen six-hour `branch-enterprise` review scenario, SHA-256
-  `bf7eef77f0cb121bb0838cc4252ae19347e1a8c8304079c11426163806cc07ff`, using
-  `enterprise_standard` observation.
-- Output: 53,548 records in 38 data files. The primary and repeat data trees have the same digest,
-  `911decaca74f1b2663d6508d2e99eed861a247ffbdd76c34ed6f9cbcb803e67f`.
-- Isolation: each reviewer received only a neutral data directory, not the scenario, ground truth,
-  source code, prior results, or another reviewer's report.
-- Scope: effectiveness measurement only. No generator change or blind-review repair loop was made.
+- Scenario: `/private/tmp/eforge-realism-review/branch-enterprise.yaml`, SHA-256
+  `bf7eef77f0cb121bb0838cc4252ae19347e1a8c8304079c11426163806cc07ff`.
+- Duration/profile: six hours under `enterprise_standard` observation.
+- Primary output: `/private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise`.
+- Repeat output: `/private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise-repeat`.
+- Neutral review copy: `/private/tmp/case-p1-definitive.PUJqMs/data`.
+- Automated evaluation: **95.3273** over 51,317 records; the only failed hard criterion remains
+  `causality.pivot_linkability`.
+- Verification: `5,243 passed, 41 skipped`; Ruff lint and format checks pass.
 
-The archived `iteration-test-expanded` scenario offered by the user no longer validates unchanged
-under the current capability rules. The exact integrated review benchmark was therefore used; this
-preserves the most useful pre-fix comparison and avoids editing the scenario to make it pass.
+Generated datasets remain untracked.
 
 ## Scores
 
-Blind synthetic-confidence is the primary comparison metric; lower means the reviewer found the
-data more realistic.
+Blind synthetic-origin confidence is the comparison metric; lower means more realistic.
 
 | Checkpoint | Threat | Detection | Network | Host/EDR | Panel average |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -42,142 +47,83 @@ data more realistic.
 | Post-gate loop 3 | 72 | 74 | 84 | 85 | **78.75** |
 | Final post-fix gate | 96 | 85 | 96 | 86 | **90.75** |
 | Post-Batch-7b | 72 | 96 | 96 | 96 | **90.00** |
+| Post-P1 blockers | 96 | 86 | 92 | 99 | **93.25** |
 
-The latest score is 1.75 points better than the original pre-fix score and 0.75 better than the
-final post-fix gate, but 11.25 worse than the best recorded intermediate checkpoint. These are
-directional observations, not controlled effect sizes: each panel was independent, generated
-content and record counts changed, and evaluator behavior also changed during the campaign.
+All four definitive reviewers returned Synthetic. Average verdict confidence was 93.5 and the
+synthetic-score spread was 13, so none of the established deliberation triggers fired. The reports
+are preserved under [`post-p1-blockers/final`](post-p1-blockers/final/).
 
-The latest deterministic evaluator scored **95.0256** over 53,548 records. Its only failed
-acceptance criterion was `causality.pivot_linkability` at 40 against an 80 threshold. Because the
-hard gate and evaluator implementation changed during remediation, this automated score should not
-be read as a direct before/after comparison.
+The dashboard is available as an editable
+[`SVG`](effectiveness-dashboard.svg) and rendered
+[`PNG`](effectiveness-dashboard.png). Machine-readable inputs are in
+[`comparison.json`](comparison.json), [`scores.json`](scores.json), and
+[`post-p1-blockers/scores.json`](post-p1-blockers/scores.json).
 
-The assessment-style comparison image is preserved as
-[`effectiveness-dashboard.png`](effectiveness-dashboard.png), with an editable
-[`SVG`](effectiveness-dashboard.svg). Its numbered checkpoints map to the five rows above; the
-source values are in [`comparison.json`](comparison.json).
+## P1 dispositions
 
-## Blind panel
+### Linux PID allocation — closed
 
-All four reviewers independently returned **Synthetic**. Average verdict confidence was 94.25 and
-the synthetic-score spread was 24, so the established deliberation conditions were not met.
+`StateManager` now uses a deterministic per-host hidden-churn schedule with cached minute-prefix
+lookups. Allocation remains fast and chronologically safe without encoding one exact
+seconds-to-PID formula. Unit coverage exercises workload sensitivity, deterministic repeat,
+out-of-order planning, and bounded retained state.
 
-| Reviewer | Verdict confidence | Synthetic confidence | Main decisive evidence |
-| --- | ---: | ---: | --- |
-| Threat Hunter | 84 | 72 | SMB byte conservation, bounded Type 3 durations, unclosed compromised SSH lifecycle |
-| Detection Engineer | 98 | 96 | inbound WFP remote-PID leakage, clock-derived Linux PIDs, formulaic Windows LogonIDs |
-| Network Forensics | 97 | 96 | SMB/HTTP framing and loss contradictions, missing Zeek gap history, quantized TLS durations |
-| Host/EDR | 98 | 96 | inbound WFP remote-PID leakage, clock-derived Linux PIDs, accumulating singleton services |
+### File/transport/capture loss — closed
 
-The individual evidence and counterevidence are preserved in the four reviewer reports in this
-directory. Strong areas remain: source-native envelopes, Windows process joins, identity and hash
-stability, connection state/packet minima, DNS/TLS/certificate semantics, firewall/NAT topology,
-and many SSH/RDP transport-to-session relationships.
+Canonical HTTP and SMB transactions now own complete application/file truth; the observation
+planner alone introduces capture loss. HTTP methods/statuses that cannot carry a body remain
+bodyless, file bytes plus framing fit inside the parent directional payload, and missing file bytes
+require a compatible parent transport gap/history. The definitive network reviewer independently
+confirmed exact file/UID linkage and byte arithmetic, while identifying loss *distribution* as a
+separate realism concern.
 
-## Controlled Batch 7b effect
+### Inbound Windows WFP ownership — closed
 
-Running the same scenario through archived Batch 7a code under the current dependency environment
-separated a Batch 7b regression from general benchmark variation:
+Inbound 5156 records now use receiver-local process identity. The definitive panel did not
+rediscover the prior local-image/remote-PID contradiction, and direction-specific unit coverage
+passes.
 
-- Batch 7a produced one Linux PID reversal finding and no SSH syslog/process ordering finding.
-- Batch 7b removes that PID reversal.
-- Batch 7b produces 37 same-PID SSH syslog rows before the corresponding eCAR process creation on
-  `PROXY-BO-01` and `WEB-BO-01`. The primary and repeat runs reproduce the same two host families.
+### SSH source ordering — closed
 
-This establishes that Batch 7b was not behavior-neutral: one contract defect was repaired, but the
-semantic-identity/source-timing migration introduced an observable lifecycle-order regression.
+All SSH paths use the source process-visibility guard with eCAR-to-later-source delay budgets. The
+definitive probe has no syslog-before-process-create findings. Detection and Host/EDR reviewers
+explicitly described SSH ordering as a realism strength.
 
-## Validated release blockers
+### SSH closure ownership — closed
 
-### P7B-REG-001 — SSH source-order regression (P1)
+The bundle now terminates one-transport source SSH clients at transport close, closes the
+bundle-owned target shell before logout, and then closes PAM/logind/session and responder sshd
+state. Two preliminary blind passes exposed incomplete source-client and target-shell facets; both
+were reproduced, fixed at the bundle owner, added to the probe, and excluded from the definitive
+scores. The final Host/EDR reviewer confirmed source client termination immediately after remote
+session closure.
 
-- **Invariant:** a source-native SSH message cannot reference an sshd child PID before that
-  provider's process-create observation for the same PID.
-- **Evidence:** 9 proxy and 28 web syslog records fail; repeat generation is identical, while the
-  controlled Batch 7a output has none.
-- **Owner:** SSH action-bundle constraints and source-timing planning, not a syslog text renderer.
-- **Required proof:** targeted source-order tests across both observation profiles and controlled
-  Batch 7a/B7b-equivalent probes.
+## Validated follow-on findings
 
-### P7B-REAL-001 — inbound WFP process ownership (P1)
+These are separate from the five closed P1 families and remain governed by the completed review's
+dependency-ordered roadmap:
 
-- **Invariant:** Windows Event 5156 on a receiver must identify the local receiving process, never
-  combine the local image with a remote host's PID.
-- **Evidence:** detection and host reviewers independently found thousands of inbound records where
-  the PID equals the remote initiator. Some `Application=System` records use Linux-sized PIDs.
-- **Owner:** `WindowsEventEmitter._render_wfp_connection()` uses
-  `network.initiating_pid` even for inbound projection, despite the canonical occurrence carrying
-  the local process image.
-- **Required proof:** inbound/outbound 5156 matrix tests for Windows-to-Windows and Linux-to-Windows
-  traffic, including PID 4/System and DNS service ownership.
+- **Process-to-artifact causality:** registry and file effects can be attached to unrelated live or
+  newly created processes, corrupting ProcessGuid/PID pivots for MRU, Defender, WER, CBS, and
+  user-shell artifacts.
+- **Foreground process lifetimes:** some one-shot Windows commands survive until interactive
+  session teardown rather than terminating according to executable semantics.
+- **Network source-native texture:** proxy HTTP timestamps preserve the connection timestamp's
+  microsecond residue through integer-millisecond offsets; capture gaps are overwhelmingly
+  bidirectional; some IDS response signatures inherit request-side tuples.
+- **Scenario/evidence bridge:** the central web-recon-to-SSH narrative is highly huntable but lacks
+  a visible credential/exploitation prerequisite and the subsequent scan lacks endpoint actor
+  ownership.
 
-### P7B-REAL-002 — file/transport/capture-loss conservation (P1)
+These findings were checked against rendered records and accepted as follow-on work. They do not
+invalidate closure of the five requested contracts, and this assessment does not start another
+blind-review-driven repair loop.
 
-- **Invariant:** application framing plus observed file bytes must fit within directional transport
-  payload, and capture loss must propagate coherently into file/application completeness and Zeek
-  history.
-- **Evidence:** 22 SMB files exceed directional payload; 172 more exactly equal it with no SMB
-  framing. A fully observed 93.6 MB HTTP body coexists with connection loss and zero header room.
-- **Owner:** file-transfer and network transaction plans independently assign file size, transport
-  payload, and `missed_bytes`.
-- **Required proof:** byte-conservation property tests for SMB/HTTP in both directions, with loss,
-  truncation, framing, sensor projection, and files/HTTP/conn fan-out.
+## Decision
 
-### P7B-REAL-003 — clock-derived Linux PIDs (P1)
-
-- **Invariant:** PID progression must reflect host process-allocation state, not reveal a direct
-  wall-clock formula.
-- **Evidence:** both Linux hosts advance at essentially two PIDs per second for six hours, with
-  regression R-squared above 0.99999999.
-- **Owner:** `StateManager._allocate_linux_pid()` explicitly derives `time_offset` from elapsed
-  seconds despite its contrary docstring.
-- **Required proof:** deterministic host-scoped allocation tests with workload-sensitive gaps,
-  non-regression under out-of-order event planning, reuse/wrap behavior, and duration-stable state.
-
-### P7B-REAL-004 — SSH closure ownership (P1)
-
-- **Invariant:** a normally closed modeled SSH transport must have lifecycle-compatible endpoint,
-  PAM, logind, shell, and session closure unless one coherent observation decision drops the group.
-- **Evidence:** the compromised `www-data` transport closes normally in Zeek and ASA, but its
-  endpoint session and processes remain open despite more than four hours of later logging.
-- **Owner:** the world-planner SSH path delegates to a bundle whose close emission defaults false;
-  a session-end plan schedules state but does not itself dispatch the close lifecycle.
-- **Required proof:** explicit, baseline, compatibility, and SCP SSH matrices covering normal FIN,
-  reset, boundary-open, planned logoff, and coherent observation drop.
-
-## Secondary validated risks
-
-- Type 3 Windows sessions show strong 30- and 60-second population ceilings. Replace per-call
-  uniform duration sampling with service/channel reuse and a heavy-tailed lifecycle model.
-- Singleton Windows services and GUI clients can accumulate parallel live instances. Durable
-  application/service state should decide reuse, restart, or termination before a new start.
-- Linux service chatter and administrator SSH cadence remain template-shaped and too frequent.
-- Repeated TLS durations and near-identical Windows LogonID slopes expose additional quantization
-  and formula texture.
-
-These are legitimate follow-up work, but they do not become a separate blind-review-driven loop.
-The reviewed remediation roadmap remains the governing plan; this gate adds verified regression
-and release-blocker evidence to it.
-
-## Decision and next action
-
-The evidence supports neither “the changes had no effect” nor “the changes improved aggregate
-realism.” The accurate conclusion is:
-
-1. The architecture work improved ownership, immutability, deterministic identity, and bounded
-   lookup behavior, and specific previous contradictions were repaired.
-2. Those gains did not translate into a measurable aggregate blind-authenticity improvement in
-   this benchmark.
-3. Batch 7b introduced one controlled source-order regression, while several high-impact existing
-   owner defects remain visible.
-
-Before opening the cumulative PR to `dev`, address the five P1 release blockers in dependency
-order: identity/state allocation, network/file accounting, inbound Windows projection, SSH source
-ordering, then SSH closure. Validate them with deterministic invariant tests and one integrated
-regression generation. A second blind panel is optional future assessment, not a condition of this
-one-pass effectiveness measurement.
-
-Machine-readable scores, comparison inputs, reproduction details, and exact artifact paths are in
-[`scores.json`](scores.json), [`comparison.json`](comparison.json), and
-[`results.json`](results.json).
+The named five-blocker gate is closed. That does not by itself make the cumulative branch ready for
+its PR: the remaining dependency-ordered review work and final package reconciliation still come
+first. The honest effectiveness conclusion is narrower: the fixes made the targeted data
+mechanically and semantically correct, but did not improve aggregate blind authenticity because
+other realism defects dominate the current reviewer signal. Continue the original remediation plan
+with those validated owner-level findings, then open the PR to `dev` when the rest is complete.

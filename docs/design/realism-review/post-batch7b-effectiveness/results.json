@@ -2,8 +2,8 @@
   "schema_version": 1,
   "recorded_at": "2026-08-08",
   "branch": "codex/batch7-compatibility-docs",
-  "commit": "53934a16778c5eea22e389c0d7d80061103e730e",
-  "purpose": "One-pass effectiveness measurement after Batch 7b; no blind-review fix loop",
+  "commit": "2ab8e5e9",
+  "purpose": "Close the five post-Batch-7b P1 blockers and measure the definitive output",
   "benchmark": {
     "scenario_source": "scenarios/branch-office-example/scenario.yaml",
     "review_copy": "/private/tmp/eforge-realism-review/branch-enterprise.yaml",
@@ -90,9 +90,9 @@
     "renderer": "/Users/dabianco/.codex/skills/eforge-assess/scripts/render_loop_dashboard.py",
     "comparison_source": "comparison.json",
     "svg": "effectiveness-dashboard.svg",
-    "svg_sha256": "fde69a244b361dfcd5fe65daa825434e5bb2fea23078ebcea32b0f1215bc68aa",
+    "svg_sha256": "0ddf9a2d4d0eaae66b07ded100e8b1232ec181047c23dd68570e681f6e064afe",
     "png": "effectiveness-dashboard.png",
-    "png_sha256": "b0d64ae630a61aea320d726badb74af43bcdccae111630b336053e9c104b9d98",
+    "png_sha256": "ab5638caeacd53b03c2dbf07b0bb22a5e507063343f97b69a7da544a148dd6cb",
     "dimensions": [1600, 1760]
   },
   "validated_root_causes": [
@@ -161,19 +161,60 @@
     "TLS duration values and Windows LogonID slopes expose additional quantization/formula texture."
   ],
   "effectiveness_conclusion": {
-    "latest_average_synthetic_confidence": 90.0,
+    "latest_average_synthetic_confidence": 93.25,
     "original_pre_fix_average": 91.75,
     "final_post_fix_gate_average": 90.75,
     "best_recorded_checkpoint_average": 78.75,
-    "result": "No material improvement in aggregate blind authenticity is demonstrated. Specific contract repairs are real, but current and newly exposed contradictions dominate the panel result.",
-    "release_gate": "blocked",
-    "automatic_fix_loop_started": false
+    "result": "All five requested P1 contracts are repaired and dynamically verified, but aggregate blind authenticity did not improve; separate process-attribution and timing-texture defects now dominate the panel result.",
+    "release_gate": "five_p1_blockers_closed_review_campaign_continues",
+    "automatic_fix_loop_started": true
+  },
+  "post_p1_gate": {
+    "implementation_commit": "2ab8e5e9",
+    "generation": {
+      "primary_output": "/private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise",
+      "repeat_output": "/private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise-repeat",
+      "reviewer_data_copy": "/private/tmp/case-p1-definitive.PUJqMs/data",
+      "data_files": 38,
+      "data_sha256": "994762e5995f822f6079e0ef7b17147d886602eebc25ff2387b965d4c6a79aae",
+      "repeat_byte_identical": true,
+      "tracked": false
+    },
+    "automated_evaluation": {
+      "records": 51317,
+      "parsed_sources": 16,
+      "overall_score": 95.32731198016175,
+      "acceptance_passed": false,
+      "only_failed_hard_gate": "causality.pivot_linkability"
+    },
+    "rendered_probe": {
+      "path": "/private/tmp/eforge-post-batch7b-p1-fixed-v7/realism-review-probe.json",
+      "findings": 0
+    },
+    "blind_panel": {
+      "verdict": "unanimous synthetic",
+      "average_verdict_confidence": 93.5,
+      "average_synthetic_confidence": 93.25,
+      "score_spread": 13,
+      "deliberation_triggered": false,
+      "scores": {
+        "threat_hunter": 96,
+        "detection_engineer": 86,
+        "network_forensics": 92,
+        "host_forensics": 99
+      }
+    },
+    "verification": {
+      "pytest": "5243 passed, 41 skipped",
+      "ruff_check": "passed",
+      "ruff_format": "passed"
+    }
   },
   "commands": {
     "validate": "uv run eforge validate /private/tmp/eforge-realism-review/branch-enterprise.yaml",
-    "generate": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml --output /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise --force",
-    "repeat": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml --output /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise-repeat --force",
-    "evaluate": "uv run eforge eval /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise --scenario /private/tmp/eforge-realism-review/branch-enterprise.yaml --format json --verbose",
-    "probe": "uv run python scripts/realism_review_probe.py /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise --output /private/tmp/eforge-post-batch7b-effectiveness/probe.json"
+    "generate": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml --output /private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise --force",
+    "repeat": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml --output /private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise-repeat --force",
+    "evaluate": "uv run eforge eval /private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise --scenario /private/tmp/eforge-realism-review/branch-enterprise.yaml --format json --verbose",
+    "probe": "uv run python scripts/realism_review_probe.py /private/tmp/eforge-post-batch7b-p1-fixed-v7/branch-enterprise --output /private/tmp/eforge-post-batch7b-p1-fixed-v7/realism-review-probe.json"
   }
 }
