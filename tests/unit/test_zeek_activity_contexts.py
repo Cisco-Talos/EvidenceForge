@@ -673,7 +673,7 @@ class TestSslContextPopulation:
 
         executor = MagicMock()
         executor._clamp_after_visible_linux_process_create.side_effect = (
-            lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"): (
+            lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"), **_kwargs: (
                 requested_time
             )
         )
@@ -692,6 +692,68 @@ class TestSslContextPopulation:
         )
 
         assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
+
+    def test_ssh_connection_syslog_waits_for_ecar_collection_delay(self):
+        """The same sshd PID cannot appear in syslog before its eCAR create row."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        visible_create = base_time + timedelta(milliseconds=280)
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+        event = OccurrenceBuilder(
+            timestamp=base_time,
+            event_type="ssh_session",
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.20.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+        )
+        executor = MagicMock()
+        executor.process_source_create_time.return_value = visible_create
+        executor.dispatcher.observation_policy.maximum_delay_difference.return_value = timedelta(
+            milliseconds=900
+        )
+        executor._clamp_after_visible_linux_process_create.side_effect = (
+            lambda _system, _pid, requested_time, _relationship_key="", **_kwargs: max(
+                requested_time,
+                visible_create
+                + executor.dispatcher.observation_policy.maximum_delay_difference(
+                    "ecar",
+                    _kwargs.get("later_source") or "ecar",
+                )
+                + timedelta(milliseconds=25),
+            )
+        )
+
+        resolved = SshSessionActionBundle(
+            request=request, executor=executor
+        )._resolve_linux_auth_lifecycle(
+            event=event,
+            responder_pid=4242,
+            syslog_seed=("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
+            conn_delay_ms=35,
+            accepted_gap_ms=90,
+            pam_gap_ms=45,
+            logind_gap_ms=420,
+            transport_open_time=base_time,
+        )
+
+        assert resolved["connection"] >= visible_create + timedelta(milliseconds=925)
 
     def test_ssh_session_auth_waits_for_jittered_ecar_flow_deadline(self, activity_gen):
         """SSH auth timing should account for connection-start jitter before eCAR FLOW."""
@@ -2118,6 +2180,7 @@ class TestSslContextPopulation:
     def test_generic_ssh_connection_emits_preauth_failure_syslog(self, activity_gen):
         """Generic port-22 responder children should have source-native auth companions."""
         gen, events = activity_gen
+        gen.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
 
         target = System(
             hostname="linux01",
@@ -2179,11 +2242,16 @@ class TestSslContextPopulation:
             if key.startswith("source.ecar_process_create|")
         ]
         assert ecar_process_times
-        assert connection_syslog_event.timestamp > max(ecar_process_times)
+        observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
+            "ecar",
+            "syslog",
+        )
+        assert connection_syslog_event.timestamp > max(ecar_process_times) + observation_gap
 
     def test_failed_logon_ssh_syslog_follows_responder_process_source_time(self, activity_gen):
         """Typed failed SSH auth shares the responder process observation floor."""
         gen, events = activity_gen
+        gen.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
         target = System(
             hostname="linux01",
@@ -2222,7 +2290,11 @@ class TestSslContextPopulation:
             if key.startswith("source.ecar_process_create|")
         ]
         assert ecar_process_times
-        assert connection_syslog_event.timestamp > max(ecar_process_times)
+        observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
+            "ecar",
+            "syslog",
+        )
+        assert connection_syslog_event.timestamp > max(ecar_process_times) + observation_gap
 
     def test_port_22_connection_without_service_sets_destination_side_transport_pid(
         self, activity_gen

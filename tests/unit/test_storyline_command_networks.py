@@ -1437,8 +1437,6 @@ class TestFileTransferActionBundles:
                     "weight": 1,
                 }
             ],
-            "missing_bytes_probability": 0.0,
-            "timeout_probability": 0.0,
         }
 
         context = SmbFileTransferMetadataActionBundle(

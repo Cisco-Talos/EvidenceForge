@@ -585,8 +585,8 @@ class TestFilesUidCorrelation:
         assert isinstance(result.pe.compile_ts, int)
         assert result.pe.compile_ts <= int(request.timestamp.timestamp()) - (30 * 24 * 60 * 60)
 
-    def test_http_file_analysis_loss_suppresses_hash_and_pe_analyzers(self):
-        """Partial HTTP file observations should not claim full-content analyzers."""
+    def test_http_file_analysis_stays_complete_until_sensor_observation(self):
+        """Canonical HTTP content stays complete until the sensor plans capture loss."""
         request = HttpResponseFileTransferRequest(
             host="updates.example.test",
             uri="/agent.exe",
@@ -600,13 +600,13 @@ class TestFilesUidCorrelation:
         result = HttpResponseFileTransferActionBundle(request, _AlwaysPeRandom()).execute()
         ft = result.file_transfer
 
-        assert ft.timedout is True
-        assert ft.missing_bytes > 0
-        assert ft.seen_bytes == request.response_body_len - ft.missing_bytes
+        assert ft.timedout is False
+        assert ft.missing_bytes == 0
+        assert ft.seen_bytes == request.response_body_len
         assert ft.total_bytes == request.response_body_len
-        assert ft.analyzers == ()
-        assert ft.sha1 == ""
-        assert result.pe is None
+        assert ft.analyzers == ("SHA1",)
+        assert ft.sha1
+        assert result.pe is not None
 
     def test_certificate_file_timestamp_follows_parent_ssl_record(self):
         """Certificate files should not predate the owning ssl.log row."""
@@ -899,8 +899,8 @@ class TestFilesUidCorrelation:
 
             assert data["filename"] == r"\\files01\Shared\Finance\budget-review.xlsx"
 
-    def test_smb_file_analysis_loss_suppresses_hash_analyzers(self):
-        """Partial SMB file observations should not claim full-content hashes."""
+    def test_smb_file_analysis_stays_complete_until_sensor_observation(self):
+        """Canonical SMB content stays complete until the sensor plans capture loss."""
         request = SmbFileTransferMetadataRequest(
             src_ip="10.0.0.5",
             dst_ip="10.0.0.10",
@@ -911,8 +911,6 @@ class TestFilesUidCorrelation:
         )
         smb_config = {
             "min_transfer_bytes": 1,
-            "missing_bytes_probability": 1.0,
-            "timeout_probability": 1.0,
             "mime_types": [{"mime_type": "application/zip", "weight": 1}],
             "analyzer_sets": [{"analyzers": ["MD5", "SHA1"], "weight": 1}],
             "filename_templates": [
@@ -931,12 +929,12 @@ class TestFilesUidCorrelation:
         ).execute()
 
         assert ft is not None
-        assert ft.timedout is True
-        assert ft.missing_bytes > 0
-        assert ft.seen_bytes == request.transfer_bytes - ft.missing_bytes
-        assert ft.analyzers == ()
-        assert ft.md5 == ""
-        assert ft.sha1 == ""
+        assert ft.timedout is False
+        assert ft.missing_bytes == 0
+        assert ft.seen_bytes == request.transfer_bytes
+        assert ft.analyzers == ("MD5", "SHA1")
+        assert ft.md5
+        assert ft.sha1
 
 
 class TestSmbFileTransferConfig:

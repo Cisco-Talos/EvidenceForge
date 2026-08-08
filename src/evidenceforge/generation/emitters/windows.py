@@ -1192,7 +1192,11 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         proc = event.process
         is_outbound = net.src_ip == host.ip
-        pid = net.initiating_pid if net.initiating_pid > 0 else 4
+        local_process_pid = proc.pid if proc is not None and proc.pid > 0 else -1
+        if is_outbound:
+            pid = local_process_pid if local_process_pid > 0 else net.initiating_pid
+        else:
+            pid = local_process_pid if local_process_pid > 0 else net.responding_pid
         image = proc.image if proc else ""
         if is_outbound and net.protocol.lower() == "udp" and net.dst_port == 53:
             sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
@@ -1205,6 +1209,8 @@ class WindowsEventEmitter(LogEmitter):
                 if running is not None:
                     image = running.image
         if not image:
+            if pid <= 0:
+                return
             if pid == 4:
                 image = "System"
             else:

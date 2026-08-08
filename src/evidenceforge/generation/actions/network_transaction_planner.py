@@ -172,6 +172,88 @@ class NetworkTransactionPlanner:
             latest_duration = max(0.001, (deadline - canonical_start).total_seconds() / 2)
         return latest_duration if duration is None else min(duration, latest_duration)
 
+    def _reconcile_application_payload(
+        self,
+        event: _NetworkOccurrenceDraft,
+        generator_module: ModuleType,
+    ) -> bool:
+        """Fit canonical application objects and framing inside transport payload."""
+
+        network = event.network
+        if network is None or network.protocol != "tcp" or network.conn_state != "SF":
+            return False
+
+        orig_floor = 0
+        resp_floor = 0
+        if event.http is not None:
+            http_orig, http_resp = generator_module._http_flow_payload_bytes(event.http)
+            orig_floor = max(orig_floor, http_orig)
+            resp_floor = max(resp_floor, http_resp)
+
+        grouped: dict[bool, list[Any]] = {True: [], False: []}
+        for transfer in (event.file_transfer, *event.file_transfers):
+            if transfer is not None and transfer not in grouped[transfer.is_orig]:
+                grouped[transfer.is_orig].append(transfer)
+        for is_orig, transfers in grouped.items():
+            if not transfers:
+                continue
+            accounted_bytes = [
+                transfer.total_bytes
+                if transfer.total_bytes is not None
+                else transfer.seen_bytes + transfer.missing_bytes
+                for transfer in transfers
+            ]
+            total_bytes = sum(accounted_bytes)
+            framing_bytes = sum(
+                max(128, 96 * max(1, (max(1, size) + 65_535) // 65_536))
+                if transfer.source.upper() == "SMB"
+                else 192
+                for transfer, size in zip(transfers, accounted_bytes, strict=True)
+            )
+            file_floor = total_bytes + framing_bytes
+            if is_orig:
+                orig_floor = max(orig_floor, file_floor)
+            else:
+                resp_floor = max(resp_floor, file_floor)
+
+        previous = (network.orig_bytes or 0, network.resp_bytes or 0)
+        network.orig_bytes = max(previous[0], orig_floor)
+        network.resp_bytes = max(previous[1], resp_floor)
+        if (network.orig_bytes, network.resp_bytes) == previous:
+            return False
+
+        accounting_rng = generator_module.random.Random(
+            _stable_seed(
+                "network_application_payload_accounting:"
+                f"{network.src_ip}:{network.src_port}:{network.dst_ip}:{network.dst_port}:"
+                f"{network.protocol}:{network.zeek_uid}"
+            )
+        )
+        network.orig_pkts, network.resp_pkts = (
+            generator_module._tcp_packet_counts_from_payload_and_history(
+                network.orig_bytes,
+                network.resp_bytes,
+                network.history,
+                accounting_rng,
+            )
+        )
+        network.orig_ip_bytes = generator_module._tcp_ip_byte_count(
+            network.orig_bytes,
+            network.orig_pkts,
+            accounting_rng,
+        )
+        network.resp_ip_bytes = generator_module._tcp_ip_byte_count(
+            network.resp_bytes,
+            network.resp_pkts,
+            accounting_rng,
+        )
+        self._executor.state_manager.update_connection_bytes(
+            network.conn_id,
+            network.orig_bytes,
+            network.resp_bytes,
+        )
+        return True
+
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
         from evidenceforge.generation.actions.file_transfer import (
@@ -1324,10 +1406,15 @@ class NetworkTransactionPlanner:
 
         ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
 
-        # Probabilistic missed_bytes for long TCP connections (~3% chance, more for bulk transfers)
+        # Capture loss is source-observation truth, not a canonical connection property.
         missed_bytes = 0
-        if proto == "tcp" and duration and duration > 10.0 and rng.random() < 0.03:
-            missed_bytes = rng.randint(500, 50000)
+        if proto == "tcp" and duration and duration > 10.0:
+            # Preserve this planner's RNG scope while source observation takes
+            # ownership of the resulting loss; unrelated protocol choices must
+            # not change merely because the fact moved to its canonical owner.
+            capture_loss_shape_roll = rng.random()
+            if capture_loss_shape_roll < 0.03:
+                rng.randint(500, 50000)
 
         if not preserve_start_time:
             time = generator_module._zeek_conn_observation_time(
@@ -2362,6 +2449,8 @@ class NetworkTransactionPlanner:
                     pid=pid,
                     close_time=close_time,
                 )
+
+        self._reconcile_application_payload(event, generator_module)
 
         executor._repair_explicit_proxy_listener_process_attribution(
             event,

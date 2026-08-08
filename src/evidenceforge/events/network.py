@@ -183,6 +183,30 @@ class NatSensorObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class FileSensorObservation:
+    """Frozen source-local completeness for one canonical transferred object."""
+
+    canonical_id: str
+    seen_bytes: int
+    total_bytes: int | None
+    missing_bytes: int
+    analyzers_visible: bool
+
+    def __post_init__(self) -> None:
+        """Reject impossible file-observation accounting."""
+
+        if not self.canonical_id:
+            raise ValueError("File observations require a canonical file ID")
+        if self.seen_bytes < 0 or self.missing_bytes < 0:
+            raise ValueError("File observation byte counts must be non-negative")
+        if self.total_bytes is not None:
+            if self.total_bytes < 0:
+                raise ValueError("File observation total bytes must be non-negative")
+            if self.seen_bytes + self.missing_bytes < self.total_bytes:
+                raise ValueError("File observations must account for the complete canonical file")
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkSensorObservation:
     """Frozen view of one canonical transaction at one network sensor."""
 
@@ -199,6 +223,10 @@ class NetworkSensorObservation:
     observed_close_time: datetime | None
     traffic: NetworkTrafficLedger
     visible_formats: frozenset[str]
+    history: str = ""
+    file_observations: tuple[FileSensorObservation, ...] = ()
+    http_request_body_len: int | None = None
+    http_response_body_len: int | None = None
     firewall_teardown_reason: str = ""
     firewall_teardown_time: datetime | None = None
     nat: NatSensorObservation | None = None
@@ -231,6 +259,13 @@ class NetworkSensorObservation:
         canonical_ids = [canonical for canonical, _observed in self.file_ids]
         if len(canonical_ids) != len(set(canonical_ids)):
             raise ValueError("Canonical file IDs must be unique within one sensor observation")
+        observation_ids = [observation.canonical_id for observation in self.file_observations]
+        if len(observation_ids) != len(set(observation_ids)):
+            raise ValueError("Canonical file observations must be unique within one sensor")
+        if self.http_request_body_len is not None and self.http_request_body_len < 0:
+            raise ValueError("Observed HTTP request bodies must be non-negative")
+        if self.http_response_body_len is not None and self.http_response_body_len < 0:
+            raise ValueError("Observed HTTP response bodies must be non-negative")
 
     @property
     def observed_duration(self) -> float | None:
@@ -247,6 +282,14 @@ class NetworkSensorObservation:
             if candidate == canonical_id:
                 return observed
         return canonical_id
+
+    def file_observation(self, canonical_id: str) -> FileSensorObservation | None:
+        """Return source-local completeness for a canonical file identifier."""
+
+        for observation in self.file_observations:
+            if observation.canonical_id == canonical_id:
+                return observation
+        return None
 
     def connection_id(self, canonical_id: str) -> str:
         """Return the sensor-local form of a canonical connection identifier."""

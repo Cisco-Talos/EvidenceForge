@@ -535,6 +535,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         logger.info("Finalizing generation")
 
         if self.activity_generator is not None and self.end_time is not None:
+            self.activity_generator.finalize_ssh_session_lifecycles(self.end_time)
             self.activity_generator.finalize_foreground_process_lifetimes(self.end_time)
 
         for format_name, emitter in self.emitters.items():

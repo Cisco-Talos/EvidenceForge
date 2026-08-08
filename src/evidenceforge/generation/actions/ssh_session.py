@@ -121,6 +121,7 @@ class SshSessionRequest:
     public_key_type: str = ""
     public_key_hash: str = ""
     emit_session_close: bool = False
+    defer_session_close: bool = False
     session_end_plan: SessionEndPlan | None = None
     ids_alerts: list[IdsAlertPlan] = field(default_factory=list)
     source: str = "activity_generator"
@@ -140,6 +141,7 @@ class SshSessionRequest:
             f"{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
             f"{self.emit_session_close}:"
+            f"{self.defer_session_close}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
             f"{self.ids_alerts}:"
             f"{self.source}:{self.time.isoformat()}"
@@ -159,7 +161,8 @@ class SshSessionRequest:
             f"{self.duration or ''}:{self.orig_bytes or ''}:{self.resp_bytes or ''}:"
             f"{self.auth_method}:{self.public_key_type}:{self.public_key_hash}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
-            f"{self.emit_session_close}:{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
+            f"{self.emit_session_close}:{self.defer_session_close}:"
+            f"{self.ids_alerts}:{self.source}:{self.time.isoformat()}"
         )
         return f"ssh-session-exec-{seed:016x}"
 
@@ -297,8 +300,24 @@ class SshSessionExecutor(Protocol):
         pid: int,
         time: datetime,
         relationship_key: str = "source.ecar_dependent_after_process_create",
+        *,
+        later_source: str | None = None,
     ) -> datetime:
         """Keep Linux same-process observations after visible eCAR creation."""
+        ...
+
+    def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
+        """Return the latest planned source timestamp for a process creation."""
+        ...
+
+    def _defer_ssh_session_close(
+        self,
+        bundle: SshSessionActionBundle,
+        state: _SshTransportState,
+        event: OccurrenceBuilder,
+        auth_state: _SshLinuxAuthState,
+    ) -> None:
+        """Queue an action-owned SSH closure until dependent generation is complete."""
         ...
 
     def _remember_ssh_responder_pid(
@@ -379,10 +398,15 @@ class SshSessionActionBundle:
             self._dispatch_linux_connection_message(state, event, auth_state)
             self._mark_edr_login_readiness(state, event, auth_state)
         self.executor.dispatcher.dispatch_builder(event)
+        if self.request.emit_session_close:
+            self._terminate_source_ssh_client_process(state)
         if auth_state is not None:
             self._dispatch_linux_auth_messages(state, event, auth_state)
             if self.request.emit_session_close:
-                self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+                if self.request.defer_session_close:
+                    self.executor._defer_ssh_session_close(self, state, event, auth_state)
+                else:
+                    self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
 
         logger.debug(
             "Generated SSH session: %s -> %s (UID: %s)",
@@ -652,6 +676,46 @@ class SshSessionActionBundle:
                 1.0,
                 (state.close_time - self.request.time).total_seconds(),
             )
+        if state.source_process is None and connection.initiating_pid > 0:
+            state.source_process = self._resolve_source_process(
+                connection.initiating_pid,
+                self.request.source_process_image,
+            )
+
+    def _terminate_source_ssh_client_process(self, state: _SshTransportState) -> None:
+        """End a one-transport SSH client immediately after its owned connection."""
+
+        source_system = self._source_system()
+        source_process = state.source_process
+        if source_system is None or source_process is None or source_process.pid <= 0:
+            return
+        executable = source_process.image.lower().replace("\\", "/").rsplit("/", 1)[-1]
+        if executable not in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}:
+            return
+        running = self.executor.state_manager.get_process(
+            source_system.hostname,
+            source_process.pid,
+        )
+        if running is None:
+            return
+        seed = _stable_seed(
+            "ssh_session_source_client_terminate:"
+            f"{source_system.hostname}:{source_process.pid}:{state.source_port}:"
+            f"{self.request.target_system.hostname}:{state.close_time.isoformat()}"
+        )
+        terminate_time = state.close_time + timedelta(
+            milliseconds=80 + (seed % 1420),
+            microseconds=191 + (seed % 613),
+        )
+        self.executor.generate_process_termination(
+            user=self.request.user,
+            system=source_system,
+            time=terminate_time,
+            pid=source_process.pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+            from_storyline=self.request.source.startswith("storyline"),
+        )
 
     def _resolve_source_process(
         self,
@@ -853,6 +917,7 @@ class SshSessionActionBundle:
             request.target_system,
             responder_pid,
             preferred_connection_time,
+            later_source="syslog",
         )
         responder_source_shift = connection_time - preferred_connection_time
         graph.add_node(
@@ -1212,6 +1277,7 @@ class SshSessionActionBundle:
 
         request = self.request
         close_time = self._source_native_session_close_time(state, auth_state)
+        self._terminate_receiver_session_shell(state, close_time)
         self.executor.dispatcher.dispatch_builder(
             OccurrenceBuilder(
                 timestamp=close_time,
@@ -1263,6 +1329,49 @@ class SshSessionActionBundle:
             )
         )
         self._terminate_receiver_sshd_process(state, auth_state, close_time)
+
+    def _terminate_receiver_session_shell(
+        self,
+        state: _SshTransportState,
+        close_time: datetime,
+    ) -> None:
+        """End the bundle-owned login shell before the SSH session closes."""
+
+        request = self.request
+        if not state.logon_id:
+            return
+        session = self.executor.state_manager.get_session(state.logon_id)
+        shell_pid = session.session_shell_pid if session is not None else None
+        if shell_pid is None:
+            return
+        running = self.executor.state_manager.get_process(
+            request.target_system.hostname,
+            shell_pid,
+        )
+        if running is None:
+            return
+        seed = _stable_seed(
+            "ssh_session_shell_terminate:"
+            f"{request.target_system.hostname}:{state.logon_id}:{shell_pid}:"
+            f"{state.close_time.isoformat()}"
+        )
+        gap = close_time - state.close_time
+        maximum_offset_ms = max(20, int(gap.total_seconds() * 1000) - 25)
+        terminate_time = state.close_time + timedelta(
+            milliseconds=20 + (seed % max(1, maximum_offset_ms - 19)),
+            microseconds=101 + (seed % 733),
+        )
+        if terminate_time >= close_time:
+            terminate_time = close_time - timedelta(milliseconds=1)
+        self.executor.generate_process_termination(
+            user=request.user,
+            system=request.target_system,
+            time=terminate_time,
+            pid=shell_pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+            from_storyline=request.source.startswith("storyline"),
+        )
 
     def _terminate_receiver_sshd_process(
         self,

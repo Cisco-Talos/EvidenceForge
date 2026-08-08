@@ -1067,6 +1067,19 @@ class WorldPlanner:
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
+            if storyline_protected and session_end_plan is None and required_until is None:
+                scenario_end = getattr(self.activity_generator, "_scenario_end_time", None)
+                if isinstance(scenario_end, datetime):
+                    close_margin_seconds = 180 + (
+                        _stable_seed(
+                            "storyline_ssh_close_margin:"
+                            f"{user.username}:{target_system.hostname}:{logon_time.isoformat()}"
+                        )
+                        % 421
+                    )
+                    required_until = ensure_utc(scenario_end) - timedelta(
+                        seconds=close_margin_seconds
+                    )
             result = self._bootstrap_ssh_session(
                 user,
                 plan,
@@ -1375,6 +1388,8 @@ class WorldPlanner:
             source_system=plan.source_system,
             source_port=source_port,
             min_duration=min_duration,
+            emit_session_close=True,
+            defer_session_close=True,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
         )

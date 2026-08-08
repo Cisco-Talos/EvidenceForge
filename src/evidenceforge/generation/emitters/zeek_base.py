@@ -111,6 +111,8 @@ def _normalize_zeek_float_precision(value: Any) -> Any:
 
 def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
     """Keep conn.log byte counters compatible with same-transaction http.log facts."""
+    if render_data.pop("_sensor_traffic_observed", False):
+        return
     request_body = render_data.get("_http_request_body_len")
     response_body = render_data.get("_http_response_body_len")
     if isinstance(request_body, int) and request_body >= 0:
@@ -357,6 +359,8 @@ class SensorMultiplexEmitter(LogEmitter):
     ) -> None:
         """Project a frozen observation into source-native Zeek fields."""
 
+        render_data["_sensor_traffic_observed"] = True
+
         original_src_ip = render_data.get("id.orig_h") or render_data.get("_id.orig_h")
         original_dst_ip = render_data.get("id.resp_h") or render_data.get("_id.resp_h")
         tuple_view = observation.tuple_view
@@ -463,8 +467,26 @@ class SensorMultiplexEmitter(LogEmitter):
                     "orig_ip_bytes": ledger.orig.ip_bytes,
                     "resp_ip_bytes": ledger.resp.ip_bytes,
                     "missed_bytes": ledger.missed_bytes,
+                    "history": observation.history,
                 }
             )
+        elif self.format_def.name == "zeek_http":
+            if observation.http_request_body_len is not None:
+                render_data["request_body_len"] = observation.http_request_body_len
+            if observation.http_response_body_len is not None:
+                render_data["response_body_len"] = observation.http_response_body_len
+
+        original_file_id = render_data.get("fuid") or render_data.get("id")
+        if isinstance(original_file_id, str):
+            file_observation = observation.file_observation(original_file_id)
+            if file_observation is not None and self.format_def.name == "zeek_files":
+                render_data["seen_bytes"] = file_observation.seen_bytes
+                render_data["total_bytes"] = file_observation.total_bytes
+                render_data["missing_bytes"] = file_observation.missing_bytes
+                if not file_observation.analyzers_visible:
+                    render_data["analyzers"] = None
+                    for hash_field in ("md5", "sha1", "sha256"):
+                        render_data[hash_field] = None
 
         original_uid = render_data.get("uid")
         if isinstance(original_uid, str):

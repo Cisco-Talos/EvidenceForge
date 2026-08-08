@@ -63,7 +63,7 @@ _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
 _NULL_LOGON_GUID = "{00000000-0000-0000-0000-000000000000}"
 _LINUX_PID_BLOCK_SECONDS = 300
-_LINUX_PID_RATE_DENOMINATOR = 10
+_MINUTES_PER_WEEK = 7 * 24 * 60
 _ENDED_IDENTITY_RETENTION = timedelta(hours=48)
 _MAX_RETAINED_PROCESS_IDENTITIES = 500_000
 _MAX_RETAINED_THREAD_IDENTITIES = 1_000_000
@@ -169,6 +169,7 @@ class StateManager:
         self._pid_time_epochs: dict[str, datetime] = {}
         self._pid_bucket_offsets: dict[tuple[str, int, int], int] = {}
         self._linux_pid_block_offsets: dict[str, dict[int, int]] = {}
+        self._linux_pid_weekly_churn_prefixes: dict[str, tuple[int, ...]] = {}
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, TemporalAllocationIndex] = {}
         self._connection_id_counter = 0
@@ -1101,19 +1102,69 @@ class StateManager:
         self._pid_time_epochs[system] = epoch
         return epoch
 
-    @staticmethod
-    def _linux_pid_rate_numerator(system: str) -> int:
-        """Return a stable host PID churn rate with room for deferred insertions."""
-        return 18 + (_stable_seed(f"linux_pid_rate:{system}") % 5)
+    def _linux_pid_weekly_churn_prefix(self, system: str) -> tuple[int, ...]:
+        """Return cached hidden process churn at each minute boundary in a week.
+
+        Real Linux hosts consume PIDs for short-lived processes that may never be
+        represented in collected endpoint telemetry. A fixed elapsed-seconds
+        multiplier exposes generator time directly, so model that hidden churn as
+        a stable host-specific weekly schedule. The prefix table trades bounded
+        memory for O(1) lookup, including for far-future timestamps.
+        """
+        cached = self._linux_pid_weekly_churn_prefixes.get(system)
+        if cached is not None:
+            return cached
+
+        rng = random.Random(_stable_seed(f"linux_pid_hidden_churn:{system}"))
+        prefix = [0]
+        hourly_factor = 1.0
+        for minute_of_week in range(_MINUTES_PER_WEEK):
+            day = minute_of_week // (24 * 60)
+            minute_of_day = minute_of_week % (24 * 60)
+            hour = minute_of_day // 60
+            if minute_of_day % 60 == 0:
+                hourly_factor = rng.choices(
+                    (0.70, 0.85, 1.00, 1.20, 1.50),
+                    weights=(10, 20, 40, 20, 10),
+                    k=1,
+                )[0]
+            if day >= 5:
+                base_churn = 95
+            elif 8 <= hour < 18:
+                base_churn = 145
+            else:
+                base_churn = 115
+            hourly_target = round(base_churn * hourly_factor)
+            lower = max(76, hourly_target - 18)
+            upper = min(220, hourly_target + 18)
+            churn = rng.randint(lower, upper)
+            if rng.random() < 0.015:
+                churn += rng.randint(18, 72)
+            prefix.append(prefix[-1] + churn)
+
+        frozen = tuple(prefix)
+        self._linux_pid_weekly_churn_prefixes[system] = frozen
+        return frozen
+
+    def _linux_pid_hidden_churn_offset(self, system: str, elapsed_seconds: int) -> int:
+        """Return hidden PID consumption before an elapsed host-runtime offset."""
+        if elapsed_seconds <= 0:
+            return 0
+
+        prefix = self._linux_pid_weekly_churn_prefix(system)
+        elapsed_minutes, second_in_minute = divmod(elapsed_seconds, 60)
+        full_weeks, minute_of_week = divmod(elapsed_minutes, _MINUTES_PER_WEEK)
+        weekly_churn = prefix[-1]
+        minute_churn = prefix[minute_of_week + 1] - prefix[minute_of_week]
+        partial_churn = (second_in_minute * minute_churn) // 60
+        return (full_weeks * weekly_churn) + prefix[minute_of_week] + partial_churn
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
         """Return deterministic per-host Linux PID churn before a coarse time block."""
         if block <= 0:
             return 0
         elapsed_seconds = block * _LINUX_PID_BLOCK_SECONDS
-        return (
-            elapsed_seconds * self._linux_pid_rate_numerator(system)
-        ) // _LINUX_PID_RATE_DENOMINATOR
+        return self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
 
     @staticmethod
     def _normalize_linux_pid(pid: int) -> int:
@@ -1151,8 +1202,7 @@ class StateManager:
         current_time = ensure_utc(current_time or self.state.current_time)
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
-        rate_numerator = self._linux_pid_rate_numerator(system)
-        time_offset = (elapsed_seconds * rate_numerator) // _LINUX_PID_RATE_DENOMINATOR
+        time_offset = self._linux_pid_hidden_churn_offset(system, elapsed_seconds)
         ordinal_key = (system, time_offset, 0)
         ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
         gap = max(1, min(5, int(pid_rng.lognormvariate(0.3, 0.8))))

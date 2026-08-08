@@ -324,6 +324,63 @@ def _check_zeek_sensor(
                         evidence={"uid": uid, "conn_state": conn.get("conn_state")},
                     )
                 )
+            if name == "http":
+                method = str(record.get("method") or "GET").upper()
+                status_code = int(record.get("status_code") or 0)
+                request_body = int(record.get("request_body_len") or 0)
+                response_body = int(record.get("response_body_len") or 0)
+                if method == "HEAD" and response_body != 0:
+                    findings.append(
+                        Finding(
+                            check="zeek_http_head_body",
+                            severity="error",
+                            path=str(directory / "http.json"),
+                            message="HEAD transaction claims source-observed response body bytes",
+                            evidence={"uid": uid, "response_body_len": response_body},
+                        )
+                    )
+                if status_code in {204, 304} and response_body != 0:
+                    findings.append(
+                        Finding(
+                            check="zeek_http_bodyless_status",
+                            severity="error",
+                            path=str(directory / "http.json"),
+                            message="Bodyless HTTP status claims response body bytes",
+                            evidence={
+                                "uid": uid,
+                                "status_code": status_code,
+                                "response_body_len": response_body,
+                            },
+                        )
+                    )
+                if request_body > int(conn.get("orig_bytes") or 0):
+                    findings.append(
+                        Finding(
+                            check="zeek_http_transport_accounting",
+                            severity="error",
+                            path=str(directory / "http.json"),
+                            message="HTTP request body exceeds originator TCP payload",
+                            evidence={
+                                "uid": uid,
+                                "request_body_len": request_body,
+                                "orig_bytes": conn.get("orig_bytes"),
+                            },
+                        )
+                    )
+                if response_body > int(conn.get("resp_bytes") or 0):
+                    findings.append(
+                        Finding(
+                            check="zeek_http_transport_accounting",
+                            severity="error",
+                            path=str(directory / "http.json"),
+                            message="HTTP response body exceeds responder TCP payload",
+                            evidence={
+                                "uid": uid,
+                                "response_body_len": response_body,
+                                "resp_bytes": conn.get("resp_bytes"),
+                            },
+                        )
+                    )
 
     files_by_fuid = {
         str(record["fuid"]): record
@@ -367,6 +424,53 @@ def _check_zeek_sensor(
                         },
                     )
                 )
+            total_bytes = record.get("total_bytes")
+            if not isinstance(total_bytes, int | float):
+                total_bytes = int(record.get("seen_bytes") or 0) + int(
+                    record.get("missing_bytes") or 0
+                )
+            direction = "orig" if record.get("is_orig") else "resp"
+            payload_bytes = int(conn.get(f"{direction}_bytes") or 0)
+            missed_bytes = int(conn.get("missed_bytes") or 0)
+            framing_floor = 128 if str(record.get("source") or "").upper() == "SMB" else 0
+            if int(total_bytes) + framing_floor > payload_bytes + missed_bytes:
+                findings.append(
+                    Finding(
+                        check="zeek_file_transport_accounting",
+                        severity="error",
+                        path=str(directory / "files.json"),
+                        message="File content and required framing exceed directional TCP payload",
+                        evidence={
+                            "fuid": record.get("fuid"),
+                            "uid": uid,
+                            "direction": direction,
+                            "total_bytes": total_bytes,
+                            "framing_floor": framing_floor,
+                            "payload_bytes": payload_bytes,
+                            "missed_bytes": missed_bytes,
+                        },
+                    )
+                )
+            file_missing = int(record.get("missing_bytes") or 0)
+            if file_missing > 0:
+                gap_marker = "G" if direction == "orig" else "g"
+                if missed_bytes == 0 or gap_marker not in str(conn.get("history") or ""):
+                    findings.append(
+                        Finding(
+                            check="zeek_file_capture_loss",
+                            severity="error",
+                            path=str(directory / "files.json"),
+                            message="File gap has no matching parent-transport capture gap",
+                            evidence={
+                                "fuid": record.get("fuid"),
+                                "uid": uid,
+                                "direction": direction,
+                                "missing_bytes": file_missing,
+                                "conn_missed_bytes": missed_bytes,
+                                "history": conn.get("history"),
+                            },
+                        )
+                    )
     for name, field in (("http", "resp_fuids"), ("ssl", "cert_chain_fuids")):
         for record in records_by_name.get(name, []):
             for fuid in record.get(field) or []:
@@ -1406,10 +1510,26 @@ def _check_cross_source_contracts(
             conn_by_tuple[key] = record
 
     ssh_intervals_by_actor: dict[str, list[tuple[float, float, dict[str, Any]]]] = defaultdict(list)
+    process_creates_by_object_id: dict[str, tuple[Path, dict[str, Any]]] = {}
+    process_terminates_by_object_id: dict[str, tuple[Path, dict[str, Any]]] = {}
+    ssh_logouts_by_logon_id: dict[str, tuple[Path, dict[str, Any]]] = {}
     rdp_outbound_by_tuple: dict[tuple[str, int, str, int], tuple[Path, dict[str, Any]]] = {}
     rdp_logins: list[tuple[Path, dict[str, Any]]] = []
     for path, record in all_ecar:
         properties = record.get("properties") or {}
+        if record.get("object") == "PROCESS" and record.get("objectID"):
+            object_id = str(record["objectID"])
+            if record.get("action") == "CREATE":
+                process_creates_by_object_id[object_id] = (path, record)
+            elif record.get("action") == "TERMINATE":
+                process_terminates_by_object_id[object_id] = (path, record)
+        elif (
+            record.get("object") == "USER_SESSION"
+            and record.get("action") == "LOGOUT"
+            and properties.get("session_type") == "ssh"
+            and properties.get("logon_id")
+        ):
+            ssh_logouts_by_logon_id[str(properties["logon_id"])] = (path, record)
         if record.get("object") == "FLOW":
             try:
                 key = (
@@ -1456,6 +1576,110 @@ def _check_cross_source_contracts(
                     )
                 )
                 break
+
+    late_ssh_client_terminations: list[dict[str, Any]] = []
+    for actor_id, intervals in ssh_intervals_by_actor.items():
+        create_item = process_creates_by_object_id.get(actor_id)
+        if create_item is None:
+            continue
+        _create_path, create = create_item
+        image_path = str((create.get("properties") or {}).get("image_path") or "")
+        executable = image_path.lower().replace("\\", "/").rsplit("/", 1)[-1]
+        if executable not in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}:
+            continue
+        termination_item = process_terminates_by_object_id.get(actor_id)
+        latest_close = max(interval[1] for interval in intervals)
+        if termination_item is None:
+            late_ssh_client_terminations.append(
+                {
+                    "actor_id": actor_id,
+                    "process_create_record_id": create.get("id"),
+                    "image_path": image_path,
+                    "latest_transport_close": latest_close,
+                    "termination_timestamp": None,
+                }
+            )
+            continue
+        termination_path, termination = termination_item
+        termination_timestamp = _numeric_timestamp(termination)
+        if termination_timestamp is None or termination_timestamp > latest_close + 30.0:
+            late_ssh_client_terminations.append(
+                {
+                    "actor_id": actor_id,
+                    "process_create_record_id": create.get("id"),
+                    "process_terminate_record_id": termination.get("id"),
+                    "image_path": image_path,
+                    "latest_transport_close": latest_close,
+                    "termination_timestamp": termination_timestamp,
+                    "termination_lag_seconds": (
+                        termination_timestamp - latest_close
+                        if termination_timestamp is not None
+                        else None
+                    ),
+                    "termination_path": str(termination_path),
+                }
+            )
+    if late_ssh_client_terminations:
+        findings.append(
+            Finding(
+                check="ecar_ssh_client_terminates_after_transport_close",
+                severity="error",
+                path=str(data_dir),
+                message="A one-transport SSH client outlives its final transport by over 30 seconds",
+                evidence={
+                    "count": len(late_ssh_client_terminations),
+                    "sample": late_ssh_client_terminations[0],
+                },
+            )
+        )
+
+    unclosed_ssh_shells: list[dict[str, Any]] = []
+    for object_id, (create_path, create) in process_creates_by_object_id.items():
+        properties = create.get("properties") or {}
+        image_path = str(properties.get("image_path") or "")
+        executable = image_path.lower().replace("\\", "/").rsplit("/", 1)[-1]
+        logon_id = str(properties.get("logon_id") or "")
+        logout_item = ssh_logouts_by_logon_id.get(logon_id)
+        if executable not in {"bash", "sh", "zsh", "fish"} or logout_item is None:
+            continue
+        logout_path, logout = logout_item
+        termination_item = process_terminates_by_object_id.get(object_id)
+        logout_timestamp = _numeric_timestamp(logout)
+        termination_timestamp = (
+            _numeric_timestamp(termination_item[1]) if termination_item is not None else None
+        )
+        if (
+            logout_timestamp is not None
+            and termination_timestamp is not None
+            and termination_timestamp <= logout_timestamp
+        ):
+            continue
+        unclosed_ssh_shells.append(
+            {
+                "object_id": object_id,
+                "pid": create.get("pid"),
+                "logon_id": logon_id,
+                "process_create_record_id": create.get("id"),
+                "process_terminate_record_id": (
+                    termination_item[1].get("id") if termination_item is not None else None
+                ),
+                "logout_record_id": logout.get("id"),
+                "logout_timestamp": logout_timestamp,
+                "termination_timestamp": termination_timestamp,
+                "create_path": str(create_path),
+                "logout_path": str(logout_path),
+            }
+        )
+    if unclosed_ssh_shells:
+        findings.append(
+            Finding(
+                check="ecar_ssh_shell_terminates_before_session_logout",
+                severity="error",
+                path=str(data_dir),
+                message="A visible SSH login shell remains open after its session logout",
+                evidence={"count": len(unclosed_ssh_shells), "sample": unclosed_ssh_shells[0]},
+            )
+        )
 
     for path, login in rdp_logins:
         properties = login.get("properties") or {}

@@ -539,6 +539,15 @@ def test_world_planner_bootstraps_ssh_session(
     activity_generator._system_pids = {
         systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid}
     }
+    activity_generator._users_by_username = {users["alice.admin"].username: users["alice.admin"]}
+    state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip=systems["WKS-01"].ip,
+        session_kind="interactive",
+        start_time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+    )
 
     result = planner.bootstrap_user_session(
         user=users["alice.admin"],
@@ -561,7 +570,8 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.source_ready_time is not None
     assert session.network_close_time is not None
     assert session.network_close_time >= datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC)
-    shell = state_manager.get_process(systems["DB-01"].hostname, session.session_shell_pid)
+    session_shell_pid = session.session_shell_pid
+    shell = state_manager.get_process(systems["DB-01"].hostname, session_shell_pid)
     assert shell is not None
     assert shell.image == "/bin/bash"
     assert shell.logon_id == session.logon_id
@@ -609,6 +619,50 @@ def test_world_planner_bootstraps_ssh_session(
     assert bash_events[0].process.parent_image == "/usr/sbin/sshd"
     assert session.transport_pid > 180_000
     assert result.network_uid
+    assert activity_generator._pending_ssh_session_closures
+
+    connection = state_manager.get_connection_by_zeek_uid(result.network_uid)
+    assert connection is not None
+    assert connection.close_time is not None
+    assert connection.initiating_pid > 0
+    source_terminate_events = [
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "process_terminate"
+        and call.args[0].src_host is not None
+        and call.args[0].src_host.hostname == systems["WKS-01"].hostname
+        and call.args[0].process is not None
+        and call.args[0].process.pid == connection.initiating_pid
+    ]
+    assert len(source_terminate_events) == 1
+    assert connection.close_time < source_terminate_events[0].timestamp
+    assert source_terminate_events[0].timestamp <= connection.close_time + timedelta(seconds=2)
+
+    activity_generator.finalize_ssh_session_lifecycles(datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC))
+
+    assert state_manager.get_session(session.logon_id) is None
+    syslog_messages = [
+        call.args[0].syslog.message
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].syslog is not None
+    ]
+    assert f"pam_unix(sshd:session): session closed for user {session.username}" in syslog_messages
+    assert any(message.startswith("Removed session ") for message in syslog_messages)
+    shell_terminate_event = next(
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "process_terminate"
+        and call.args[0].process is not None
+        and call.args[0].process.pid == session_shell_pid
+    )
+    session_close_event = next(
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "logoff"
+        and call.args[0].auth is not None
+        and call.args[0].auth.logon_id == session.logon_id
+    )
+    assert shell_terminate_event.timestamp < session_close_event.timestamp
 
 
 def test_world_planner_materializes_visible_shell_for_reused_ssh_session(

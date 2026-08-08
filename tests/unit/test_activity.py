@@ -108,6 +108,7 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
+    _apply_plaintext_http_policy,
     _extract_http_url_from_command,
     _extract_image_from_command,
     _http_context_from_process_command,
@@ -305,6 +306,48 @@ class TestProcessHttpCommandCorrelation:
         normalized = _normalize_http_context_for_source_native_response(http)
 
         assert normalized.resp_mime_types == ("text/html",)
+
+    def test_http_normalization_removes_head_response_body(self):
+        """HEAD response metadata must not claim entity-body bytes."""
+        http = HttpContext(
+            method="HEAD",
+            host="portal.example.com",
+            uri="/sitemap.xml",
+            response_body_len=478,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/xml"],
+        )
+
+        normalized = _normalize_http_context_for_source_native_response(http)
+
+        assert normalized.response_body_len == 0
+        assert normalized.resp_mime_types == ()
+
+    def test_plaintext_redirect_does_not_restore_head_response_body(self, monkeypatch):
+        """Redirect policy must preserve bodyless HEAD semantics."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.proxy_uri.plaintext_http_redirect_status",
+            lambda *_args, **_kwargs: 301,
+        )
+        http = HttpContext(
+            method="HEAD",
+            host="portal.example.com",
+            uri="/sitemap.xml",
+            response_body_len=0,
+            status_code=200,
+            status_msg="OK",
+        )
+
+        redirected = _apply_plaintext_http_policy(
+            http,
+            hostname="portal.example.com",
+            dst_ip="203.0.113.25",
+            dst_port=80,
+        )
+
+        assert redirected.status_code in {301, 302}
+        assert redirected.response_body_len == 0
 
     def test_http_context_from_curl_command_preserves_url_and_user_agent(self):
         """CLI HTTP command lines should drive the canonical HTTP flow metadata."""

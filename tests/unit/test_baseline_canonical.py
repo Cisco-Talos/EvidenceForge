@@ -1410,6 +1410,7 @@ class TestSmbFileTransferCorrelation:
         assert event.protocol.primary_file_transfer.is_orig is False
         assert event.protocol.primary_file_transfer.seen_bytes <= 250000
         assert event.protocol.primary_file_transfer.total_bytes == 250000
+        assert event.network.resp_bytes > event.protocol.primary_file_transfer.total_bytes
 
     def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp

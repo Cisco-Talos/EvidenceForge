@@ -5,7 +5,12 @@
 
 from pathlib import Path
 
-from scripts.realism_review_probe import Finding, _check_cisco_asa_contracts, _check_zeek_sensor
+from scripts.realism_review_probe import (
+    Finding,
+    _check_cisco_asa_contracts,
+    _check_cross_source_contracts,
+    _check_zeek_sensor,
+)
 
 
 def _asa_findings(tmp_path: Path, lines: list[str]) -> list[Finding]:
@@ -95,6 +100,100 @@ def test_probe_rejects_service_without_analyzer_payload(tmp_path: Path) -> None:
     )
 
     assert [finding.check for finding in findings] == ["zeek_unconfirmed_service"]
+
+
+def test_probe_rejects_head_body_larger_than_transport(tmp_path: Path) -> None:
+    findings: list[Finding] = []
+    _check_zeek_sensor(
+        tmp_path,
+        {
+            "conn": [
+                {
+                    "ts": 1.0,
+                    "uid": "CheadBody",
+                    "id.orig_h": "198.51.100.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "10.0.0.20",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "service": "http",
+                    "orig_bytes": 300,
+                    "resp_bytes": 220,
+                    "orig_ip_bytes": 500,
+                    "resp_ip_bytes": 420,
+                    "orig_pkts": 4,
+                    "resp_pkts": 4,
+                    "conn_state": "SF",
+                    "duration": 1.0,
+                }
+            ],
+            "http": [
+                {
+                    "ts": 1.1,
+                    "uid": "CheadBody",
+                    "id.orig_h": "198.51.100.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "10.0.0.20",
+                    "id.resp_p": 80,
+                    "method": "HEAD",
+                    "response_body_len": 478,
+                }
+            ],
+        },
+        findings,
+    )
+
+    assert [finding.check for finding in findings] == [
+        "zeek_http_head_body",
+        "zeek_http_transport_accounting",
+    ]
+
+
+def test_probe_rejects_file_gap_without_transport_gap(tmp_path: Path) -> None:
+    findings: list[Finding] = []
+    _check_zeek_sensor(
+        tmp_path,
+        {
+            "conn": [
+                {
+                    "ts": 1.0,
+                    "uid": "CfileGap",
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "198.51.100.20",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "service": "http",
+                    "orig_bytes": 300,
+                    "resp_bytes": 10_500,
+                    "orig_ip_bytes": 500,
+                    "resp_ip_bytes": 11_000,
+                    "orig_pkts": 4,
+                    "resp_pkts": 10,
+                    "conn_state": "SF",
+                    "duration": 1.0,
+                    "missed_bytes": 0,
+                    "history": "ShADadfF",
+                }
+            ],
+            "files": [
+                {
+                    "ts": 1.1,
+                    "fuid": "FfileGap",
+                    "conn_uids": ["CfileGap"],
+                    "source": "HTTP",
+                    "is_orig": False,
+                    "seen_bytes": 9_500,
+                    "total_bytes": 10_000,
+                    "missing_bytes": 500,
+                    "duration": 0.5,
+                }
+            ],
+        },
+        findings,
+    )
+
+    assert [finding.check for finding in findings] == ["zeek_file_capture_loss"]
 
 
 def test_probe_detects_ocsp_http_without_response_companion(tmp_path: Path) -> None:
@@ -213,3 +312,99 @@ def test_probe_detects_one_client_using_unrelated_public_dns_operators(tmp_path:
     )
 
     assert [finding.check for finding in findings] == ["dns_public_resolver_operator_coherence"]
+
+
+def test_probe_rejects_ssh_client_termination_long_after_transport_close(tmp_path: Path) -> None:
+    findings: list[Finding] = []
+    host_path = tmp_path / "HOST" / "ecar.json"
+    zeek_path = tmp_path / "ZEEK" / "conn.json"
+    _check_cross_source_contracts(
+        tmp_path,
+        {
+            host_path: [
+                {
+                    "timestamp_ms": 1_000,
+                    "id": "process-create",
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "ssh-process",
+                    "properties": {"image_path": r"C:\Windows\System32\OpenSSH\ssh.exe"},
+                },
+                {
+                    "timestamp_ms": 2_000,
+                    "id": "ssh-flow",
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "actorID": "ssh-process",
+                    "properties": {
+                        "src_ip": "10.0.0.8",
+                        "src_port": "51000",
+                        "dst_ip": "10.0.0.20",
+                        "dst_port": "22",
+                    },
+                },
+                {
+                    "timestamp_ms": 100_000,
+                    "id": "process-terminate",
+                    "object": "PROCESS",
+                    "action": "TERMINATE",
+                    "objectID": "ssh-process",
+                    "properties": {"image_path": r"C:\Windows\System32\OpenSSH\ssh.exe"},
+                },
+            ],
+            zeek_path: [
+                {
+                    "ts": 2.0,
+                    "duration": 10.0,
+                    "id.orig_h": "10.0.0.8",
+                    "id.orig_p": 51000,
+                    "id.resp_h": "10.0.0.20",
+                    "id.resp_p": 22,
+                }
+            ],
+        },
+        findings,
+    )
+
+    assert [finding.check for finding in findings] == [
+        "ecar_ssh_client_terminates_after_transport_close"
+    ]
+
+
+def test_probe_rejects_ssh_shell_without_termination_before_logout(tmp_path: Path) -> None:
+    findings: list[Finding] = []
+    host_path = tmp_path / "HOST" / "ecar.json"
+    _check_cross_source_contracts(
+        tmp_path,
+        {
+            host_path: [
+                {
+                    "timestamp_ms": 1_000,
+                    "id": "shell-create",
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "ssh-shell",
+                    "pid": 42001,
+                    "properties": {
+                        "image_path": "/bin/bash",
+                        "logon_id": "0x1234",
+                    },
+                },
+                {
+                    "timestamp_ms": 20_000,
+                    "id": "session-logout",
+                    "object": "USER_SESSION",
+                    "action": "LOGOUT",
+                    "properties": {
+                        "session_type": "ssh",
+                        "logon_id": "0x1234",
+                    },
+                },
+            ]
+        },
+        findings,
+    )
+
+    assert [finding.check for finding in findings] == [
+        "ecar_ssh_shell_terminates_before_session_logout"
+    ]

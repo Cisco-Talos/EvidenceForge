@@ -1385,8 +1385,6 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
     """Root schema for smb_file_transfers.yaml."""
 
     min_transfer_bytes: int
-    missing_bytes_probability: float
-    timeout_probability: float
     mime_types: list[SmbMimeTypeEntry]
     analyzer_sets: list[SmbAnalyzerSetEntry]
     filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
@@ -1396,13 +1394,6 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
     def min_transfer_bytes_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("min_transfer_bytes must be positive")
-        return v
-
-    @field_validator("missing_bytes_probability", "timeout_probability")
-    @classmethod
-    def probability_range(cls, v: float) -> float:
-        if not 0 <= v <= 1:
-            raise ValueError("probability must be between 0 and 1")
         return v
 
     @field_validator("mime_types", "analyzer_sets")

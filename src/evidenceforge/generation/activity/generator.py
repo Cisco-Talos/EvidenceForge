@@ -755,7 +755,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     status_code = http.status_code
     response_body_len = max(0, http.response_body_len)
     status_msg = http.status_msg
-    bodyless_status = status_code in {204, 304}
+    bodyless_status = status_code in {204, 304} or method == "HEAD"
 
     if bodyless_status:
         response_body_len = 0
@@ -850,7 +850,11 @@ def _apply_plaintext_http_policy(
     if redirect_status is None or http.status_code in {301, 302}:
         return http
 
-    response_body_len = response_size_for_status(redirect_status, hostname, http.uri)
+    response_body_len = (
+        0
+        if (http.method or "GET").upper() == "HEAD"
+        else response_size_for_status(redirect_status, hostname, http.uri)
+    )
     resp_mime_types = response_mime_types_for_status(
         redirect_status,
         "text/html",
@@ -4218,6 +4222,9 @@ class ActivityGenerator:
         self._linux_local_logon_syslog_sessions: set[str] = set()
         self._linux_local_logind_session_ids: dict[str, int] = {}
         self._ssh_session_ready_times: dict[str, datetime] = {}
+        self._pending_ssh_session_closures: list[
+            tuple[datetime, Any, Any, OccurrenceBuilder, Any]
+        ] = []
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_process_finalizers: ExpiringIndex[
             tuple[str, int], tuple[System, str, str, str, datetime]
@@ -4376,6 +4383,32 @@ class ActivityGenerator:
                 process_name=running.image or process_name,
                 logon_id=running.logon_id or logon_id,
             )
+
+    def _defer_ssh_session_close(
+        self,
+        bundle: Any,
+        state: Any,
+        event: OccurrenceBuilder,
+        auth_state: Any,
+    ) -> None:
+        """Queue an SSH bundle closure until all dependent activity is generated."""
+
+        self._pending_ssh_session_closures.append(
+            (ensure_utc(state.close_time), bundle, state, event, auth_state)
+        )
+
+    def finalize_ssh_session_lifecycles(self, end_time: datetime) -> None:
+        """Dispatch due action-owned SSH closures after dependent generation completes."""
+
+        window_end = ensure_utc(end_time)
+        pending = sorted(self._pending_ssh_session_closures, key=lambda item: item[0])
+        self._pending_ssh_session_closures = []
+        for close_time, bundle, state, event, auth_state in pending:
+            if close_time >= window_end:
+                continue
+            if not state.logon_id or self.state_manager.get_session(state.logon_id) is None:
+                continue
+            bundle._dispatch_linux_session_close_lifecycle(state, event, auth_state)
 
     def _generate_bounded_foreground_process_termination(
         self,
@@ -10143,6 +10176,7 @@ class ActivityGenerator:
             system,
             responder_pid,
             connection_message_time,
+            later_source="syslog",
         )
         if visible_connection_time > connection_message_time:
             source_shift = visible_connection_time - connection_message_time
@@ -11776,14 +11810,24 @@ class ActivityGenerator:
         pid: int,
         time: datetime,
         relationship_key: str = "source.ecar_dependent_after_process_create",
+        *,
+        later_source: str | None = None,
     ) -> datetime:
         """Keep Linux same-process observations after visible eCAR creation."""
         if pid <= 0 or _get_os_category(system.os) != "linux":
             return time
         visible_create_time = self.process_source_create_time(system.hostname, pid)
-        if visible_create_time is None or time > visible_create_time:
+        if visible_create_time is None:
             return time
-        return visible_create_time + sample_timing_delta(
+        required_floor = visible_create_time
+        if later_source is not None:
+            required_floor += self.dispatcher.observation_policy.maximum_delay_difference(
+                "ecar",
+                later_source,
+            ) + timedelta(milliseconds=25)
+        if time > required_floor:
+            return time
+        return required_floor + sample_timing_delta(
             relationship_key,
             seed_parts=(system.hostname, pid, visible_create_time, time),
         )
@@ -12178,6 +12222,7 @@ class ActivityGenerator:
             target_system,
             sshd_pid,
             time + timedelta(milliseconds=connection_delta_ms),
+            later_source="syslog",
         )
         process_floor_shift_ms = max(
             0,
@@ -17201,6 +17246,7 @@ class ActivityGenerator:
         public_key_type: str = "",
         public_key_hash: str = "",
         emit_session_close: bool = False,
+        defer_session_close: bool = False,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
         source: str = "activity_generator",
@@ -17227,6 +17273,7 @@ class ActivityGenerator:
             public_key_type=public_key_type,
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
+            defer_session_close=defer_session_close,
             session_end_plan=session_end_plan,
             ids_alerts=list(ids_alerts or []),
             source=source,

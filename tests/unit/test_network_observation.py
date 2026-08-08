@@ -16,6 +16,7 @@ from evidenceforge.events import HostContext
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder, RawProjectionRequest
 from evidenceforge.events.contexts import (
     DnsContext,
+    FileTransferContext,
     HttpContext,
     IdsAlertPlan,
     NatContext,
@@ -199,6 +200,45 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
         assert observation.connection_id(event.network.zeek_uid) == observation.connection_uid
         assert observation.traffic.missed_bytes == 0
         assert observation.observed_duration >= event.network.duration
+
+
+def test_capture_loss_projects_file_and_http_completeness_with_gap_history() -> None:
+    """Sensor loss must propagate beyond conn.log without changing canonical truth."""
+
+    event = _network_event(protocol="tcp")
+    event.http = HttpContext(
+        method="GET",
+        host="files.example.com",
+        uri="/payload.bin",
+        response_body_len=8_000,
+    )
+    event.file_transfer = FileTransferContext(
+        fuid="FObservationFile1",
+        source="HTTP",
+        analyzers=("SHA256",),
+        is_orig=False,
+        seen_bytes=8_000,
+        total_bytes=8_000,
+        sha256="a" * 64,
+    )
+    observed = NetworkTrafficLedger(
+        orig=event.network.traffic.orig,
+        resp=DirectionalTrafficLedger(payload_bytes=4_200, packets=12, ip_bytes=4_536),
+        missed_resp_bytes=4_200,
+    )
+
+    history, files, request_body, response_body = NetworkObservationPlanner._observed_protocol(
+        event,
+        observed,
+    )
+
+    assert history.endswith("g")
+    assert request_body == 0
+    assert response_body == 4_000
+    assert files[0].seen_bytes == 4_000
+    assert files[0].missing_bytes == 4_000
+    assert not files[0].analyzers_visible
+    assert event.file_transfer.seen_bytes == 8_000
 
 
 def test_inbound_static_nat_sensor_views_come_from_topology_and_nat_context() -> None:

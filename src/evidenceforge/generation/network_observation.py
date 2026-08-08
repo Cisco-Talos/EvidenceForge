@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    FileSensorObservation,
     NatSensorObservation,
     NetworkSensorObservation,
     NetworkTrafficLedger,
@@ -24,6 +25,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     firewall_observation_timing,
     network_sensor_observation_timing,
 )
+from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.utils.ids import _has_synthetic_marker
 from evidenceforge.utils.rng import _stable_seed
 
@@ -122,6 +124,16 @@ class NetworkObservationPlanner:
                 observed_start,
                 observed_close,
             )
+            observed_traffic = self._observed_traffic(
+                transaction.traffic,
+                timing,
+                sensor_identity,
+                transaction.stable_id,
+                transaction.protocol,
+            )
+            history, file_observations, request_body_len, response_body_len = (
+                self._observed_protocol(event, observed_traffic)
+            )
             observations.append(
                 NetworkSensorObservation(
                     sensor_identity=sensor_identity,
@@ -144,14 +156,12 @@ class NetworkObservationPlanner:
                     local_resp=local_resp,
                     observed_start_time=observed_start,
                     observed_close_time=observed_close,
-                    traffic=self._observed_traffic(
-                        transaction.traffic,
-                        timing,
-                        sensor_identity,
-                        transaction.stable_id,
-                        transaction.protocol,
-                    ),
+                    traffic=observed_traffic,
                     visible_formats=frozenset(formats),
+                    history=history,
+                    file_observations=file_observations,
+                    http_request_body_len=request_body_len,
+                    http_response_body_len=response_body_len,
                     firewall_teardown_reason=firewall_reason,
                     firewall_teardown_time=firewall_teardown,
                     nat=self._nat_observation(
@@ -163,6 +173,94 @@ class NetworkObservationPlanner:
                 )
             )
         return tuple(observations)
+
+    @classmethod
+    def _observed_protocol(
+        cls,
+        event: CanonicalOccurrence,
+        traffic: NetworkTrafficLedger,
+    ) -> tuple[str, tuple[FileSensorObservation, ...], int | None, int | None]:
+        """Freeze application completeness implied by one sensor's traffic ledger."""
+
+        network = event.network
+        if network is None:
+            return "", (), None, None
+
+        history = network.history
+        if network.protocol.lower() == "tcp":
+            if traffic.missed_orig_bytes > 0 and "G" not in history:
+                history += "G"
+            if traffic.missed_resp_bytes > 0 and "g" not in history:
+                history += "g"
+
+        orig_ratio = cls._payload_observation_ratio(
+            network.traffic.orig.payload_bytes,
+            traffic.orig.payload_bytes,
+        )
+        resp_ratio = cls._payload_observation_ratio(
+            network.traffic.resp.payload_bytes,
+            traffic.resp.payload_bytes,
+        )
+        files: list[FileSensorObservation] = []
+        for transfer in event.protocol.file_transfers:
+            ratio = orig_ratio if transfer.is_orig else resp_ratio
+            total = transfer.total_bytes
+            accounted_total = (
+                total if total is not None else transfer.seen_bytes + transfer.missing_bytes
+            )
+            seen = min(transfer.seen_bytes, int(transfer.seen_bytes * ratio))
+            missing = max(transfer.missing_bytes, accounted_total - seen)
+            files.append(
+                FileSensorObservation(
+                    canonical_id=transfer.fuid,
+                    seen_bytes=seen,
+                    total_bytes=total,
+                    missing_bytes=missing,
+                    analyzers_visible=missing == 0 and not transfer.timedout,
+                )
+            )
+
+        for certificate in event.protocol.x509_chain:
+            total = certificate_file_size(certificate)
+            seen = int(total * resp_ratio)
+            files.append(
+                FileSensorObservation(
+                    canonical_id=certificate.fuid,
+                    seen_bytes=seen,
+                    total_bytes=total,
+                    missing_bytes=total - seen,
+                    analyzers_visible=seen == total,
+                )
+            )
+
+        request_body_len = None
+        response_body_len = None
+        http = event.protocol.http
+        if http is not None:
+            canonical_request = max(
+                0,
+                http.flow_request_body_len
+                if http.flow_request_body_len is not None
+                else http.request_body_len,
+            )
+            canonical_response = max(
+                0,
+                http.flow_response_body_len
+                if http.flow_response_body_len is not None
+                else http.response_body_len,
+            )
+            request_body_len = min(http.request_body_len, int(canonical_request * orig_ratio))
+            response_body_len = min(http.response_body_len, int(canonical_response * resp_ratio))
+
+        return history, tuple(files), request_body_len, response_body_len
+
+    @staticmethod
+    def _payload_observation_ratio(canonical_bytes: int, observed_bytes: int) -> float:
+        """Return the bounded fraction of canonical payload visible at one sensor."""
+
+        if canonical_bytes <= 0:
+            return 1.0
+        return min(1.0, max(0.0, observed_bytes / canonical_bytes))
 
     @staticmethod
     def _nat_observation(

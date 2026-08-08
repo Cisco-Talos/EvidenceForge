@@ -2675,7 +2675,8 @@ class TestWindowsEventEmitter:
                 dst_ip="10.0.0.10",
                 dst_port=88,
                 protocol="tcp",
-                initiating_pid=684,
+                initiating_pid=9072,
+                responding_pid=684,
             ),
         )
 
@@ -2687,6 +2688,8 @@ class TestWindowsEventEmitter:
         assert '<Data Name="LayerName">%%14610</Data>' in content
         assert '<Data Name="LayerRTID">44</Data>' in content
         assert '<Data Name="ProcessID">684</Data>' in content
+        assert '<Data Name="ProcessID">9072</Data>' not in content
+        assert "lsass.exe" in content
         assert '<Data Name="DestAddress">10.0.0.10</Data>' in content
 
     def test_wfp_dns_connection_uses_dns_client_svchost_pid(self, format_def, temp_output):
