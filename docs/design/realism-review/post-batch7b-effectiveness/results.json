@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-08",
+  "branch": "codex/batch7-compatibility-docs",
+  "commit": "53934a16778c5eea22e389c0d7d80061103e730e",
+  "purpose": "One-pass effectiveness measurement after Batch 7b; no blind-review fix loop",
+  "benchmark": {
+    "scenario_source": "scenarios/branch-office-example/scenario.yaml",
+    "review_copy": "/private/tmp/eforge-realism-review/branch-enterprise.yaml",
+    "scenario_sha256": "bf7eef77f0cb121bb0838cc4252ae19347e1a8c8304079c11426163806cc07ff",
+    "duration_hours": 6,
+    "observation_profile": "enterprise_standard",
+    "users": 5,
+    "systems": 9,
+    "storyline_events": 6,
+    "sensors": 3,
+    "validation": {
+      "status": "passed_with_warning",
+      "warning": "portal.northstarclaims.net is not declared in network identities"
+    },
+    "selection_note": "The archived iteration-test-expanded scenario no longer validates unchanged under the current capability contract, so the frozen integrated review benchmark was used."
+  },
+  "generation": {
+    "primary_output": "/private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise",
+    "repeat_output": "/private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise-repeat",
+    "reviewer_data_copy": "/private/tmp/case-omega.SimlDV/data",
+    "data_files": 38,
+    "data_sha256": "911decaca74f1b2663d6508d2e99eed861a247ffbdd76c34ed6f9cbcb803e67f",
+    "repeat_data_sha256": "911decaca74f1b2663d6508d2e99eed861a247ffbdd76c34ed6f9cbcb803e67f",
+    "repeat_byte_identical": true,
+    "tracked": false
+  },
+  "automated_evaluation": {
+    "records": 53548,
+    "parsed_sources": 16,
+    "overall_score": 95.02557608408206,
+    "acceptance_passed": false,
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 94.81469262407524,
+      "causality": 89.51485148514851,
+      "timing": 94.7159502838806
+    },
+    "only_failed_hard_gate": {
+      "name": "causality.pivot_linkability",
+      "actual": 40.0,
+      "threshold": 80.0
+    },
+    "comparison_limitation": "Evaluator acceptance rules changed during the campaign; this score is not a controlled comparison to every prior checkpoint."
+  },
+  "rendered_probe": {
+    "primary": "/private/tmp/eforge-post-batch7b-effectiveness/probe.json",
+    "repeat": "/private/tmp/eforge-post-batch7b-effectiveness/probe-repeat.json",
+    "finding_families": 2,
+    "finding_records": 37,
+    "check": "ssh_syslog_after_ecar_process_create",
+    "hosts": {
+      "PROXY-BO-01": 9,
+      "WEB-BO-01": 28
+    },
+    "repeat_identical": true
+  },
+  "controlled_batch7a_comparison": {
+    "commit": "868eb35d",
+    "source_tree": "/private/tmp/batch7a-compare-src.6fqNWB",
+    "output": "/private/tmp/eforge-post-batch7b-effectiveness/batch7a-controlled",
+    "data_sha256": "029900a78fe9bea0c9f0b58adfaf329c89bc3c1ba5d3e88511414c75c91306db",
+    "probe": "/private/tmp/eforge-post-batch7b-effectiveness/probe-batch7a-controlled.json",
+    "findings": {
+      "ecar_linux_pid_chronology": 1,
+      "ssh_syslog_after_ecar_process_create": 0
+    },
+    "conclusion": "Batch 7b repaired the observed Linux PID reversal but introduced a deterministic SSH syslog-before-eCAR-process-create regression affecting 37 records on two hosts."
+  },
+  "blind_panel": {
+    "isolation": "Four reviewers received only the data directory and did not receive the scenario, ground truth, code, prior reports, or one another's reports.",
+    "verdict": "unanimous synthetic",
+    "average_verdict_confidence": 94.25,
+    "average_synthetic_confidence": 90.0,
+    "score_spread": 24,
+    "deliberation_triggered": false,
+    "scores": {
+      "threat_hunter": 72,
+      "detection_engineer": 96,
+      "network_forensics": 96,
+      "host_forensics": 96
+    }
+  },
+  "dashboard": {
+    "renderer": "/Users/dabianco/.codex/skills/eforge-assess/scripts/render_loop_dashboard.py",
+    "comparison_source": "comparison.json",
+    "svg": "effectiveness-dashboard.svg",
+    "svg_sha256": "fde69a244b361dfcd5fe65daa825434e5bb2fea23078ebcea32b0f1215bc68aa",
+    "png": "effectiveness-dashboard.png",
+    "png_sha256": "b0d64ae630a61aea320d726badb74af43bcdccae111630b336053e9c104b9d98",
+    "dimensions": [1600, 1760]
+  },
+  "validated_root_causes": [
+    {
+      "id": "P7B-REG-001",
+      "priority": "P1",
+      "family": "SSH source-order regression",
+      "owner": "SSH action bundle and source timing",
+      "dynamic_evidence": "37 same-PID syslog records precede eCAR process creation; absent in controlled Batch 7a output and identical on repeat",
+      "static_evidence": [
+        "src/evidenceforge/generation/actions/ssh_session.py:384",
+        "src/evidenceforge/generation/actions/ssh_session.py:746"
+      ]
+    },
+    {
+      "id": "P7B-REAL-001",
+      "priority": "P1",
+      "family": "Inbound Windows WFP process ownership",
+      "owner": "Windows source-native projection",
+      "dynamic_evidence": "Inbound Event 5156 combines receiver image with the remote initiator PID in thousands of records",
+      "static_evidence": [
+        "src/evidenceforge/generation/emitters/windows.py:1188",
+        "src/evidenceforge/generation/emitters/windows.py:1195"
+      ]
+    },
+    {
+      "id": "P7B-REAL-002",
+      "priority": "P1",
+      "family": "File, application, transport, and capture-loss accounting",
+      "owner": "File-transfer and network transaction plans",
+      "dynamic_evidence": "22 SMB files exceed directional payload; 172 more equal payload with no framing; complete SMB/HTTP extraction can coexist with connection loss",
+      "static_evidence": [
+        "src/evidenceforge/generation/actions/file_transfer.py:686",
+        "src/evidenceforge/generation/actions/file_transfer.py:702",
+        "src/evidenceforge/generation/actions/network_transaction_planner.py:1327"
+      ]
+    },
+    {
+      "id": "P7B-REAL-003",
+      "priority": "P1",
+      "family": "Clock-derived Linux PID allocation",
+      "owner": "StateManager identity allocation",
+      "dynamic_evidence": "Both Linux hosts advance at essentially two PIDs per wall-clock second with R-squared above 0.99999999",
+      "static_evidence": [
+        "src/evidenceforge/generation/state_manager.py:1143",
+        "src/evidenceforge/generation/state_manager.py:1155"
+      ]
+    },
+    {
+      "id": "P7B-REAL-004",
+      "priority": "P1",
+      "family": "SSH closure ownership",
+      "owner": "WorldPlanner and SSH action bundle",
+      "dynamic_evidence": "The compromised www-data SSH transport closes normally, but the endpoint/PAM/session/process lifecycle remains open for hours",
+      "static_evidence": [
+        "src/evidenceforge/generation/world_model.py:1378",
+        "src/evidenceforge/generation/actions/ssh_session.py:123",
+        "src/evidenceforge/generation/actions/ssh_session.py:384"
+      ]
+    }
+  ],
+  "secondary_validated_risks": [
+    "Windows Type 3 session duration populations have 30- or 60-second hard ceilings outside isolated long outliers.",
+    "Repeated singleton Windows service and desktop-client starts are not guarded by durable running-instance state.",
+    "Linux background noise and administrator SSH session cadence remain overly chatty and template-shaped.",
+    "TLS duration values and Windows LogonID slopes expose additional quantization/formula texture."
+  ],
+  "effectiveness_conclusion": {
+    "latest_average_synthetic_confidence": 90.0,
+    "original_pre_fix_average": 91.75,
+    "final_post_fix_gate_average": 90.75,
+    "best_recorded_checkpoint_average": 78.75,
+    "result": "No material improvement in aggregate blind authenticity is demonstrated. Specific contract repairs are real, but current and newly exposed contradictions dominate the panel result.",
+    "release_gate": "blocked",
+    "automatic_fix_loop_started": false
+  },
+  "commands": {
+    "validate": "uv run eforge validate /private/tmp/eforge-realism-review/branch-enterprise.yaml",
+    "generate": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml --output /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise --force",
+    "repeat": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml --output /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise-repeat --force",
+    "evaluate": "uv run eforge eval /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise --scenario /private/tmp/eforge-realism-review/branch-enterprise.yaml --format json --verbose",
+    "probe": "uv run python scripts/realism_review_probe.py /private/tmp/eforge-post-batch7b-effectiveness/branch-enterprise --output /private/tmp/eforge-post-batch7b-effectiveness/probe.json"
+  }
+}

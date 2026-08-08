@@ -135,6 +135,7 @@
   "limitations": [
     "Optional Docker/licensed external parser tests remain skipped behind their existing dependency gates.",
     "Generated datasets and temporary probe outputs remain untracked.",
-    "The broader census still records unrelated architectural risks and bypasses for later remediation; Batch 7b does not silently close those findings."
+    "The broader census still records unrelated architectural risks and bypasses for later remediation; Batch 7b does not silently close those findings.",
+    "This bounded branch-office migration gate predates the broader post-Batch-7b effectiveness assessment. That later integrated benchmark found a controlled SSH source-order regression and additional P1 realism blockers; see post-batch7b-effectiveness/REPORT.md."
   ]
 }

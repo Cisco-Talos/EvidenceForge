@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "metric": "blind synthetic-confidence",
+  "direction": "lower is more realistic",
+  "checkpoints": [
+    {
+      "index": 1,
+      "label": "Original pre-fix",
+      "source": "../blind-summary.md",
+      "scores": {
+        "threat_hunter": 88,
+        "detection_engineer": 96,
+        "network_forensics": 86,
+        "host_forensics": 97,
+        "average": 91.75
+      },
+      "automated_eval": {
+        "score": 96.1891,
+        "records": 48848,
+        "source": "../empirical-results.json"
+      }
+    },
+    {
+      "index": 2,
+      "label": "Post-Batch-2",
+      "source": "../post-batch-2-blind/scores.json",
+      "scores": {
+        "threat_hunter": 98,
+        "detection_engineer": 95,
+        "network_forensics": 94,
+        "host_forensics": 99,
+        "average": 96.5
+      },
+      "automated_eval": null
+    },
+    {
+      "index": 3,
+      "label": "Post-gate loop 3",
+      "source": "../post-gate-blind/scores.json",
+      "scores": {
+        "threat_hunter": 72,
+        "detection_engineer": 74,
+        "network_forensics": 84,
+        "host_forensics": 85,
+        "average": 78.75
+      },
+      "automated_eval": {
+        "score": 95.35244020762539,
+        "records": 48839
+      }
+    },
+    {
+      "index": 4,
+      "label": "Final post-fix gate",
+      "source": "../post-gate-loop5-blind/scores.json",
+      "scores": {
+        "threat_hunter": 96,
+        "detection_engineer": 85,
+        "network_forensics": 96,
+        "host_forensics": 86,
+        "average": 90.75
+      },
+      "automated_eval": {
+        "score": 96.0,
+        "records": 49838
+      }
+    },
+    {
+      "index": 5,
+      "label": "Post-Batch-7b",
+      "source": "scores.json",
+      "scores": {
+        "threat_hunter": 72,
+        "detection_engineer": 96,
+        "network_forensics": 96,
+        "host_forensics": 96,
+        "average": 90.0
+      },
+      "automated_eval": {
+        "score": 95.02557608408206,
+        "records": 53548
+      }
+    }
+  ],
+  "latest_deltas": {
+    "versus_original_pre_fix": -1.75,
+    "versus_final_post_fix_gate": -0.75,
+    "versus_best_recorded_checkpoint": 11.25
+  },
+  "comparability_limitations": [
+    "The checkpoints are independent blind panels, not repeated ratings by the same reviewers.",
+    "Generated content and record counts changed across checkpoints, so score movement is directional rather than a controlled causal estimate.",
+    "Automated evaluator scores are not directly comparable across every checkpoint because evaluator rules changed during the remediation campaign."
+  ]
+}

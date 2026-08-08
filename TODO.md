@@ -91,11 +91,17 @@ without turning `TODO.md` back into a high-conflict work journal.
   authored schema, and source formats; version the ground-truth schema. Optimize indexed lookup
   speed while proving duration-stable retained state. See the Batch 7 worklog for the approved
   implementation contract and [Batch 7b results](docs/design/realism-review/batch7b-results.json).
+- [ ] **P1** Close the post-Batch-7b effectiveness gate before opening the cumulative PR to `dev`:
+  repair the controlled SSH source-order regression, inbound Windows 5156 local-process ownership,
+  file/application/transport loss accounting, clock-derived Linux PID allocation, and missing SSH
+  close ownership. Use invariant tests plus one integrated regression generation; a new blind panel
+  is optional, not part of this gate. See the
+  [effectiveness report](docs/design/realism-review/post-batch7b-effectiveness/REPORT.md).
 - The complete dependency order and acceptance boundaries remain in the
   [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
   exact evidence, owners, remediation, and tests remain in
   [the machine-readable finding register](docs/design/realism-review/findings.json).
-- [ ] Continue current-dev realism assessment only if another loop is needed;
+- [ ] Continue current-dev realism assessment only if a separately approved future loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.
 - [ ] **P1** Feed the latest post-fix Host-review priors into the next
