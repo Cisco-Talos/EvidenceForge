@@ -192,6 +192,8 @@ system_services:
 
   workstation:
     - image: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"
+      compatibility_group: remote_access_stack
+      compatibility_option: cisco_secure_client
       command_templates:
         - "vpnagent.exe"
       parent: services
@@ -206,6 +208,8 @@ system_services:
             company: "Cisco Systems, Inc."
             original_filename: "vpnapi.dll"
     - image: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"
+      compatibility_group: remote_access_stack
+      compatibility_option: globalprotect
       command_templates:
         - "PanGPS.exe"
       parent: services
@@ -214,6 +218,8 @@ system_services:
         - path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGpHip.dll"
           signature: "Palo Alto Networks, Inc."
     - image: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"
+      compatibility_group: remote_access_stack
+      compatibility_option: zscaler
       command_templates:
         - "ZSAService.exe"
       parent: services
@@ -222,6 +228,8 @@ system_services:
         - path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSACommon.dll"
           signature: "Zscaler, Inc."
     - image: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.exe"
+      compatibility_group: remote_access_stack
+      compatibility_option: zscaler
       command_templates:
         - "ZSATunnel.exe"
       parent: services

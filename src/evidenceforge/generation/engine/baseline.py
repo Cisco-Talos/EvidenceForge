@@ -1678,6 +1678,7 @@ class BaselineMixin:
         self,
         svc_name: str,
         rng: random.Random,
+        system: System | None = None,
     ) -> dict[str, Any]:
         """Return a role-specific caller process for service-account 4648 noise."""
         fallback = {
@@ -1718,6 +1719,42 @@ class BaselineMixin:
         processes = [
             process for process in profile.get("processes", []) if isinstance(process, dict)
         ]
+        if system is not None:
+            system_type = (
+                str(getattr(system, "type", "workstation") or "workstation")
+                .lower()
+                .replace("-", "_")
+            )
+            processes = [
+                process
+                for process in processes
+                if not process.get("system_types")
+                or system_type
+                in {
+                    str(value).lower().replace("-", "_")
+                    for value in process.get("system_types", [])
+                }
+            ]
+        grouped_options: dict[str, set[str]] = {}
+        for process in processes:
+            group = str(process.get("compatibility_group") or "")
+            option = str(process.get("compatibility_option") or "")
+            if group and option:
+                grouped_options.setdefault(group, set()).add(option)
+        deployment_key = str(getattr(getattr(self, "scenario", None), "name", "default"))
+        selected_options = {
+            group: random.Random(
+                _stable_seed(f"software_deployment:{deployment_key}:{group}")
+            ).choice(sorted(options))
+            for group, options in grouped_options.items()
+        }
+        processes = [
+            process
+            for process in processes
+            if not process.get("compatibility_group")
+            or selected_options.get(str(process["compatibility_group"]))
+            == str(process.get("compatibility_option") or "")
+        ]
         if not processes:
             return fallback
         choice = rng.choices(
@@ -1746,7 +1783,7 @@ class BaselineMixin:
         rng: random.Random,
     ) -> tuple[str, int]:
         """Return a live caller process for benign service-account delegation."""
-        choice = self._pick_service_account_delegation_process(svc_name, rng)
+        choice = self._pick_service_account_delegation_process(svc_name, rng, system)
         image = choice["image"]
         normalized_image = image.replace("/", "\\").lower()
         candidates = []
@@ -7835,6 +7872,7 @@ class BaselineMixin:
                         rng,
                         sys_type_str,
                         system,
+                        str(self.scenario.name),
                     )
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))

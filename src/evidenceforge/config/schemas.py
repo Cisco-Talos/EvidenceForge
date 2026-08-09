@@ -1376,6 +1376,9 @@ class ServiceAccountDelegationProcessConfig(BaseModel, extra="forbid"):
     command_line: str = Field(min_length=1)
     parent_key: str = Field(default="services", min_length=1)
     weight: int = Field(gt=0)
+    system_types: list[str] | None = None
+    compatibility_group: str | None = None
+    compatibility_option: str | None = None
 
 
 class ServiceAccountDelegationProfileConfig(BaseModel, extra="forbid"):
@@ -2262,6 +2265,8 @@ class SystemServiceEntry(BaseModel, extra="forbid"):
     params: dict[str, list[str]] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
     singleton: bool = False
+    compatibility_group: str | None = None
+    compatibility_option: str | None = None
 
 
 class SystemBinaryEntry(BaseModel, extra="forbid"):
