@@ -1192,7 +1192,7 @@ def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:
         for answer in row.get("answers", [])
     ]
     assert mail_answers
-    assert set(mail_answers) <= {"10.10.2.25", "fd00:3714:0019::1"}
+    assert set(mail_answers) <= {"10.10.2.25", "fd00:0a02:0019::1"}
 
 
 def test_generic_internal_mail_alias_uses_ingress_mail_server_dns_identity() -> None:
