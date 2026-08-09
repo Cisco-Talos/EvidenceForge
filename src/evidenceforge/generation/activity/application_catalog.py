@@ -19,6 +19,7 @@ from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 from evidenceforge.generation.activity.system_processes import (
     get_system_binary_path,
 )
+from evidenceforge.utils.rng import _stable_seed
 
 _CATALOG_PATH = get_activity_directory() / "application_catalog.yaml"
 _CACHED_CATALOG: dict[str, Any] | None = None
@@ -63,6 +64,7 @@ def get_apps_for_persona(
     os_category: str,
     category: str,
     system_type: str | None = None,
+    deployment_key: str = "default",
 ) -> list[dict[str, Any]]:
     """Return applications available to a persona on a given OS and category.
 
@@ -101,6 +103,26 @@ def get_apps_for_persona(
                 continue
         results.append(app)
 
+    grouped_options: dict[str, set[str]] = {}
+    for app in results:
+        group = str(app.get("compatibility_group") or "")
+        option = str(app.get("compatibility_option") or "")
+        if group and option:
+            grouped_options.setdefault(group, set()).add(option)
+    selected_options = {
+        group: random.Random(_stable_seed(f"software_deployment:{deployment_key}:{group}")).choice(
+            sorted(options)
+        )
+        for group, options in grouped_options.items()
+    }
+    results = [
+        app
+        for app in results
+        if not app.get("compatibility_group")
+        or selected_options.get(str(app["compatibility_group"]))
+        == str(app.get("compatibility_option") or "")
+    ]
+
     # Only fall back to "default" if the persona is truly unknown
     # (not listed in ANY app's persona allowlist). Known personas with
     # no apps in a category should return empty — the caller skips
@@ -110,7 +132,9 @@ def get_apps_for_persona(
         for app in data["applications"]:
             known_personas.update(app.get("personas", []))
         if persona_lower not in known_personas:
-            return get_apps_for_persona("default", os_category, category, system_type)
+            return get_apps_for_persona(
+                "default", os_category, category, system_type, deployment_key
+            )
 
     return results
 
@@ -457,6 +481,7 @@ def pick_app_and_command(
     category: str,
     username: str = "",
     system_type: str | None = None,
+    deployment_key: str = "default",
 ) -> tuple[str, str] | None:
     """Pick a random app for the persona and return (image_path, command_template).
 
@@ -466,7 +491,7 @@ def pick_app_and_command(
     For browser-category apps, applies per-user browser affinity: each user
     has a primary browser (90% of the time) with occasional secondary use (10%).
     """
-    apps = get_apps_for_persona(persona, os_category, category, system_type)
+    apps = get_apps_for_persona(persona, os_category, category, system_type, deployment_key)
     if not apps:
         return None
 
@@ -480,3 +505,16 @@ def pick_app_and_command(
         image_path = image_path.replace("{username}", username)
     command_line = rng.choice(platform["command_templates"])
     return image_path, command_line
+
+
+def is_singleton_application_image(image_path: str, os_category: str) -> bool:
+    """Return whether a catalog application permits one live instance per session."""
+    normalized = image_path.replace("/", "\\").lower()
+    for app in load_catalog().get("applications", []):
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        candidate = str(platform.get("image_path") or "").replace("/", "\\").lower()
+        if candidate == normalized:
+            return bool(app.get("singleton_per_session"))
+    return False

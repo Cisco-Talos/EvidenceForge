@@ -1741,7 +1741,11 @@ class BaselineMixin:
             option = str(process.get("compatibility_option") or "")
             if group and option:
                 grouped_options.setdefault(group, set()).add(option)
-        deployment_key = str(getattr(getattr(self, "scenario", None), "name", "default"))
+        scenario = getattr(self, "scenario", None)
+        deployment_key = str(
+            getattr(getattr(scenario, "environment", None), "domain", None)
+            or getattr(scenario, "name", "default")
+        )
         selected_options = {
             group: random.Random(
                 _stable_seed(f"software_deployment:{deployment_key}:{group}")
@@ -7872,7 +7876,7 @@ class BaselineMixin:
                         rng,
                         sys_type_str,
                         system,
-                        str(self.scenario.name),
+                        str(self.scenario.environment.domain),
                     )
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))

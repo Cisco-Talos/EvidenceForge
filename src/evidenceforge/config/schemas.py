@@ -429,6 +429,9 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     personas: list[str]
     system_types: list[str] | None = None
     selection_weight: int = Field(default=10, gt=0)
+    compatibility_group: str | None = None
+    compatibility_option: str | None = None
+    singleton_per_session: bool = False
 
 
 # --- Persona ---

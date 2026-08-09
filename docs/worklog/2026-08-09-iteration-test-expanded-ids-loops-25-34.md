@@ -66,3 +66,39 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** preserve deterministic per-environment selection, product
   diversity between deployments, legitimate endpoint agents, explicit attack
   processes, process lifecycles, and Linux/Windows OS constraints.
+
+## Loop 26 Outcome
+
+- **Commits:** `f17096f0 test: correct private IPv6 expectation` and
+  `c0a01395 fix: constrain enterprise software deployments`.
+- **Verification:** 241 focused tests passed; config validation and Ruff passed;
+  final full suite passed with 5,102 tests and 41 skips.
+- **Generation and eval:** 82,753 records; automated score
+  95.9570292254711, PASS across every hard gate.
+- **Hard probe:** one background remote-access stack (Zscaler), one backup
+  platform (Commvault), zero competing background stacks, and zero Veeam
+  server processes on workstations.
+- **Blind panel:** initial 14/30/18/68, average 32.5. Deliberation triggered on
+  disagreement and 54-point spread, ending Synthetic 3-1 at 56.5 with final
+  scores 62/58/30/76.
+- **Target result:** background services passed, but user applications remained
+  an uncovered sibling entry path and reproduced the cross-vendor defect.
+
+## Loop 27 Family Contract
+
+- **Selected family:** stateful deployment-scoped endpoint control software
+  across service and user-application catalogs.
+- **Finding classification:** `existing_family_sibling` plus singleton lifecycle
+  defect.
+- **Owning abstraction:** shared application compatibility metadata and durable
+  running-process state.
+- **Invariant:** service agents and user UIs select the same deployment stack;
+  one UI instance may be live per product, principal, and logon context; a new
+  instance requires prior termination unless an explicit migration state exists.
+- **Entry paths:** system service noise, persona user applications, session
+  startup, spawn rules, and catalog-driven process effects.
+- **Consumers:** eCAR, Security 4688, Sysmon Event 1, module loads, process
+  network correlation, and host software inventory.
+- **Sibling risks:** preserve multiple principals/sessions, explicit storyline
+  processes, deterministic cohort selection, process termination, application
+  diversity outside compatibility groups, and Linux behavior.

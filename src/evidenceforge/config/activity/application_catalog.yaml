@@ -949,6 +949,9 @@ applications:
 
   - id: cisco_secure_client
     display_name: "Cisco Secure Client"
+    compatibility_group: remote_access_stack
+    compatibility_option: cisco_secure_client
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe'
@@ -978,6 +981,9 @@ applications:
 
   - id: globalprotect
     display_name: "GlobalProtect"
+    compatibility_group: remote_access_stack
+    compatibility_option: globalprotect
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe'
@@ -1007,6 +1013,9 @@ applications:
 
   - id: zscaler_client_connector
     display_name: "Zscaler Client Connector"
+    compatibility_group: remote_access_stack
+    compatibility_option: zscaler
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Zscaler\ZSATray\ZSATray.exe'

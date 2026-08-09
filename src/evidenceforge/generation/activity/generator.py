@@ -20321,9 +20321,35 @@ class ActivityGenerator:
                     catalog_category,
                     username=user.username,
                     system_type=system.type,
+                    deployment_key=str(
+                        getattr(getattr(self, "_scenario_environment", None), "domain", "default")
+                    ),
                 )
                 if result:
                     process_name, command_line = result
+                    from evidenceforge.generation.activity.application_catalog import (
+                        is_singleton_application_image,
+                    )
+
+                    if is_singleton_application_image(process_name, os_category):
+                        normalized_image = process_name.replace("/", "\\").lower()
+                        existing = next(
+                            (
+                                proc
+                                for proc in self.state_manager.get_processes_on_system(
+                                    system.hostname
+                                )
+                                if proc.username.lower() == user.username.lower()
+                                and proc.logon_id == logon_id
+                                and proc.image.replace("/", "\\").lower() == normalized_image
+                            ),
+                            None,
+                        )
+                        if existing is not None:
+                            self.state_manager.update_process_activity_time(
+                                system.hostname, existing.pid, time
+                            )
+                            return
                     command_line = self._parameterize_command_for_system(
                         rng,
                         command_line,
