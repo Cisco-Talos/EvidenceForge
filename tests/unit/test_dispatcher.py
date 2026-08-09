@@ -589,6 +589,62 @@ class TestObservationProfiles:
             "dropped": 1,
         }
 
+    def test_zeek_http_missingness_is_coherent_across_persistent_transactions(self, monkeypatch):
+        """One persistent flow should not gain a synthetic gap from per-row missingness."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {"zeek_http": 0.5},
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("zeek_http_transaction_gap_test")
+        first = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=80,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+            ),
+        )
+        second = SecurityEvent(
+            timestamp=_make_ts() + timedelta(milliseconds=600),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=80,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+                application_layer_only=True,
+            ),
+        )
+
+        first_identity = policy._event_identity(
+            "zeek", "zeek_http", first, force_format_specific=True
+        )
+        second_identity = policy._event_identity(
+            "zeek", "zeek_http", second, force_format_specific=True
+        )
+
+        assert first_identity == second_identity
+        assert policy.decide("zeek_http", first).status == policy.decide("zeek_http", second).status
+
     def test_zeek_visible_child_promotes_dropped_conn_parent(self, monkeypatch):
         """A visible Zeek child row must not orphan its conn.log parent."""
         monkeypatch.setattr(

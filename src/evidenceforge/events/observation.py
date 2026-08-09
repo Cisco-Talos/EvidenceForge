@@ -261,6 +261,14 @@ class ObservationPolicy:
         group = self._coherent_group_key(source, event)
         host = self._host_key_for_event(event)
         timestamp = int(event.timestamp.timestamp() * 1_000_000)
+        coherent_http_transaction = (
+            force_format_specific
+            and source == "zeek"
+            and format_name == "zeek_http"
+            and group.startswith("uid:")
+        )
+        if coherent_http_transaction:
+            return "|".join([source, format_name, format_name, host, group, ""])
         coherent = self._uses_coherent_source_identity(source, group) and not force_format_specific
         return "|".join(
             [
