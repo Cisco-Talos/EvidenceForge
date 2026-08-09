@@ -21709,13 +21709,7 @@ class ActivityGenerator:
 
         explicit_source_ip = source_ip.strip()
         if explicit_source_ip in {"", "-"}:
-            target_system = self._explicit_credentials_target_system(target_server)
-            if target_system is not None and (
-                target_system.ip != system.ip
-                and target_system.hostname.lower() != system.hostname.lower()
-            ):
-                return target_system.ip
-            return "-"
+            return system.ip
 
         normalized_source_ip = explicit_source_ip.removeprefix("::ffff:")
         if normalized_source_ip.lower() in local_names or explicit_source_ip.lower() in local_names:

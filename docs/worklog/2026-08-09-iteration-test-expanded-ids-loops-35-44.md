@@ -121,3 +121,23 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** RunAs, scheduled tasks, PsExec/WMIC/service-control
   bundles, caller process/session ownership, transport correlation, parser
   normalization, evaluator pivoting, and source-native XML tests.
+
+## Loop 40 Outcome
+
+- **Generation/eval:** 83,943 fresh records; 96.08685376090904; FAIL only on
+  pivot linkability (50/100).
+- **Blind panel:** Real/Inconclusive/Synthetic/Synthetic at 26/52/63/66,
+  average 51.75; disagreement and a 40-point spread triggered deliberation.
+- **Deliberation:** unanimous Synthetic at 64/68/69/74, average 68.75.
+- **Loop 39 target confirmation:** all 32 Event 4648 rows identify the attempt
+  origin and use zero unless a real remote source endpoint is explicitly owned;
+  no fresh reviewer repeated the target-address or invented-port defect.
+- **Fresh selected family:** Windows OpenSSH client process ancestry.
+- **Owning abstraction:** process planner/action bundle parent selection before
+  Security, Sysmon, and eCAR projection.
+- **Invariant:** ordinary user-launched `ssh.exe` descends from a visible,
+  active shell, terminal, or explicit launcher/handler; unrelated browser and
+  mail processes are never generic parents.
+- **Sibling risks:** session ownership, source-visible process timing,
+  parent lifetime, remote-admin transport actor identity, process pools,
+  storyline compatibility, and three-source process correlation.

@@ -39,7 +39,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.base import ActionAnchor
-from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
+from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
@@ -281,14 +281,12 @@ class ExplicitCredentialUseActionBundle:
             self._request.source_ip,
         )
         network_source_port = 0
-        if network_source_ip not in {"", "-"}:
+        if self._request.source_port > 0:
             network_source_port = (
                 self._request.source_port
                 if self._request.source_ip.strip().removeprefix("::ffff:") == network_source_ip
                 else 0
             )
-        if network_source_ip not in {"", "-"} and network_source_port <= 0:
-            network_source_port = self._sample_source_port()
         event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="explicit_credentials",
@@ -346,15 +344,6 @@ class ExplicitCredentialUseActionBundle:
                 ntpath.basename(self._request.process_name),
             )
         return process_pid
-
-    def _sample_source_port(self) -> int:
-        """Return a source-native ephemeral port for explicit credential network metadata."""
-
-        rng = _get_rng()
-        os_category = _get_os_category(self._request.system.os)
-        if os_category == "linux":
-            return rng.randint(32768, 60999)
-        return rng.randint(49152, 65535)
 
 
 class WindowsServiceInstallActionBundle:

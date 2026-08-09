@@ -8342,10 +8342,10 @@ class TestActivityGenerator:
         assert logon.timestamp < explicit.timestamp
         assert explicit.auth.subject_logon_id == logon.auth.logon_id
 
-    def test_generate_explicit_credentials_defaults_remote_network_endpoint_blank(
+    def test_generate_explicit_credentials_defaults_remote_network_endpoint_to_origin(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Remote 4648 records should not invent local source endpoint metadata."""
+        """Remote 4648 records should identify the local machine as the attempt origin."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -8363,13 +8363,13 @@ class TestActivityGenerator:
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        assert explicit.auth.source_ip == "-"
+        assert explicit.auth.source_ip == test_system.ip
         assert explicit.auth.source_port == 0
 
-    def test_generate_explicit_credentials_resolves_known_remote_target_endpoint(
+    def test_generate_explicit_credentials_uses_local_origin_for_known_remote_target(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Known remote 4648 targets should render joinable destination endpoint metadata."""
+        """4648 Network Address identifies the attempt origin, not the target server."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         target_system = System(
@@ -8400,8 +8400,8 @@ class TestActivityGenerator:
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        assert explicit.auth.source_ip == target_system.ip
-        assert 49152 <= explicit.auth.source_port <= 65535
+        assert explicit.auth.source_ip == test_system.ip
+        assert explicit.auth.source_port == 0
 
     def test_generate_explicit_credentials_ignores_unrelated_source_ip_override(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
