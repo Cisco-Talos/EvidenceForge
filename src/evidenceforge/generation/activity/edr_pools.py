@@ -180,6 +180,20 @@ def _is_valid_installed_software_products(value: Any) -> bool:
     return True
 
 
+def _is_valid_ownership_rules(value: Any, marker_key: str) -> bool:
+    """Return whether a process/artifact ownership-rule section is well formed."""
+    if not isinstance(value, list) or not value:
+        return False
+    for item in value:
+        if not isinstance(item, dict):
+            return False
+        if not _is_valid_string_list(item.get(marker_key)):
+            return False
+        if not _is_valid_string_list(item.get("executables")):
+            return False
+    return True
+
+
 def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dict[str, Any]:
     """Validate merged EDR pools and fall back to defaults for malformed sections."""
     validators: dict[str, Any] = {
@@ -209,6 +223,15 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         sanitized["file_side_effect_profiles"] = candidate_profiles
     elif "file_side_effect_profiles" in defaults:
         sanitized["file_side_effect_profiles"] = defaults["file_side_effect_profiles"]
+    for section, marker_key in (
+        ("file_ownership_rules", "path_contains"),
+        ("registry_ownership_rules", "key_contains"),
+    ):
+        candidate_rules = merged.get(section)
+        if _is_valid_ownership_rules(candidate_rules, marker_key):
+            sanitized[section] = candidate_rules
+        elif section in defaults:
+            sanitized[section] = defaults[section]
     return sanitized
 
 
@@ -286,6 +309,47 @@ def get_registry_keys_hklm() -> list[tuple[str, str, str]]:
     """Return HKLM registry key pool as (key, value_name, details) tuples."""
     pools = load_edr_pools()
     return [(k, vn, d) for k, vn, d in pools.get("registry_keys_hklm", [])]
+
+
+def _artifact_allowed_for_process(
+    artifact: str,
+    process_name: str,
+    rules: list[dict[str, Any]],
+    marker_key: str,
+) -> bool:
+    """Return whether ownership rules permit a process to own an artifact."""
+    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    normalized = artifact.lower()
+    for rule in rules:
+        markers = [str(marker).lower() for marker in rule.get(marker_key, [])]
+        if not any(marker in normalized for marker in markers):
+            continue
+        owners = {str(owner).lower() for owner in rule.get("executables", [])}
+        return exe in owners
+    return True
+
+
+def file_path_templates_for_process(templates: list[str], process_name: str) -> list[str]:
+    """Return ambient file templates whose source-native owner matches the process."""
+    rules = load_edr_pools().get("file_ownership_rules", [])
+    return [
+        template
+        for template in templates
+        if _artifact_allowed_for_process(template, process_name, rules, "path_contains")
+    ]
+
+
+def registry_entries_for_process(
+    entries: list[tuple[str, str, str]],
+    process_name: str,
+) -> list[tuple[str, str, str]]:
+    """Return registry templates whose source-native owner matches the process."""
+    rules = load_edr_pools().get("registry_ownership_rules", [])
+    return [
+        entry
+        for entry in entries
+        if _artifact_allowed_for_process(entry[0], process_name, rules, "key_contains")
+    ]
 
 
 def get_dll_pool() -> list[str]:
@@ -739,6 +803,7 @@ def select_ambient_file_churn_effect(
 
     candidates = file_path_templates_for_user(path_templates, os_category, user)
     if os_category == "windows":
+        candidates = file_path_templates_for_process(candidates, process_name)
         candidates = [
             candidate
             for candidate in candidates

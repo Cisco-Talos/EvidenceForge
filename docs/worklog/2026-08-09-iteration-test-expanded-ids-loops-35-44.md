@@ -162,3 +162,24 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** service/update process availability, user/session identity,
   registry hive eligibility, installer inventory, file action semantics,
   ProcessGuid correlation, and output volume/distribution.
+
+## Loop 42 Outcome
+
+- **Generation/eval:** 79,750 fresh records; 96.11472158905761; FAIL only on
+  pivot linkability (51.6129/100).
+- **Blind panel:** Inconclusive/Inconclusive/Synthetic/Synthetic at 43/43/88/87,
+  average 65.25; disagreement and a 45-point spread triggered deliberation.
+- **Deliberation:** unanimous Synthetic at 82/84/91/91, average 87.0.
+- **Loop 41 target confirmation:** zero ambient WER, CBS, or Office-registry
+  rows; Defender history is owned only by `MsMpEng.exe`; no current reviewer
+  repeated the former process/artifact ownership contradiction.
+- **Fresh selected family:** additive CONNECT control-message and tunnel-payload
+  accounting on the canonical client-to-proxy TCP stream.
+- **Owning abstraction:** proxy transaction action contract plus source-native
+  proxy projection from canonical network totals.
+- **Invariant:** for a successful CONNECT, control bytes plus tunneled payload
+  equal the canonical TCP directional totals; terminal deny/auth outcomes have
+  no tunnel payload or duration fields.
+- **Sibling risks:** tunnel reuse, SSL inspection rows, Zeek `conn`/`http`
+  agreement, ASA aggregate accounting, cache/deny outcomes, Splunk/SOF-ELK
+  projections, parser normalization, and file-transfer sizing.

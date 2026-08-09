@@ -2342,6 +2342,51 @@ class TestBaselineRegistryRealism:
 
         assert datetime.fromisoformat(value).replace(tzinfo=UTC) < event_time
 
+    def test_registry_writer_candidates_preserve_native_ownership(self):
+        from evidenceforge.generation.engine.baseline import _registry_writer_candidates
+
+        pids = {
+            "services": 100,
+            "svchost_local_system": 101,
+            "svchost_wusvcs": 102,
+            "msiexec": 103,
+            "msmpeng": 104,
+            "mpcmdrun": 105,
+            "explorer": 106,
+            "runtime_broker": 107,
+        }
+
+        cbs = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages",
+            pids,
+            "alice",
+        )
+        office = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Office\16.0\Word\Reading Locations",
+            pids,
+            "alice",
+        )
+        explorer = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs",
+            pids,
+            "alice",
+        )
+        defender = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection",
+            pids,
+            "alice",
+        )
+
+        assert cbs == []
+        assert office == []
+        assert {image.rsplit("\\", 1)[-1].lower() for _pid, image, _user in explorer} == {
+            "explorer.exe"
+        }
+        assert {image.rsplit("\\", 1)[-1].lower() for _pid, image, _user in defender} == {
+            "msmpeng.exe",
+            "mpcmdrun.exe",
+        }
+
     def test_registry_noise_prefers_dynamic_pools_and_filters_repeated_tells(self):
         import inspect
 

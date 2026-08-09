@@ -1218,10 +1218,23 @@ def _registry_writer_candidates(
     if key.startswith("HKCU\\"):
         if desktop_user is None:
             return []
-        candidates = [
-            _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
-            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", desktop_user),
-        ]
+        if "\\microsoft\\office\\" in key_lower:
+            # Office applications are foreground processes, not durable seeded
+            # system processes. Their own process-side-effect path owns these writes.
+            candidates = []
+        elif "\\explorer\\" in key_lower or "\\windows\\shell\\" in key_lower:
+            candidates = [
+                _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+            ]
+        else:
+            candidates = [
+                _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+                _candidate(
+                    "runtime_broker",
+                    r"C:\Windows\System32\RuntimeBroker.exe",
+                    desktop_user,
+                ),
+            ]
     elif "windows defender" in key_lower:
         candidates = [
             _candidate(
@@ -1231,13 +1244,14 @@ def _registry_writer_candidates(
                 "mpcmdrun",
                 r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe",
             ),
-            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
         ]
-    elif "windowsupdate" in key_lower or "component based servicing" in key_lower:
+    elif "component based servicing" in key_lower:
+        # CBS state is emitted only with a concrete TiWorker/TrustedInstaller
+        # occurrence. Never fabricate that ownership through generic services.
+        candidates = []
+    elif "windowsupdate" in key_lower:
         candidates = [
             _candidate("svchost_wusvcs", r"C:\Windows\System32\svchost.exe"),
-            _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
-            _candidate("services", r"C:\Windows\System32\services.exe"),
         ]
     elif "wbem" in key_lower or "cimom" in key_lower:
         candidates = [
@@ -1252,7 +1266,6 @@ def _registry_writer_candidates(
     elif "installer" in key_lower or "uninstall" in key_lower or "app paths" in key_lower:
         candidates = [
             _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
-            _candidate("services", r"C:\Windows\System32\services.exe"),
         ]
     elif "tcpip" in key_lower or "w32time" in key_lower or "netlogon" in key_lower:
         candidates = [
@@ -8127,9 +8140,10 @@ class BaselineMixin:
                     if writer_candidates:
                         _reg_pid, _reg_image, _reg_user = rng.choice(writer_candidates)
                     else:
-                        _reg_pid = _svc_pid
-                        _reg_image = r"C:\Windows\System32\svchost.exe"
-                        _reg_user = "SYSTEM"
+                        # An unavailable native owner means the ambient write did
+                        # not occur in this window. Do not substitute a generic
+                        # service process and manufacture false causality.
+                        continue
                     _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
                     if _reg_proc is not None:
                         _reg_image = _reg_proc.image

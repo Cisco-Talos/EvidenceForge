@@ -12143,6 +12143,14 @@ class ActivityGenerator:
             "taskhostw.exe",
             "usoclient.exe",
             "dllhost.exe",
+            "tiworker.exe",
+            "trustedinstaller.exe",
+            "mpcmdrun.exe",
+            "msmpeng.exe",
+            "winword.exe",
+            "excel.exe",
+            "powerpnt.exe",
+            "outlook.exe",
         }
         _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         _STORYLINE_REGISTRY_WRITERS = {"reg.exe", "regedit.exe", "msiexec.exe"}
@@ -12160,17 +12168,21 @@ class ActivityGenerator:
                 get_registry_keys_hkcu,
                 get_registry_keys_hklm,
                 materialize_edr_template_group,
+                registry_entries_for_process,
             )
 
-            _pool_hkcu = get_registry_keys_hkcu()
-            _pool_hklm = get_registry_keys_hklm()
+            _pool_hkcu = registry_entries_for_process(get_registry_keys_hkcu(), process_name)
+            _pool_hklm = registry_entries_for_process(get_registry_keys_hklm(), process_name)
             for _ in range(_reg_count):
                 if process_username in _SYSTEM_ACCOUNTS:
-                    _key, _vname, _details = rng.choice(_pool_hklm)
+                    _eligible_registry = _pool_hklm
                 elif _exe in _HKLM_WRITERS:
-                    _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
+                    _eligible_registry = _pool_hklm + _pool_hkcu
                 else:
-                    _key, _vname, _details = rng.choice(_pool_hkcu)
+                    _eligible_registry = _pool_hkcu
+                if not _eligible_registry:
+                    continue
+                _key, _vname, _details = rng.choice(_eligible_registry)
                 _template_user = user.username if user else "SYSTEM"
                 _key, _vname, _details = materialize_edr_template_group(
                     (_key, _vname, _details),
