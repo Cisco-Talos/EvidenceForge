@@ -11,6 +11,7 @@ from evidenceforge.generation.activity.application_catalog import (
     get_apps_for_persona,
     get_child_processes,
     get_pe_metadata,
+    is_deployment_compatible_application,
     is_singleton_application_image,
     is_system_type_allowed,
     load_catalog,
@@ -45,6 +46,12 @@ class TestCatalogLoading:
         assert is_singleton_application_image(
             r"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe",
             "windows",
+        )
+
+    def test_incompatible_remote_access_app_is_rejected_for_deployment(self):
+        assert is_deployment_compatible_application("vpnui.exe", "windows", "meridianhcs.local")
+        assert not is_deployment_compatible_application(
+            "ZSATray.exe", "windows", "meridianhcs.local"
         )
 
     def test_all_entries_have_fully_qualified_paths(self):

@@ -518,3 +518,42 @@ def is_singleton_application_image(image_path: str, os_category: str) -> bool:
         if candidate == normalized:
             return bool(app.get("singleton_per_session"))
     return False
+
+
+def is_deployment_compatible_application(
+    image_or_exe: str,
+    os_category: str,
+    deployment_key: str,
+) -> bool:
+    """Return whether a catalog app belongs to the selected deployment cohort."""
+    catalog = load_catalog().get("applications", [])
+    grouped_options: dict[str, set[str]] = {}
+    for app in catalog:
+        if os_category not in app.get("platforms", {}):
+            continue
+        group = str(app.get("compatibility_group") or "")
+        option = str(app.get("compatibility_option") or "")
+        if group and option:
+            grouped_options.setdefault(group, set()).add(option)
+    selected_options = {
+        group: random.Random(_stable_seed(f"software_deployment:{deployment_key}:{group}")).choice(
+            sorted(options)
+        )
+        for group, options in grouped_options.items()
+    }
+
+    candidate = image_or_exe.replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    for app in catalog:
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        app_exe = (
+            str(platform.get("image_path") or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
+        )
+        if candidate != app_exe and candidate.replace(".exe", "") != app_exe.replace(".exe", ""):
+            continue
+        group = str(app.get("compatibility_group") or "")
+        if not group:
+            return True
+        return selected_options.get(group) == str(app.get("compatibility_option") or "")
+    return True

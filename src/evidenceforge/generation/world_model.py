@@ -1090,6 +1090,7 @@ class WorldPlanner:
         from evidenceforge.generation.activity.application_catalog import (
             get_app_categories,
             has_catalog_entry,
+            is_deployment_compatible_application,
             is_persona_allowed,
             is_system_type_allowed,
             load_catalog,
@@ -1109,6 +1110,12 @@ class WorldPlanner:
 
         def _is_allowed(exe: str) -> bool:
             if not has_catalog_entry(exe, os_cat):
+                return False
+            if not is_deployment_compatible_application(
+                exe,
+                os_cat,
+                self.activity_generator._software_deployment_key,
+            ):
                 return False
             system_type = getattr(system, "type", None)
             if not is_system_type_allowed(exe, os_cat, system_type):
