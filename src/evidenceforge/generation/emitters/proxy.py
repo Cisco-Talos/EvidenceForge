@@ -130,7 +130,7 @@ def _connect_setup_fields(
         }
 
     fields["byte_scope"] = "connect-control-message"
-    if net is not None:
+    if net is not None and ((net.orig_bytes or 0) > 0 or (net.resp_bytes or 0) > 0):
         fields["tunnel_cs_bytes"] = max(0, int(net.orig_bytes or 0))
         fields["tunnel_sc_bytes"] = max(0, int(net.resp_bytes or 0))
         if net.duration is not None:
