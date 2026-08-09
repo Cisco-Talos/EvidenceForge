@@ -130,11 +130,42 @@ def _connect_setup_fields(
         }
 
     fields["byte_scope"] = "connect-control-message"
-    if net is not None and ((net.orig_bytes or 0) > 0 or (net.resp_bytes or 0) > 0):
-        fields["tunnel_cs_bytes"] = max(0, int(net.orig_bytes or 0))
-        fields["tunnel_sc_bytes"] = max(0, int(net.resp_bytes or 0))
-        if net.duration is not None:
-            fields["tunnel_duration_ms"] = max(0, round(float(net.duration) * 1000))
+    fields.update(
+        _connect_tunnel_payload_fields(
+            px,
+            net,
+            setup_cs_bytes=int(fields["cs_bytes"]),
+            setup_sc_bytes=int(fields["sc_bytes"]),
+        )
+    )
+    return fields
+
+
+def _connect_tunnel_payload_fields(
+    px: Any,
+    net: Any,
+    *,
+    setup_cs_bytes: int,
+    setup_sc_bytes: int,
+) -> dict[str, int]:
+    """Return tunneled payload counters excluding the CONNECT exchange."""
+    if net is None:
+        return {}
+    method = str(getattr(px, "method", "") or "").upper()
+    tunnel_status = getattr(px, "tunnel_status_code", None)
+    if tunnel_status is None:
+        tunnel_status = getattr(px, "status_code", 200) if method == "CONNECT" else 200
+    transaction = getattr(px, "transaction", None)
+    terminal_outcome = getattr(transaction, "terminal_outcome", "")
+    if int(tunnel_status or 0) >= 400 or terminal_outcome not in {"", "success"}:
+        return {}
+
+    fields = {
+        "tunnel_cs_bytes": max(0, int(net.orig_bytes or 0) - setup_cs_bytes),
+        "tunnel_sc_bytes": max(0, int(net.resp_bytes or 0) - setup_sc_bytes),
+    }
+    if net.duration is not None:
+        fields["tunnel_duration_ms"] = max(0, round(float(net.duration) * 1000))
     return fields
 
 
@@ -401,14 +432,14 @@ class ProxyEmitter(HostMultiplexEmitter):
         }
         if str(px.method).upper() == "CONNECT":
             event_data["byte_scope"] = "connect-control-message"
-            if net is not None:
-                event_data["tunnel_cs_bytes"] = max(0, int(net.orig_bytes or 0))
-                event_data["tunnel_sc_bytes"] = max(0, int(net.resp_bytes or 0))
-                if net.duration is not None:
-                    event_data["tunnel_duration_ms"] = max(
-                        0,
-                        round(float(net.duration) * 1000),
-                    )
+            event_data.update(
+                _connect_tunnel_payload_fields(
+                    px,
+                    net,
+                    setup_cs_bytes=max(0, int(px.cs_bytes or 0)),
+                    setup_sc_bytes=max(0, int(px.sc_bytes or 0)),
+                )
+            )
         self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:

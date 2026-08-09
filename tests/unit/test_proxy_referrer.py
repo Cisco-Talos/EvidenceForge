@@ -575,8 +575,8 @@ class TestProxyActionSemantics:
         assert connect["proxy_action"] == "tunnel-setup"
         assert connect["ssl_bump_action"] == "peek"
         assert connect["byte_scope"] == "connect-control-message"
-        assert connect["tunnel_cs_bytes"] == 12_345
-        assert connect["tunnel_sc_bytes"] == 67_890
+        assert connect["bytes_in"] + connect["tunnel_cs_bytes"] == 12_345
+        assert connect["bytes_out"] + connect["tunnel_sc_bytes"] == 67_890
         assert connect["tunnel_duration_ms"] == 4_250
         assert inspected["http_method"] == "GET"
         assert inspected["user"] == r"NORTHSTAR-BRANCH\alice"
@@ -654,8 +654,8 @@ class TestProxyActionSemantics:
         assert connect_fields["proxy_action"] == "tunnel-setup"
         assert connect_fields["ssl_bump_action"] == "peek"
         assert connect_fields["byte_scope"] == "connect-control-message"
-        assert connect_fields["tunnel_cs_bytes"] == 8192
-        assert connect_fields["tunnel_sc_bytes"] == 131072
+        assert connect_fields["cs_bytes"] + connect_fields["tunnel_cs_bytes"] == 8192
+        assert connect_fields["sc_bytes"] + connect_fields["tunnel_sc_bytes"] == 131072
         assert connect_fields["tunnel_duration_ms"] == 2500
         assert inspected_fields["proxy_action"] == "ssl-inspect"
         assert inspected_fields["ssl_bump_action"] == "bump"
@@ -755,9 +755,9 @@ class TestProxyActionSemantics:
         denied_fields = _parse_proxy_fields(rendered_lines[0])
         assert denied_fields["method"] == "CONNECT"
         assert denied_fields["byte_scope"] == "connect-control-message"
-        assert denied_fields["tunnel_cs_bytes"] == 2048
-        assert denied_fields["tunnel_sc_bytes"] == 1024
-        assert denied_fields["tunnel_duration_ms"] == 750
+        assert "tunnel_cs_bytes" not in denied_fields
+        assert "tunnel_sc_bytes" not in denied_fields
+        assert "tunnel_duration_ms" not in denied_fields
         assert denied_fields["status_code"] == 403
         assert denied_fields["proxy_action"] == "deny"
         assert denied_fields["ssl_bump_action"] == "terminate"

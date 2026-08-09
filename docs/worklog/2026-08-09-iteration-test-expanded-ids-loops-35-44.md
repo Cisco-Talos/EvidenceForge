@@ -183,3 +183,24 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** tunnel reuse, SSL inspection rows, Zeek `conn`/`http`
   agreement, ASA aggregate accounting, cache/deny outcomes, Splunk/SOF-ELK
   projections, parser normalization, and file-transfer sizing.
+
+## Loop 43 Outcome
+
+- **Generation/eval:** 79,750 fresh records; 96.11472158905761; FAIL only on
+  pivot linkability (51.6129/100).
+- **Blind panel:** Inconclusive/Synthetic/Synthetic/Synthetic at 44/87/67/87,
+  average 71.25; disagreement and a 43-point spread triggered deliberation.
+- **Deliberation:** unanimous Synthetic at 88/93/89/94, average 91.0.
+- **Loop 42 target confirmation:** matched proxy connections never equal the
+  tunnel-only ledger; successful control plus tunnel scopes reconstruct the TCP
+  total, terminal denials have no tunnel fields, and the Network reviewer called
+  the corrected scoping realistic.
+- **Fresh selected family:** named singleton Windows service process ownership.
+- **Owning abstraction:** system-process planner and canonical running-process
+  state before Security, Sysmon, and eCAR projection.
+- **Invariant:** one host has at most one active `svchost -s <service>` process
+  per named singleton service; repeated baseline activity reuses that process or
+  owns an explicit terminate/restart transition.
+- **Sibling risks:** service command parsing, multi-service svchost groups,
+  service restarts, out-of-order generation, process activity timestamps,
+  scheduled-task selection, and three-source lifecycle correlation.
