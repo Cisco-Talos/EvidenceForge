@@ -181,7 +181,7 @@ Splunk harness test, which passed unrestricted.
   equal the canonical TCP directional totals; terminal deny/auth outcomes have
   no tunnel payload or duration fields.
 - **Sibling risks:** tunnel reuse, SSL inspection rows, Zeek `conn`/`http`
-  agreement, ASA aggregate accounting, cache/deny outcomes, Splunk/SOF-ELK
+  agreement, ASA aggregate accounting, cache/deny outcomes, Splunk/SOF-ELK®
   projections, parser normalization, and file-transfer sizing.
 
 ## Loop 43 Outcome
@@ -204,3 +204,26 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** service command parsing, multi-service svchost groups,
   service restarts, out-of-order generation, process activity timestamps,
   scheduled-task selection, and three-source lifecycle correlation.
+
+## Loop 44 Outcome
+
+- **Generation/eval:** 83,707 fresh records; 96.02555389939702; FAIL only on
+  pivot linkability (51.6129/100).
+- **Blind panel:** Real/Synthetic/Synthetic/Synthetic at 29/89/72/58, average
+  62.0; disagreement and a 60-point spread triggered deliberation.
+- **Deliberation:** unanimous Synthetic at 88/94/91/92, average 91.25, with
+  consensus verdict confidence 96.
+- **Loop 43 target confirmation:** 28 named `svchost -s` creations mapped to 28
+  distinct host/service pairs with zero overlapping live instances; no fresh
+  reviewer repeated the named-service singleton contradiction.
+- **Fresh high-priority findings for the next assessment set:** canonical
+  binary hashes vary with user installation paths; multiple software builds
+  postdate the evidence clock; one explicit-credential event names a caller
+  after three sources terminate it; Type 5 logons uniformly self-populate
+  `WorkstationName`; and DNS/DHCP infrastructure texture remains thin.
+- **Owning abstractions for future work:** binary artifact/version inventory,
+  canonical process-liveness and explicit-credential bundle timing,
+  logon-type-native rendering matrices, and DNS/DHCP action bundles.
+- **Final verification:** the full suite produced 5,295 passes and 41 skips.
+  Two stale documentation/observation assertions were corrected and passed in
+  focused reruns; the sole localhost-bind sandbox failure passed unrestricted.

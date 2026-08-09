@@ -11782,6 +11782,7 @@ class ActivityGenerator:
                 process_name=process_name,
                 time=time,
                 username=process_username,
+                command_line=command_line,
             )
             if singleton_service_pid is not None:
                 running_proc = self.state_manager.get_process(
@@ -19177,6 +19178,7 @@ class ActivityGenerator:
             process_name=process_name,
             time=time,
             username=username,
+            command_line=command_line,
         )
         if singleton_service_pid is not None:
             return singleton_service_pid
@@ -25332,6 +25334,7 @@ class ActivityGenerator:
         process_name: str,
         time: datetime,
         username: str,
+        command_line: str = "",
     ) -> int | None:
         """Return an active canonical Windows service singleton PID when one exists."""
         if _get_os_category(system.os) != "windows":
@@ -25339,6 +25342,8 @@ class ActivityGenerator:
 
         normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
         exe_name = normalized_path.rsplit("\\", 1)[-1]
+        service_match = re.search(r"(?:^|\s)-s\s+(?P<service>[^\s]+)", command_line, re.IGNORECASE)
+        service_name = service_match.group("service").lower() if service_match else ""
         from evidenceforge.generation.activity.system_processes import (
             get_windows_singleton_service_paths,
         )
@@ -25349,17 +25354,31 @@ class ActivityGenerator:
         for key, paths in get_windows_singleton_service_paths().items():
             singleton_paths.setdefault(key, set()).update(paths)
         valid_paths = singleton_paths.get(exe_name)
-        if not valid_paths:
+        is_named_svchost = exe_name == "svchost.exe" and bool(service_name)
+        if not valid_paths and not is_named_svchost:
             return None
 
-        if "\\" in normalized_path and normalized_path not in valid_paths:
+        if valid_paths and "\\" in normalized_path and normalized_path not in valid_paths:
             return None
 
         normalized_username = username.upper()
         candidates: list[RunningProcess] = []
         for proc in self.state_manager.get_processes_on_system(system.hostname):
             proc_path = ntpath.normpath(proc.image.replace("/", "\\")).lower()
-            if proc_path not in valid_paths:
+            if is_named_svchost:
+                if ntpath.basename(proc_path) != "svchost.exe":
+                    continue
+                proc_service_match = re.search(
+                    r"(?:^|\s)-s\s+(?P<service>[^\s]+)",
+                    proc.command_line,
+                    re.IGNORECASE,
+                )
+                if (
+                    proc_service_match is None
+                    or proc_service_match.group("service").lower() != service_name
+                ):
+                    continue
+            elif valid_paths is not None and proc_path not in valid_paths:
                 continue
             if proc.username.upper() != normalized_username:
                 continue

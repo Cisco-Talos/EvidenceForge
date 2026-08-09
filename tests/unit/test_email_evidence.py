@@ -1010,7 +1010,9 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     cert_fuids = [fuid for row in starttls_tls12 for fuid in (row.get("cert_chain_fuids") or [])]
     assert cert_fuids
     assert set(cert_fuids) <= {row["fuid"] for row in file_records}
-    assert set(cert_fuids) <= {row["id"] for row in x509_records}
+    x509_ids = {row["id"] for row in x509_records}
+    assert x509_ids
+    assert x509_ids <= set(cert_fuids)
     conn_by_uid = {row["uid"]: row for row in conn_records}
     assert all(conn_by_uid[uid]["orig_bytes"] > 1000 for uid in starttls_uids)
     safe_isp_relay = public_safe_mail_hostname("smtp.isp.example")

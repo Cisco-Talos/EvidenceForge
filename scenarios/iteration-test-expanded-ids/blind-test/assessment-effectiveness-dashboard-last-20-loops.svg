@@ -1,0 +1,444 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1760" viewBox="0 0 1600 1760">
+<rect x="0.00" y="0.00" width="1600.00" height="1760.00" fill="#f8fafc" stroke="none" opacity="1.0"/>
+<text x="86.00" y="48.00" font-family="Inter, Arial, sans-serif" font-size="34" fill="#111827" font-weight="700" text-anchor="start">Last 20 Assessment Loops: Effectiveness Dashboard</text>
+<text x="86.00" y="78.00" font-family="Inter, Arial, sans-serif" font-size="14" fill="#6b7280" font-weight="400" text-anchor="start">Blind synthetic-confidence trend, trailing five-loop average, deltas, and reviewer disagreement (#6). Lower is better.</text>
+<rect x="86.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="102.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Loops</text>
+<text x="102.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">25-44</text>
+<text x="102.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">20 loops</text>
+<rect x="334.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="350.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Latest blind avg</text>
+<text x="350.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">62.00</text>
+<text x="350.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Loop 44</text>
+<rect x="582.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="598.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Latest 5-loop avg</text>
+<text x="598.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">60.85</text>
+<text x="598.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Trailing mean</text>
+<rect x="830.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="846.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Best loop</text>
+<text x="846.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">25: 21.75</text>
+<text x="846.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Lowest blind avg</text>
+<rect x="1078.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="1094.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Worst loop</text>
+<text x="1094.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">38: 75.00</text>
+<text x="1094.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Highest blind avg</text>
+<rect x="1326.00" y="106.00" width="230.00" height="94.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="1342.00" y="136.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="600" text-anchor="start">Widest spread</text>
+<text x="1342.00" y="168.00" font-family="Inter, Arial, sans-serif" font-size="28" fill="#111827" font-weight="700" text-anchor="start">33: 80</text>
+<text x="1342.00" y="190.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Reviewer disagreement</text>
+<text x="86.00" y="228.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">1. Blind reviewer scores and five-loop rolling average</text>
+<text x="606.00" y="228.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Blue band is min-max reviewer range; black line is trailing 5-loop blind average.</text>
+<rect x="86.00" y="260.00" width="1320.00" height="360.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<line x1="130.00" y1="582.00" x2="1362.00" y2="582.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="586.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">0</text>
+<line x1="130.00" y1="522.40" x2="1362.00" y2="522.40" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="526.40" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">20</text>
+<line x1="130.00" y1="462.80" x2="1362.00" y2="462.80" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="466.80" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">40</text>
+<line x1="130.00" y1="403.20" x2="1362.00" y2="403.20" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="407.20" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">60</text>
+<line x1="130.00" y1="343.60" x2="1362.00" y2="343.60" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="347.60" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">80</text>
+<line x1="130.00" y1="284.00" x2="1362.00" y2="284.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="288.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">100</text>
+<path d="M 130.00 486.64 L 194.84 379.36 L 259.68 391.28 L 324.53 456.84 L 389.37 409.16 L 454.21 447.90 L 519.05 447.90 L 583.89 474.72 L 648.74 307.84 L 713.58 316.78 L 778.42 385.32 L 843.26 349.56 L 908.11 355.52 L 972.95 298.90 L 1037.79 382.34 L 1102.63 385.32 L 1167.47 379.36 L 1232.32 319.76 L 1297.16 322.74 L 1362.00 316.78 L 1362.00 495.58 L 1297.16 450.88 L 1232.32 453.86 L 1167.47 474.72 L 1102.63 504.52 L 1037.79 477.70 L 972.95 388.30 L 908.11 379.36 L 843.26 486.64 L 778.42 498.56 L 713.58 546.24 L 648.74 546.24 L 583.89 543.26 L 519.05 540.28 L 454.21 534.32 L 389.37 531.34 L 324.53 549.22 L 259.68 546.24 L 194.84 540.28 L 130.00 540.28 Z" fill="#bfdbfe" opacity="0.40" stroke="none"/>
+<path d="M 130.00 540.28 L 194.84 540.28 L 259.68 546.24 L 324.53 549.22 L 389.37 528.36 L 454.21 525.38 L 519.05 531.34 L 583.89 534.32 L 648.74 513.46 L 713.58 531.34 L 778.42 391.28 L 843.26 486.64 L 908.11 355.52 L 972.95 388.30 L 1037.79 477.70 L 1102.63 504.52 L 1167.47 447.90 L 1232.32 453.86 L 1297.16 450.88 L 1362.00 495.58" fill="none" stroke="#dc2626" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="130.00" cy="540.28" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 25 Threat: 14</title></circle>
+<circle cx="194.84" cy="540.28" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 26 Threat: 14</title></circle>
+<circle cx="259.68" cy="546.24" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 27 Threat: 12</title></circle>
+<circle cx="324.53" cy="549.22" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 28 Threat: 11</title></circle>
+<circle cx="389.37" cy="528.36" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 29 Threat: 18</title></circle>
+<circle cx="454.21" cy="525.38" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 30 Threat: 19</title></circle>
+<circle cx="519.05" cy="531.34" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 31 Threat: 17</title></circle>
+<circle cx="583.89" cy="534.32" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 32 Threat: 16</title></circle>
+<circle cx="648.74" cy="513.46" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 33 Threat: 23</title></circle>
+<circle cx="713.58" cy="531.34" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 34 Threat: 17</title></circle>
+<circle cx="778.42" cy="391.28" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 35 Threat: 64</title></circle>
+<circle cx="843.26" cy="486.64" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 36 Threat: 32</title></circle>
+<circle cx="908.11" cy="355.52" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 37 Threat: 76</title></circle>
+<circle cx="972.95" cy="388.30" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 38 Threat: 65</title></circle>
+<circle cx="1037.79" cy="477.70" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 39 Threat: 35</title></circle>
+<circle cx="1102.63" cy="504.52" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 40 Threat: 26</title></circle>
+<circle cx="1167.47" cy="447.90" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 41 Threat: 45</title></circle>
+<circle cx="1232.32" cy="453.86" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 42 Threat: 43</title></circle>
+<circle cx="1297.16" cy="450.88" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 43 Threat: 44</title></circle>
+<circle cx="1362.00" cy="495.58" r="3.2" fill="#ffffff" stroke="#dc2626" stroke-width="1.7"><title>Loop 44 Threat: 29</title></circle>
+<path d="M 130.00 516.44 L 194.84 492.60 L 259.68 391.28 L 324.53 492.60 L 389.37 486.64 L 454.21 489.62 L 519.05 510.48 L 583.89 495.58 L 648.74 495.58 L 713.58 492.60 L 778.42 391.28 L 843.26 435.98 L 908.11 370.42 L 972.95 379.36 L 1037.79 456.84 L 1102.63 427.04 L 1167.47 379.36 L 1232.32 453.86 L 1297.16 322.74 L 1362.00 316.78" fill="none" stroke="#7c3aed" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="130.00" cy="516.44" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 25 Detection: 22</title></circle>
+<circle cx="194.84" cy="492.60" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 26 Detection: 30</title></circle>
+<circle cx="259.68" cy="391.28" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 27 Detection: 64</title></circle>
+<circle cx="324.53" cy="492.60" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 28 Detection: 30</title></circle>
+<circle cx="389.37" cy="486.64" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 29 Detection: 32</title></circle>
+<circle cx="454.21" cy="489.62" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 30 Detection: 31</title></circle>
+<circle cx="519.05" cy="510.48" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 31 Detection: 24</title></circle>
+<circle cx="583.89" cy="495.58" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 32 Detection: 29</title></circle>
+<circle cx="648.74" cy="495.58" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 33 Detection: 29</title></circle>
+<circle cx="713.58" cy="492.60" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 34 Detection: 30</title></circle>
+<circle cx="778.42" cy="391.28" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 35 Detection: 64</title></circle>
+<circle cx="843.26" cy="435.98" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 36 Detection: 49</title></circle>
+<circle cx="908.11" cy="370.42" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 37 Detection: 71</title></circle>
+<circle cx="972.95" cy="379.36" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 38 Detection: 68</title></circle>
+<circle cx="1037.79" cy="456.84" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 39 Detection: 42</title></circle>
+<circle cx="1102.63" cy="427.04" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 40 Detection: 52</title></circle>
+<circle cx="1167.47" cy="379.36" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 41 Detection: 68</title></circle>
+<circle cx="1232.32" cy="453.86" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 42 Detection: 43</title></circle>
+<circle cx="1297.16" cy="322.74" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 43 Detection: 87</title></circle>
+<circle cx="1362.00" cy="316.78" r="3.2" fill="#ffffff" stroke="#7c3aed" stroke-width="1.7"><title>Loop 44 Detection: 89</title></circle>
+<path d="M 130.00 525.38 L 194.84 528.36 L 259.68 531.34 L 324.53 531.34 L 389.37 531.34 L 454.21 534.32 L 519.05 540.28 L 583.89 543.26 L 648.74 546.24 L 713.58 546.24 L 778.42 498.56 L 843.26 382.34 L 908.11 367.44 L 972.95 298.90 L 1037.79 453.86 L 1102.63 394.26 L 1167.47 474.72 L 1232.32 319.76 L 1297.16 382.34 L 1362.00 367.44" fill="none" stroke="#0891b2" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="130.00" cy="525.38" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 25 Network: 19</title></circle>
+<circle cx="194.84" cy="528.36" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 26 Network: 18</title></circle>
+<circle cx="259.68" cy="531.34" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 27 Network: 17</title></circle>
+<circle cx="324.53" cy="531.34" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 28 Network: 17</title></circle>
+<circle cx="389.37" cy="531.34" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 29 Network: 17</title></circle>
+<circle cx="454.21" cy="534.32" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 30 Network: 16</title></circle>
+<circle cx="519.05" cy="540.28" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 31 Network: 14</title></circle>
+<circle cx="583.89" cy="543.26" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 32 Network: 13</title></circle>
+<circle cx="648.74" cy="546.24" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 33 Network: 12</title></circle>
+<circle cx="713.58" cy="546.24" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 34 Network: 12</title></circle>
+<circle cx="778.42" cy="498.56" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 35 Network: 28</title></circle>
+<circle cx="843.26" cy="382.34" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 36 Network: 67</title></circle>
+<circle cx="908.11" cy="367.44" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 37 Network: 72</title></circle>
+<circle cx="972.95" cy="298.90" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 38 Network: 95</title></circle>
+<circle cx="1037.79" cy="453.86" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 39 Network: 43</title></circle>
+<circle cx="1102.63" cy="394.26" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 40 Network: 63</title></circle>
+<circle cx="1167.47" cy="474.72" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 41 Network: 36</title></circle>
+<circle cx="1232.32" cy="319.76" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 42 Network: 88</title></circle>
+<circle cx="1297.16" cy="382.34" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 43 Network: 67</title></circle>
+<circle cx="1362.00" cy="367.44" r="3.2" fill="#ffffff" stroke="#0891b2" stroke-width="1.7"><title>Loop 44 Network: 72</title></circle>
+<path d="M 130.00 486.64 L 194.84 379.36 L 259.68 456.84 L 324.53 456.84 L 389.37 409.16 L 454.21 447.90 L 519.05 447.90 L 583.89 474.72 L 648.74 307.84 L 713.58 316.78 L 778.42 385.32 L 843.26 349.56 L 908.11 379.36 L 972.95 367.44 L 1037.79 382.34 L 1102.63 385.32 L 1167.47 382.34 L 1232.32 322.74 L 1297.16 322.74 L 1362.00 409.16" fill="none" stroke="#ea580c" stroke-width="2.1" opacity="0.82" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="130.00" cy="486.64" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 25 Host/EDR: 32</title></circle>
+<circle cx="194.84" cy="379.36" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 26 Host/EDR: 68</title></circle>
+<circle cx="259.68" cy="456.84" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 27 Host/EDR: 42</title></circle>
+<circle cx="324.53" cy="456.84" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 28 Host/EDR: 42</title></circle>
+<circle cx="389.37" cy="409.16" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 29 Host/EDR: 58</title></circle>
+<circle cx="454.21" cy="447.90" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 30 Host/EDR: 45</title></circle>
+<circle cx="519.05" cy="447.90" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 31 Host/EDR: 45</title></circle>
+<circle cx="583.89" cy="474.72" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 32 Host/EDR: 36</title></circle>
+<circle cx="648.74" cy="307.84" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 33 Host/EDR: 92</title></circle>
+<circle cx="713.58" cy="316.78" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 34 Host/EDR: 89</title></circle>
+<circle cx="778.42" cy="385.32" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 35 Host/EDR: 66</title></circle>
+<circle cx="843.26" cy="349.56" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 36 Host/EDR: 78</title></circle>
+<circle cx="908.11" cy="379.36" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 37 Host/EDR: 68</title></circle>
+<circle cx="972.95" cy="367.44" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 38 Host/EDR: 72</title></circle>
+<circle cx="1037.79" cy="382.34" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 39 Host/EDR: 67</title></circle>
+<circle cx="1102.63" cy="385.32" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 40 Host/EDR: 66</title></circle>
+<circle cx="1167.47" cy="382.34" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 41 Host/EDR: 67</title></circle>
+<circle cx="1232.32" cy="322.74" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 42 Host/EDR: 87</title></circle>
+<circle cx="1297.16" cy="322.74" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 43 Host/EDR: 87</title></circle>
+<circle cx="1362.00" cy="409.16" r="3.2" fill="#ffffff" stroke="#ea580c" stroke-width="1.7"><title>Loop 44 Host/EDR: 58</title></circle>
+<path d="M 130.00 455.20 L 194.84 468.61 L 259.68 473.53 L 324.53 495.43 L 389.37 496.03 L 454.21 492.45 L 519.05 496.92 L 583.89 503.03 L 648.74 494.69 L 713.58 491.26 L 778.42 474.72 L 843.26 455.95 L 908.11 427.19 L 972.95 405.73 L 1037.79 399.92 L 1102.63 402.16 L 1167.47 403.65 L 1232.32 407.52 L 1297.16 409.76 L 1362.00 400.67" fill="none" stroke="#111827" stroke-width="3.3" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="130.00" cy="455.20" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 25 5-loop avg: 42.55</title></circle>
+<circle cx="194.84" cy="468.61" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 26 5-loop avg: 38.05</title></circle>
+<circle cx="259.68" cy="473.53" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 27 5-loop avg: 36.40</title></circle>
+<circle cx="324.53" cy="495.43" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 28 5-loop avg: 29.05</title></circle>
+<circle cx="389.37" cy="496.03" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 29 5-loop avg: 28.85</title></circle>
+<circle cx="454.21" cy="492.45" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 30 5-loop avg: 30.05</title></circle>
+<circle cx="519.05" cy="496.92" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 31 5-loop avg: 28.55</title></circle>
+<circle cx="583.89" cy="503.03" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 32 5-loop avg: 26.50</title></circle>
+<circle cx="648.74" cy="494.69" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 33 5-loop avg: 29.30</title></circle>
+<circle cx="713.58" cy="491.26" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 34 5-loop avg: 30.45</title></circle>
+<circle cx="778.42" cy="474.72" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 35 5-loop avg: 36.00</title></circle>
+<circle cx="843.26" cy="455.95" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 36 5-loop avg: 42.30</title></circle>
+<circle cx="908.11" cy="427.19" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 37 5-loop avg: 51.95</title></circle>
+<circle cx="972.95" cy="405.73" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 38 5-loop avg: 59.15</title></circle>
+<circle cx="1037.79" cy="399.92" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 39 5-loop avg: 61.10</title></circle>
+<circle cx="1102.63" cy="402.16" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 40 5-loop avg: 60.35</title></circle>
+<circle cx="1167.47" cy="403.65" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 41 5-loop avg: 59.85</title></circle>
+<circle cx="1232.32" cy="407.52" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 42 5-loop avg: 58.55</title></circle>
+<circle cx="1297.16" cy="409.76" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 43 5-loop avg: 57.80</title></circle>
+<circle cx="1362.00" cy="400.67" r="4" fill="#111827" stroke="#111827" stroke-width="1"><title>Loop 44 5-loop avg: 60.85</title></circle>
+<text x="130.00" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">25</text>
+<text x="259.68" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">27</text>
+<text x="389.37" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">29</text>
+<text x="519.05" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">31</text>
+<text x="648.74" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">33</text>
+<text x="778.42" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">35</text>
+<text x="908.11" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">37</text>
+<text x="1037.79" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">39</text>
+<text x="1167.47" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">41</text>
+<text x="1297.16" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">43</text>
+<text x="1362.00" y="606.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">44</text>
+<line x1="1434.00" y1="297.00" x2="1462.00" y2="297.00" stroke="#dc2626" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="302.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Threat</text>
+<line x1="1434.00" y1="325.00" x2="1462.00" y2="325.00" stroke="#7c3aed" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="330.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Detection</text>
+<line x1="1434.00" y1="353.00" x2="1462.00" y2="353.00" stroke="#0891b2" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="358.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Network</text>
+<line x1="1434.00" y1="381.00" x2="1462.00" y2="381.00" stroke="#ea580c" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="386.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Host/EDR</text>
+<line x1="1434.00" y1="409.00" x2="1462.00" y2="409.00" stroke="#111827" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="414.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">5-loop avg</text>
+<text x="86.00" y="668.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">2. Reviewer heatmap</text>
+<text x="331.00" y="668.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Red cells are higher synthetic-confidence scores.</text>
+<rect x="86.00" y="700.00" width="1320.00" height="250.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<text x="110.00" y="777.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Threat</text>
+<rect x="236.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 25 Threat: 14</title></rect>
+<text x="263.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">14</text>
+<rect x="293.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 26 Threat: 14</title></rect>
+<text x="320.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">14</text>
+<rect x="350.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 27 Threat: 12</title></rect>
+<text x="377.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">12</text>
+<rect x="407.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 28 Threat: 11</title></rect>
+<text x="434.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">11</text>
+<rect x="464.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 29 Threat: 18</title></rect>
+<text x="491.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">18</text>
+<rect x="521.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 30 Threat: 19</title></rect>
+<text x="548.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">19</text>
+<rect x="578.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 31 Threat: 17</title></rect>
+<text x="605.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">17</text>
+<rect x="635.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 32 Threat: 16</title></rect>
+<text x="662.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">16</text>
+<rect x="692.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 33 Threat: 23</title></rect>
+<text x="719.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">23</text>
+<rect x="749.00" y="752.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 34 Threat: 17</title></rect>
+<text x="776.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">17</text>
+<rect x="806.00" y="752.00" width="54.00" height="34.00" fill="rgb(245,115,72)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 35 Threat: 64</title></rect>
+<text x="833.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">64</text>
+<rect x="863.00" y="752.00" width="54.00" height="34.00" fill="rgb(106,182,108)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 36 Threat: 32</title></rect>
+<text x="890.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">32</text>
+<rect x="920.00" y="752.00" width="54.00" height="34.00" fill="rgb(201,49,51)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 37 Threat: 76</title></rect>
+<text x="947.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">76</text>
+<rect x="977.00" y="752.00" width="54.00" height="34.00" fill="rgb(244,109,67)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 38 Threat: 65</title></rect>
+<text x="1004.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">65</text>
+<rect x="1034.00" y="752.00" width="54.00" height="34.00" fill="rgb(140,194,120)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 39 Threat: 35</title></rect>
+<text x="1061.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">35</text>
+<rect x="1091.00" y="752.00" width="54.00" height="34.00" fill="rgb(37,156,84)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 40 Threat: 26</title></rect>
+<text x="1118.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">26</text>
+<rect x="1148.00" y="752.00" width="54.00" height="34.00" fill="rgb(255,237,160)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 41 Threat: 45</title></rect>
+<text x="1175.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">45</text>
+<rect x="1205.00" y="752.00" width="54.00" height="34.00" fill="rgb(232,228,152)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 42 Threat: 43</title></rect>
+<text x="1232.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">43</text>
+<rect x="1262.00" y="752.00" width="54.00" height="34.00" fill="rgb(244,233,156)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 43 Threat: 44</title></rect>
+<text x="1289.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">44</text>
+<rect x="1319.00" y="752.00" width="54.00" height="34.00" fill="rgb(72,169,96)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 44 Threat: 29</title></rect>
+<text x="1346.00" y="775.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">29</text>
+<text x="110.00" y="817.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Detection</text>
+<rect x="236.00" y="792.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 25 Detection: 22</title></rect>
+<text x="263.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">22</text>
+<rect x="293.00" y="792.00" width="54.00" height="34.00" fill="rgb(83,173,100)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 26 Detection: 30</title></rect>
+<text x="320.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">30</text>
+<rect x="350.00" y="792.00" width="54.00" height="34.00" fill="rgb(245,115,72)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 27 Detection: 64</title></rect>
+<text x="377.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">64</text>
+<rect x="407.00" y="792.00" width="54.00" height="34.00" fill="rgb(83,173,100)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 28 Detection: 30</title></rect>
+<text x="434.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">30</text>
+<rect x="464.00" y="792.00" width="54.00" height="34.00" fill="rgb(106,182,108)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 29 Detection: 32</title></rect>
+<text x="491.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">32</text>
+<rect x="521.00" y="792.00" width="54.00" height="34.00" fill="rgb(95,178,104)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 30 Detection: 31</title></rect>
+<text x="548.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">31</text>
+<rect x="578.00" y="792.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 31 Detection: 24</title></rect>
+<text x="605.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">24</text>
+<rect x="635.00" y="792.00" width="54.00" height="34.00" fill="rgb(72,169,96)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 32 Detection: 29</title></rect>
+<text x="662.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">29</text>
+<rect x="692.00" y="792.00" width="54.00" height="34.00" fill="rgb(72,169,96)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 33 Detection: 29</title></rect>
+<text x="719.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">29</text>
+<rect x="749.00" y="792.00" width="54.00" height="34.00" fill="rgb(83,173,100)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 34 Detection: 30</title></rect>
+<text x="776.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">30</text>
+<rect x="806.00" y="792.00" width="54.00" height="34.00" fill="rgb(245,115,72)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 35 Detection: 64</title></rect>
+<text x="833.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">64</text>
+<rect x="863.00" y="792.00" width="54.00" height="34.00" fill="rgb(253,211,141)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 36 Detection: 49</title></rect>
+<text x="890.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">49</text>
+<rect x="920.00" y="792.00" width="54.00" height="34.00" fill="rgb(220,76,58)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 37 Detection: 71</title></rect>
+<text x="947.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">71</text>
+<rect x="977.00" y="792.00" width="54.00" height="34.00" fill="rgb(232,93,63)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 38 Detection: 68</title></rect>
+<text x="1004.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">68</text>
+<rect x="1034.00" y="792.00" width="54.00" height="34.00" fill="rgb(221,224,148)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 39 Detection: 42</title></rect>
+<text x="1061.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">42</text>
+<rect x="1091.00" y="792.00" width="54.00" height="34.00" fill="rgb(251,192,127)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 40 Detection: 52</title></rect>
+<text x="1118.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">52</text>
+<rect x="1148.00" y="792.00" width="54.00" height="34.00" fill="rgb(232,93,63)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 41 Detection: 68</title></rect>
+<text x="1175.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">68</text>
+<rect x="1205.00" y="792.00" width="54.00" height="34.00" fill="rgb(232,228,152)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 42 Detection: 43</title></rect>
+<text x="1232.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">43</text>
+<rect x="1262.00" y="792.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 43 Detection: 87</title></rect>
+<text x="1289.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">87</text>
+<rect x="1319.00" y="792.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 44 Detection: 89</title></rect>
+<text x="1346.00" y="815.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">89</text>
+<text x="110.00" y="857.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Network</text>
+<rect x="236.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 25 Network: 19</title></rect>
+<text x="263.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">19</text>
+<rect x="293.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 26 Network: 18</title></rect>
+<text x="320.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">18</text>
+<rect x="350.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 27 Network: 17</title></rect>
+<text x="377.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">17</text>
+<rect x="407.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 28 Network: 17</title></rect>
+<text x="434.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">17</text>
+<rect x="464.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 29 Network: 17</title></rect>
+<text x="491.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">17</text>
+<rect x="521.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 30 Network: 16</title></rect>
+<text x="548.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">16</text>
+<rect x="578.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 31 Network: 14</title></rect>
+<text x="605.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">14</text>
+<rect x="635.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 32 Network: 13</title></rect>
+<text x="662.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">13</text>
+<rect x="692.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 33 Network: 12</title></rect>
+<text x="719.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">12</text>
+<rect x="749.00" y="832.00" width="54.00" height="34.00" fill="rgb(26,152,80)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 34 Network: 12</title></rect>
+<text x="776.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">12</text>
+<rect x="806.00" y="832.00" width="54.00" height="34.00" fill="rgb(60,165,92)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 35 Network: 28</title></rect>
+<text x="833.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">28</text>
+<rect x="863.00" y="832.00" width="54.00" height="34.00" fill="rgb(236,98,64)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 36 Network: 67</title></rect>
+<text x="890.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">67</text>
+<rect x="920.00" y="832.00" width="54.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 37 Network: 72</title></rect>
+<text x="947.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
+<rect x="977.00" y="832.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 38 Network: 95</title></rect>
+<text x="1004.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">95</text>
+<rect x="1034.00" y="832.00" width="54.00" height="34.00" fill="rgb(232,228,152)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 39 Network: 43</title></rect>
+<text x="1061.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">43</text>
+<rect x="1091.00" y="832.00" width="54.00" height="34.00" fill="rgb(245,122,76)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 40 Network: 63</title></rect>
+<text x="1118.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">63</text>
+<rect x="1148.00" y="832.00" width="54.00" height="34.00" fill="rgb(152,199,124)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 41 Network: 36</title></rect>
+<text x="1175.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">36</text>
+<rect x="1205.00" y="832.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 42 Network: 88</title></rect>
+<text x="1232.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">88</text>
+<rect x="1262.00" y="832.00" width="54.00" height="34.00" fill="rgb(236,98,64)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 43 Network: 67</title></rect>
+<text x="1289.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">67</text>
+<rect x="1319.00" y="832.00" width="54.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 44 Network: 72</title></rect>
+<text x="1346.00" y="855.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
+<text x="110.00" y="897.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#374151" font-weight="600" text-anchor="start">Host/EDR</text>
+<rect x="236.00" y="872.00" width="54.00" height="34.00" fill="rgb(106,182,108)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 25 Host/EDR: 32</title></rect>
+<text x="263.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">32</text>
+<rect x="293.00" y="872.00" width="54.00" height="34.00" fill="rgb(232,93,63)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 26 Host/EDR: 68</title></rect>
+<text x="320.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">68</text>
+<rect x="350.00" y="872.00" width="54.00" height="34.00" fill="rgb(221,224,148)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 27 Host/EDR: 42</title></rect>
+<text x="377.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">42</text>
+<rect x="407.00" y="872.00" width="54.00" height="34.00" fill="rgb(221,224,148)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 28 Host/EDR: 42</title></rect>
+<text x="434.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">42</text>
+<rect x="464.00" y="872.00" width="54.00" height="34.00" fill="rgb(248,154,100)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 29 Host/EDR: 58</title></rect>
+<text x="491.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">58</text>
+<rect x="521.00" y="872.00" width="54.00" height="34.00" fill="rgb(255,237,160)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 30 Host/EDR: 45</title></rect>
+<text x="548.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">45</text>
+<rect x="578.00" y="872.00" width="54.00" height="34.00" fill="rgb(255,237,160)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 31 Host/EDR: 45</title></rect>
+<text x="605.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">45</text>
+<rect x="635.00" y="872.00" width="54.00" height="34.00" fill="rgb(152,199,124)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 32 Host/EDR: 36</title></rect>
+<text x="662.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">36</text>
+<rect x="692.00" y="872.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 33 Host/EDR: 92</title></rect>
+<text x="719.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">92</text>
+<rect x="749.00" y="872.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 34 Host/EDR: 89</title></rect>
+<text x="776.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">89</text>
+<rect x="806.00" y="872.00" width="54.00" height="34.00" fill="rgb(240,104,66)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 35 Host/EDR: 66</title></rect>
+<text x="833.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">66</text>
+<rect x="863.00" y="872.00" width="54.00" height="34.00" fill="rgb(193,38,48)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 36 Host/EDR: 78</title></rect>
+<text x="890.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">78</text>
+<rect x="920.00" y="872.00" width="54.00" height="34.00" fill="rgb(232,93,63)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 37 Host/EDR: 68</title></rect>
+<text x="947.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">68</text>
+<rect x="977.00" y="872.00" width="54.00" height="34.00" fill="rgb(216,71,57)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 38 Host/EDR: 72</title></rect>
+<text x="1004.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">72</text>
+<rect x="1034.00" y="872.00" width="54.00" height="34.00" fill="rgb(236,98,64)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 39 Host/EDR: 67</title></rect>
+<text x="1061.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">67</text>
+<rect x="1091.00" y="872.00" width="54.00" height="34.00" fill="rgb(240,104,66)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 40 Host/EDR: 66</title></rect>
+<text x="1118.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">66</text>
+<rect x="1148.00" y="872.00" width="54.00" height="34.00" fill="rgb(236,98,64)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 41 Host/EDR: 67</title></rect>
+<text x="1175.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">67</text>
+<rect x="1205.00" y="872.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 42 Host/EDR: 87</title></rect>
+<text x="1232.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">87</text>
+<rect x="1262.00" y="872.00" width="54.00" height="34.00" fill="rgb(165,0,38)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 43 Host/EDR: 87</title></rect>
+<text x="1289.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">87</text>
+<rect x="1319.00" y="872.00" width="54.00" height="34.00" fill="rgb(248,154,100)" stroke="none" opacity="0.92" rx="3" ry="3"><title>Loop 44 Host/EDR: 58</title></rect>
+<text x="1346.00" y="895.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#111827" font-weight="700" text-anchor="middle">58</text>
+<text x="263.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">25</text>
+<text x="377.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">27</text>
+<text x="491.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">29</text>
+<text x="605.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">31</text>
+<text x="719.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">33</text>
+<text x="833.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">35</text>
+<text x="947.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">37</text>
+<text x="1061.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">39</text>
+<text x="1175.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">41</text>
+<text x="1289.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">43</text>
+<text x="1346.00" y="738.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">44</text>
+<text x="86.00" y="998.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">3. Loop-to-loop change in blind average</text>
+<text x="496.00" y="998.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Negative bars are improvements; positive bars are regressions.</text>
+<rect x="86.00" y="1030.00" width="1320.00" height="275.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<line x1="130.00" y1="1167.50" x2="1362.00" y2="1167.50" stroke="#6b7280" stroke-width="1.4" opacity="1.0"/>
+<rect x="138.00" y="1167.50" width="47.74" height="35.50" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 25: delta -10.50</title></rect>
+<text x="161.87" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">25</text>
+<rect x="199.20" y="1131.16" width="47.74" height="36.34" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 26: delta +10.75</title></rect>
+<rect x="260.40" y="1163.27" width="47.74" height="4.23" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 27: delta +1.25</title></rect>
+<text x="284.27" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">27</text>
+<rect x="321.60" y="1167.50" width="47.74" height="29.58" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 28: delta -8.75</title></rect>
+<rect x="382.80" y="1146.37" width="47.74" height="21.13" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 29: delta +6.25</title></rect>
+<text x="406.67" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">29</text>
+<rect x="444.00" y="1167.50" width="47.74" height="11.83" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 30: delta -3.50</title></rect>
+<rect x="505.20" y="1167.50" width="47.74" height="9.30" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 31: delta -2.75</title></rect>
+<text x="529.07" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">31</text>
+<rect x="566.40" y="1167.50" width="47.74" height="5.07" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 32: delta -1.50</title></rect>
+<rect x="627.60" y="1115.10" width="47.74" height="52.40" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 33: delta +15.50</title></rect>
+<text x="651.47" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">33</text>
+<rect x="688.80" y="1167.50" width="47.74" height="6.76" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 34: delta -2.00</title></rect>
+<rect x="750.00" y="1104.96" width="47.74" height="62.54" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 35: delta +18.50</title></rect>
+<text x="773.87" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">35</text>
+<rect x="811.20" y="1164.12" width="47.74" height="3.38" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 36: delta +1.00</title></rect>
+<rect x="872.40" y="1115.95" width="47.74" height="51.55" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 37: delta +15.25</title></rect>
+<text x="896.27" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">37</text>
+<rect x="933.60" y="1156.51" width="47.74" height="10.99" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 38: delta +3.25</title></rect>
+<rect x="994.80" y="1167.50" width="47.74" height="95.50" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 39: delta -28.25</title></rect>
+<text x="1018.67" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">39</text>
+<rect x="1056.00" y="1150.60" width="47.74" height="16.90" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 40: delta +5.00</title></rect>
+<rect x="1117.20" y="1159.89" width="47.74" height="7.61" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 41: delta +2.25</title></rect>
+<text x="1141.07" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">41</text>
+<rect x="1178.40" y="1129.47" width="47.74" height="38.03" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 42: delta +11.25</title></rect>
+<rect x="1239.60" y="1147.22" width="47.74" height="20.28" fill="#dc2626" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 43: delta +6.00</title></rect>
+<text x="1263.47" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">43</text>
+<rect x="1300.80" y="1167.50" width="47.74" height="31.27" fill="#16a34a" stroke="none" opacity="0.84" rx="2" ry="2"><title>Loop 44: delta -9.25</title></rect>
+<text x="1324.67" y="1287.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">44</text>
+<text x="130.00" y="1064.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Max regression: loop 35 (+18.50)</text>
+<text x="130.00" y="1086.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Max recovery: loop 39 (-28.25)</text>
+<text x="86.00" y="1358.00" font-family="Inter, Arial, sans-serif" font-size="20" fill="#111827" font-weight="700" text-anchor="start">4. Reviewer disagreement band (#6)</text>
+<text x="431.00" y="1358.00" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6b7280" font-weight="400" text-anchor="start">Top line is max reviewer score, bottom line min reviewer score, blue line is spread.</text>
+<rect x="86.00" y="1390.00" width="1320.00" height="285.00" fill="#ffffff" stroke="#e5e7eb" opacity="1.0" rx="8" ry="8"/>
+<line x1="130.00" y1="1637.00" x2="1362.00" y2="1637.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="1641.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">0</text>
+<line x1="130.00" y1="1592.40" x2="1362.00" y2="1592.40" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="1596.40" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">20</text>
+<line x1="130.00" y1="1547.80" x2="1362.00" y2="1547.80" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="1551.80" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">40</text>
+<line x1="130.00" y1="1503.20" x2="1362.00" y2="1503.20" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="1507.20" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">60</text>
+<line x1="130.00" y1="1458.60" x2="1362.00" y2="1458.60" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="1462.60" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">80</text>
+<line x1="130.00" y1="1414.00" x2="1362.00" y2="1414.00" stroke="#e5e7eb" stroke-width="1.0" opacity="1.0"/>
+<text x="120.00" y="1418.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="end">100</text>
+<path d="M 130.00 1565.64 L 194.84 1485.36 L 259.68 1494.28 L 324.53 1543.34 L 389.37 1507.66 L 454.21 1536.65 L 519.05 1536.65 L 583.89 1556.72 L 648.74 1431.84 L 713.58 1438.53 L 778.42 1489.82 L 843.26 1463.06 L 908.11 1467.52 L 972.95 1425.15 L 1037.79 1487.59 L 1102.63 1489.82 L 1167.47 1485.36 L 1232.32 1440.76 L 1297.16 1442.99 L 1362.00 1438.53" fill="none" stroke="#991b1b" stroke-width="2.6" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 130.00 1605.78 L 194.84 1605.78 L 259.68 1610.24 L 324.53 1612.47 L 389.37 1599.09 L 454.21 1601.32 L 519.05 1605.78 L 583.89 1608.01 L 648.74 1610.24 L 713.58 1610.24 L 778.42 1574.56 L 843.26 1565.64 L 908.11 1485.36 L 972.95 1492.05 L 1037.79 1558.95 L 1102.63 1579.02 L 1167.47 1556.72 L 1232.32 1541.11 L 1297.16 1538.88 L 1362.00 1572.33" fill="none" stroke="#166534" stroke-width="2.6" opacity="1.0" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 130.00 1596.86 L 194.84 1516.58 L 259.68 1521.04 L 324.53 1567.87 L 389.37 1545.57 L 454.21 1572.33 L 519.05 1567.87 L 583.89 1585.71 L 648.74 1458.60 L 713.58 1465.29 L 778.42 1552.26 L 843.26 1534.42 L 908.11 1619.16 L 972.95 1570.10 L 1037.79 1565.64 L 1102.63 1547.80 L 1167.47 1565.64 L 1232.32 1536.65 L 1297.16 1541.11 L 1362.00 1503.20" fill="none" stroke="#2563eb" stroke-width="2.8" opacity="1.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5"/>
+<circle cx="130.00" cy="1596.86" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 25 reviewer spread: 18</title></circle>
+<circle cx="194.84" cy="1516.58" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 26 reviewer spread: 54</title></circle>
+<circle cx="259.68" cy="1521.04" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 27 reviewer spread: 52</title></circle>
+<circle cx="324.53" cy="1567.87" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 28 reviewer spread: 31</title></circle>
+<circle cx="389.37" cy="1545.57" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 29 reviewer spread: 41</title></circle>
+<circle cx="454.21" cy="1572.33" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 30 reviewer spread: 29</title></circle>
+<circle cx="519.05" cy="1567.87" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 31 reviewer spread: 31</title></circle>
+<circle cx="583.89" cy="1585.71" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 32 reviewer spread: 23</title></circle>
+<circle cx="648.74" cy="1458.60" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 33 reviewer spread: 80</title></circle>
+<circle cx="713.58" cy="1465.29" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 34 reviewer spread: 77</title></circle>
+<circle cx="778.42" cy="1552.26" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 35 reviewer spread: 38</title></circle>
+<circle cx="843.26" cy="1534.42" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 36 reviewer spread: 46</title></circle>
+<circle cx="908.11" cy="1619.16" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 37 reviewer spread: 8</title></circle>
+<circle cx="972.95" cy="1570.10" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 38 reviewer spread: 30</title></circle>
+<circle cx="1037.79" cy="1565.64" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 39 reviewer spread: 32</title></circle>
+<circle cx="1102.63" cy="1547.80" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 40 reviewer spread: 40</title></circle>
+<circle cx="1167.47" cy="1565.64" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 41 reviewer spread: 32</title></circle>
+<circle cx="1232.32" cy="1536.65" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 42 reviewer spread: 45</title></circle>
+<circle cx="1297.16" cy="1541.11" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 43 reviewer spread: 43</title></circle>
+<circle cx="1362.00" cy="1503.20" r="4" fill="#ffffff" stroke="#2563eb" stroke-width="2"><title>Loop 44 reviewer spread: 60</title></circle>
+<text x="130.00" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">25</text>
+<text x="259.68" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">27</text>
+<text x="389.37" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">29</text>
+<text x="519.05" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">31</text>
+<text x="648.74" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">33</text>
+<text x="778.42" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">35</text>
+<text x="908.11" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">37</text>
+<text x="1037.79" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">39</text>
+<text x="1167.47" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">41</text>
+<text x="1297.16" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">43</text>
+<text x="1362.00" y="1661.00" font-family="Inter, Arial, sans-serif" font-size="11" fill="#6b7280" font-weight="400" text-anchor="middle">44</text>
+<line x1="1434.00" y1="1435.00" x2="1462.00" y2="1435.00" stroke="#991b1b" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="1440.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Max reviewer</text>
+<line x1="1434.00" y1="1465.00" x2="1462.00" y2="1465.00" stroke="#166534" stroke-width="3" opacity="1.0"/>
+<text x="1472.00" y="1470.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Min reviewer</text>
+<line x1="1434.00" y1="1495.00" x2="1462.00" y2="1495.00" stroke="#2563eb" stroke-width="3" opacity="1.0" stroke-dasharray="6 5"/>
+<text x="1472.00" y="1500.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Spread (#6)</text>
+<text x="1434.00" y="1556.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Latest spread: 60</text>
+<text x="1434.00" y="1578.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#374151" font-weight="400" text-anchor="start">Widest: loop 33 (80)</text>
+<text x="86.00" y="1724.00" font-family="Inter, Arial, sans-serif" font-size="12" fill="#6b7280" font-weight="400" text-anchor="start">Generated from loop scores.json artifacts. Blind scores are synthetic-confidence values; lower is more realistic.</text>
+</svg>

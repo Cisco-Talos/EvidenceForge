@@ -1285,6 +1285,58 @@ class TestGenerateSystemProcess:
         ]
         assert len(security_creates) == 1
 
+    def test_reuses_named_svchost_service_but_not_other_services(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Each `svchost -s` service name owns at most one active process."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+
+        schedule_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s Schedule",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+        reused_schedule_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s Schedule",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+        bits_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=15),
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s BITS",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert reused_schedule_pid == schedule_pid
+        assert bits_pid != schedule_pid
+        service_creates = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "system_process_create"
+            and call[0][0].process.image.endswith("svchost.exe")
+        ]
+        assert [event.process.command_line for event in service_creates] == [
+            "svchost.exe -k netsvcs -p -s Schedule",
+            "svchost.exe -k netsvcs -p -s BITS",
+        ]
+
     def test_stale_cleanup_preserves_catalog_singleton_service_agents(
         self, win_system, timestamp, state_manager
     ):
