@@ -6667,7 +6667,16 @@ class ActivityGenerator:
             time=process_time,
             logon_id=session.logon_id,
         )
-        if os_category == "linux":
+        if os_category == "windows" and image_exe in {"ssh.exe", "scp.exe", "sftp.exe"}:
+            parent_pid = self._ensure_windows_user_cli_parent(
+                system=source_system,
+                user=user,
+                session=session,
+                child_time=process_time,
+                candidate_pid=parent_pid,
+                child_command_line=command_line,
+            )
+        elif os_category == "linux":
             parent_pid = (
                 self._linux_non_shell_session_parent_pid(
                     system=source_system,
@@ -6695,6 +6704,83 @@ class ActivityGenerator:
         if running is not None:
             return pid, running.image
         return pid, image
+
+    def _ensure_windows_user_cli_parent(
+        self,
+        *,
+        system: System,
+        user: User,
+        session: Any,
+        child_time: datetime,
+        candidate_pid: int,
+        child_command_line: str,
+    ) -> int:
+        """Return a visible interactive shell for a user-owned Windows CLI process."""
+
+        candidate = self.state_manager.get_process(system.hostname, candidate_pid)
+        if candidate is not None:
+            candidate_exe = ntpath.basename(candidate.image).lower()
+            if (
+                candidate_exe in self._WINDOWS_SHELL_NAMES
+                and candidate.logon_id == session.logon_id
+                and self._is_pid_active_at(system, candidate.pid, child_time)
+                and not self._is_one_shot_shell_parent(system, candidate.pid)
+            ):
+                return candidate.pid
+
+        shell_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if ntpath.basename(proc.image).lower() in self._WINDOWS_SHELL_NAMES
+            and proc.username == user.username
+            and proc.logon_id == session.logon_id
+            and self._is_pid_active_at(system, proc.pid, child_time)
+            and not self._is_one_shot_shell_parent(system, proc.pid)
+        ]
+        if shell_candidates:
+            return max(shell_candidates, key=lambda proc: proc.start_time).pid
+
+        shell_seed = _stable_seed(
+            f"windows-user-cli-parent:{system.hostname}:{user.username}:"
+            f"{session.logon_id}:{child_command_line}"
+        )
+        shell_image = (
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            if shell_seed % 3
+            else r"C:\Windows\System32\cmd.exe"
+        )
+        shell_command = ntpath.basename(shell_image)
+        session_floor = ensure_utc(session.start_time) + timedelta(milliseconds=100)
+        lead_ms = 1200 + shell_seed % 4801
+        shell_time = max(session_floor, ensure_utc(child_time) - timedelta(milliseconds=lead_ms))
+        if shell_time >= ensure_utc(child_time):
+            shell_time = ensure_utc(child_time) - timedelta(milliseconds=100)
+        explorer_pid = self._ensure_session_explorer_pid(
+            system,
+            user,
+            time=shell_time,
+            logon_id=session.logon_id,
+        )
+        parent_pid = explorer_pid or self._windows_explorer_parent_pid(
+            system,
+            user,
+            shell_time,
+            session.logon_id,
+        )
+        shell_pid = self.generate_process(
+            user=user,
+            system=system,
+            time=shell_time,
+            logon_id=session.logon_id,
+            process_name=shell_image,
+            command_line=shell_command,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+        )
+        self._record_user_process(system, user, shell_pid, shell_image)
+        return shell_pid
 
     @staticmethod
     def _user_connection_owner_spec(

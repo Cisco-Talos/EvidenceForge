@@ -141,3 +141,24 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** session ownership, source-visible process timing,
   parent lifetime, remote-admin transport actor identity, process pools,
   storyline compatibility, and three-source process correlation.
+
+## Loop 41 Outcome
+
+- **Generation/eval:** 88,028 fresh records; 95.82987695897476; FAIL only on
+  pivot linkability (50/100).
+- **Blind panel:** Inconclusive/Synthetic/Real/Synthetic at 45/68/36/67,
+  average 54.0; disagreement and a 32-point spread triggered deliberation.
+- **Deliberation:** unanimous Synthetic at 63/70/66/64, average 65.75.
+- **Loop 40 target confirmation:** all 61 Windows `ssh.exe` processes descend
+  from `cmd.exe` or `powershell.exe` in the same active logon session; no fresh
+  reviewer repeated the browser/mail-parent defect.
+- **Fresh selected family:** actor-native Windows file and registry side
+  effects, especially WER, Defender, CBS, Office MRU, and Explorer state.
+- **Owning abstraction:** endpoint side-effect planning and data-driven
+  eligibility before Sysmon/eCAR rendering.
+- **Invariant:** a visible process may own only artifacts that its executable
+  family can natively create or modify; source renderers preserve that causal
+  ownership without substituting actors.
+- **Sibling risks:** service/update process availability, user/session identity,
+  registry hive eligibility, installer inventory, file action semantics,
+  ProcessGuid correlation, and output volume/distribution.

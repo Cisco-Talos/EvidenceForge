@@ -5567,6 +5567,16 @@ class TestActivityGenerator:
         ssh_proc = ssh_processes[-1]
         assert ssh_proc.username == source_user.username
         assert ssh_proc.command_line == "ssh.exe aisha.johnson@WEB-EXT-01"
+        parent = state_manager.get_process(workstation.hostname, ssh_proc.parent_pid)
+        assert parent is not None
+        assert parent.image.rsplit("\\", 1)[-1].lower() in {
+            "cmd.exe",
+            "powershell.exe",
+            "pwsh.exe",
+            "windowsterminal.exe",
+        }
+        assert parent.logon_id == ssh_proc.logon_id
+        assert parent.start_time < ssh_proc.start_time
 
         connection_event = next(
             call.args[0]
