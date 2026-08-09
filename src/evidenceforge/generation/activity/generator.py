@@ -6526,6 +6526,8 @@ class ActivityGenerator:
         user, session = session_info
 
         image_lower = image.lower()
+        image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        resident_resource_owner = image_exe == "gvfsd-smb-browse"
         require_exact_command = self._connection_owner_requires_exact_command_line(
             image,
             command_line,
@@ -6549,22 +6551,49 @@ class ActivityGenerator:
             )
             return proc.pid, proc.image
 
+        if resident_resource_owner:
+            resource_key = self._singleton_application_key(
+                source_system,
+                user.username,
+                session.logon_id,
+                f"{image}|{command_line}",
+            )
+            provisional_end = (
+                self.state_manager.get_session_end_time(session.logon_id) or self._scenario_end_time
+            )
+            if not self.claim_singleton_application_interval(
+                resource_key,
+                ensure_utc(session.start_time),
+                provisional_end,
+            ):
+                return -1, None
+
         process_rng = random.Random(
             _stable_seed(
                 "high_confidence_user_connection_owner:"
                 f"{source_system.hostname}:{user.username}:{image}:{time.isoformat()}"
             )
         )
-        process_lifetime = (
-            _windows_foreground_lifetime(image, command_line)
-            if os_category == "windows"
-            else _linux_foreground_lifetime(image, command_line)
-        )
-        if process_lifetime is None:
-            lead_seconds = process_rng.uniform(3.0, 30.0)
+        if resident_resource_owner:
+            process_time = ensure_utc(session.start_time) + timedelta(
+                milliseconds=500
+                + _stable_seed(
+                    f"resident_resource_bootstrap:{source_system.hostname}:"
+                    f"{user.username}:{session.logon_id}:{command_line}"
+                )
+                % 2500
+            )
         else:
-            lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
-        process_time = time - timedelta(seconds=lead_seconds)
+            process_lifetime = (
+                _windows_foreground_lifetime(image, command_line)
+                if os_category == "windows"
+                else _linux_foreground_lifetime(image, command_line)
+            )
+            if process_lifetime is None:
+                lead_seconds = process_rng.uniform(3.0, 30.0)
+            else:
+                lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
+            process_time = time - timedelta(seconds=lead_seconds)
         min_process_time = ensure_utc(session.start_time) + timedelta(milliseconds=500)
         if process_time < min_process_time:
             process_time = min_process_time

@@ -131,6 +131,7 @@ applications:
 
   - id: outlook
     display_name: "Microsoft Outlook"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE'

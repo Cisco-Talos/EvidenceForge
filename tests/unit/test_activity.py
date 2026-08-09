@@ -5503,6 +5503,98 @@ class TestActivityGenerator:
         assert file_proc.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
         assert dc_proc.command_line == "gvfsd-smb-browse smb://DC-01/shared"
 
+    def test_linux_smb_browse_owner_reuses_resource_when_requests_arrive_out_of_order(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Resident SMB helpers bootstrap near session start and survive planner order."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-MRIVERA-02",
+            ip="10.10.1.50",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.2.20",
+            os="Windows Server 2022",
+            type="server",
+            roles=["file_server"],
+            services=["smb"],
+        )
+        activity_gen._ip_to_system = {
+            workstation.ip: workstation,
+            file_server.ip: file_server,
+        }
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        later_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp + timedelta(hours=2),
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname=file_server.hostname,
+            http=None,
+        )
+        earlier_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
+            source_system=workstation,
+            time=timestamp,
+            service="smb",
+            dst_port=445,
+            proto="tcp",
+            hostname=file_server.hostname,
+            http=None,
+        )
+
+        owners = [
+            process
+            for process in state_manager.get_processes_on_system(workstation.hostname)
+            if process.image == "/usr/bin/gvfsd-smb-browse"
+            and process.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
+        ]
+        assert earlier_pid == later_pid
+        assert len(owners) == 1
+        assert owners[0].start_time < timestamp
+
+    def test_outlook_catalog_singleton_reuses_recycle_launch(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Outlook /recycle resolves to the live session owner."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=timestamp - timedelta(minutes=1),
+            session_kind="interactive",
+        )
+        image = r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"
+        first_pid = activity_gen.generate_process(
+            test_user, test_system, timestamp, logon_id, image, "OUTLOOK.EXE /recycle"
+        )
+        reused_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            logon_id,
+            image,
+            f'"{image}" /recycle',
+        )
+
+        assert reused_pid == first_pid
+
     def test_sqlcmd_unresolved_host_emits_failed_network_attempt(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
