@@ -288,3 +288,37 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** preserve legitimate multi-process Office helpers, separate
   SMB shares/resources, separate sessions, crash/restart behavior, explicit
   storyline processes, and bounded foreground commands.
+
+## Loop 32 Outcome
+
+- **Commits:** `b3cd49a0 fix: preserve resident desktop resource owners` and
+  `07751e47 fix: reuse resident mail client owners`.
+- **Verification:** final full suite passed with 5,120 tests and 41 skips; Ruff
+  and configuration checks passed.
+- **Generation and eval:** 83,526 records; automated score
+  96.11941703495413, PASS across every hard gate.
+- **Hard probe:** 13 resident-helper/mail-client ownership groups and zero
+  overlapping owners.
+- **Blind panel:** unanimous Real at 16/29/13/36, average 23.5; no deliberation
+  trigger fired.
+- **Target result:** no reviewer repeated the resident-helper or Outlook
+  singleton-overlap finding.
+- **Highest next root contract:** explicit proxy CONNECT accounting scope and
+  canonical tunnel transfer totals.
+
+## Loop 33 Family Contract
+
+- **Selected family:** explicit forward-proxy CONNECT accounting.
+- **Finding classification:** `contract_gap` in source-native accounting.
+- **Owning abstraction:** proxy transaction action bundle and canonical
+  client-to-proxy transport lifecycle.
+- **Invariant:** CONNECT control-message bytes are unmistakably distinguished
+  from full client-to-proxy tunnel transfer totals; duration and directional
+  totals derive from the canonical transport, with documented units/scope.
+- **Entry paths:** explicit HTTPS proxy setup, reused tunnels, denied/auth
+  terminal outcomes, and raw compatibility events.
+- **Consumers:** proxy access logs, Splunk JSON, SIEM parsers, bandwidth hunting,
+  and Zeek/proxy cross-source pivots.
+- **Sibling risks:** do not double count application rows, preserve cache/deny
+  semantics, keep raw-event compatibility, and avoid inventing origin totals
+  when the canonical transport does not expose them.
