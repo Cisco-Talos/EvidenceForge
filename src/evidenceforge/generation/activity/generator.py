@@ -13554,6 +13554,8 @@ class ActivityGenerator:
             return -1, None
         session = max(sessions, key=lambda candidate: candidate.start_time)
         image_lower = image.lower()
+        image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        resident_mail_client = image_exe in {"outlook.exe", "thunderbird", "thunderbird.exe"}
         running_candidates = [
             proc
             for proc in self.state_manager.get_processes_on_system(system.hostname)
@@ -13568,13 +13570,40 @@ class ActivityGenerator:
             self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
             return proc.pid, proc.image
 
+        if resident_mail_client:
+            singleton_key = self._singleton_application_key(
+                system,
+                user.username,
+                session.logon_id,
+                image,
+            )
+            provisional_end = (
+                self.state_manager.get_session_end_time(session.logon_id) or self._scenario_end_time
+            )
+            if not self.claim_singleton_application_interval(
+                singleton_key,
+                ensure_utc(session.start_time),
+                provisional_end,
+            ):
+                return -1, None
+
         rng = random.Random(
             _stable_seed(
                 f"email_client_process:{system.hostname}:{user.username}:{image}:{time.isoformat()}"
             )
         )
-        lead_seconds = rng.uniform(3.0, 180.0)
-        process_time = time - timedelta(seconds=lead_seconds)
+        if resident_mail_client:
+            process_time = ensure_utc(session.start_time) + timedelta(
+                milliseconds=500
+                + _stable_seed(
+                    f"resident_mail_bootstrap:{system.hostname}:{user.username}:"
+                    f"{session.logon_id}:{image}"
+                )
+                % 2500
+            )
+        else:
+            lead_seconds = rng.uniform(3.0, 180.0)
+            process_time = time - timedelta(seconds=lead_seconds)
         min_process_time = session.start_time + timedelta(milliseconds=500)
         if process_time < min_process_time:
             process_time = min_process_time

@@ -5595,6 +5595,45 @@ class TestActivityGenerator:
 
         assert reused_pid == first_pid
 
+    def test_outlook_email_client_reuses_owner_when_requests_arrive_out_of_order(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Email access bootstraps one resident Outlook owner near session start."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=timestamp - timedelta(minutes=1),
+            session_kind="interactive",
+        )
+        image = r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"
+
+        later_pid, _ = activity_gen._ensure_email_client_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(hours=2),
+            image=image,
+            command_line=f'"{image}" /recycle',
+        )
+        earlier_pid, _ = activity_gen._ensure_email_client_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            image=image,
+            command_line=f'"{image}" /recycle',
+        )
+
+        owners = [
+            process
+            for process in state_manager.get_processes_on_system(test_system.hostname)
+            if process.image == image and process.username == test_user.username
+        ]
+        assert earlier_pid == later_pid
+        assert len(owners) == 1
+        assert owners[0].start_time < timestamp
+
     def test_sqlcmd_unresolved_host_emits_failed_network_attempt(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
