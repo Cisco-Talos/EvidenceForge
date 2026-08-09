@@ -31,6 +31,11 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FirewallContext, NatContext, NetworkContext
+from evidenceforge.events.network import (
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+    NetworkTuple,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 
@@ -322,6 +327,46 @@ class TestPermitRecords:
         assert byte_match is not None
         assert int(byte_match.group(1)) == 5120
         assert "SYN Timeout" not in lines[1]
+
+    def test_unobserved_boundary_teardown_keeps_only_built(self, asa_emitter, tmp_path):
+        """A post-cutoff ASA close is absent rather than shifted into the window."""
+
+        event = _make_connection_event(protocol="tcp")
+        event.network_observations = (
+            NetworkSensorObservation(
+                sensor_identity="fw01",
+                path_role="perimeter",
+                capture_profile="default",
+                tuple_view=NetworkTuple(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="203.0.113.50",
+                    dst_port=443,
+                    protocol="tcp",
+                ),
+                connection_uid="CBoundary1",
+                connection_ids=(),
+                file_ids=(),
+                local_orig=True,
+                local_resp=False,
+                observed_start_time=T0,
+                observed_close_time=T0 + timedelta(minutes=10),
+                traffic=NetworkTrafficLedger(),
+                visible_formats=frozenset({"cisco_asa"}),
+                firewall_teardown_reason="TCP FINs",
+                firewall_teardown_time=T0 + timedelta(minutes=10),
+                firewall_teardown_observed=False,
+            ),
+        )
+        event.network_observations_planned = True
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
+        lines = [line for line in output.strip().split("\n") if line]
+        assert len(lines) == 1
+        assert "Built outbound TCP connection" in lines[0]
 
     def test_connection_crossing_year_boundary_keeps_id_pairing(self, asa_emitter, tmp_path):
         """Built and teardown rows split by year should keep the same connection ID."""

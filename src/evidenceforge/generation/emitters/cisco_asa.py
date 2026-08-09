@@ -498,7 +498,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     fw_hostname,
                     observation,
                 )
-                if sensor_event.nat and sensor_event.nat.nat_type != "static":
+                if (
+                    teardown_ts is not None
+                    and sensor_event.nat
+                    and sensor_event.nat.nat_type != "static"
+                ):
                     self._emit_nat_teardown(
                         sensor_event,
                         sensor_net,
@@ -604,8 +608,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostname: str,
         fw_hostname: str,
         observation: Any | None = None,
-    ) -> datetime:
+    ) -> datetime | None:
         """Emit a Teardown connection record (302014/302016/302021)."""
+        if observation is not None and not observation.firewall_teardown_observed:
+            return None
         if observation is not None and observation.firewall_teardown_time is not None:
             reason = observation.firewall_teardown_reason
             teardown_ts = observation.firewall_teardown_time

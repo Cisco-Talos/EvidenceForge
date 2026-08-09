@@ -671,6 +671,61 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
     assert observation.firewall_teardown_time == observation.observed_close_time
 
 
+def test_firewall_teardown_after_export_window_is_marked_unobserved() -> None:
+    """Perimeter lifecycle fan-out respects the half-open collection boundary."""
+
+    config = NetworkConfig(
+        segments=[
+            NetworkSegment(name="inside", cidr="10.0.1.0/24", exposure="internal"),
+            NetworkSegment(name="outside", cidr="198.51.100.0/24", exposure="external"),
+        ],
+        sensors=[
+            NetworkSensor(
+                type="firewall",
+                name="fw-perimeter",
+                monitoring_segments=["inside", "outside"],
+                log_formats=["cisco_asa"],
+            )
+        ],
+    )
+    close = T0 + timedelta(minutes=10)
+    network = NetworkContext(
+        src_ip="10.0.1.20",
+        src_port=51000,
+        dst_ip="198.51.100.40",
+        dst_port=22,
+        protocol="tcp",
+        zeek_uid="CFirewallBoundary1",
+        conn_id="conn-firewall-boundary",
+        duration=600.0,
+        conn_state="SF",
+        history="ShADadFf",
+        orig_pkts=4,
+        resp_pkts=4,
+        orig_ip_bytes=500,
+        resp_ip_bytes=500,
+        source_visible_start_time=T0,
+        source_visible_close_time=close,
+    )
+    network.finalize_transaction(
+        "network:firewall-boundary",
+        hostname="edge.example",
+        outcome="success",
+        phase_times=(("transport_start", T0), ("transport_close", close)),
+    )
+    event = SecurityEvent(timestamp=T0, event_type="connection", network=network)
+    event._sensor_hostnames_by_format = {"cisco_asa": ["fw-perimeter"]}
+
+    observation = NetworkObservationPlanner(
+        NetworkVisibilityEngine(config, systems=[]),
+        output_end_time=T0 + timedelta(minutes=5),
+    ).plan(event, {"cisco_asa"})[0]
+
+    assert observation.firewall_teardown_time is not None
+    assert observation.firewall_teardown_time >= T0 + timedelta(minutes=5)
+    assert observation.firewall_teardown_observed is False
+
+
 def test_capture_profile_accepts_blank_and_rejects_unknown_names() -> None:
     """Scenario sensors inherit the default profile but fail fast on typos."""
 

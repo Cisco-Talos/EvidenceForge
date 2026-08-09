@@ -127,6 +127,7 @@ class NetworkSensorObservation:
     visible_formats: frozenset[str]
     firewall_teardown_reason: str = ""
     firewall_teardown_time: datetime | None = None
+    firewall_teardown_observed: bool = True
 
     def __post_init__(self) -> None:
         """Validate source-local interval and identifier invariants."""

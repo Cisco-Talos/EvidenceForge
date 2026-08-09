@@ -52,8 +52,13 @@ def derive_sensor_identifier(canonical_id: str, sensor_identity: str) -> str:
 class NetworkObservationPlanner:
     """Project canonical network truth through configured sensor behavior."""
 
-    def __init__(self, visibility_engine: NetworkVisibilityEngine | None) -> None:
+    def __init__(
+        self,
+        visibility_engine: NetworkVisibilityEngine | None,
+        output_end_time: datetime | None = None,
+    ) -> None:
         self.visibility_engine = visibility_engine
+        self.output_end_time = output_end_time
 
     def plan(
         self,
@@ -118,6 +123,7 @@ class NetworkObservationPlanner:
                 observed_start,
                 observed_close,
             )
+            firewall_teardown_observed = self._before_output_end(firewall_teardown)
             observations.append(
                 NetworkSensorObservation(
                     sensor_identity=sensor_identity,
@@ -160,9 +166,23 @@ class NetworkObservationPlanner:
                     visible_formats=frozenset(formats),
                     firewall_teardown_reason=firewall_reason,
                     firewall_teardown_time=firewall_teardown,
+                    firewall_teardown_observed=firewall_teardown_observed,
                 )
             )
         return tuple(observations)
+
+    def _before_output_end(self, timestamp: datetime | None) -> bool:
+        """Return whether a source-local fan-out row is inside the export window."""
+
+        if timestamp is None or self.output_end_time is None:
+            return True
+        candidate = timestamp
+        gate = self.output_end_time
+        if candidate.tzinfo is not None and gate.tzinfo is None:
+            candidate = candidate.replace(tzinfo=None)
+        elif candidate.tzinfo is None and gate.tzinfo is not None:
+            gate = gate.replace(tzinfo=None)
+        return candidate < gate
 
     @staticmethod
     def _firewall_teardown_plan(

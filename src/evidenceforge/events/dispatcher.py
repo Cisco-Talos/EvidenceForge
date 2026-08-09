@@ -143,7 +143,10 @@ class EventDispatcher:
         )
         from evidenceforge.generation.network_observation import NetworkObservationPlanner
 
-        self.network_observation_planner = NetworkObservationPlanner(visibility_engine)
+        self.network_observation_planner = NetworkObservationPlanner(
+            visibility_engine,
+            output_end_time=output_end_time,
+        )
         from evidenceforge.generation.identity_lifecycle import IdentityLifecyclePlanner
 
         self.identity_lifecycle_planner = IdentityLifecyclePlanner(state_manager)
