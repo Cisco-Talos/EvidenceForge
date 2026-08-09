@@ -218,3 +218,38 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** retain legitimate one-time provisioning, explicit attack or
   remediation mutations, regional host defaults, reboot persistence, correct
   privileged actor/session ownership, and cross-source ordering.
+
+## Loop 30 Outcome
+
+- **Commit:** `bfbe3ed3 fix: preserve host timezone configuration state`.
+- **Verification:** 7 focused polkit tests and 14 extra-syslog configuration
+  tests passed; all 87 config files validated; final full suite passed with
+  5,115 tests and 41 skips; Ruff lint and format checks passed.
+- **Generation and eval:** 81,856 records; automated score
+  95.97420986025638, PASS across every hard gate.
+- **Hard probe:** zero server timezone mutations, one workstation mutation, and
+  zero repeated or contradictory host mutations.
+- **Blind panel:** unanimous Real at 19/31/16/45, average 27.75; no deliberation
+  trigger fired.
+- **Target result:** no reviewer repeated the production-host timezone mutation
+  finding.
+- **Highest next root contract:** perimeter source-family observation-window
+  clipping, independently selected by the threat and detection reviewers.
+
+## Loop 31 Family Contract
+
+- **Selected family:** perimeter collection/export window enforcement.
+- **Finding classification:** `existing_family_sibling` repeated across Loops 28
+  through 30 and now promoted to the sole target.
+- **Owning abstraction:** source-observation profile boundary before native
+  perimeter rendering.
+- **Invariant:** no ASA or IDS record timestamp may exceed its declared source-
+  family window; a connection opened in-window and closed after cutoff retains
+  its in-window opening evidence while its unobserved teardown is absent.
+- **Entry paths:** ASA build/teardown, NAT translation lifecycle, ACL deny,
+  transport close, IDS alert delay, and source-observation jitter.
+- **Consumers:** ASA syslog, IDS exports, collection-profile conformance checks,
+  connection/NAT detections, and blind perimeter timelines.
+- **Sibling risks:** preserve canonical transport duration for Zeek/endpoint
+  sources with later windows, retain in-window partial lifecycles, avoid moving
+  close events earlier, and apply clipping after source-native delay decisions.
