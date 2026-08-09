@@ -733,29 +733,28 @@ class NetworkTransactionPlanner:
                 resolved_process = None
                 drop_explicit_pid_without_inference = caller_supplied_pid
             elif (
-                not caller_supplied_pid
-                and (
-                    inferred_end_plan := executor.state_manager.process_session_end_plan(
-                        resolved_source_system.hostname,
-                        pid,
+                (
+                    owning_end_plan := executor.state_manager.process_session_end_plan(
+                        resolved_source_system.hostname, pid
                     )
                 )
                 is not None
-                and inferred_end_plan.is_authoritative
-                and ensure_utc(time) >= ensure_utc(inferred_end_plan.canonical_end)
+                and owning_end_plan.is_authoritative
+                and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
             ):
                 generator_module.logger.debug(
-                    "Dropping inferred connection PID after its owning session ended: "
+                    "Dropping connection PID after its owning session ended: "
                     "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
                     resolved_source_system.hostname,
                     pid,
-                    inferred_end_plan.canonical_end,
+                    owning_end_plan.canonical_end,
                     time,
                     dst_ip,
                     dst_port,
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif (
                 resolved_process
                 and resolved_process.start_time
@@ -1366,6 +1365,29 @@ class NetworkTransactionPlanner:
                 time,
             )
         else:
+            if pid > 0 and resolved_source_system is not None:
+                final_end_plan = executor.state_manager.process_session_end_plan(
+                    resolved_source_system.hostname,
+                    pid,
+                )
+                if (
+                    final_end_plan is not None
+                    and final_end_plan.is_authoritative
+                    and ensure_utc(time) >= ensure_utc(final_end_plan.canonical_end)
+                ):
+                    generator_module.logger.debug(
+                        "Dropping connection PID after source timing crossed its session end: "
+                        "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
+                        resolved_source_system.hostname,
+                        pid,
+                        final_end_plan.canonical_end,
+                        time,
+                        dst_ip,
+                        dst_port,
+                    )
+                    pid = -1
+                    resolved_process = None
+                    process_image = None
             duration = self._cap_to_owning_session(
                 start=time,
                 duration=duration,

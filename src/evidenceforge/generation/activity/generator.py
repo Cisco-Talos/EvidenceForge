@@ -1543,7 +1543,7 @@ _WINDOWS_BROWSER_CHILD_MARKERS = (
     " -childid ",
     " /prefetch:",
 )
-_WINDOWS_ELECTRON_CHILD_EXES = frozenset({"teams.exe"})
+_WINDOWS_ELECTRON_CHILD_EXES = frozenset({"slack.exe", "teams.exe", "zoom.exe"})
 _WINDOWS_ELECTRON_CHILD_MARKERS = (
     "--type=",
     "--utility-sub-type=",
@@ -7631,6 +7631,15 @@ class ActivityGenerator:
     ) -> tuple[User, Any] | None:
         """Pick the user session most likely to own a user-mode proxy request."""
         known_users = getattr(self, "_users_by_username", {})
+
+        def _accepts_activity(session: Any) -> bool:
+            end_plan = self.state_manager.get_session_end_plan(session.logon_id)
+            return not (
+                end_plan is not None
+                and end_plan.is_authoritative
+                and ensure_utc(time) >= ensure_utc(end_plan.canonical_end)
+            )
+
         sessions = [
             session
             for session in self.state_manager.get_sessions_on_system_at(
@@ -7642,6 +7651,7 @@ class ActivityGenerator:
             and not session.username.endswith("$")
             and session.logon_type in {2, 7, 10, 11}
             and _session_started_by(session, time)
+            and _accepts_activity(session)
             and not self._workstation_logon_locked_at(
                 source_system,
                 session.username,
@@ -10989,12 +10999,16 @@ class ActivityGenerator:
     ) -> int | None:
         """Reuse already-open desktop apps that normally stay resident."""
         requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if requested_exe not in _PERSISTENT_USER_APP_EXES:
+        from evidenceforge.generation.activity.application_catalog import (
+            is_singleton_application_image,
+        )
+
+        if requested_exe not in _PERSISTENT_USER_APP_EXES and not is_singleton_application_image(
+            process_name, _get_os_category(system.os)
+        ):
             return None
         command = f" {command_line.lower()} "
-        if requested_exe == "teams.exe" and any(
-            marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS
-        ):
+        if any(marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS):
             return None
 
         candidates: list[RunningProcess] = []
@@ -11125,7 +11139,8 @@ class ActivityGenerator:
         with self._singleton_application_lock:
             intervals = self._singleton_application_intervals.setdefault(key, [])
             if any(
-                existing_start <= start < existing_end for existing_start, existing_end in intervals
+                start < existing_end and existing_start < provisional_end
+                for existing_start, existing_end in intervals
             ):
                 return False
             intervals.append((start, provisional_end))

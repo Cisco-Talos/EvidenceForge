@@ -88,29 +88,25 @@ windows:
     command_templates:
       - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe"'
     lifetime: long
-    children:
-      - teams.exe
+    children: []
 
   onedrive.exe:
     command_templates:
       - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
     lifetime: long
-    children:
-      - onedrive.exe
+    children: []
 
   slack.exe:
     command_templates:
       - '"C:\Users\{username}\AppData\Local\slack\Slack.exe" --startup'
     lifetime: long
-    children:
-      - slack.exe
+    children: []
 
   zoom.exe:
     command_templates:
       - '"C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe" --background'
     lifetime: long
     children:
-      - zoom.exe
       - CptHost.exe
 
   webex.exe:
@@ -118,22 +114,19 @@ windows:
       - '"C:\Program Files\Cisco Spark\Webex.exe" --autostart'
     lifetime: long
     children:
-      - Webex.exe
       - CiscoCollabHost.exe
 
   dropbox.exe:
     command_templates:
       - '"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /systemstartup'
     lifetime: long
-    children:
-      - Dropbox.exe
+    children: []
 
   googledrivefs.exe:
     command_templates:
       - '"C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe" --startup'
     lifetime: long
-    children:
-      - GoogleDriveFS.exe
+    children: []
 
   postman.exe:
     command_templates:

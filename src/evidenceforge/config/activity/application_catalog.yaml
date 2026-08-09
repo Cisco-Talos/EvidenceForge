@@ -245,9 +245,9 @@ applications:
           company: "Microsoft Corporation"
           original_filename: "Teams.exe"
         command_templates:
-          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=renderer'
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --processStart Teams.exe'
         children:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=renderer'
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]

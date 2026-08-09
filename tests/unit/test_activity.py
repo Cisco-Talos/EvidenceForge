@@ -32,6 +32,7 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -698,6 +699,109 @@ class TestActivityGenerator:
         assert event.auth.username == test_user.username
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
+
+    def test_user_connection_owner_rejects_session_past_authoritative_end(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Background flows must not create user processes after a fixed logoff."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        session_end = session_start + timedelta(hours=1)
+        activity_time = session_end + timedelta(minutes=1)
+        logon_id = "0xabc123"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+        )
+        state_manager.plan_session_end(
+            logon_id,
+            SessionEndPlan(
+                canonical_end=session_end,
+                authority="explicit_storyline",
+                storyline_event_id="evt-logoff",
+            ),
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+
+        owner = activity_gen._ensure_user_connection_owner_process(
+            source_system=test_system,
+            time=activity_time,
+            service="ssh",
+            dst_port=22,
+            os_category="windows",
+            hostname="server.example",
+            ssh_attempted_username=None,
+        )
+
+        assert owner == (-1, None)
+        assert state_manager.get_processes_on_system(test_system.hostname) == []
+
+    def test_catalog_singleton_reuses_top_level_slack_but_not_renderer(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Canonical process creation reuses bootstrap owners across entry paths."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=timestamp - timedelta(minutes=1),
+            session_kind="interactive",
+        )
+        image = rf"C:\Users\{test_user.username}\AppData\Local\slack\Slack.exe"
+        first_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            image,
+            f'"{image}" --startup',
+        )
+        reused_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            logon_id,
+            image,
+            f'"{image}" --process-start-args',
+        )
+        renderer_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5, seconds=1),
+            logon_id,
+            image,
+            f'"{image}" --type=renderer',
+            parent_pid=first_pid,
+        )
+
+        assert reused_pid == first_pid
+        assert renderer_pid != first_pid
+
+    def test_singleton_application_interval_rejects_reverse_order_overlap(
+        self, activity_gen, test_system
+    ) -> None:
+        """A later-planned owner also blocks an earlier overlapping request."""
+        key = activity_gen._singleton_application_key(
+            test_system,
+            "analyst",
+            "0x1234",
+            r"C:\Program Files\Example\Example.exe",
+        )
+        later_start = datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
+        session_end = later_start + timedelta(hours=3)
+
+        assert activity_gen.claim_singleton_application_interval(key, later_start, session_end)
+        assert not activity_gen.claim_singleton_application_interval(
+            key,
+            later_start - timedelta(hours=1),
+            session_end,
+        )
 
     def test_linux_read_file_side_effect_maps_to_file_read(self, monkeypatch):
         """Linux read side effects from EDR pools should emit file_read events."""

@@ -13,8 +13,27 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
+
+
+def test_long_lived_desktop_spawn_rules_do_not_recursively_bootstrap() -> None:
+    """Singleton desktop parents must not spawn another copy of themselves."""
+    rules = load_spawn_rules()["windows"]
+    singleton_parents = {
+        "teams.exe",
+        "onedrive.exe",
+        "slack.exe",
+        "zoom.exe",
+        "webex.exe",
+        "dropbox.exe",
+        "googledrivefs.exe",
+    }
+
+    for parent in singleton_parents:
+        children = {str(child).lower() for child in rules[parent].get("children", [])}
+        assert parent not in children
 
 
 @pytest.fixture
