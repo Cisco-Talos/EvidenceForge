@@ -78,3 +78,25 @@ Splunk harness test, which passed unrestricted.
   rows or full-file fingerprints; complete observations retain canonical IDs.
 - **Sibling risks:** SSL certificate FUID references, files.log hashes/analyzers,
   OCSP HTTP fan-out, PE analysis, multi-sensor variance, and parser ordering.
+
+## Loop 38 Outcome
+
+- **Generation/eval:** 85,068 newly generated records; 95.9090570499255;
+  automated FAIL only on pivot linkability (50/100). Schemas, canonical
+  invariants, IDS integrity, and causal ordering passed.
+- **Blind panel:** unanimous Synthetic at 65/68/95/72, average 75.0. No
+  deliberation trigger: all verdict confidences were at least 80 and the score
+  spread was exactly 30 points.
+- **Loop 37 target confirmation:** incomplete files produced zero X.509, OCSP,
+  or PE analyzer intersections on either sensor. The Network reviewer also
+  independently explained missing certificate analysis through incomplete file
+  capture rather than reporting the prior contradiction.
+- **Fresh selected family:** canonical Zeek connection-state and packet-history
+  consistency.
+- **Owning abstraction:** `NetworkTransactionPlan`; sensor observations and the
+  Zeek emitter project its already-consistent transport truth.
+- **Invariant:** RSTR terminates with lowercase responder `r`, RSTO with
+  uppercase originator `R`, and S1 contains no observed reset/close marker.
+- **Sibling risks:** generator history pools, sensor-specific network
+  observations, emitter projection, packet-actor direction, ASA teardown
+  reasons, and deterministic evaluator assertions.

@@ -65,6 +65,7 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
             **self._sensor_metadata(
                 event,
                 self.format_def.name if self.format_def else "zeek_ocsp",
+                analyzer_file_id=ocsp.id,
             ),
         }
         if event.network is not None and event.network.zeek_uid:

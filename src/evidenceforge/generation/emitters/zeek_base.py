@@ -326,16 +326,34 @@ class SensorMultiplexEmitter(LogEmitter):
             return ts + timedelta(milliseconds=milliseconds)
         return float(ts) + milliseconds / 1000
 
-    def _sensor_metadata(self, event: Any, format_name: str) -> dict[str, Any]:
-        """Return preplanned sensor routing and observation metadata."""
+    def _sensor_metadata(
+        self,
+        event: Any,
+        format_name: str,
+        *,
+        analyzer_file_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return preplanned sensor routing and observation metadata.
+
+        File-dependent analyzer rows are visible only where the owning sensor
+        captured enough of that file for its analyzer to run.
+        """
 
         observations = {
             observation.sensor_identity: observation
             for observation in getattr(event, "network_observations", ())
             if format_name in observation.visible_formats
+            and (
+                analyzer_file_id is None
+                or (
+                    (file_observation := observation.file_observation(analyzer_file_id)) is not None
+                    and file_observation.analyzers_visible
+                )
+            )
         }
         targets = list(observations)
-        if not targets:
+        observations_planned = getattr(event, "network_observations_planned", False)
+        if not targets and not observations_planned:
             targets = event._sensor_hostnames_by_format.get(format_name, [])
         canonical_start = None
         if event.network is not None:
@@ -343,11 +361,7 @@ class SensorMultiplexEmitter(LogEmitter):
         return {
             "_sensor_hostnames": targets,
             "_network_sensor_observations": observations,
-            "_network_observations_planned": getattr(
-                event,
-                "network_observations_planned",
-                False,
-            ),
+            "_network_observations_planned": observations_planned,
             "_canonical_network_start": canonical_start,
         }
 

@@ -84,7 +84,11 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         chain_not_before: datetime | None,
     ) -> datetime:
         format_name = self.format_def.name if self.format_def else "zeek_x509"
-        sensor_metadata = self._sensor_metadata(event, format_name)
+        sensor_metadata = self._sensor_metadata(
+            event,
+            format_name,
+            analyzer_file_id=x509.fuid,
+        )
         timestamp = _tls_certificate_x509_timestamp(
             event,
             x509,

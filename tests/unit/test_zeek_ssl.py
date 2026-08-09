@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    FileSensorObservation,
     NetworkSensorObservation,
     NetworkTrafficLedger,
     NetworkTuple,
@@ -338,6 +339,77 @@ class TestSslUidCorrelation:
             ssl_data = json.loads(output.read_text().splitlines()[0])
 
         assert "cert_chain_fuids" not in ssl_data
+
+    def test_incomplete_certificate_file_suppresses_sensor_x509_analysis(self):
+        """A sensor cannot decode or fingerprint certificate bytes it did not capture."""
+
+        x509_format = load_format("zeek_x509")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            emitter = ZeekX509Emitter(x509_format, output_dir, sensor_hostnames=["core"])
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            certificate = X509Context(
+                fuid="FIncompleteCert1",
+                fingerprint="a" * 40,
+                certificate_serial="01",
+                certificate_subject="CN=example.com",
+                certificate_issuer="CN=Example CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+            )
+            event = OccurrenceBuilder(
+                timestamp=event_time,
+                event_type="connection",
+                network=network_plan(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CIncompleteCert1",
+                    conn_state="SF",
+                ),
+                x509=certificate,
+            )
+            event._sensor_hostnames_by_format = {"zeek_x509": ["core"]}
+            event.network_observations = (
+                NetworkSensorObservation(
+                    sensor_identity="core",
+                    path_role="source_side",
+                    capture_profile="lossy",
+                    tuple_view=NetworkTuple(
+                        src_ip="10.0.0.1",
+                        src_port=50000,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                    ),
+                    connection_uid="CObservedIncomplete1",
+                    connection_ids=(),
+                    file_ids=((certificate.fuid, "FObservedIncomplete1"),),
+                    local_orig=True,
+                    local_resp=False,
+                    observed_start_time=event_time,
+                    observed_close_time=event_time + timedelta(seconds=1),
+                    traffic=event.network.traffic,
+                    visible_formats=frozenset({"zeek_x509"}),
+                    file_observations=(
+                        FileSensorObservation(
+                            canonical_id=certificate.fuid,
+                            seen_bytes=1276,
+                            total_bytes=1279,
+                            missing_bytes=3,
+                            analyzers_visible=False,
+                        ),
+                    ),
+                ),
+            )
+            event.network_observations_planned = True
+
+            emitter.emit(event)
+            emitter.close()
+
+            assert not (output_dir / "core" / "x509.json").exists()
 
     def test_files_host_lists_follow_sensor_nat_view(self):
         """files.log tx/rx hosts should agree with the same-sensor conn endpoint view."""

@@ -71,6 +71,7 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
             **self._sensor_metadata(
                 event,
                 self.format_def.name if self.format_def else "zeek_pe",
+                analyzer_file_id=pe.id,
             ),
         }
         self.emit_event(event_data)
