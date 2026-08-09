@@ -180,3 +180,41 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** preserve explicit multi-process helper architectures,
   separate user sessions, crash/restart behavior, updater children, storyline
   process intent, and atomic planning under parallel generation.
+
+## Loop 29 Outcome
+
+- **Commits:** `2942320d fix: preserve desktop application bootstrap owners`
+  and `f5604488 fix: enforce desktop and session lifecycle ownership`.
+- **Verification:** 407 focused lifecycle tests passed; final full suite passed
+  with 5,114 tests and 41 skips; Ruff lint and format checks passed.
+- **Generation and eval:** 83,152 records; automated score
+  96.39949670786655, PASS across every hard gate.
+- **Hard probe:** 34 top-level singleton application starts across 34 ownership
+  groups, with zero overlapping owners.
+- **Blind panel:** initial scores 18/32/17/58, average 31.25, and a 3-1 Real
+  vote. Mandatory verdict/spread deliberation ended Synthetic 3-1 at 51.5 with
+  final scores 56/54/29/67.
+- **Target result:** reviewers found clean process/session lifecycles and did not
+  repeat the desktop bootstrap overlap finding.
+- **Highest next root contract:** durable role-aware state ownership for
+  privileged host-configuration mutations.
+
+## Loop 30 Family Contract
+
+- **Selected family:** privileged host-configuration mutation state, beginning
+  with timezone changes.
+- **Finding classification:** `new_family` canonical state/lifecycle defect.
+- **Owning abstraction:** host configuration state plus a privileged mutation
+  action bundle that owns command intent and source-native companions.
+- **Invariant:** each host has one durable effective timezone; a mutation is
+  role-appropriate, changes from the current value to a new value, persists for
+  later events, and cannot be contradicted by another baseline mutation without
+  an explicit corrective workflow.
+- **Entry paths:** baseline maintenance commands, catalog shell activity,
+  systemd/timedate services, administrator sessions, and explicit storyline
+  configuration changes.
+- **Consumers:** eCAR PROCESS and configuration evidence, Linux syslog/polkit/
+  systemd records, bash history, command attribution, and host timelines.
+- **Sibling risks:** retain legitimate one-time provisioning, explicit attack or
+  remediation mutations, regional host defaults, reboot persistence, correct
+  privileged actor/session ownership, and cross-source ordering.
