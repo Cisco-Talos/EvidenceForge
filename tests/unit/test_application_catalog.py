@@ -48,6 +48,17 @@ class TestCatalogLoading:
             "windows",
         )
 
+    def test_long_lived_desktop_apps_are_singleton_per_session(self):
+        images = (
+            r"C:\Users\sophia.martinez\AppData\Local\slack\Slack.exe",
+            r"C:\Users\sophia.martinez\AppData\Roaming\Zoom\bin\Zoom.exe",
+            r"C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe",
+            r"C:\Users\sophia.martinez\AppData\Local\Microsoft\Teams\current\Teams.exe",
+            r"C:\Users\sophia.martinez\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+        )
+
+        assert all(is_singleton_application_image(image, "windows") for image in images)
+
     def test_incompatible_remote_access_app_is_rejected_for_deployment(self):
         assert is_deployment_compatible_application("vpnui.exe", "windows", "meridianhcs.local")
         assert not is_deployment_compatible_application(

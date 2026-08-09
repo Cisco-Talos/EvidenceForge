@@ -515,7 +515,15 @@ def is_singleton_application_image(image_path: str, os_category: str) -> bool:
         if not platform:
             continue
         candidate = str(platform.get("image_path") or "").replace("/", "\\").lower()
-        if candidate == normalized:
+        matches = candidate == normalized
+        if "{username}" in candidate:
+            prefix, suffix = candidate.split("{username}", 1)
+            matches = (
+                normalized.startswith(prefix)
+                and normalized.endswith(suffix)
+                and len(normalized) > len(prefix) + len(suffix)
+            )
+        if matches:
             return bool(app.get("singleton_per_session"))
     return False
 

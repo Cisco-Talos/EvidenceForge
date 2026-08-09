@@ -143,3 +143,40 @@ or a synthetic-confidence spread above 30 points.
   occurrences, stable reused LUID semantics, 4624-before-4672 ordering after
   source delay, source-native submillisecond spacing, and standalone explicit
   4672 storyline events.
+
+## Loop 28 Outcome
+
+- **Commit:** `5c7786d6 fix: bind privilege events to logon occurrences`.
+- **Verification:** 459 focused endpoint/emitter tests passed; final full suite
+  passed with 5,107 tests and 41 skips; Ruff lint and format checks passed.
+- **Generation and eval:** 84,268 records; automated score
+  96.25815833259675, PASS across every hard gate.
+- **Hard probe:** 1,080 Event 4624 rows and 379 Event 4672 rows; zero same-LUID
+  excess 4672 companions without an intervening 4624.
+- **Blind panel:** initial scores 11/30/17/42, average 25.0, all Real.
+  Deliberation triggered only because the spread was 31 points and confirmed
+  Real unanimously at 25.5 with final scores 14/29/20/39.
+- **Target result:** Windows duplicate checks were clean and no reviewer repeated
+  the prior privilege-companion cluster or record-ID timing finding.
+- **Highest next root contract:** durable per-principal/session bootstrap
+  ownership for long-lived desktop applications.
+
+## Loop 29 Family Contract
+
+- **Selected family:** long-lived desktop application bootstrap ownership and
+  lifecycle reuse.
+- **Finding classification:** `existing_family_sibling` beyond endpoint-control
+  UIs.
+- **Owning abstraction:** application-catalog lifecycle metadata and atomic
+  per-principal/session singleton planning.
+- **Invariant:** Google Drive, Slack, Zoom, Teams, VPN UIs, and comparable
+  long-lived desktop applications have one bootstrap owner per host, principal,
+  and logon session; later activity reuses the live instance, emits a legitimate
+  child, or follows an observed terminate/restart transition.
+- **Entry paths:** session startup, persona application sampling, network-process
+  ownership, spawn rules, and catalog-driven background activity.
+- **Consumers:** eCAR PROCESS lifecycle, Security 4688/4689, Sysmon Event 1/5,
+  module loads, network attribution, and host forensic timelines.
+- **Sibling risks:** preserve explicit multi-process helper architectures,
+  separate user sessions, crash/restart behavior, updater children, storyline
+  process intent, and atomic planning under parallel generation.
