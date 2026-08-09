@@ -322,3 +322,42 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** do not double count application rows, preserve cache/deny
   semantics, keep raw-event compatibility, and avoid inventing origin totals
   when the canonical transport does not expose them.
+
+## Loop 33 Outcome
+
+- **Commits:** `76421d75 fix: clarify proxy tunnel accounting`, `1f9e4f5d
+  fix: annotate authored proxy tunnels`, `1f854be8 fix: omit unavailable proxy
+  tunnel totals`, and `998d9942 fix: define proxy tunnel accounting fields`.
+- **Verification:** 67 focused proxy/parser tests passed with 11 skips; config
+  validation found zero issues across 87 files; full suite passed with 5,120
+  tests and 41 skips; Ruff checks passed.
+- **Generation and eval:** 83,526 records; automated score
+  96.11941703495413, PASS across every hard gate.
+- **Hard probe:** all 806 CONNECT rows declared control-message byte scope; 803
+  exposed canonical tunnel totals/duration and three omitted unavailable totals.
+- **Blind panel:** initial Real 3-1 at 23/29/12/92. Mandatory disagreement and
+  80-point-spread deliberation ended Synthetic 4-0 at 80/79/64/94, average
+  79.25.
+- **Target result:** successful tunnel accounting correlated tightly, but failed
+  terminal-state gating remained a narrower sibling gap.
+- **Highest next root contract:** durable, causally triggered Linux daemon state
+  telemetry, selected unanimously in deliberation.
+
+## Loop 34 Family Contract
+
+- **Selected family:** Linux daemon health and state-transition telemetry,
+  beginning with rsyslog.
+- **Finding classification:** `new_family` causal state defect.
+- **Owning abstraction:** durable per-host daemon state plus explicit
+  service/configuration mutation consequences.
+- **Invariant:** reload, socket reacquisition, worker reconfiguration, and retry
+  recovery messages require an owning state transition; ambient health rows may
+  report only durable queue/checkpoint state and must evolve monotonically or by
+  bounded stateful updates.
+- **Entry paths:** ambient extra-syslog generation, service commands, config-file
+  mutations, package/config management, SIGHUP, restart, and forwarding errors.
+- **Consumers:** Linux syslog timelines, eCAR process/configuration evidence,
+  shell history, SIEM daemon-health detections, and host forensics.
+- **Sibling risks:** preserve daemon PID continuity, legitimate startup/reload
+  evidence, role-aware services, bounded queue variation, deterministic output,
+  and avoid fixed per-host caps as a new distribution fingerprint.
