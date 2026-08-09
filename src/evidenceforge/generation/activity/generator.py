@@ -4173,9 +4173,11 @@ class ActivityGenerator:
         self._failed_logon_attempt_times: dict[tuple[str, str, int, str], list[datetime]] = {}
         self._failed_logon_attempt_lock = Lock()
         self._software_deployment_key = "default"
+        self._scenario_end_time = datetime.max.replace(tzinfo=UTC)
         self._singleton_application_intervals: dict[
             tuple[str, str, str, str], list[tuple[datetime, datetime]]
         ] = {}
+        self._singleton_application_lock = Lock()
         self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
         self._visible_account_created_at: dict[str, datetime] = {}
         self._visible_account_kerberos_transport_emitted: set[tuple[str, str, str]] = set()
@@ -11091,6 +11093,51 @@ class ActivityGenerator:
                 adjusted_time = previous + min_gap
         self._last_browser_launch_by_session[key] = adjusted_time
         return adjusted_time
+
+    @staticmethod
+    def _singleton_application_key(
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+    ) -> tuple[str, str, str, str]:
+        """Return the durable identity for one session-scoped singleton app."""
+        return (
+            system.hostname,
+            username.lower(),
+            logon_id,
+            process_name.replace("/", "\\").lower(),
+        )
+
+    def claim_singleton_application_interval(
+        self,
+        key: tuple[str, str, str, str],
+        start: datetime,
+        provisional_end: datetime,
+    ) -> bool:
+        """Atomically reserve a singleton interval unless it overlaps an owner."""
+        with self._singleton_application_lock:
+            intervals = self._singleton_application_intervals.setdefault(key, [])
+            if any(
+                existing_start <= start < existing_end for existing_start, existing_end in intervals
+            ):
+                return False
+            intervals.append((start, provisional_end))
+            return True
+
+    def update_singleton_application_end(
+        self,
+        key: tuple[str, str, str, str],
+        start: datetime,
+        end: datetime,
+    ) -> None:
+        """Replace a provisional singleton end after lifecycle planning."""
+        with self._singleton_application_lock:
+            intervals = self._singleton_application_intervals.get(key, [])
+            for index, (existing_start, _existing_end) in enumerate(intervals):
+                if existing_start == start:
+                    intervals[index] = (start, end)
+                    return
 
     @staticmethod
     def _linux_process_is_system_background_helper(process_name: str, command_line: str) -> bool:
@@ -20336,17 +20383,18 @@ class ActivityGenerator:
                     singleton_key: tuple[str, str, str, str] | None = None
                     if is_singleton_application_image(process_name, os_category):
                         normalized_image = process_name.replace("/", "\\").lower()
-                        singleton_key = (
-                            system.hostname,
-                            user.username.lower(),
+                        singleton_key = self._singleton_application_key(
+                            system,
+                            user.username,
                             logon_id,
                             normalized_image,
                         )
-                        if any(
-                            start <= time < end
-                            for start, end in self._singleton_application_intervals.get(
-                                singleton_key, []
-                            )
+                        provisional_end = (
+                            self.state_manager.get_session_end_time(logon_id)
+                            or self._scenario_end_time
+                        )
+                        if not self.claim_singleton_application_interval(
+                            singleton_key, time, provisional_end
                         ):
                             return
                         existing = next(
@@ -20530,9 +20578,9 @@ class ActivityGenerator:
                                 )
                             )
                             if singleton_key is not None:
-                                self._singleton_application_intervals.setdefault(
-                                    singleton_key, []
-                                ).append((process_time, termination_time))
+                                self.update_singleton_application_end(
+                                    singleton_key, process_time, termination_time
+                                )
                     elif os_category == "linux":
                         self._emit_bash_command_event(
                             user,

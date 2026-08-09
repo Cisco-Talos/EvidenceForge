@@ -1092,6 +1092,7 @@ class WorldPlanner:
             has_catalog_entry,
             is_deployment_compatible_application,
             is_persona_allowed,
+            is_singleton_application_image,
             is_system_type_allowed,
             load_catalog,
             resolve_image_path,
@@ -1146,6 +1147,15 @@ class WorldPlanner:
             target_exe = rng.choice(os_exes)
         image = resolve_image_path(target_exe, os_cat, username=user.username)
 
+        singleton_key = None
+        if is_singleton_application_image(image, os_cat):
+            singleton_key = self.activity_generator._singleton_application_key(
+                system,
+                user.username,
+                session.logon_id,
+                image,
+            )
+
         # Build a realistic command line from the catalog template when
         # available, instead of emitting the bare executable name.
         command_line = target_exe
@@ -1173,6 +1183,17 @@ class WorldPlanner:
         min_proc_time = session.start_time + timedelta(milliseconds=100)
         if proc_time < min_proc_time:
             proc_time = min_proc_time
+        if singleton_key is not None:
+            interval_end = (
+                self.state_manager.get_session_end_time(session.logon_id)
+                or self.activity_generator._scenario_end_time
+            )
+            if not self.activity_generator.claim_singleton_application_interval(
+                singleton_key,
+                proc_time,
+                interval_end,
+            ):
+                return -1
         self.state_manager.set_current_time(proc_time)
         parent_pid = self.activity_generator._resolve_parent(
             system, user, proc_time, session.logon_id, image
