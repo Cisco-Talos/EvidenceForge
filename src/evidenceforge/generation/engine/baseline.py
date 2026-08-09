@@ -639,14 +639,14 @@ def _extra_syslog_effective_limit(
 ) -> int:
     """Return a stable host-conditioned admission limit for ambient syslog.
 
-    Most program limits are literal safety caps. Ambient sudo and unattended
-    upgrades are different: if every busy host saturates the same cap, the cap
-    becomes a fleet-wide count fingerprint. Sample stable host/day targets
-    beneath their configured ceilings.
+    Most program limits are literal safety caps. Ambient sudo, rsyslog health,
+    and unattended upgrades are different: if every busy host saturates the
+    same cap, the cap becomes a fleet-wide count fingerprint. Sample stable
+    host/day targets beneath their configured ceilings.
     """
     configured_limit = int(entry.get("max_per_host_window", 0) or 0)
     app = entry.get("app")
-    if configured_limit <= 0 or app not in {"sudo", "unattended-upgr"}:
+    if configured_limit <= 0 or app not in {"sudo", "rsyslogd", "unattended-upgr"}:
         return configured_limit
 
     normalized_start = ensure_utc(window_start)
@@ -661,6 +661,9 @@ def _extra_syslog_effective_limit(
     if app == "unattended-upgr":
         zero_probability = 0.12 if system_type == "server" else 0.45
         median_fraction = 0.38 if system_type == "server" else 0.20
+    elif app == "rsyslogd":
+        zero_probability = 0.02 if system_type == "server" else 0.08
+        median_fraction = 0.72 if system_type == "server" else 0.48
     else:
         zero_probability = 0.04 if system_type == "server" else 0.14
         median_fraction = 0.52 if system_type == "server" else 0.30
