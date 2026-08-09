@@ -53,12 +53,32 @@ fields:
   - name: sc_bytes
     type: integer
     required: false
-    description: "Server to client bytes"
+    description: "Server to client transaction bytes; CONNECT rows contain only setup response bytes"
 
   - name: cs_bytes
     type: integer
     required: false
-    description: "Client to server bytes"
+    description: "Client to server transaction bytes; CONNECT rows contain only setup request bytes"
+
+  - name: byte_scope
+    type: string
+    required: false
+    description: "Accounting scope; CONNECT setup rows use connect-control-message"
+
+  - name: tunnel_cs_bytes
+    type: integer
+    required: false
+    description: "Canonical client-to-proxy tunnel bytes when transport accounting is available"
+
+  - name: tunnel_sc_bytes
+    type: integer
+    required: false
+    description: "Canonical proxy-to-client tunnel bytes when transport accounting is available"
+
+  - name: tunnel_duration_ms
+    type: integer
+    required: false
+    description: "Canonical client-to-proxy tunnel duration in milliseconds when available"
 
   - name: time_taken
     type: integer
