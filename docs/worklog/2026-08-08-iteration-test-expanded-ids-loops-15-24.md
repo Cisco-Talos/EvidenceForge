@@ -328,3 +328,17 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** preserve UID reuse, byte budgets, connection deadlines,
   source-port identity, request/file containment, proxy legs, sensor clocks,
   observation loss, and deterministic generation.
+
+## Loop 24 Outcome
+
+- Commits `8f1593f3`, `9dc294ad`, and `481f0ed8`; the exact final
+  implementation passed 5,097 tests with 41 skips; Ruff passed.
+- Population probe across 2,188 HTTP rows and 78 multi-transaction sensor views
+  found zero depth inversions, zero gaps, and zero rows outside parent intervals.
+- Automated evaluation passed at 96.47758076735246 over 83,527 records, with
+  221/221 IDS integrity checks passing.
+- Initial blind scores were 15/64/26/24, average 32.25. Deliberation ended Real
+  by a 3-1 vote at 31.5, final scores 23/58/18/27.
+- Highest-impact remaining family after the ten-loop run: Windows
+  authentication-attempt identity, deduplication, cadence, and mechanism-native
+  Event 4625 initiator semantics.
