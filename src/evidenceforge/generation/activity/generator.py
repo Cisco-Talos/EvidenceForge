@@ -1878,6 +1878,8 @@ def _windows_foreground_lifetime(
         return None
     if exe_name in {"curl.exe", "curl", "wget.exe", "wget"}:
         return (0.8, 12.0)
+    if exe_name == "service-healthcheck.exe":
+        return (2.0, 45.0)
     if exe_name in {
         "whoami.exe",
         "hostname.exe",
@@ -6226,7 +6228,12 @@ class ActivityGenerator:
         """Bound a one-shot system connection owner and its package frontend."""
         if not self._connection_owner_is_one_shot_network_client(image, command_line):
             return
-        lifetime = _linux_foreground_lifetime(image, command_line)
+        os_category = _get_os_category(source_system.os)
+        lifetime = (
+            _windows_foreground_lifetime(image, command_line)
+            if os_category == "windows"
+            else _linux_foreground_lifetime(image, command_line)
+        )
         if lifetime is None:
             return
         running = self.state_manager.get_process(source_system.hostname, pid)

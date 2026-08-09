@@ -600,6 +600,77 @@ def test_non_sudo_extra_syslog_limits_remain_literal(linux_system):
     )
 
 
+def test_unattended_upgrade_limits_are_host_conditioned(linux_system):
+    """Unattended-upgrade caps must not become identical fleet-wide quotas."""
+    entry = {
+        "app": "unattended-upgr",
+        "messages": ["Checking", "No packages"],
+        "max_per_host_window": 8,
+    }
+    window_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    systems = [
+        linux_system.model_copy(
+            update={
+                "hostname": f"LINUX-UPGRADE-{index:02d}",
+                "type": "server",
+                "roles": ["web_server"] if index % 2 else ["mail_server"],
+            }
+        )
+        for index in range(16)
+    ]
+
+    first = [_extra_syslog_effective_limit(system, entry, window_start) for system in systems]
+    second = [_extra_syslog_effective_limit(system, entry, window_start) for system in systems]
+
+    assert first == second
+    assert all(0 <= count <= 8 for count in first)
+    assert len(set(first)) >= 3
+    assert sum(count == 8 for count in first) <= 2
+
+
+def test_package_maintenance_uses_one_refresh_window_per_host(linux_system):
+    """Successful repository traffic clusters once instead of restarting minutes later."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    first = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "security.ubuntu.com",
+        first,
+    )
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "archive.ubuntu.com",
+        first + timedelta(minutes=2),
+    )
+    assert not engine._package_maintenance_connection_allowed(
+        linux_system,
+        "security.ubuntu.com",
+        first + timedelta(minutes=6),
+    )
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "security.ubuntu.com",
+        first + timedelta(hours=12),
+    )
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "api.github.com",
+        first + timedelta(minutes=7),
+    )
+
+
+def test_ambient_registry_noise_emits_only_state_changes():
+    """Repeated writes of an unchanged ambient value are suppressed."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    target = r"HKLM\SOFTWARE\Policies\Example\Enabled"
+
+    assert engine._ambient_registry_write_changes_state("WS-01", target, "DWORD (0x1)")
+    assert not engine._ambient_registry_write_changes_state("WS-01", target, "DWORD (0x1)")
+    assert engine._ambient_registry_write_changes_state("WS-01", target, "DWORD (0x0)")
+    assert engine._ambient_registry_write_changes_state("WS-02", target, "DWORD (0x1)")
+
+
 def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     """Anacron syslog should be a coherent daily run, not random repeated fragments."""
     engine = type("FakeEngine", (object,), {})()

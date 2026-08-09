@@ -126,3 +126,40 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** preserve legitimate missing rows without changing later depth
   order, retain absolute sensor clock texture, keep rows inside connection bounds,
   and avoid forcing identical UIDs or timestamps across independent sensors.
+
+## Loop 18 Outcome
+
+- Commit `04eb354c`; full suite 5,084 passed and 41 skipped; Ruff passed.
+- Automated evaluation passed at 96.13584007989348 over 89,215 records with
+  exact IDS integrity at 233/233.
+- Hard probe: zero cross-sensor request-order mismatches across 38 paired
+  multi-transaction streams; all 38 retained sensor-specific timestamps. One
+  same-stream depth inversion survived on a lossy flow because canonical
+  connection-start jitter can still reorder requests before sensor projection.
+- Initial blind scores were 28/73/68/93, average 65.5. Deliberation removed a
+  factually incorrect Linux-syslog absence claim and ended unanimously Synthetic
+  at average 73.75.
+- Highest-impact next family: fleet maintenance and management-agent lifecycle
+  modeling, independently identified by threat, detection, and host reviewers.
+
+## Loop 19 Family Contract
+
+- **Selected family:** stateful fleet maintenance and management-agent lifecycle.
+- **Finding classification:** `new_family` distribution texture and contract gaps.
+- **Owning abstractions:** baseline maintenance scheduling, canonical system
+  process/action lifecycles, role-aware registry state, and data-driven job profiles.
+- **Invariant:** successful package refreshes suppress immediate repeats; retries
+  require a modeled failure or lock. Group Policy, registry updates, and health
+  checks must be owned by a recognizable timer/task/service/agent and change
+  state only when appropriate for the host role.
+- **Entry paths:** Linux APT timers and unattended-upgrades, Windows Group Policy
+  refresh, scheduled health checks, service workers, and baseline registry noise.
+- **Consumers:** eCAR process/file/registry records, Windows Security and Sysmon,
+  Linux syslog, network/proxy evidence, evaluator probes, and endpoint/detection
+  blind review.
+- **Layer rationale:** fleet cadence, product ownership, retry state, and role
+  selection are generation/planning truth. Emitters should render those facts,
+  not independently invent or suppress repeated activity.
+- **Sibling risks:** retain legitimate failure-driven retries, serialize package
+  managers, preserve source-local observation loss, avoid removing useful
+  maintenance diversity, and keep existing process/session lifecycle invariants.

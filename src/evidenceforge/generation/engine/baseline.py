@@ -639,13 +639,14 @@ def _extra_syslog_effective_limit(
 ) -> int:
     """Return a stable host-conditioned admission limit for ambient syslog.
 
-    Most program limits are literal safety caps. Ambient sudo is different: if
-    every busy host saturates the same cap, the cap becomes a fleet-wide count
-    fingerprint. Sample a zero-capable, right-skewed host/day target beneath the
-    configured ceiling while leaving all other program limits unchanged.
+    Most program limits are literal safety caps. Ambient sudo and unattended
+    upgrades are different: if every busy host saturates the same cap, the cap
+    becomes a fleet-wide count fingerprint. Sample stable host/day targets
+    beneath their configured ceilings.
     """
     configured_limit = int(entry.get("max_per_host_window", 0) or 0)
-    if configured_limit <= 0 or entry.get("app") != "sudo":
+    app = entry.get("app")
+    if configured_limit <= 0 or app not in {"sudo", "unattended-upgr"}:
         return configured_limit
 
     normalized_start = ensure_utc(window_start)
@@ -653,15 +654,19 @@ def _extra_syslog_effective_limit(
     roles = ",".join(sorted(str(role).lower() for role in (system.roles or [])))
     target_rng = random.Random(
         _stable_seed(
-            "extra_syslog_sudo_target:"
+            f"extra_syslog_{app}_target:"
             f"{system.hostname}:{system_type}:{roles}:{normalized_start.date().isoformat()}"
         )
     )
-    zero_probability = 0.04 if system_type == "server" else 0.14
+    if app == "unattended-upgr":
+        zero_probability = 0.12 if system_type == "server" else 0.45
+        median_fraction = 0.38 if system_type == "server" else 0.20
+    else:
+        zero_probability = 0.04 if system_type == "server" else 0.14
+        median_fraction = 0.52 if system_type == "server" else 0.30
     if target_rng.random() < zero_probability:
         return 0
 
-    median_fraction = 0.52 if system_type == "server" else 0.30
     role_factor = min(1.22, 1.0 + (0.035 * len(system.roles or [])))
     sampled_fraction = target_rng.lognormvariate(math.log(median_fraction), 0.48)
     target = round(configured_limit * sampled_fraction * role_factor)
@@ -2621,6 +2626,14 @@ class BaselineMixin:
                 if reg_proc.start_time and reg_ts <= reg_proc.start_time:
                     reg_ts = reg_proc.start_time + timedelta(milliseconds=1)
             target = f"{key}\\{value_name}"
+            value = _materialize_registry_value_for_time(target, details, reg_ts, rng)
+            if not BaselineMixin._ambient_registry_write_changes_state(
+                self,
+                system.hostname,
+                target,
+                value,
+            ):
+                continue
             self.activity_generator.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=reg_ts,
@@ -2642,7 +2655,7 @@ class BaselineMixin:
                     ),
                     registry=RegistryContext(
                         key=target,
-                        value=_materialize_registry_value_for_time(target, details, reg_ts, rng),
+                        value=value,
                         action="modify",
                         pid=reg_pid,
                     ),
@@ -6599,7 +6612,25 @@ class BaselineMixin:
         hour_end = current_hour + timedelta(hours=1)
 
         for idx in range(count):
-            process = rng.choice(processes)
+            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            eligible_processes = [
+                process
+                for process in processes
+                if process.start_time <= ts
+                and not self.activity_generator._foreground_process_expired_for_attribution(
+                    system,
+                    process,
+                    ts,
+                )
+                and not self.activity_generator._process_termination_recorded(
+                    system.hostname,
+                    process.pid,
+                    process.start_time,
+                )
+            ]
+            if not eligible_processes:
+                continue
+            process = rng.choice(eligible_processes)
             process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
             if is_service_account(os_cat, process_username):
                 username = process_username
@@ -6629,7 +6660,6 @@ class BaselineMixin:
                 continue
             file_action, file_path = file_effect
 
-            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
             if process.start_time and ts <= process.start_time:
                 ts = process.start_time + timedelta(milliseconds=rng.randint(5, 750))
             if ts >= hour_end:
@@ -6749,6 +6779,8 @@ class BaselineMixin:
                     continue
                 offset = _burst_offset()
                 ts = current_hour + timedelta(seconds=offset)
+                if not self._package_maintenance_connection_allowed(system, hostname, ts):
+                    continue
                 self.state_manager.set_current_time(ts)
                 # Resolve initiating PID from the system process that handles this service
                 _SERVICE_TO_PID_KEY = {
@@ -7236,6 +7268,8 @@ class BaselineMixin:
                     continue
                 ts = paced_ts
                 if not _session_active_at(session, ts, current_hour, planned_logoffs):
+                    continue
+                if not self._package_maintenance_connection_allowed(system, hostname, ts):
                     continue
 
                 persona_pid = -1
@@ -7939,6 +7973,13 @@ class BaselineMixin:
                         _reg_ts,
                         rng,
                     )
+                    if not BaselineMixin._ambient_registry_write_changes_state(
+                        self,
+                        system.hostname,
+                        _target,
+                        _details,
+                    ):
+                        continue
                     # Sysmon value writes are Event 13. Event 12 is reserved for key-only
                     # create/delete contexts, not the value-name pools used here.
                     _reg_action = "modify"
@@ -8058,8 +8099,8 @@ class BaselineMixin:
 
             # GPO application: periodic SYSTEM credential usage to DC
             if os_cat == "windows" and system.type == "workstation":
-                gpo_phase = _stable_seed(f"gpo_phase_{system.hostname}") % 4
-                if (current_hour.hour + gpo_phase) % 3 == 0:
+                gpo_phase = _stable_seed(f"gpo_phase_{system.hostname}") % 8
+                if (current_hour.hour + gpo_phase) % 8 == 0:
                     dcs = [
                         s
                         for s in self.scenario.environment.systems
@@ -8071,7 +8112,7 @@ class BaselineMixin:
                         # Group Policy refresh runs as SYSTEM but does not normally
                         # create a 4648 explicit-credential audit for SYSTEM->SYSTEM.
                         gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
-                        gpupdate_command = r"gpupdate.exe /target:computer /force"
+                        gpupdate_command = r"gpupdate.exe /target:computer"
                         parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                         gpupdate_pid = self.activity_generator.generate_system_process(
                             system=system,
@@ -10045,3 +10086,53 @@ class BaselineMixin:
         if assigned:
             return assigned[0]
         return rng.choice(workstations) if workstations else None
+
+    def _package_maintenance_connection_allowed(
+        self,
+        system: System,
+        hostname: str | None,
+        timestamp: datetime,
+    ) -> bool:
+        """Admit package-repository traffic only inside one stateful refresh window."""
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            is_package_manager_destination,
+        )
+
+        if not is_package_manager_destination(system, hostname):
+            return True
+
+        state = getattr(self, "_package_maintenance_windows", None)
+        if state is None:
+            state = {}
+            self._package_maintenance_windows = state
+        current = ensure_utc(timestamp)
+        active = state.get(system.hostname)
+        if active is None:
+            state[system.hostname] = (current, current + timedelta(minutes=4))
+            return True
+
+        window_start, window_end = active
+        if window_start - timedelta(minutes=4) <= current <= window_end:
+            state[system.hostname] = (min(window_start, current), max(window_end, current))
+            return True
+        if current >= window_start + timedelta(hours=12):
+            state[system.hostname] = (current, current + timedelta(minutes=4))
+            return True
+        return False
+
+    def _ambient_registry_write_changes_state(
+        self,
+        system_hostname: str,
+        target: str,
+        value: str,
+    ) -> bool:
+        """Record an ambient registry value only when the modeled state changes."""
+        state = getattr(self, "_ambient_registry_state", None)
+        if state is None:
+            state = {}
+            self._ambient_registry_state = state
+        key = (system_hostname, target.lower())
+        if state.get(key) == value:
+            return False
+        state[key] = value
+        return True

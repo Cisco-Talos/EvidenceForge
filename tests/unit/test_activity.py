@@ -4857,6 +4857,34 @@ class TestActivityGenerator:
             command_line,
         )
 
+    def test_windows_healthcheck_connection_owner_has_bounded_lifecycle(
+        self, activity_gen, state_manager, test_system
+    ):
+        """One-shot Windows health checks terminate instead of lingering for hours."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
+        command_line = f'"{image}" --target "gateway.zscaler.net"'
+        state_manager.set_current_time(timestamp)
+
+        pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=test_system,
+            time=timestamp,
+            key="service_healthcheck:gateway.zscaler.net",
+            image=image,
+            command_line=command_line,
+            username="SYSTEM",
+        )
+        process = state_manager.get_process(test_system.hostname, pid)
+        assert process is not None
+
+        activity_gen.finalize_foreground_process_lifetimes(timestamp + timedelta(minutes=5))
+
+        assert activity_gen._process_termination_recorded(
+            test_system.hostname,
+            pid,
+            process.start_time,
+        )
+
     @pytest.mark.parametrize("method", ["http", "https"])
     def test_apt_method_connection_owner_has_frontend_parent(
         self, activity_gen, state_manager, method
