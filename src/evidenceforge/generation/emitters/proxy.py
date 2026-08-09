@@ -103,26 +103,39 @@ def _proxy_action(px: Any, *, setup: bool = False) -> str:
     return "forward"
 
 
-def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | datetime]:
+def _connect_setup_fields(
+    px: Any,
+    net: Any,
+    request_time: datetime,
+) -> dict[str, int | str | datetime]:
     """Return action-planned CONNECT setup fields, with raw-event compatibility."""
 
     transaction = getattr(px, "transaction", None)
     if transaction is not None and transaction.tunnel_request_at is not None:
-        return {
+        fields: dict[str, int | str | datetime] = {
             "timestamp": transaction.tunnel_request_at,
             "sc_bytes": transaction.tunnel_setup_sc_bytes,
             "cs_bytes": transaction.tunnel_setup_cs_bytes,
             "time_taken": transaction.tunnel_setup_time_taken_ms,
         }
-    seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
-    rng = random.Random(seed)
-    host_len = len(str(px.host or ""))
-    return {
-        "timestamp": request_time,
-        "sc_bytes": rng.randint(90, 260),
-        "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
-        "time_taken": rng.randint(20, 450),
-    }
+    else:
+        seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
+        rng = random.Random(seed)
+        host_len = len(str(px.host or ""))
+        fields = {
+            "timestamp": request_time,
+            "sc_bytes": rng.randint(90, 260),
+            "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
+            "time_taken": rng.randint(20, 450),
+        }
+
+    fields["byte_scope"] = "connect-control-message"
+    if net is not None:
+        fields["tunnel_cs_bytes"] = max(0, int(net.orig_bytes or 0))
+        fields["tunnel_sc_bytes"] = max(0, int(net.resp_bytes or 0))
+        if net.duration is not None:
+            fields["tunnel_duration_ms"] = max(0, round(float(net.duration) * 1000))
+    return fields
 
 
 def _splunk_json_timestamp(value: datetime | str | None) -> str:
@@ -237,6 +250,13 @@ def _proxy_metadata(event_data: dict[str, Any]) -> str:
     ssl_bump = _ssl_bump_action(event_data)
     if ssl_bump:
         parts.append(f"ssl_bump={ssl_bump}")
+    byte_scope = str(event_data.get("byte_scope") or "")
+    if byte_scope:
+        parts.append(f"byte_scope={byte_scope}")
+    for key in ("tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
+        value = event_data.get(key)
+        if value not in {None, ""}:
+            parts.append(f"{key}={_int_value(value, 0)}")
     return " ".join(parts)
 
 
@@ -328,7 +348,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                     needs_connect = False
 
             if needs_connect:
-                setup = _connect_setup_fields(px, request_time)
+                setup = _connect_setup_fields(px, net, request_time)
                 connect_data = {
                     "timestamp": setup["timestamp"],
                     "client_ip": px.client_ip,
@@ -348,6 +368,10 @@ class ProxyEmitter(HostMultiplexEmitter):
                     "cache_result": "NONE",
                     "referrer": None,
                     "proxy_action": _proxy_action(px, setup=True),
+                    "byte_scope": setup["byte_scope"],
+                    "tunnel_cs_bytes": setup.get("tunnel_cs_bytes"),
+                    "tunnel_sc_bytes": setup.get("tunnel_sc_bytes"),
+                    "tunnel_duration_ms": setup.get("tunnel_duration_ms"),
                     "_host_fqdn": px.proxy_fqdn,
                 }
                 self._dispatch(connect_data)
@@ -450,4 +474,8 @@ class ProxyEmitter(HostMultiplexEmitter):
         content_type = event_data.get("content_type")
         if content_type:
             record["http_content_type"] = str(content_type)
+        for key in ("byte_scope", "tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
+            value = event_data.get(key)
+            if value not in {None, ""}:
+                record[key] = value
         return json.dumps(record, sort_keys=True, separators=(",", ":"))

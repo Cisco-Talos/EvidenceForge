@@ -536,6 +536,9 @@ class TestProxyActionSemantics:
                 dst_ip="93.184.216.34",
                 dst_port=443,
                 protocol="tcp",
+                orig_bytes=12_345,
+                resp_bytes=67_890,
+                duration=4.25,
             ),
             proxy=ProxyContext(
                 client_ip="10.0.10.50",
@@ -570,6 +573,10 @@ class TestProxyActionSemantics:
         assert connect["uri_path"] == "/"
         assert connect["proxy_action"] == "tunnel-setup"
         assert connect["ssl_bump_action"] == "peek"
+        assert connect["byte_scope"] == "connect-control-message"
+        assert connect["tunnel_cs_bytes"] == 12_345
+        assert connect["tunnel_sc_bytes"] == 67_890
+        assert connect["tunnel_duration_ms"] == 4_250
         assert inspected["http_method"] == "GET"
         assert inspected["user"] == r"NORTHSTAR-BRANCH\alice"
         assert inspected["uri_path"] == "/page"
@@ -614,6 +621,9 @@ class TestProxyActionSemantics:
                 dst_ip="10.0.20.10",
                 dst_port=8080,
                 protocol="tcp",
+                orig_bytes=8_192,
+                resp_bytes=131_072,
+                duration=2.5,
             ),
             proxy=ProxyContext(
                 client_ip="10.0.10.50",
@@ -642,6 +652,10 @@ class TestProxyActionSemantics:
         assert connect_fields["sc_bytes"] < inspected_fields["sc_bytes"]
         assert connect_fields["proxy_action"] == "tunnel-setup"
         assert connect_fields["ssl_bump_action"] == "peek"
+        assert connect_fields["byte_scope"] == "connect-control-message"
+        assert connect_fields["tunnel_cs_bytes"] == 8192
+        assert connect_fields["tunnel_sc_bytes"] == 131072
+        assert connect_fields["tunnel_duration_ms"] == 2500
         assert inspected_fields["proxy_action"] == "ssl-inspect"
         assert inspected_fields["ssl_bump_action"] == "bump"
 
