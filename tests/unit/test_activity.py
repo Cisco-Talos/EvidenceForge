@@ -9090,6 +9090,60 @@ class TestActivityGenerator:
         assert second_event.network.application_layer_only is True
         assert second_event.http.trans_depth == 2
 
+    def test_generate_connection_orders_reused_http_transactions_by_depth(self, state_manager):
+        """Persistent request timestamps should advance with assigned transaction depth."""
+
+        class CollectorEmitter:
+            def __init__(self):
+                self.events = []
+
+            def can_handle(self, event):
+                return event.event_type == "connection" and event.http is not None
+
+            def emit(self, event):
+                self.events.append(event)
+
+        http_emitter = CollectorEmitter()
+        emitters = {"zeek_http": http_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        generator = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        def emit_request(offset_ms, trans_depth, uri):
+            return generator.generate_connection(
+                "10.0.0.1",
+                "93.184.216.34",
+                timestamp + timedelta(milliseconds=offset_ms),
+                dst_port=80,
+                proto="tcp",
+                service="http",
+                duration=4.0 if trans_depth == 1 else 0.2,
+                orig_bytes=1_000,
+                resp_bytes=10_000,
+                conn_state="SF",
+                http=HttpContext(
+                    method="GET",
+                    host="portal.example.com",
+                    uri=uri,
+                    user_agent="Mozilla/5.0",
+                    response_body_len=1_000,
+                    flow_response_body_len=10_000 if trans_depth == 1 else None,
+                    trans_depth=trans_depth,
+                ),
+                emit_dns=False,
+            )
+
+        first_uid = emit_request(0, 1, "/")
+        second_uid = emit_request(700, 2, "/asset-a.js")
+        third_uid = emit_request(500, 3, "/asset-b.js")
+
+        assert first_uid == second_uid == third_uid
+        assert [event.http.trans_depth for event in http_emitter.events] == [1, 2, 3]
+        request_times = [event.http.canonical_request_time for event in http_emitter.events]
+        assert request_times == sorted(request_times)
+        assert request_times[2] > request_times[1]
+
     def test_generate_connection_derives_plain_http_bytes_from_http_context(
         self, activity_gen, state_manager, mock_emitters
     ):

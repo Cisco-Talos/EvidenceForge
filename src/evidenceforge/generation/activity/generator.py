@@ -326,9 +326,11 @@ class _HttpPersistentConnection:
     resp_budget: int
     used_orig: int
     used_resp: int
+    last_request_time: datetime
 
 
 _HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
+_HTTP_PERSISTENT_TRANSACTION_GAP = timedelta(microseconds=1)
 _RECENT_CONNECTION_REUSE_WINDOW_SECONDS = 86_400.0
 
 

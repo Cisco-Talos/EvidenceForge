@@ -294,3 +294,37 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** preserve one-shot explicit health commands, Linux owners,
   Go/Meridian monitoring user agents, CryptoAPI/Windows Update identities,
   stable proxy ownership, and non-overlapping process lifetimes.
+
+## Loop 23 Outcome
+
+- Commit `2a205e0b`; full suite 5,095 passed and 41 skipped; Ruff passed.
+- The prior Windows ServiceHealth pattern collapsed from 134 short workers to
+  18 flows owned by one durable DC process, with zero target-bearing commands
+  and zero overlapping workers in the collection.
+- Automated evaluation passed at 96.47688957444862 over 83,522 records, with
+  221/221 IDS integrity checks passing.
+- Initial blind scores were 16/64/73/94, average 61.75. Deliberation ended
+  unanimously Synthetic at 86.0, final scores 84/83/87/90.
+- Decisive next defect: two no-loss HTTP streams render request depths `1,3,2`
+  on the DMZ sensor and repeat the same inversion on the core sensor.
+
+## Loop 24 Family Contract
+
+- **Selected family:** HTTP/1.x persistent-connection transaction lifecycle.
+- **Finding classification:** `regression` hard causal contradiction; Loop 18
+  fixed emitter-local ordering but cross-action connection reuse can still
+  assign a later depth to an earlier canonical request time.
+- **Owning abstraction:** canonical HTTP persistent-connection state in the
+  network transaction planner.
+- **Invariant:** on one persistent TCP connection, canonical request time is
+  strictly monotonic with assigned `trans_depth`; a request that cannot fit the
+  remaining ordered interval starts a new connection at depth 1.
+- **Entry paths:** direct browser sessions, repeated HTTP application actions,
+  explicit callers supplying HTTP contexts, and proxy-origin HTTP transactions.
+- **Consumers:** Zeek HTTP at every sensor, web/proxy access timing, file/PE
+  analyzer timestamps, endpoint FLOW timing, and parent connection ledgers.
+- **Layer rationale:** transaction depth and reuse are assigned before source
+  observation; emitters cannot repair contradictory canonical request order.
+- **Sibling risks:** preserve UID reuse, byte budgets, connection deadlines,
+  source-port identity, request/file containment, proxy legs, sensor clocks,
+  observation loss, and deterministic generation.

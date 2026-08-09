@@ -604,7 +604,13 @@ class NetworkTransactionPlanner:
                     reuse_deadline = (
                         cached.close_deadline - generator_module._HTTP_PERSISTENT_REUSE_GUARD
                     )
-                    elapsed = (time - reuse_deadline).total_seconds()
+                    requested_time = http.canonical_request_time or time
+                    ordered_request_time = max(
+                        requested_time,
+                        cached.last_request_time
+                        + generator_module._HTTP_PERSISTENT_TRANSACTION_GAP,
+                    )
+                    elapsed = (ordered_request_time - reuse_deadline).total_seconds()
                     request_body = http.request_body_len or 0
                     response_body = http.response_body_len or 0
                     fits_parent_flow = (
@@ -612,14 +618,20 @@ class NetworkTransactionPlanner:
                         and cached.used_resp + response_body <= cached.resp_budget
                     )
                     if elapsed <= 0 and fits_parent_flow:
+                        time = ordered_request_time
                         src_port = cached.src_port
                         reused_http_uid = cached.uid
                         reused_http_conn_id = cached.conn_id
                         http_application_layer_only = True
-                        http = generator_module.replace(http, trans_depth=cached.next_trans_depth)
+                        http = generator_module.replace(
+                            http,
+                            trans_depth=cached.next_trans_depth,
+                            canonical_request_time=ordered_request_time,
+                        )
                         cached.next_trans_depth += 1
                         cached.used_orig += request_body
                         cached.used_resp += response_body
+                        cached.last_request_time = ordered_request_time
                     else:
                         executor._http_persistent_connections.pop(http_persistent_key, None)
                 if not http_application_layer_only:
@@ -2501,6 +2513,7 @@ class NetworkTransactionPlanner:
                     ),
                     used_orig=event.http.request_body_len or 0,
                     used_resp=event.http.response_body_len or 0,
+                    last_request_time=event.http.canonical_request_time or event.timestamp,
                 )
             )
 
