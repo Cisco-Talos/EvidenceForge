@@ -4929,6 +4929,53 @@ class TestActivityGenerator:
             frontend_start,
         )
 
+    def test_apt_method_owner_and_frontend_close_as_one_bounded_family(
+        self, activity_gen, state_manager
+    ):
+        """System-owned APT helpers close before their serialized frontend."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+        )
+        state_manager.set_current_time(timestamp)
+
+        helper_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=server,
+            time=timestamp,
+            key="apt_proxy_method:https",
+            image="/usr/lib/apt/methods/https",
+            command_line="/usr/lib/apt/methods/https",
+            username="root",
+        )
+        helper = state_manager.get_process(server.hostname, helper_pid)
+        assert helper is not None
+        frontend = state_manager.get_process(server.hostname, helper.parent_pid)
+        assert frontend is not None
+        helper_start = helper.start_time
+        frontend_start = frontend.start_time
+
+        activity_gen.finalize_foreground_process_lifetimes(timestamp + timedelta(minutes=3))
+
+        assert activity_gen._process_termination_recorded(
+            server.hostname,
+            helper_pid,
+            helper_start,
+        )
+        assert activity_gen._process_termination_recorded(
+            server.hostname,
+            frontend.pid,
+            frontend_start,
+        )
+        helper_end = activity_gen.process_source_terminate_time(server.hostname, helper_pid)
+        frontend_end = activity_gen.process_source_terminate_time(server.hostname, frontend.pid)
+        assert helper_end is not None
+        assert frontend_end is not None
+        assert timestamp < helper_end < frontend_end < timestamp + timedelta(minutes=3)
+
     def test_workstation_ssh_connection_materializes_user_owner(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

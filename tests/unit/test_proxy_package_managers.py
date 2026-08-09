@@ -94,8 +94,8 @@ def test_explicit_proxy_rejects_apt_hint_on_rpm_host() -> None:
 
 
 def test_apt_method_helper_has_package_update_lifetime() -> None:
-    """Apt method helper ownership should live long enough to cover repo fan-out."""
+    """APT transport helpers stay bounded inside their longer frontend transaction."""
     assert _linux_foreground_lifetime(
         "/usr/lib/apt/methods/https",
         "/usr/lib/apt/methods/https",
-    ) == (20.0, 180.0)
+    ) == (5.0, 60.0)

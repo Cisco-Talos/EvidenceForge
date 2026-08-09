@@ -1794,7 +1794,7 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
         "/usr/lib/apt/methods/"
     ):
-        return (20.0, 180.0)
+        return (5.0, 60.0)
     if exe_name in {"apt", "apt-get", "dnf", "yum"} and any(
         token in command for token in ("update", "upgradable", "makecache", "check-update")
     ):
@@ -6128,6 +6128,12 @@ class ActivityGenerator:
     ) -> tuple[int, str | None]:
         """Reuse or create a source-native system process for connection attribution."""
         sys_pids = getattr(self, "_system_pids", {}).setdefault(source_system.hostname, {})
+        process_rng = random.Random(
+            _stable_seed(
+                "high_confidence_connection_owner:"
+                f"{source_system.hostname}:{key}:{image}:{username}:{time.isoformat()}"
+            )
+        )
         pid = self._active_matching_process_pid(
             source_system=source_system,
             time=time,
@@ -6138,14 +6144,17 @@ class ActivityGenerator:
         )
         if pid > 0:
             self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+            self._remember_system_connection_owner_finalizer(
+                source_system=source_system,
+                time=time,
+                pid=pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                rng=process_rng,
+            )
             return pid, image
 
-        process_rng = random.Random(
-            _stable_seed(
-                "high_confidence_connection_owner:"
-                f"{source_system.hostname}:{key}:{image}:{username}:{time.isoformat()}"
-            )
-        )
         if self._connection_owner_is_one_shot_network_client(image, command_line):
             lead_seconds = process_rng.uniform(0.12, 3.5)
         else:
@@ -6183,11 +6192,73 @@ class ActivityGenerator:
         if pid > 0:
             sys_pids[key] = pid
             self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+            self._remember_system_connection_owner_finalizer(
+                source_system=source_system,
+                time=time,
+                pid=pid,
+                image=image,
+                command_line=command_line,
+                username=username,
+                rng=process_rng,
+            )
             self.state_manager.set_current_time(time)
             running = self.state_manager.get_process(source_system.hostname, pid)
             return pid, running.image if running is not None else image
         self.state_manager.set_current_time(time)
         return -1, None
+
+    def _remember_system_connection_owner_finalizer(
+        self,
+        *,
+        source_system: System,
+        time: datetime,
+        pid: int,
+        image: str,
+        command_line: str,
+        username: str,
+        rng: random.Random,
+    ) -> None:
+        """Bound a one-shot system connection owner and its package frontend."""
+        if not self._connection_owner_is_one_shot_network_client(image, command_line):
+            return
+        lifetime = _linux_foreground_lifetime(image, command_line)
+        if lifetime is None:
+            return
+        termination_time = ensure_utc(time) + timedelta(seconds=rng.uniform(*lifetime))
+        self._remember_foreground_process_finalizer(
+            system=source_system,
+            user=User(username=username, full_name=username, email=f"{username}@example.local"),
+            pid=pid,
+            process_name=image,
+            logon_id="0x3e7",
+            termination_time=termination_time,
+        )
+
+        if not image.lower().startswith("/usr/lib/apt/methods/"):
+            return
+        helper = self.state_manager.get_process(source_system.hostname, pid)
+        active = self._linux_apt_frontends.get(source_system.hostname)
+        if helper is None or active is None or helper.parent_pid != active[0]:
+            return
+        frontend = self.state_manager.get_process(source_system.hostname, active[0])
+        if frontend is None:
+            return
+        frontend_termination = max(
+            active[1],
+            termination_time + timedelta(milliseconds=rng.randint(120, 1800)),
+        )
+        self._linux_apt_frontends[source_system.hostname] = (
+            frontend.pid,
+            frontend_termination,
+        )
+        self._remember_foreground_process_finalizer(
+            system=source_system,
+            user=User(username="root", full_name="root", email="root@example.local"),
+            pid=frontend.pid,
+            process_name=frontend.image,
+            logon_id=frontend.logon_id or "0x3e7",
+            termination_time=frontend_termination,
+        )
 
     def _ensure_linux_apt_frontend_process(
         self,

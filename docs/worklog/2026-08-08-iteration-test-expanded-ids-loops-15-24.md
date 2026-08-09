@@ -76,3 +76,12 @@ finding is carried forward into target selection.
 - **Sibling risks:** helper fan-out must reuse a still-live frontend, requests
   after closure must create a new frontend, parent termination must follow all
   children, and RPM-family behavior must remain unchanged.
+
+### Loop 17 rendered-data closure
+
+The first post-commit hard probe caught a second entry path before blind review:
+explicit-proxy repair materialized APT method helpers as system connection owners
+without registering their one-shot finalizers. Those helpers were closed only by
+later lifecycle cleanup, stretching both helper and parent intervals for hours.
+The family fix now registers bounded helper closure at the canonical system-owner
+boundary and extends the serialized APT frontend just beyond its last helper.
