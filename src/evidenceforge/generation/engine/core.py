@@ -324,6 +324,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self.activity_generator._network_resolver = self.network_resolver
         self.activity_generator._scenario_environment = self.scenario.environment
+        self.activity_generator._software_deployment_key = self.scenario.environment.domain
         self.activity_generator._scenario_root = self.scenario_root
         self.activity_generator._email_artifact_dir = self.artifact_dir / "email"
         self.activity_generator._artifacts_manifest_path = (

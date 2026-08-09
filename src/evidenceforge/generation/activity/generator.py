@@ -4172,6 +4172,10 @@ class ActivityGenerator:
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._failed_logon_attempt_times: dict[tuple[str, str, int, str], list[datetime]] = {}
         self._failed_logon_attempt_lock = Lock()
+        self._software_deployment_key = "default"
+        self._singleton_application_intervals: dict[
+            tuple[str, str, str, str], list[tuple[datetime, datetime]]
+        ] = {}
         self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
         self._visible_account_created_at: dict[str, datetime] = {}
         self._visible_account_kerberos_transport_emitted: set[tuple[str, str, str]] = set()
@@ -20321,9 +20325,7 @@ class ActivityGenerator:
                     catalog_category,
                     username=user.username,
                     system_type=system.type,
-                    deployment_key=str(
-                        getattr(getattr(self, "_scenario_environment", None), "domain", "default")
-                    ),
+                    deployment_key=self._software_deployment_key,
                 )
                 if result:
                     process_name, command_line = result
@@ -20331,8 +20333,22 @@ class ActivityGenerator:
                         is_singleton_application_image,
                     )
 
+                    singleton_key: tuple[str, str, str, str] | None = None
                     if is_singleton_application_image(process_name, os_category):
                         normalized_image = process_name.replace("/", "\\").lower()
+                        singleton_key = (
+                            system.hostname,
+                            user.username.lower(),
+                            logon_id,
+                            normalized_image,
+                        )
+                        if any(
+                            start <= time < end
+                            for start, end in self._singleton_application_intervals.get(
+                                singleton_key, []
+                            )
+                        ):
+                            return
                         existing = next(
                             (
                                 proc
@@ -20501,16 +20517,22 @@ class ActivityGenerator:
                             effect_command_line,
                         )
                         if lifetime is not None:
-                            self._generate_bounded_foreground_process_termination(
-                                user=user,
-                                system=system,
-                                start_time=process_time,
-                                pid=pid,
-                                process_name=effect_process_name,
-                                logon_id=logon_id,
-                                lifetime=lifetime,
-                                rng=rng,
+                            termination_time = (
+                                self._generate_bounded_foreground_process_termination(
+                                    user=user,
+                                    system=system,
+                                    start_time=process_time,
+                                    pid=pid,
+                                    process_name=effect_process_name,
+                                    logon_id=logon_id,
+                                    lifetime=lifetime,
+                                    rng=rng,
+                                )
                             )
+                            if singleton_key is not None:
+                                self._singleton_application_intervals.setdefault(
+                                    singleton_key, []
+                                ).append((process_time, termination_time))
                     elif os_category == "linux":
                         self._emit_bash_command_event(
                             user,
