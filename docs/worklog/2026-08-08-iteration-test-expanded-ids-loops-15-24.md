@@ -230,3 +230,35 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** preserve distinct sensor offsets, HTTP transaction order,
   DNS RTT containment, start/close duration, loss accounting, and deterministic
   path-specific timing without making sensor timestamps identical.
+
+## Loop 21 Outcome
+
+- Commit `dc4d519c`; full suite 5,093 passed and 41 skipped; Ruff and all
+  87 config validations passed.
+- Clock probe across 1,943 matched flows: 41-66 ms relative offsets, all one
+  sign, 6.13 ms six-hour population deviation; specialist linear fit found
+  about 1 ppm drift and about 1 ms residual deviation.
+- Automated evaluation remained 96.17321730394976 over 86,721 records.
+- Initial blind scores were 22/33/74/91, average 55.0. Deliberation ended
+  unanimously Synthetic at 70.5, final scores 61/64/75/82.
+- Highest-impact next defect: 187 clean matched one-datagram sensor pairs differ
+  by symmetric one-byte payload changes with unchanged packet/content semantics.
+
+## Loop 22 Family Contract
+
+- **Selected family:** packet-derived dual-sensor traffic accounting.
+- **Finding classification:** `new_family` near-hard physical contradiction.
+- **Owning abstraction:** `NetworkObservationPlanner` capture-loss projection.
+- **Invariant:** passive no-loss views of the same datagram retain identical
+  directional payload/IP byte and packet totals unless an explicit packet-level
+  loss or middlebox transformation is modeled with corresponding semantics.
+- **Entry paths:** UDP DNS, ICMP, NTP/DHCP datagrams, TCP streams, and all
+  multi-sensor canonical connections.
+- **Consumers:** Zeek conn/protocol logs, IDS correlation, file byte envelopes,
+  and cross-sensor forensic matching.
+- **Layer rationale:** capture-loss projection owns sensor counter differences;
+  emitters correctly render the frozen ledger. The current ledger lacks a
+  packet sequence capable of representing whole-datagram loss safely.
+- **Sibling risks:** retain TCP loss/missed-byte texture, never fabricate partial
+  UDP/ICMP payload mutation, preserve packet/IP-byte arithmetic, and avoid
+  suppressing protocol children without a modeled whole-packet observation.

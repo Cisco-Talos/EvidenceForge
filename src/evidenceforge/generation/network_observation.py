@@ -358,6 +358,11 @@ class NetworkObservationPlanner:
         transaction_id: str,
         protocol: str,
     ) -> NetworkTrafficLedger:
+        if protocol.lower() != "tcp":
+            # The canonical ledger does not retain individual datagram sizes.
+            # Fractional byte loss would fabricate a rewritten UDP/ICMP packet
+            # while leaving packet counts and analyzer content unchanged.
+            return canonical
         rng = random.Random(
             _stable_seed(
                 f"network-capture-loss:{timing.profile_name}:{sensor_identity}:{transaction_id}"
@@ -377,12 +382,8 @@ class NetworkObservationPlanner:
         return NetworkTrafficLedger(
             orig=orig,
             resp=resp,
-            missed_orig_bytes=(
-                canonical.missed_orig_bytes + missed_orig if protocol.lower() == "tcp" else 0
-            ),
-            missed_resp_bytes=(
-                canonical.missed_resp_bytes + missed_resp if protocol.lower() == "tcp" else 0
-            ),
+            missed_orig_bytes=canonical.missed_orig_bytes + missed_orig,
+            missed_resp_bytes=canonical.missed_resp_bytes + missed_resp,
         )
 
     @staticmethod

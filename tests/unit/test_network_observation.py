@@ -193,6 +193,7 @@ def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> N
         event = _network_event(
             start=T0 + timedelta(seconds=index * 3),
             stable_id=f"network:distributed-texture:{index}",
+            protocol="tcp",
             zeek_uid=f"CDistributedTexture{index}",
         )
         observations = _observation_by_sensor(planner.plan(event, {"zeek_conn", "zeek_dns"}))
@@ -303,8 +304,9 @@ def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatc
     )
 
 
-def test_non_tcp_capture_loss_preserves_datagram_accounting_without_stream_gaps() -> None:
-    """UDP/ICMP observations must not publish Zeek TCP stream-gap semantics."""
+@pytest.mark.parametrize("protocol", ["udp", "icmp"])
+def test_non_tcp_capture_loss_requires_packet_level_truth(protocol: str) -> None:
+    """Datagram views cannot invent fractional loss without a packet sequence."""
 
     timing = NetworkSensorObservationTiming(
         profile_name="lossy_datagrams",
@@ -327,11 +329,14 @@ def test_non_tcp_capture_loss_preserves_datagram_accounting_without_stream_gaps(
     )
 
     observed = NetworkObservationPlanner._observed_traffic(
-        canonical, timing, "zeek-core", "udp-loss", "udp"
+        canonical, timing, "zeek-core", f"{protocol}-loss", protocol
     )
 
-    assert observed.orig.payload_bytes < canonical.orig.payload_bytes
-    assert observed.resp.payload_bytes < canonical.resp.payload_bytes
+    assert observed is canonical
+    assert observed.orig.payload_bytes == canonical.orig.payload_bytes
+    assert observed.resp.payload_bytes == canonical.resp.payload_bytes
+    assert observed.orig.packets == canonical.orig.packets
+    assert observed.resp.packets == canonical.resp.packets
     assert observed.missed_bytes == 0
 
 
