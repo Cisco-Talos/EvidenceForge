@@ -129,6 +129,27 @@ def test_network_context_finalizes_one_canonical_transaction() -> None:
     assert network.traffic is transaction.traffic
 
 
+@pytest.mark.parametrize(
+    ("conn_state", "history", "expected"),
+    [
+        ("RSTR", "ShADadR", "ShADadr"),
+        ("RSTO", "ShADadr", "ShADadR"),
+        ("S1", "ShR", "Sh"),
+    ],
+)
+def test_network_context_normalizes_zeek_state_history_semantics(
+    conn_state: str,
+    history: str,
+    expected: str,
+) -> None:
+    """Canonical transport truth must identify the same reset/close actor as Zeek."""
+
+    start = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+    network = replace(_network_context(start), conn_state=conn_state, history=history)
+
+    assert network.history == expected
+
+
 def test_network_context_detects_post_finalization_counter_drift() -> None:
     """Downstream code cannot rewrite finalized canonical accounting."""
 

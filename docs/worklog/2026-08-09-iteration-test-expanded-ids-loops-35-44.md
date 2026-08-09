@@ -100,3 +100,24 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** generator history pools, sensor-specific network
   observations, emitter projection, packet-actor direction, ASA teardown
   reasons, and deterministic evaluator assertions.
+
+## Loop 39 Outcome
+
+- **Generation/eval:** 83,175 newly generated records; 96.30232345905807;
+  automated FAIL only on pivot linkability (51.6129/100).
+- **Blind panel:** Real/Inconclusive/Inconclusive/Synthetic at 35/42/43/67,
+  average 46.75. Verdict disagreement and a 32-point spread triggered
+  deliberation.
+- **Deliberation:** unanimous Synthetic at 72/66/69/86, average 73.25.
+- **Loop 38 target confirmation:** all generated RSTR, RSTO, and S1 histories
+  satisfy their Zeek actor/termination semantics, and the Network reviewer
+  independently described the resulting combinations as plausible.
+- **Fresh selected family:** Event 4648 source-native Network Information.
+- **Owning abstraction:** Windows explicit-credential action bundle and its
+  canonical `AuthContext`; the Security emitter remains a renderer.
+- **Invariant:** Network Address identifies the attempt's origin, never its
+  target; Port is zero/blank for local use or the real source port owned by the
+  corresponding remote transport, never a separately sampled value.
+- **Sibling risks:** RunAs, scheduled tasks, PsExec/WMIC/service-control
+  bundles, caller process/session ownership, transport correlation, parser
+  normalization, evaluator pivoting, and source-native XML tests.

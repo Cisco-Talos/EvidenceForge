@@ -1107,8 +1107,8 @@ class NetworkTransactionPlanner:
                         "S2": "ShADadF",
                         "S3": "ShADadf",
                         "RSTO": "ShADaR",
-                        "RSTR": "ShADadR",
-                        "S1": "ShR",
+                        "RSTR": "ShADadr",
+                        "S1": "Sh",
                     }.get(conn_state, generator_module._tcp_success_history(rng))
             if conn_state in ("S0", "REJ"):
                 duration = None

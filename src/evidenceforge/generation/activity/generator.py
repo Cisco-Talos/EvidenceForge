@@ -2379,7 +2379,7 @@ TCP_CONN_STATE_DISTRIBUTION = [
     ("S0", 9, "S"),  # Single SYN, no reply
     ("S0", 5, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
     # Partial handshakes (S1) — ~3%
-    ("S1", 2, "ShR"),  # SYN-ACK seen, RST
+    ("S1", 2, "Sh"),  # SYN-ACK seen, no termination observed
     ("S1", 1, "Sh"),  # SYN-ACK seen, no further data
     # Rejected connections (REJ) — ~5% (refused ports, firewall rejects)
     ("REJ", 3, "Sr"),  # RST from responder immediately
@@ -2389,8 +2389,8 @@ TCP_CONN_STATE_DISTRIBUTION = [
     ("RSTO", 2, "ShADadTR"),  # Data + retransmit then RST
     ("RSTO", 2, "ShAR"),  # Quick RST after handshake
     # Reset by responder (RSTR) — ~5% (server resets, IDS/WAF termination)
-    ("RSTR", 3, "ShADadR"),  # Data exchange then responder RST
-    ("RSTR", 2, "ShAdR"),  # Partial data then responder RST
+    ("RSTR", 3, "ShADadr"),  # Data exchange then responder RST
+    ("RSTR", 2, "ShAdr"),  # Partial data then responder RST
     # Half-closed states — ~2% (one side closed, other didn't respond)
     ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
     ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied

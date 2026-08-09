@@ -25,6 +25,7 @@
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.network import normalize_zeek_history
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -78,11 +79,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
     @staticmethod
     def _normalize_history_for_state(conn_state: str, history: str) -> str:
         """Keep generated Zeek history direction consistent with conn_state semantics."""
-        if conn_state == "RSTR" and history:
-            return history[:-1] + "r" if history.endswith("R") else history
-        if conn_state == "RSTO" and history:
-            return history[:-1] + "R" if history.endswith("r") else history
-        return history
+        return normalize_zeek_history(conn_state, history)
 
     @staticmethod
     def _render_service_name(service: str | None) -> str | None:

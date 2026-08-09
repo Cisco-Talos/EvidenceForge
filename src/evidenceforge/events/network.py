@@ -45,6 +45,18 @@ SemanticClaim = Literal[
 ]
 
 
+def normalize_zeek_history(conn_state: str, history: str) -> str:
+    """Return packet-history markers compatible with Zeek connection state."""
+
+    if conn_state == "RSTR" and history.endswith("R"):
+        return f"{history[:-1]}r"
+    if conn_state == "RSTO" and history.endswith("r"):
+        return f"{history[:-1]}R"
+    if conn_state == "S1":
+        return history.rstrip("RrFf")
+    return history
+
+
 @dataclass(frozen=True, slots=True)
 class SignaturePredicate:
     """Canonical preconditions for attaching one IDS signature to a transport."""
@@ -333,6 +345,8 @@ class NetworkTransactionPlan:
 
     def __post_init__(self) -> None:
         """Validate interval and tuple invariants at the canonical boundary."""
+
+        object.__setattr__(self, "history", normalize_zeek_history(self.conn_state, self.history))
 
         if not self.stable_id:
             raise ValueError("Network transaction stable_id cannot be empty")

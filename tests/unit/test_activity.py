@@ -9947,7 +9947,7 @@ class TestActivityGenerator:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         net = event.network
-        assert net.history == "ShR"
+        assert net.history == "Sh"
         assert "D" not in net.history
         assert "d" not in net.history
         assert net.orig_bytes == 0
