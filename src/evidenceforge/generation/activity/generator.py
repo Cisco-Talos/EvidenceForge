@@ -12692,6 +12692,7 @@ class ActivityGenerator:
         time: datetime,
         process_image: str,
         source_port: int,
+        required_until: datetime | None = None,
     ) -> tuple[int, str] | None:
         """Return the source-side SSH client process that owns an outbound session."""
         if _get_os_category(source_system.os) != "linux":
@@ -12738,7 +12739,12 @@ class ActivityGenerator:
         strict_server_session = (
             source_system.type or "workstation"
         ).lower() == "server" and getattr(self, "_scenario_start_time", None) is not None
-        session = self._active_source_linux_session(user, source_system, requested_time)
+        session = self._active_source_linux_session(
+            user,
+            source_system,
+            requested_time,
+            required_until=required_until,
+        )
         if session is None:
             if strict_server_session:
                 return None
@@ -12819,8 +12825,10 @@ class ActivityGenerator:
         user: User,
         system: System,
         time: datetime,
+        *,
+        required_until: datetime | None = None,
     ) -> ActiveSession | None:
-        """Return the newest active Linux session that can launch an SSH client."""
+        """Return the newest Linux session that can own the full SSH client lifetime."""
         strict_server_session = (system.type or "workstation").lower() == "server" and getattr(
             self, "_scenario_start_time", None
         ) is not None
@@ -12829,6 +12837,10 @@ class ActivityGenerator:
             for session in self.state_manager.get_sessions_for_user_at(user.username, time)
             if session.system == system.hostname
             and _session_active_for_activity(session, time, margin_seconds=1.5)
+            and (
+                required_until is None
+                or _session_active_for_activity(session, required_until, margin_seconds=1.5)
+            )
             and (not strict_server_session or session.session_kind == "ssh")
         ]
         if not candidates:

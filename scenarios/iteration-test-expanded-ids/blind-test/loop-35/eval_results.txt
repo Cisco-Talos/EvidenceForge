@@ -1,0 +1,38 @@
+EvidenceForge Data Quality Evaluation — Loop 35
+
+Scenario: iteration-test-expanded-ids
+Total records: 85,173 across 19 sources
+Observation profile: enterprise_standard
+
+Overall Quality Score: 96/100
+Acceptance: FAIL
+
+Pillar scores:
+  Parseability: 100/100
+  Plausibility: 97/100
+  Causality: 89/100
+  Timing: 96/100
+
+Category scores:
+  Parseability & Source Schema: 100/100
+  Canonical Cross-Source Invariants: 100/100
+  Declared Scenario Completeness: 88/100
+  Distribution & Realism Diagnostics: 95/100
+
+Hard requirement failure:
+  causality.pivot_linkability: 31/62 inferred expected-visible narrative edges
+  retain a shared rendered pivot (50/100; minimum 80).
+
+Other notable results:
+  Spec conformance: 85,173/85,173 (100/100)
+  Format constraints: 85,173/85,173 (100/100)
+  Cross-source field agreement: 16,598/16,598 (100/100)
+  IDS correlation integrity: 185/185 (100/100)
+  Causal ordering: 12,888/12,888 (100/100)
+  Event presence: 45/46 (98/100)
+  Indicator accuracy: 993/1,013 (98/100)
+  Temporal integrity: 41/46 (89/100)
+  Storyline trace coverage: 66/71 (93/100)
+  Intent reconciliation: 96/96 assertions (100/100)
+
+See eval_results.json for the complete machine-readable evaluation.

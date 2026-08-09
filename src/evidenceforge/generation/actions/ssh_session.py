@@ -290,6 +290,7 @@ class SshSessionExecutor(Protocol):
         time: datetime,
         process_image: str,
         source_port: int,
+        required_until: datetime | None = None,
     ) -> tuple[int, str] | None:
         """Return or materialize the source-side SSH client process."""
         ...
@@ -596,6 +597,7 @@ class SshSessionActionBundle:
                 time=request.time,
                 process_image=source_process_image or "/usr/bin/ssh",
                 source_port=state.source_port,
+                required_until=state.close_time,
             )
             if client is not None:
                 source_pid, source_process_image = client

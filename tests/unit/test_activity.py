@@ -200,6 +200,38 @@ def test_linux_server_ssh_client_uses_active_ssh_source_session():
     assert session.logon_id == logon_id
 
 
+def test_linux_server_ssh_client_requires_session_through_transport_close():
+    """A source SSH process must not outlive the inbound session that owns it."""
+    state_manager = StateManager()
+    generator = ActivityGenerator(state_manager, {})
+    timestamp = datetime(2024, 3, 18, 15, 33, tzinfo=UTC)
+    user = User(username="aisha.johnson", full_name="Aisha Johnson", email="aisha@example.com")
+    server = System(hostname="APP-INT-01", ip="10.10.3.10", os="Ubuntu 22.04", type="server")
+
+    state_manager.set_current_time(timestamp - timedelta(minutes=5))
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=server.hostname,
+        logon_type=10,
+        source_ip="10.10.1.21",
+        source_port=51234,
+        session_kind="ssh",
+    )
+    state_manager.update_session_metadata(
+        logon_id,
+        network_close_time=timestamp + timedelta(minutes=5),
+    )
+
+    session = generator._active_source_linux_session(
+        user,
+        server,
+        timestamp,
+        required_until=timestamp + timedelta(minutes=10),
+    )
+
+    assert session is None
+
+
 def test_linux_ssh_client_command_line_varies_source_native_forms():
     """Source-side SSH history should not collapse to one bare user@host form."""
     commands = {
