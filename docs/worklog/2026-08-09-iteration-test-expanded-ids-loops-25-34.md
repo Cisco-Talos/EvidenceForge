@@ -253,3 +253,38 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** preserve canonical transport duration for Zeek/endpoint
   sources with later windows, retain in-window partial lifecycles, avoid moving
   close events earlier, and apply clipping after source-native delay decisions.
+
+## Loop 31 Outcome
+
+- **Commit:** `e5f5aac8 fix: clip perimeter teardown observations`.
+- **Verification:** 164 focused observation/ASA/dispatcher tests passed; final
+  full suite passed with 5,117 tests and 41 skips; Ruff checks passed.
+- **Generation and eval:** 81,851 records; automated score
+  95.97420986025638, PASS across every hard gate.
+- **Hard probe:** zero ASA rows at or after the half-open 18:00 endpoint.
+- **Blind panel:** initial unanimous Real at 17/24/14/45. Mandatory 31-point
+  spread deliberation confirmed Real 4-0 at 23/30/18/47, average 29.5.
+- **Target result:** threat, detection, and network reviewers explicitly found
+  the perimeter lifecycle/window behavior clean.
+- **Highest next root contract:** durable per-principal/session/resource state
+  for resident helpers and nominal singleton applications.
+
+## Loop 32 Family Contract
+
+- **Selected family:** resident desktop helper and nominal singleton lifecycle
+  ownership (`gvfsd-smb-browse`, Outlook `/recycle`, and siblings).
+- **Finding classification:** `existing_family_sibling` extending Loop 29's
+  desktop bootstrap ownership to resource-scoped Linux helpers and Office apps.
+- **Owning abstraction:** canonical process lifecycle state keyed by host,
+  principal, logon session, executable, and resource identity.
+- **Invariant:** one live resident owner exists for a session/resource key;
+  repeated activity reuses it until an observed termination, while distinct
+  shares, profiles, sessions, and helper roles remain independent.
+- **Entry paths:** SMB browsing/mount activity, Linux desktop helpers, Office
+  application catalog launches, spawn rules, session startup, and network owner
+  materialization.
+- **Consumers:** eCAR process/file/flow evidence, Windows Security/Sysmon process
+  rows, bash history, SMB attribution, and host forensic timelines.
+- **Sibling risks:** preserve legitimate multi-process Office helpers, separate
+  SMB shares/resources, separate sessions, crash/restart behavior, explicit
+  storyline processes, and bounded foreground commands.
