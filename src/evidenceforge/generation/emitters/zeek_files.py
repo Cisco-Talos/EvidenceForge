@@ -26,9 +26,12 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    planned_zeek_connection_interval,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed
 
@@ -38,7 +41,7 @@ _SOURCE_TIMING = SourceTimingPlanner()
 class ZeekFilesEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek files.log format (NDJSON).
 
-    Generates file transfer metadata logs. Requires NetworkContext plus either
+    Generates file transfer metadata logs. Requires NetworkTransactionPlan plus either
     FileTransferContext or TLS X.509 certificate contexts. Uses own fuid
     (F-prefix) alongside conn.log uid.
     """
@@ -47,23 +50,21 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_files.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         return (
             event.event_type in self._supported_types
             and event.network is not None
             and (
-                event.file_transfer is not None
-                or bool(event.file_transfers)
-                or bool(event.x509_chain)
-                or event.x509 is not None
+                event.protocol.primary_file_transfer is not None
+                or bool(event.protocol.file_transfers)
+                or bool(event.protocol.x509_chain)
+                or event.protocol.leaf_certificate is not None
             )
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
-        file_transfers = list(event.file_transfers)
-        if event.file_transfer is not None:
-            file_transfers.insert(0, event.file_transfer)
+        file_transfers = list(event.protocol.file_transfers)
         sensor_metadata = self._sensor_metadata(event, self.format_def.name)
         previous_file_ts: datetime | None = None
         for ft in file_transfers:
@@ -107,7 +108,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             }
             self.emit_event(event_data)
 
-        certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        certificates = event.protocol.x509_chain
         previous_cert_ts: datetime | None = None
         for depth, cert in enumerate(certificates):
             size = certificate_file_size(cert)
@@ -184,27 +185,34 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
 
 
 def _tls_connection_analysis_times(
-    event: SecurityEvent,
+    event: CanonicalOccurrence,
 ) -> tuple[datetime, tuple[datetime, datetime] | None, datetime]:
     """Return conn bounds and the owning ssl.log analyzer timestamp."""
     net = event.network
     if net is None:
         return event.timestamp, None, event.timestamp
-    conn_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_conn_start",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=event.timestamp,
-    )
+    planned_interval = planned_zeek_connection_interval(event)
+    if planned_interval is not None:
+        conn_ts, planned_close = planned_interval
+    else:
+        planned_close = None
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
     within = None
-    if net.duration is not None and net.duration > 0:
+    if planned_close is not None:
+        within = (conn_ts, max(conn_ts, planned_close - timedelta(microseconds=1)))
+    elif net.duration is not None and net.duration > 0:
         latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
         within = (conn_ts, latest)
     ssl_ts = _SOURCE_TIMING.source_time(
@@ -224,7 +232,9 @@ def _tls_connection_analysis_times(
     return conn_ts, within, ssl_ts
 
 
-def _tls_certificate_gap(event: SecurityEvent, fuid: str, position: int, label: str) -> timedelta:
+def _tls_certificate_gap(
+    event: CanonicalOccurrence, fuid: str, position: int, label: str
+) -> timedelta:
     """Return deterministic non-uniform spacing for certificate analyzer rows."""
     seed = _stable_seed(
         "zeek-tls-cert-gap:"
@@ -235,7 +245,7 @@ def _tls_certificate_gap(event: SecurityEvent, fuid: str, position: int, label: 
 
 
 def _constrained_tls_timestamp(
-    event: SecurityEvent,
+    event: CanonicalOccurrence,
     source_key: str,
     seed_parts: tuple[Any, ...],
     lower_bound: datetime,
@@ -262,7 +272,7 @@ def _constrained_tls_timestamp(
 
 
 def _tls_certificate_file_timestamp(
-    event: SecurityEvent,
+    event: CanonicalOccurrence,
     cert: Any,
     position: int,
     *,
@@ -298,7 +308,7 @@ def _tls_certificate_file_timestamp(
 
 
 def _tls_certificate_x509_timestamp(
-    event: SecurityEvent,
+    event: CanonicalOccurrence,
     cert: Any,
     position: int,
     *,
@@ -330,14 +340,14 @@ def _tls_certificate_x509_timestamp(
 
 
 def _file_transfer_analyzer_timestamp(
-    event: SecurityEvent,
+    event: CanonicalOccurrence,
     zeek_uid: str,
     fuid: str,
     conn_ts: datetime,
 ) -> datetime:
     """Return a deterministic files.log analysis time after the conn start."""
     net = event.network
-    if event.http is not None and net is not None:
+    if event.protocol.http is not None and net is not None:
         http_seed_parts = (
             zeek_uid,
             net.src_ip,
@@ -365,29 +375,36 @@ def _file_transfer_analyzer_timestamp(
 
 
 def _bounded_file_transfer_observation(
-    event: SecurityEvent,
+    event: CanonicalOccurrence,
     min_start: datetime | None = None,
     file_transfer: Any | None = None,
 ) -> tuple[datetime, float]:
     """Keep files.log observation timing inside the owning conn.log interval."""
     net = event.network
-    ft = file_transfer or event.file_transfer
+    ft = file_transfer or event.protocol.primary_file_transfer
     if net is None or ft is None:
         return event.timestamp, 0.0
-    conn_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_conn_start",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=event.timestamp,
-    )
-    conn_duration = net.duration
+    planned_interval = planned_zeek_connection_interval(event)
+    if planned_interval is not None:
+        conn_ts, planned_close = planned_interval
+        conn_duration = (
+            (planned_close - conn_ts).total_seconds() if planned_close is not None else None
+        )
+    else:
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
+        conn_duration = net.duration
     file_duration = ft.duration
     file_ts = _file_transfer_analyzer_timestamp(event, net.zeek_uid, ft.fuid, conn_ts)
     hard_lower_bound = max(conn_ts, min_start) if min_start is not None else conn_ts
@@ -436,26 +453,30 @@ def _bounded_in_connection_timestamp(
     return preferred_ts
 
 
-def _related_http_analyzer_timestamp(event: SecurityEvent) -> datetime | None:
+def _related_http_analyzer_timestamp(event: CanonicalOccurrence) -> datetime | None:
     """Return the owning HTTP analyzer timestamp when this file belongs to http.log."""
     net = event.network
-    ft = event.file_transfer
-    http = event.http
+    ft = event.protocol.primary_file_transfer
+    http = event.protocol.http
     if net is None or ft is None or http is None or ft.fuid not in http.resp_fuids:
         return None
-    conn_ts = _SOURCE_TIMING.source_time(
-        event,
-        "source.zeek_conn_start",
-        seed_parts=(
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        ),
-        not_before=event.timestamp,
-    )
+    planned_interval = planned_zeek_connection_interval(event)
+    if planned_interval is not None:
+        conn_ts = planned_interval[0]
+    else:
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
     return _SOURCE_TIMING.source_time(
         event,
         "source.zeek_http_request",

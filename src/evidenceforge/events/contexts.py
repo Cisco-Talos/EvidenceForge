@@ -31,14 +31,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
     NetworkTransactionOutcome,
     NetworkTransactionPlan,
+    SignaturePredicate,
 )
 from evidenceforge.events.proxy import ProxyTransactionPlan
 
@@ -161,8 +161,8 @@ class ProcessAccessContext:
 
 
 @dataclass(slots=True)
-class NetworkContext:
-    """Network connection details -- shared across Zeek, eCAR, Snort."""
+class NetworkTransactionDraft:
+    """Action-owned mutable network draft that cannot cross the dispatch boundary."""
 
     src_ip: str
     src_port: int
@@ -236,6 +236,11 @@ class NetworkContext:
             traffic=self._project_traffic_ledger(),
             initiating_pid=self.initiating_pid,
             responding_pid=self.responding_pid,
+            local_orig=self.local_orig,
+            local_resp=self.local_resp,
+            ip_proto=self.ip_proto,
+            link_local=self.link_local,
+            application_layer_only=self.application_layer_only,
         )
         self.transaction = transaction
         return transaction
@@ -283,7 +288,7 @@ class NetworkContext:
             transaction.traffic,
         )
         if projection != canonical:
-            raise ValueError("NetworkContext changed after canonical transaction finalization")
+            raise ValueError("Network draft changed after transaction finalization")
 
     def _project_traffic_ledger(self) -> NetworkTrafficLedger:
         """Build immutable accounting from legacy flat context fields."""
@@ -411,9 +416,11 @@ class ImageLoadContext:
     signed: bool = True
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"  # Valid, Expired, Revoked, Unavailable
+    load_phase: Literal["startup", "runtime"] = "runtime"
+    load_order: int = 0
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class IdsDetectionFilterContext:
     """Sensor-local rate threshold applied before IDS event generation."""
 
@@ -422,7 +429,7 @@ class IdsDetectionFilterContext:
     seconds: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class IdsEventFilterContext:
     """Sensor-local output filter applied after IDS detection."""
 
@@ -432,7 +439,7 @@ class IdsEventFilterContext:
     seconds: int
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class IdsAlertPolicyContext:
     """Effective Snort-style filtering policy for an IDS alert."""
 
@@ -440,9 +447,9 @@ class IdsAlertPolicyContext:
     event_filter: IdsEventFilterContext | None = None
 
 
-@dataclass(slots=True)
-class IdsContext:
-    """IDS/IPS alert details for Snort."""
+@dataclass(frozen=True, slots=True)
+class IdsAlertPlan:
+    """Immutable IDS attachment evaluated against one network transaction."""
 
     sid: int
     message: str
@@ -451,6 +458,8 @@ class IdsContext:
     rev: int = 1
     gid: int = 1
     policy: IdsAlertPolicyContext | None = None
+    predicate: SignaturePredicate | None = None
+    origin: Literal["built_in", "authored_attachment"] = "built_in"
 
 
 @dataclass(slots=True)
@@ -557,7 +566,7 @@ class ShellContext:
 # --- Zeek protocol-layer contexts (Phase: Zeek expansion) ---
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class SslContext:
     """SSL/TLS handshake details for Zeek ssl.log."""
 
@@ -567,10 +576,13 @@ class SslContext:
     resumed: bool = False
     established: bool = True
     ssl_history: str = ""  # e.g., "CSOXYFFD"
-    cert_chain_fuids: list[str] = field(default_factory=list)
+    cert_chain_fuids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "cert_chain_fuids", tuple(self.cert_chain_fuids))
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class HttpContext:
     """HTTP request/response details for Zeek http.log."""
 
@@ -590,12 +602,17 @@ class HttpContext:
     status_msg: str = "OK"
     referrer: str = ""
     trans_depth: int = 1
-    tags: list[str] = field(default_factory=list)
-    resp_fuids: list[str] = field(default_factory=list)
-    resp_mime_types: list[str] = field(default_factory=list)
+    tags: tuple[str, ...] = ()
+    resp_fuids: tuple[str, ...] = ()
+    resp_mime_types: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tags", tuple(self.tags))
+        object.__setattr__(self, "resp_fuids", tuple(self.resp_fuids))
+        object.__setattr__(self, "resp_mime_types", tuple(self.resp_mime_types))
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class FileTransferContext:
     """File transfer metadata for Zeek files.log.
 
@@ -607,7 +624,7 @@ class FileTransferContext:
     source: str = ""  # "HTTP", "SSL", "SMTP"
     depth: int = 0
     filename: str = ""
-    analyzers: list[str] = field(default_factory=list)
+    analyzers: tuple[str, ...] = ()
     mime_type: str = ""
     duration: float = 0.0
     observation_not_before: datetime | None = None
@@ -622,8 +639,11 @@ class FileTransferContext:
     sha1: str = ""
     sha256: str = ""
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "analyzers", tuple(self.analyzers))
 
-@dataclass(slots=True)
+
+@dataclass(frozen=True, slots=True)
 class X509Context:
     """X.509 certificate details for Zeek x509.log."""
 
@@ -640,10 +660,13 @@ class X509Context:
     certificate_key_type: str = "rsa"
     certificate_key_length: int = 2048
     certificate_exponent: str = "65537"
-    san_dns: list[str] = field(default_factory=list)
+    san_dns: tuple[str, ...] = ()
     basic_constraints_ca: bool = False
     host_cert: bool = True
     client_cert: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "san_dns", tuple(self.san_dns))
 
 
 @dataclass(slots=True)
@@ -681,7 +704,7 @@ class NtpContext:
     num_exts: int = 0
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class OcspContext:
     """OCSP response details for Zeek ocsp.log."""
 
@@ -697,7 +720,7 @@ class OcspContext:
     revokereason: str | None = None
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PeContext:
     """PE (Portable Executable) analysis for Zeek pe.log."""
 
@@ -716,10 +739,13 @@ class PeContext:
     has_export_table: bool = False
     has_cert_table: bool = False
     has_debug_data: bool = False
-    section_names: list[str] = field(default_factory=lambda: [".text", ".rdata", ".data", ".rsrc"])
+    section_names: tuple[str, ...] = (".text", ".rdata", ".data", ".rsrc")
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "section_names", tuple(self.section_names))
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ProxyContext:
     """HTTP proxy transaction details for proxy_access.log fan-out."""
 
@@ -742,32 +768,6 @@ class ProxyContext:
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
     proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
     transaction: ProxyTransactionPlan | None = None
-
-
-@dataclass(slots=True)
-class EdrContext:
-    """EDR-specific entity tracking for eCAR format.
-
-    Carries persistent object/actor UUIDs that form the eCAR object graph.
-    object_id persists across an entity's lifecycle (e.g., same UUID for
-    PROCESS/CREATE and PROCESS/TERMINATE).  actor_id links to the objectID
-    of the entity that performed the action (e.g., parent process UUID on
-    a PROCESS/CREATE, or initiating process UUID on a FILE/CREATE).
-    """
-
-    object_id: str = ""
-    actor_id: str = ""
-    tid: int = -1
-
-    def validate_identity_plan(self, plan: EventIdentityPlan) -> None:
-        """Validate populated compatibility fields against canonical identity truth."""
-
-        if plan.object_id and self.object_id and self.object_id != plan.object_id:
-            raise ValueError("EdrContext object_id contradicts the canonical identity subject")
-        if plan.actor_id and self.actor_id and self.actor_id != plan.actor_id:
-            raise ValueError("EdrContext actor_id contradicts the canonical identity actor")
-        if plan.canonical_tid >= 0 and self.tid >= 0 and self.tid != plan.canonical_tid:
-            raise ValueError("EdrContext tid contradicts the canonical identity thread")
 
 
 @dataclass(slots=True)
@@ -807,15 +807,3 @@ class NatContext:
     mapped_dst_port: int  # post-NAT dest port
     pre_nat_dst_ip: str = ""  # original public dest when canonical tuple is already post-NAT
     pre_nat_dst_port: int = 0  # original public dest port when canonical tuple is already post-NAT
-
-
-@dataclass(slots=True)
-class RawContext:
-    """Carries arbitrary fields destined for one specific emitter.
-
-    Use when an event needs pipeline benefits (state management, visibility,
-    local_only) but doesn't have a dedicated context model.
-    """
-
-    target_format: str  # Emitter key, e.g. "syslog", "windows_event_security"
-    fields: dict[str, Any]

@@ -131,7 +131,7 @@ class TestSIDInWindowsEvents:
         state_manager.set_current_time(timestamp)
         activity_gen.generate_logon(test_user, test_system, timestamp)
 
-        # Logon now dispatched via SecurityEvent
+        # Logon now dispatched via OccurrenceBuilder
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.subject_sid == "S-1-5-18"  # SYSTEM
         assert SID_PATTERN.match(event.auth.user_sid)
@@ -146,7 +146,7 @@ class TestSIDInWindowsEvents:
 
         activity_gen.generate_logoff(test_user, test_system, timestamp, logon_id)
 
-        # Logoff dispatched via SecurityEvent
+        # Logoff dispatched via OccurrenceBuilder
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "logoff"
         assert SID_PATTERN.match(event.auth.user_sid)
@@ -168,7 +168,7 @@ class TestSIDInWindowsEvents:
             "cmd.exe /c dir",
         )
 
-        # Process dispatched via SecurityEvent (find process_create among possible file/registry events)
+        # Process dispatched via OccurrenceBuilder (find process_create among possible file/registry events)
         process_events = [
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -188,7 +188,7 @@ class TestSIDInWindowsEvents:
 
         gen.generate_logon(user, system, timestamp)
 
-        # Logon dispatched via SecurityEvent
+        # Logon dispatched via OccurrenceBuilder
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.subject_sid == "S-1-5-18"  # SYSTEM always known
         assert event.auth.user_sid == "S-1-0-0"  # No domain SIDs available, falls back

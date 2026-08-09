@@ -264,7 +264,7 @@ class TestConnStateByteConsistency:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        if event.http is not None and event.network.conn_state == "SF":
+        if event.protocol.http is not None and event.network.conn_state == "SF":
             assert event.network.duration is not None, (
                 "SF connection with HTTP context must have a duration"
             )

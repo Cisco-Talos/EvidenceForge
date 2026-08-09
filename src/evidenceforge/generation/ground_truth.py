@@ -30,6 +30,7 @@ import ipaddress
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from evidenceforge.events.ground_truth import (
     GROUND_TRUTH_SCHEMA_VERSION,
@@ -41,6 +42,12 @@ from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
 
+if TYPE_CHECKING:
+    from evidenceforge.generation.intent_ledger import (
+        AuthoredIntentLedger,
+        IntentExecutionSnapshot,
+    )
+
 logger = logging.getLogger(__name__)
 
 _EVENT_BASE_KEYS = {
@@ -49,6 +56,7 @@ _EVENT_BASE_KEYS = {
     "system",
     "activity",
     "type",
+    "intent_id",
     "storyline_cluster_id",
     "explanation",
     "skipped_reason",
@@ -92,12 +100,16 @@ class GroundTruthGenerator:
         red_herring_events: list[dict] | None = None,
         source_evidence_status: dict[str, dict[str, dict[str, int]]] | None = None,
         ids_evaluation_summary: dict[str, dict[str, dict[str, object]]] | None = None,
+        authored_intent_ledger: AuthoredIntentLedger | None = None,
+        intent_execution_snapshot: tuple[IntentExecutionSnapshot, ...] = (),
     ):
         self.scenario = scenario
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
         self.source_evidence_status = source_evidence_status or {}
         self.ids_evaluation_summary = ids_evaluation_summary
+        self.authored_intent_ledger = authored_intent_ledger
+        self.intent_execution_snapshot = intent_execution_snapshot
 
     def build_document(self) -> GroundTruthDocument:
         """Build the canonical machine-readable ground-truth document."""
@@ -118,10 +130,64 @@ class GroundTruthGenerator:
                 "ids_evaluation": self._build_ids_evaluation(),
                 "storyline_steps": self._build_storyline_steps(),
                 "red_herring_steps": self._build_red_herring_steps(),
+                "intent_reconciliation": self._build_intent_reconciliation(),
                 "events": self._build_event_records(),
             }
         )
         return document
+
+    def _build_intent_reconciliation(self) -> dict | None:
+        """Reconcile authored intent with planner, occurrence, and observation evidence."""
+
+        if self.authored_intent_ledger is None:
+            return None
+        snapshot_by_id = {
+            snapshot.intent_id: snapshot for snapshot in self.intent_execution_snapshot
+        }
+        accounted_ids = {
+            snapshot.intent_id
+            for snapshot in self.intent_execution_snapshot
+            if snapshot.planned or snapshot.occurrence_ids or snapshot.source_observations
+        }
+        reconciliation = self.authored_intent_ledger.reconcile(accounted_ids)
+        rows = []
+        for intent in self.authored_intent_ledger.intents:
+            execution = snapshot_by_id.get(intent.intent_id)
+            rows.append(
+                {
+                    "intent_id": intent.intent_id,
+                    "ground_truth_section": intent.section.value,
+                    "storyline_id": intent.step_id,
+                    "event_type": intent.event_type,
+                    "semantic_instance_key": intent.semantic_instance_key,
+                    "authored_time": intent.authored_time,
+                    "actor": intent.actor,
+                    "system": intent.system,
+                    "activity": intent.activity,
+                    "planned": bool(execution and execution.planned),
+                    "action_ids": list(execution.action_ids) if execution else [],
+                    "occurrence_ids": list(execution.occurrence_ids) if execution else [],
+                    "source_status": execution.source_status if execution else {},
+                }
+            )
+        occurred_count = sum(bool(row["occurrence_ids"]) for row in rows)
+        observed_count = sum(
+            any(
+                statuses.get("visible", 0) > 0 or statuses.get("delayed", 0) > 0
+                for statuses in row["source_status"].values()
+            )
+            for row in rows
+        )
+        return {
+            "complete": reconciliation.complete,
+            "expected_count": len(rows),
+            "planned_count": sum(bool(row["planned"]) for row in rows),
+            "occurred_count": occurred_count,
+            "observed_count": observed_count,
+            "missing_intent_ids": sorted(reconciliation.missing_intent_ids),
+            "unexpected_intent_ids": sorted(reconciliation.unexpected_intent_ids),
+            "intents": rows,
+        }
 
     def write_json(
         self,
@@ -284,6 +350,7 @@ class GroundTruthGenerator:
         record = {
             "record_id": "",
             "kind": event["type"],
+            "intent_id": event.get("intent_id"),
             "storyline_id": event.get("storyline_cluster_id"),
             "time": ts,
             "actor": event["actor"],

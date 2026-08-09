@@ -9,14 +9,13 @@ from unittest.mock import patch
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
     FileContext,
     HostContext,
     ImageLoadContext,
-    NetworkContext,
     ProcessAccessContext,
     ProcessContext,
     RegistryContext,
@@ -25,6 +24,7 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.dll_load_profiles import get_module_pe_metadata
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import SysmonEventEmitter
+from tests.network_factories import network_plan
 
 
 def _win_host():
@@ -66,29 +66,29 @@ class TestCanHandle:
     """Test can_handle for new event types."""
 
     def test_connection_on_windows(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="10.0.2.20", src_port=49152, dst_port=443, protocol="tcp"
             ),
         )
         assert emitter.can_handle(event) is True
 
     def test_connection_on_linux_rejected(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_linux_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.2.10", dst_ip="10.0.1.10", src_port=49152, dst_port=22, protocol="tcp"
             ),
         )
         assert emitter.can_handle(event) is False
 
     def test_file_create_on_windows(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="file_create",
             src_host=_win_host(),
@@ -97,7 +97,7 @@ class TestCanHandle:
         assert emitter.can_handle(event) is True
 
     def test_image_load_on_windows(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -111,7 +111,7 @@ class TestCanHandle:
         assert emitter.can_handle(event) is True
 
     def test_registry_modify_on_windows(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -128,7 +128,7 @@ class TestEvent3Filter:
     """Test Event 3 (NetworkConnect) filtering."""
 
     def test_lolbin_passes_filter(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -139,7 +139,7 @@ class TestEvent3Filter:
                 command_line="powershell",
                 username="user",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="10.0.2.20", src_port=49152, dst_port=443, protocol="tcp"
             ),
         )
@@ -158,7 +158,7 @@ class TestEvent3Filter:
                 "exclude_dest_ips": [],
             }
         }
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -169,7 +169,7 @@ class TestEvent3Filter:
                 command_line="chrome",
                 username="user",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="93.184.216.34",
                 src_port=49200,
@@ -192,7 +192,7 @@ class TestEvent3Filter:
                 "exclude_dest_ips": [],
             }
         }
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -203,7 +203,7 @@ class TestEvent3Filter:
                 command_line="chrome",
                 username="user",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="93.184.216.34",
                 src_port=49200,
@@ -215,7 +215,7 @@ class TestEvent3Filter:
 
     def test_suspicious_port_passes_filter(self, emitter):
         """Any process connecting to a suspicious port should pass."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -226,7 +226,7 @@ class TestEvent3Filter:
                 command_line="chrome",
                 username="user",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="192.168.1.100",
                 src_port=49200,
@@ -237,7 +237,7 @@ class TestEvent3Filter:
         assert emitter._passes_event3_filter(event) is True
 
     def test_loopback_excluded(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -248,7 +248,7 @@ class TestEvent3Filter:
                 command_line="powershell",
                 username="user",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="127.0.0.1", src_port=49152, dst_port=80, protocol="tcp"
             ),
         )
@@ -260,7 +260,7 @@ class TestEvent7Filter:
 
     def test_system32_dll_filtered(self, emitter):
         """Microsoft-signed DLLs from System32 should be excluded."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -282,7 +282,7 @@ class TestEvent7Filter:
 
     def test_unsigned_thirdparty_dll_passes(self, emitter):
         """Unsigned DLLs from non-system paths should pass."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -311,7 +311,7 @@ class TestEvent7Filter:
                 "image_loaded": {"enabled": False},
             },
         ):
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
                 event_type="image_load",
                 src_host=_win_host(),
@@ -329,7 +329,7 @@ class TestEvent11Filter:
     """Test Event 11 (FileCreate) filtering."""
 
     def test_exe_in_temp_passes(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="file_create",
             src_host=_win_host(),
@@ -338,7 +338,7 @@ class TestEvent11Filter:
         assert emitter._passes_event11_filter(event) is True
 
     def test_txt_file_filtered(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="file_create",
             src_host=_win_host(),
@@ -347,7 +347,7 @@ class TestEvent11Filter:
         assert emitter._passes_event11_filter(event) is False
 
     def test_startup_folder_passes(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="file_create",
             src_host=_win_host(),
@@ -363,7 +363,7 @@ class TestEventRegistryFilter:
     """Test Events 12/13 (Registry) filtering."""
 
     def test_run_key_modify_passes(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -377,7 +377,7 @@ class TestEventRegistryFilter:
 
     def test_create_key_filtered_by_default(self, emitter):
         """CreateKey actions are filtered by default (log_create_key: false)."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -389,7 +389,7 @@ class TestEventRegistryFilter:
         assert emitter._passes_event12_13_filter(event) is False
 
     def test_non_matching_key_filtered(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -406,7 +406,7 @@ class TestEvent22Filter:
     """Test Event 22 (DNSQuery) filtering."""
 
     def test_dns_query_passes_by_default(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -422,7 +422,7 @@ class TestEvent22Filter:
                 "dns_query": {"enabled": False},
             },
         ):
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
                 event_type="connection",
                 src_host=_win_host(),
@@ -435,7 +435,7 @@ class TestRenderEvent3:
     """Test Event 3 (NetworkConnect) rendering."""
 
     def test_renders_valid_event3(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -447,7 +447,7 @@ class TestRenderEvent3:
                 username="admin",
             ),
             auth=AuthContext(username="admin"),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="10.0.2.20",
                 src_port=49152,
@@ -468,7 +468,7 @@ class TestRenderEvent3:
 
     def test_event3_uses_source_native_timestamp_offset(self, emitter):
         event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="connection",
             src_host=_win_host(),
@@ -479,7 +479,7 @@ class TestRenderEvent3:
                 command_line="cmd",
                 username="admin",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="10.0.2.20",
                 src_port=49152,
@@ -503,7 +503,7 @@ class TestRenderEvent3:
         )
 
     def test_event3_normalizes_mail_hostname_to_port_family(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -514,7 +514,7 @@ class TestRenderEvent3:
                 command_line="svchost.exe",
                 username="NETWORK SERVICE",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="74.125.200.27",
                 src_port=49152,
@@ -537,7 +537,7 @@ class TestRenderEvent7:
     """Test Event 7 (ImageLoaded) rendering."""
 
     def test_renders_valid_event7(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -568,7 +568,7 @@ class TestRenderEvent7:
 
     def test_event7_system_dll_renders_windows_metadata(self, emitter):
         """System DLL image loads should not render application PE metadata."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -597,7 +597,7 @@ class TestRenderEvent7:
 
     def test_unsigned_event7_overrides_valid_signature_status(self, emitter):
         """Unsigned image loads should not render a contradictory Valid signature status."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -627,7 +627,7 @@ class TestRenderEvent7:
 
     def test_signed_event7_populates_vendor_metadata_when_catalog_missing(self, emitter):
         """Signed DLL loads should not render all PE metadata fields as '-'."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -655,7 +655,7 @@ class TestRenderEvent7:
 
     def test_program_files_module_metadata_is_not_windows_os_fallback(self, emitter):
         """Application DLLs should inherit package metadata instead of Windows OS fields."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -685,7 +685,7 @@ class TestRenderEvent7:
 
     def test_third_party_shell_extension_metadata_is_consistent(self, emitter):
         """7-Zip shell extension loads should render stable third-party metadata."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -719,7 +719,7 @@ class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""
 
     def test_renders_valid_event11(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="file_create",
             src_host=_win_host(),
@@ -753,14 +753,14 @@ class TestRenderEvent11:
             username="admin",
             start_time=start_time,
         )
-        process_event = SecurityEvent(
+        process_event = OccurrenceBuilder(
             timestamp=start_time,
             event_type="process_create",
             src_host=_win_host(),
             process=process,
             auth=AuthContext(username="admin"),
         )
-        file_event = SecurityEvent(
+        file_event = OccurrenceBuilder(
             timestamp=start_time,
             event_type="file_create",
             src_host=_win_host(),
@@ -794,7 +794,7 @@ class TestRenderEventRegistry:
     """Test Events 12/13 (Registry) rendering."""
 
     def test_modify_renders_event13(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -822,7 +822,7 @@ class TestRenderEventRegistry:
         assert "CurrentVersion\\Run" in content
 
     def test_delete_renders_event12(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -847,7 +847,7 @@ class TestRenderEventRegistry:
         assert "DeleteKey" in content
 
     def test_value_delete_context_renders_event13(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -883,7 +883,7 @@ class TestProcessCreateMetadata:
 
     def test_windows_os_binary_versions_are_consistent_per_host(self, emitter):
         host = _win_host()
-        first = SecurityEvent(
+        first = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -898,7 +898,7 @@ class TestProcessCreateMetadata:
                 start_time=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             ),
         )
-        second = SecurityEvent(
+        second = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
             event_type="process_create",
             src_host=host,
@@ -1119,11 +1119,11 @@ class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""
 
     def test_renders_valid_event22(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
             ),
             dns=DnsContext(query="evil-c2.com", rcode="NOERROR", answers=["1.2.3.4"]),
@@ -1142,11 +1142,11 @@ class TestRenderEvent22:
     def test_dns_query_uses_canonical_initiating_process(self, emitter):
         """Event 22 should preserve the application that initiated the lookup."""
         process_start = datetime(2024, 1, 15, 10, 29, 55, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="10.0.0.1",
                 src_port=49152,
@@ -1182,11 +1182,11 @@ class TestRenderEvent22:
     def test_dns_query_uses_source_latency_offset(self, emitter):
         """Sysmon Event 22 should not render at the exact Zeek DNS packet timestamp."""
         event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
             ),
             dns=DnsContext(
@@ -1203,11 +1203,11 @@ class TestRenderEvent22:
         assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
 
     def test_nxdomain_query_status(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
             ),
             dns=DnsContext(query="doesnotexist.com", rcode="NXDOMAIN", answers=[]),
@@ -1221,11 +1221,11 @@ class TestRenderEvent22:
         assert '<Data Name="QueryResults">-</Data>' in content
 
     def test_servfail_query_status(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
             ),
             dns=DnsContext(query="flaky.com", rcode="SERVFAIL", answers=[]),
@@ -1252,12 +1252,12 @@ class TestPidResolutionInFilter:
         mock_sm.get_process.return_value = mock_proc
         emitter._state_manager = mock_sm
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            # No ProcessContext — only initiating_pid on NetworkContext
-            network=NetworkContext(
+            # No ProcessContext — only initiating_pid on NetworkTransactionPlan
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="93.184.216.34",
                 src_port=49200,
@@ -1291,11 +1291,11 @@ class TestPidResolutionInFilter:
         mock_sm.get_process.return_value = mock_proc
         emitter._state_manager = mock_sm
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="93.184.216.34",
                 src_port=49200,
@@ -1320,7 +1320,7 @@ class TestTemplateCompleteness:
         return list(set(empty + whitespace))
 
     def test_event3_no_empty_required_fields(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
@@ -1332,7 +1332,7 @@ class TestTemplateCompleteness:
                 username="admin",
             ),
             auth=AuthContext(username="admin"),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="10.0.2.20",
                 src_port=49152,
@@ -1350,7 +1350,7 @@ class TestTemplateCompleteness:
         assert required_empty == [], f"Empty required fields in Event 3: {required_empty}"
 
     def test_event7_no_empty_required_fields(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="image_load",
             src_host=_win_host(),
@@ -1377,7 +1377,7 @@ class TestTemplateCompleteness:
         assert required_empty == [], f"Empty required fields in Event 7: {required_empty}"
 
     def test_event11_no_empty_required_fields(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="file_create",
             src_host=_win_host(),
@@ -1399,7 +1399,7 @@ class TestTemplateCompleteness:
         assert required_empty == [], f"Empty required fields in Event 11: {required_empty}"
 
     def test_event13_no_empty_required_fields(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
@@ -1426,11 +1426,11 @@ class TestTemplateCompleteness:
         assert '<Data Name="User">CORP\\admin</Data>' in content
 
     def test_event22_no_empty_required_fields(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="connection",
             src_host=_win_host(),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.1.10",
                 dst_ip="10.0.0.1",
                 src_port=49152,
@@ -1449,7 +1449,7 @@ class TestTemplateCompleteness:
 
     def test_sysmon_events_default_rule_name_to_dash(self, emitter):
         """Sysmon RuleName should be consistently populated when no rule matched."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=_win_host(),
@@ -1476,7 +1476,7 @@ class TestUserFieldFormatting:
     """Fix 1: NT AUTHORITY\\SYSTEM instead of DOMAIN\\SYSTEM."""
 
     def test_system_user_gets_nt_authority(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=_win_host(),
@@ -1496,7 +1496,7 @@ class TestUserFieldFormatting:
         assert "CORP\\SYSTEM" not in content
 
     def test_local_service_gets_nt_authority(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=_win_host(),
@@ -1516,7 +1516,7 @@ class TestUserFieldFormatting:
         assert "CORP\\LOCAL SERVICE" not in content
 
     def test_regular_user_gets_domain(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=_win_host(),
@@ -1535,7 +1535,7 @@ class TestUserFieldFormatting:
         assert "CORP\\jsmith" in content
 
     def test_event1_version5_includes_parent_user(self, emitter):
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="process_create",
             src_host=_win_host(),
@@ -1561,7 +1561,7 @@ class TestUserFieldFormatting:
 
     def test_process_access_target_user_gets_domain(self, emitter):
         """Sysmon Event 10 target user should use source-native domain formatting."""
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="process_access",
             src_host=_win_host(),
@@ -1655,7 +1655,7 @@ class TestEvent3PortProcessConstraints:
 
     def _make_conn_event(self, dst_port, image=None, initiating_pid=-1):
         host = _win_host()
-        net = NetworkContext(
+        net = network_plan(
             src_ip="10.0.1.10",
             dst_ip="10.0.2.20",
             src_port=49152,
@@ -1674,7 +1674,7 @@ class TestEvent3PortProcessConstraints:
             if image
             else None
         )
-        return SecurityEvent(
+        return OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
             src_host=host,

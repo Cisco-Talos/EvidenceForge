@@ -245,6 +245,27 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         self._compact_heap(force=True)
         return removed
 
+    def trim_earliest(self, capacity: int) -> list[tuple[K, V]]:
+        """Evict the earliest-deadline entries in ``O(r log n)`` time.
+
+        Use this for capacity bounds whose retention priority is already the
+        expiry deadline. It avoids sorting the entire live index every time a
+        high-volume workload crosses its cap.
+        """
+
+        if capacity < 0:
+            raise ValueError("ExpiringIndex capacity must be non-negative")
+        removed: list[tuple[K, V]] = []
+        while len(self._items) > capacity and self._heap:
+            deadline, _order, version, key = heapq.heappop(self._heap)
+            if self._versions.get(key) != version or self._deadlines.get(key) != deadline:
+                continue
+            value = self.pop(key)
+            if value is not None:
+                removed.append((key, value))
+        self._compact_heap_if_needed()
+        return removed
+
     def _compact_heap_if_needed(self) -> None:
         if len(self._heap) > 100_000 and len(self._heap) > len(self._items) * 4:
             self._compact_heap(force=True)

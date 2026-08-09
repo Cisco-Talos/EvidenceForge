@@ -8,6 +8,11 @@
 #
 # Overlay behavior: profile lists merge by name.
 
+# Stable per-name availability for public owners that do not have an explicit
+# provider profile below. Internal names only return AAAA when dns_registry.yaml
+# carries an explicit IPv6 mapping.
+generic_aaaa_probability: 0.62
+
 nameserver_profiles:
   - name: google
     weight: 0

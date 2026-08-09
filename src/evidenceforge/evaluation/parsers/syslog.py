@@ -29,7 +29,7 @@ from pathlib import Path
 
 from evidenceforge.output_targets import OutputTarget
 
-from . import LogParser, ParsedRecord, register_parser
+from . import LogParser, ParsedRecord, iter_bounded_text_lines, register_parser
 
 RFC5424_PATTERN = re.compile(
     r"^<(?P<pri>\d{1,3})>(?P<version>1)\s+"
@@ -138,21 +138,20 @@ class SyslogParser(LogParser):
         generated_rfc3164 = _path_year(path) is not None
         last_ts: datetime | None = None
 
-        with path.open(encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                record = self._parse_line(
-                    line,
-                    line_num,
-                    seed_year=seed_year,
-                    last_ts=last_ts,
-                    generated_rfc3164=generated_rfc3164,
-                )
-                if record.timestamp is not None:
-                    last_ts = record.timestamp
-                yield record
+        for line_num, line in iter_bounded_text_lines(path):
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            record = self._parse_line(
+                line,
+                line_num,
+                seed_year=seed_year,
+                last_ts=last_ts,
+                generated_rfc3164=generated_rfc3164,
+            )
+            if record.timestamp is not None:
+                last_ts = record.timestamp
+            yield record
 
     def _parse_line(
         self,

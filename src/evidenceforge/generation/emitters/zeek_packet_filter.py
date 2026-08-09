@@ -24,7 +24,7 @@
 
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -38,7 +38,7 @@ class ZeekPacketFilterEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_packet_filter.json"
     _supported_types: set[str] = {"sensor_startup"}
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render a sensor startup packet_filter.log entry."""
         if event.event_type != "sensor_startup":
             return

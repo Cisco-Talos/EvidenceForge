@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import tarfile
+import tempfile
 import zipfile
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -51,7 +54,9 @@ from evidenceforge.external_parsers.splunk_runtime import (
     reset_splunk_run_directories,
     run_splunk_compose,
 )
+from evidenceforge.models.exceptions import PathSafetyError
 from evidenceforge.output_targets import OutputTarget, read_output_target_marker
+from evidenceforge.utils.paths import open_regular_file_beneath, write_exclusive_child_stream
 
 JsonObject = dict[str, Any]
 ProgressCallback = Callable[[str, dict[str, Any]], None]
@@ -95,6 +100,25 @@ class StagedSplunkLog:
     subtype: str
     sourcetype: str
     record_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SplunkArchiveBudget:
+    """Resource limits for one operator-supplied Splunk application archive."""
+
+    max_members: int = 10_000
+    max_expanded_bytes: int = 2 * 1024 * 1024 * 1024
+    max_member_bytes: int = 512 * 1024 * 1024
+    max_compression_ratio: float = 200.0
+
+    def __post_init__(self) -> None:
+        if (
+            self.max_members < 1
+            or self.max_expanded_bytes < 1
+            or self.max_member_bytes < 1
+            or self.max_compression_ratio <= 0
+        ):
+            raise ValueError("Splunk archive budgets must be positive")
 
 
 @dataclass(frozen=True)
@@ -444,7 +468,7 @@ def stage_splunk_logs(
                 staged_relative = _staged_relative_path(relative, staged_paths)
                 staged = data_root / staged_relative
                 staged.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, staged)
+                _copy_regular_source_beneath(source_root, relative, staged)
                 logs.append(
                     StagedSplunkLog(
                         source=source,
@@ -474,7 +498,7 @@ def stage_splunk_logs(
                     logtype=logtype,
                     subtype=subtype,
                     sourcetype="",
-                    record_count=_count_records(source),
+                    record_count=_count_regular_records_beneath(source_root, relative),
                 )
             )
 
@@ -491,7 +515,7 @@ def stage_splunk_logs(
                 logtype="bash history",
                 subtype="bash_history",
                 sourcetype="",
-                record_count=_count_records(source),
+                record_count=_count_regular_records_beneath(source_root, relative),
             )
         )
 
@@ -558,21 +582,119 @@ def build_splunk_configs(
     )
 
 
-def stage_splunk_apps(app_paths: tuple[Path, ...], destination_root: Path) -> tuple[str, ...]:
+def stage_splunk_apps(
+    app_paths: tuple[Path, ...],
+    destination_root: Path,
+    *,
+    archive_budget: SplunkArchiveBudget | None = None,
+) -> tuple[str, ...]:
     """Copy or unpack user-supplied Splunk apps into ephemeral runtime state."""
+    destination_root.mkdir(parents=True, exist_ok=True)
+    effective_budget = archive_budget or SplunkArchiveBudget()
     app_names: list[str] = []
     for app_path in app_paths:
-        source = app_path.expanduser().resolve()
+        source = app_path.expanduser().absolute()
         if not source.exists():
             raise SplunkHarnessError(f"supplied Splunk app path does not exist: {source}")
+        if source.is_symlink():
+            raise SplunkHarnessError(f"supplied Splunk app path cannot be a symlink: {source}")
         if source.is_dir():
             destination = _unique_app_destination(destination_root, source.name)
-            shutil.copytree(source, destination, symlinks=False)
+            _copy_regular_app_tree(source, destination)
             app_names.append(destination.name)
             continue
-        extracted = _extract_app_archive(source, destination_root)
+        if not source.is_file():
+            raise SplunkHarnessError(f"supplied Splunk app path is not a regular file: {source}")
+        extracted = _extract_app_archive(
+            source,
+            destination_root,
+            budget=effective_budget,
+        )
         app_names.extend(path.name for path in extracted)
     return tuple(sorted(app_names))
+
+
+def _copy_regular_source_beneath(source_root: Path, relative: Path, destination: Path) -> None:
+    """Copy one regular source without following any source or destination symlink."""
+
+    try:
+        with open_regular_file_beneath(
+            source_root,
+            relative,
+            label="Splunk staged log",
+        ) as source:
+
+            def chunks() -> Iterator[bytes]:
+                while chunk := source.read(1024 * 1024):
+                    yield chunk
+
+            write_exclusive_child_stream(
+                destination.parent,
+                destination.name,
+                chunks(),
+                label="Splunk staged log",
+            )
+    except PathSafetyError as exc:
+        raise SplunkHarnessError(str(exc)) from exc
+
+
+def _count_regular_records_beneath(
+    source_root: Path,
+    relative: Path,
+    *,
+    skip_comments: bool = False,
+) -> int:
+    """Count records through the same no-symlink source boundary used for staging."""
+
+    try:
+        with open_regular_file_beneath(
+            source_root,
+            relative,
+            label="Splunk source log",
+        ) as source:
+            return sum(
+                1
+                for line in source
+                if line.strip() and not (skip_comments and line.lstrip().startswith(b"#"))
+            )
+    except PathSafetyError as exc:
+        raise SplunkHarnessError(str(exc)) from exc
+
+
+def _copy_regular_app_tree(source_root: Path, destination_root: Path) -> None:
+    """Copy one application tree while rejecting links and special files."""
+
+    destination_root.mkdir()
+    try:
+        pending: list[Path] = [Path()]
+        while pending:
+            relative_dir = pending.pop()
+            source_dir = source_root / relative_dir
+            destination_dir = destination_root / relative_dir
+            with os.scandir(source_dir) as entries:
+                for entry in sorted(entries, key=lambda item: item.name):
+                    relative = relative_dir / entry.name
+                    metadata = entry.stat(follow_symlinks=False)
+                    if entry.is_symlink():
+                        raise SplunkHarnessError(
+                            f"supplied Splunk app contains a symlink: {source_root / relative}"
+                        )
+                    if stat.S_ISDIR(metadata.st_mode):
+                        (destination_root / relative).mkdir()
+                        pending.append(relative)
+                        continue
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise SplunkHarnessError(
+                            f"supplied Splunk app contains a special file: {source_root / relative}"
+                        )
+                    _copy_regular_source_beneath(
+                        source_root,
+                        relative,
+                        destination_dir / entry.name,
+                    )
+    except (OSError, SplunkHarnessError):
+        shutil.rmtree(destination_root, ignore_errors=True)
+        raise
 
 
 def validate_splunk_output(
@@ -1202,18 +1324,26 @@ def require_splunk_output_target(data_dir: Path) -> OutputTarget:
     return output_target
 
 
-def _extract_app_archive(source: Path, destination_root: Path) -> tuple[Path, ...]:
-    temp_dir = destination_root / f".extract-{source.stem}"
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-    temp_dir.mkdir(parents=True)
+def _extract_app_archive(
+    source: Path,
+    destination_root: Path,
+    *,
+    budget: SplunkArchiveBudget,
+) -> tuple[Path, ...]:
+    destination_root.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=".extract-", dir=destination_root))
     try:
         if zipfile.is_zipfile(source):
             with zipfile.ZipFile(source) as archive:
-                _safe_zip_extract(archive, temp_dir)
+                _safe_zip_extract(archive, temp_dir, budget=budget)
         elif tarfile.is_tarfile(source):
             with tarfile.open(source) as archive:
-                _safe_tar_extract(archive, temp_dir)
+                _safe_tar_extract(
+                    archive,
+                    temp_dir,
+                    budget=budget,
+                    archive_bytes=source.stat().st_size,
+                )
         else:
             raise SplunkHarnessError(f"unsupported Splunk app archive type: {source}")
         roots = [path for path in temp_dir.iterdir() if path.is_dir()]
@@ -1227,37 +1357,176 @@ def _extract_app_archive(source: Path, destination_root: Path) -> tuple[Path, ..
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _safe_zip_extract(archive: zipfile.ZipFile, destination: Path) -> None:
-    destination = destination.resolve()
-    for member in archive.infolist():
-        target = (destination / member.filename).resolve()
-        if not target.is_relative_to(destination):
-            raise SplunkHarnessError(f"unsafe path in Splunk app archive: {member.filename}")
-    archive.extractall(destination)
+def _safe_zip_extract(
+    archive: zipfile.ZipFile,
+    destination: Path,
+    *,
+    budget: SplunkArchiveBudget,
+) -> None:
+    members = archive.infolist()
+    _enforce_archive_member_count(len(members), budget)
+    expanded_bytes = sum(member.file_size for member in members)
+    _enforce_archive_expanded_bytes(expanded_bytes, budget)
+    compressed_bytes = sum(member.compress_size for member in members)
+    _enforce_archive_ratio(expanded_bytes, compressed_bytes, budget)
+    normalized: set[Path] = set()
+    for member in members:
+        relative = _safe_archive_member_path(member.filename)
+        _reject_duplicate_archive_member(relative, normalized)
+        mode = member.external_attr >> 16
+        file_type = stat.S_IFMT(mode)
+        if file_type not in {0, stat.S_IFREG, stat.S_IFDIR}:
+            raise SplunkHarnessError(
+                f"unsupported file type in Splunk app archive: {member.filename}"
+            )
+        if member.file_size > budget.max_member_bytes:
+            raise SplunkHarnessError(
+                f"Splunk app archive member exceeds {budget.max_member_bytes} bytes: "
+                f"{member.filename}"
+            )
+        if member.file_size and member.file_size / max(1, member.compress_size) > (
+            budget.max_compression_ratio
+        ):
+            raise SplunkHarnessError(
+                f"Splunk app archive member exceeds {budget.max_compression_ratio}:1 "
+                f"compression ratio: {member.filename}"
+            )
+        if member.is_dir():
+            (destination / relative).mkdir(parents=True, exist_ok=True)
+            continue
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(member, "r") as source:
+            _write_archive_member(
+                source,
+                target,
+                expected_bytes=member.file_size,
+                budget=budget,
+            )
 
 
-def _safe_tar_extract(archive: tarfile.TarFile, destination: Path) -> None:
-    destination = destination.resolve()
-    for member in archive.getmembers():
-        target = (destination / member.name).resolve()
-        if not target.is_relative_to(destination):
-            raise SplunkHarnessError(f"unsafe path in Splunk app archive: {member.name}")
+def _safe_tar_extract(
+    archive: tarfile.TarFile,
+    destination: Path,
+    *,
+    budget: SplunkArchiveBudget,
+    archive_bytes: int,
+) -> None:
+    members = archive.getmembers()
+    _enforce_archive_member_count(len(members), budget)
+    expanded_bytes = sum(member.size for member in members if member.isfile())
+    _enforce_archive_expanded_bytes(expanded_bytes, budget)
+    _enforce_archive_ratio(expanded_bytes, archive_bytes, budget)
+    normalized: set[Path] = set()
+    for member in members:
+        relative = _safe_archive_member_path(member.name)
+        _reject_duplicate_archive_member(relative, normalized)
         if not (member.isdir() or member.isfile()):
             raise SplunkHarnessError(f"unsupported file type in Splunk app archive: {member.name}")
+        if member.size > budget.max_member_bytes:
+            raise SplunkHarnessError(
+                f"Splunk app archive member exceeds {budget.max_member_bytes} bytes: {member.name}"
+            )
+        target = destination / relative
         if member.isdir():
             target.mkdir(parents=True, exist_ok=True)
             continue
-
         target.parent.mkdir(parents=True, exist_ok=True)
         source = archive.extractfile(member)
         if source is None:
             raise SplunkHarnessError(f"failed to read Splunk app archive member: {member.name}")
-        with source, target.open("wb") as output:
-            shutil.copyfileobj(source, output)
+        with source:
+            _write_archive_member(
+                source,
+                target,
+                expected_bytes=member.size,
+                budget=budget,
+            )
+
+
+def _safe_archive_member_path(name: str) -> Path:
+    """Normalize one portable archive member name without resolving filesystem links."""
+
+    portable = name.replace("\\", "/")
+    if portable.startswith("/"):
+        raise SplunkHarnessError(f"unsafe path in Splunk app archive: {name}")
+    parts = [part for part in portable.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts) or (parts and parts[0].endswith(":")):
+        raise SplunkHarnessError(f"unsafe path in Splunk app archive: {name}")
+    return Path(*parts) if parts else Path(".")
+
+
+def _reject_duplicate_archive_member(relative: Path, seen: set[Path]) -> None:
+    if relative in seen:
+        raise SplunkHarnessError(f"duplicate path in Splunk app archive: {relative}")
+    seen.add(relative)
+
+
+def _enforce_archive_member_count(count: int, budget: SplunkArchiveBudget) -> None:
+    if count > budget.max_members:
+        raise SplunkHarnessError(
+            f"Splunk app archive has {count} members; limit is {budget.max_members}"
+        )
+
+
+def _enforce_archive_expanded_bytes(expanded: int, budget: SplunkArchiveBudget) -> None:
+    if expanded > budget.max_expanded_bytes:
+        raise SplunkHarnessError(
+            f"Splunk app archive expands to {expanded} bytes; limit is {budget.max_expanded_bytes}"
+        )
+
+
+def _enforce_archive_ratio(
+    expanded: int,
+    compressed: int,
+    budget: SplunkArchiveBudget,
+) -> None:
+    ratio = expanded / max(1, compressed)
+    if ratio > budget.max_compression_ratio:
+        raise SplunkHarnessError(
+            f"Splunk app archive compression ratio {ratio:.1f}:1 exceeds "
+            f"{budget.max_compression_ratio}:1"
+        )
+
+
+def _write_archive_member(
+    source: Any,
+    target: Path,
+    *,
+    expected_bytes: int,
+    budget: SplunkArchiveBudget,
+) -> None:
+    """Stream one preflighted member and reject metadata/content size disagreement."""
+
+    def chunks() -> Iterator[bytes]:
+        actual = 0
+        while chunk := source.read(1024 * 1024):
+            actual += len(chunk)
+            if actual > expected_bytes:
+                raise SplunkHarnessError(
+                    f"Splunk app archive member exceeded declared size: {target.name}"
+                )
+            yield chunk
+        if actual != expected_bytes:
+            raise SplunkHarnessError(
+                f"Splunk app archive member size mismatch for {target.name}: "
+                f"expected {expected_bytes}, read {actual}"
+            )
+
+    try:
+        write_exclusive_child_stream(
+            target.parent,
+            target.name,
+            chunks(),
+            label="Splunk app archive member",
+            max_bytes=budget.max_member_bytes,
+        )
+    except PathSafetyError as exc:
+        raise SplunkHarnessError(str(exc)) from exc
 
 
 def _unique_app_destination(destination_root: Path, app_name: str) -> Path:
-    safe = app_name.replace("/", "_").replace("\\", "_")
+    safe = _safe_stage_part(app_name)
     candidate = destination_root / safe
     suffix = 1
     while candidate.exists():

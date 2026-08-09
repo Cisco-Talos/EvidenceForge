@@ -204,11 +204,22 @@ def test_public_dns_aaaa_known_owner_without_profile_uses_nodata_not_fake_ipv6(m
     assert _public_dns_aaaa_answers("api.webexapis.com", "23.45.118.80") == []
 
 
-def test_public_dns_aaaa_generic_unknown_domain_keeps_deterministic_fallback():
-    answers = _public_dns_aaaa_answers("api.wellbridge-services.net", "45.56.88.10")
+def test_public_dns_aaaa_generic_unknown_domain_has_stable_mixed_availability():
+    samples = [
+        _public_dns_aaaa_answers(f"api-{index}.wellbridge-services.net", f"45.56.88.{index}")
+        for index in range(1, 41)
+    ]
 
-    assert len(answers) == 1
-    assert ":" in answers[0]
+    assert samples == [
+        _public_dns_aaaa_answers(f"api-{index}.wellbridge-services.net", f"45.56.88.{index}")
+        for index in range(1, 41)
+    ]
+    assert any(samples)
+    assert any(not answers for answers in samples)
+
+
+def test_internal_aaaa_requires_explicit_ipv6_identity():
+    assert _public_dns_aaaa_answers("wks-01.corp.local", "10.10.10.50", is_internal=True) == []
 
 
 def test_public_dns_soa_serials_do_not_look_future_date_coded():

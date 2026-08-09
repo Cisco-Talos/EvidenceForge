@@ -38,10 +38,10 @@ from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
-from threading import Lock
+from threading import Lock, local
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.timing_profiles import (
@@ -323,7 +323,9 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     return netbios_domain
 
 
-def _logon_workstation_name(auth: AuthContext, host: HostContext, event: SecurityEvent) -> str:
+def _logon_workstation_name(
+    auth: AuthContext, host: HostContext, event: CanonicalOccurrence
+) -> str:
     """Return native Windows WorkstationName semantics for successful logons."""
     if auth.workstation_name:
         return auth.workstation_name
@@ -518,7 +520,6 @@ class WindowsEventEmitter(LogEmitter):
         "account_changed",
         "password_change",
         "password_reset",
-        "special_privileges",
         "workstation_locked",
         "workstation_unlocked",
     }
@@ -541,7 +542,7 @@ class WindowsEventEmitter(LogEmitter):
             normalized[field] = normalize_windows_id_value(value)
         return normalized
 
-    def _event_rng(self, event: SecurityEvent, salt: str = "") -> random.Random:
+    def _event_rng(self, event: CanonicalOccurrence, salt: str = "") -> random.Random:
         """Return a deterministic renderer-local RNG for incidental Windows fields."""
         host = event.src_host or event.dst_host
         parts: list[object] = [
@@ -588,7 +589,6 @@ class WindowsEventEmitter(LogEmitter):
         "logoff",
         "failed_logon",
         "machine_logon",
-        "special_privileges",
         "kerberos_tgt",
         "kerberos_tgt_renewal",
         "kerberos_service",
@@ -610,13 +610,13 @@ class WindowsEventEmitter(LogEmitter):
         "workstation_unlocked",
     }
 
-    def _get_host(self, event: SecurityEvent) -> "HostContext":
+    def _get_host(self, event: CanonicalOccurrence) -> "HostContext":
         """Select the correct Windows host for this event type."""
         if event.event_type in self._DST_HOST_TYPES:
             return event.dst_host or event.src_host
         return event.src_host or event.dst_host
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Windows emitter handles events on Windows hosts."""
         host = self._get_host(event)
         return (
@@ -625,9 +625,11 @@ class WindowsEventEmitter(LogEmitter):
             and host.os_category == "windows"
         )
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Dispatch to per-type render method."""
         self._current_storyline_origin = event.storyline_origin
+        host = self._get_host(event)
+        self._emission_context.host_type = host.system_type if host is not None else ""
         renderer = {
             "logon": self._render_logon,
             "logoff": self._render_logoff,
@@ -660,7 +662,6 @@ class WindowsEventEmitter(LogEmitter):
             "account_changed": self._render_account_changed,
             "password_change": self._render_password_change,
             "password_reset": self._render_password_reset,
-            "special_privileges": self._render_special_privileges,
             "workstation_locked": self._render_workstation_lock,
             "workstation_unlocked": self._render_workstation_unlock,
         }.get(event.event_type)
@@ -672,8 +673,9 @@ class WindowsEventEmitter(LogEmitter):
             renderer(event)
         finally:
             self._current_storyline_origin = False
+            self._emission_context.host_type = ""
 
-    def _render_logon(self, event: SecurityEvent) -> None:
+    def _render_logon(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -685,7 +687,7 @@ class WindowsEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 4624,
-            "_auth_occurrence_id": event.event_id,
+            "_auth_occurrence_id": event.occurrence_id,
             "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
@@ -721,7 +723,7 @@ class WindowsEventEmitter(LogEmitter):
             privs = auth.privilege_list or _special_privilege_fallback(auth.username)
             priv_data = {
                 "EventID": 4672,
-                "_auth_occurrence_id": event.event_id,
+                "_auth_occurrence_id": event.occurrence_id,
                 "TimeCreated": event.timestamp,
                 "Computer": host.fqdn,
                 "Channel": "Security",
@@ -742,6 +744,11 @@ class WindowsEventEmitter(LogEmitter):
         auth: AuthContext,
     ) -> tuple[int, str]:
         """Return EventData ProcessId/ProcessName for source-native 4624 semantics."""
+        if auth.logon_type in {2, 7, 10, 11} and auth.process_pid > 0:
+            return (
+                auth.process_pid,
+                auth.process_name or r"C:\Windows\System32\winlogon.exe",
+            )
         caller_by_type = {
             2: ("winlogon", 0x280, r"C:\Windows\System32\winlogon.exe"),
             4: ("services", 0x2BC, r"C:\Windows\System32\services.exe"),
@@ -757,36 +764,7 @@ class WindowsEventEmitter(LogEmitter):
         sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
         return int(sys_pids.get(role, default_pid)), process_name
 
-    def _render_special_privileges(self, event: SecurityEvent) -> None:
-        """Render standalone Windows 4672 (Special Privileges Assigned).
-
-        Used for explicit standalone 4672 events. Normal elevated logons render
-        4672 from _render_logon() so the privilege event shares the target
-        host and LogonID with its 4624.
-        """
-        rng = self._event_rng(event)
-        auth = event.auth
-        host = self._get_host(event)
-
-        privs = auth.privilege_list or _special_privilege_fallback(auth.username)
-
-        priv_data = {
-            "EventID": 4672,
-            "TimeCreated": event.timestamp,
-            "Computer": host.fqdn,
-            "Channel": "Security",
-            "Level": 0,
-            "ExecutionProcessID": auth.reporting_pid or 600,
-            "ExecutionThreadID": rng.randint(100, 500),
-            "SubjectUserSid": auth.user_sid,
-            "SubjectUserName": auth.username,
-            "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
-            "SubjectLogonId": auth.logon_id or "0x0",
-            "PrivilegeList": privs,
-        }
-        self.emit_event(priv_data)
-
-    def _render_workstation_lock(self, event: SecurityEvent) -> None:
+    def _render_workstation_lock(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4800 (workstation locked)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -808,7 +786,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_workstation_unlock(self, event: SecurityEvent) -> None:
+    def _render_workstation_unlock(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4801 (workstation unlocked)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -830,7 +808,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_logoff(self, event: SecurityEvent) -> None:
+    def _render_logoff(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4634 (logoff)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -854,7 +832,7 @@ class WindowsEventEmitter(LogEmitter):
             event_data["_storyline_origin"] = True
         self.emit_event(event_data)
 
-    def _render_failed_logon(self, event: SecurityEvent) -> None:
+    def _render_failed_logon(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4625 (failed logon)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -897,7 +875,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_process_create(self, event: SecurityEvent) -> None:
+    def _render_process_create(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4688 (new process created)."""
         rng = self._event_rng(event)
         proc = event.process
@@ -939,7 +917,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_process_terminate(self, event: SecurityEvent) -> None:
+    def _render_process_terminate(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4689 (process exited)."""
         rng = self._event_rng(event)
         proc = event.process
@@ -973,7 +951,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_system_process_create(self, event: SecurityEvent) -> None:
+    def _render_system_process_create(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4688 for system-account process (SYSTEM, LOCAL SERVICE, etc.)."""
         rng = self._event_rng(event)
         proc = event.process
@@ -1015,7 +993,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_machine_logon(self, event: SecurityEvent) -> None:
+    def _render_machine_logon(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4624 for machine account logon (type 3 on DC)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1026,7 +1004,7 @@ class WindowsEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 4624,
-            "_auth_occurrence_id": event.event_id,
+            "_auth_occurrence_id": event.occurrence_id,
             "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
@@ -1067,7 +1045,7 @@ class WindowsEventEmitter(LogEmitter):
         if auth.elevated and auth.emit_special_privileges:
             priv_data = {
                 "EventID": 4672,
-                "_auth_occurrence_id": event.event_id,
+                "_auth_occurrence_id": event.occurrence_id,
                 "TimeCreated": event.timestamp,
                 "Computer": host.fqdn,
                 "Channel": "Security",
@@ -1088,7 +1066,7 @@ class WindowsEventEmitter(LogEmitter):
             }
             self.emit_event(priv_data)
 
-    def _render_kerberos_tgt(self, event: SecurityEvent) -> None:
+    def _render_kerberos_tgt(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4768 (Kerberos TGT request)."""
         rng = self._event_rng(event)
         krb = event.kerberos
@@ -1121,7 +1099,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_kerberos_service(self, event: SecurityEvent) -> None:
+    def _render_kerberos_service(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4769 (Kerberos service ticket request)."""
         rng = self._event_rng(event)
         krb = event.kerberos
@@ -1149,7 +1127,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_kerberos_tgt_renewal(self, event: SecurityEvent) -> None:
+    def _render_kerberos_tgt_renewal(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4770 (Kerberos TGT renewal)."""
         rng = self._event_rng(event)
         krb = event.kerberos
@@ -1175,7 +1153,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_ntlm_validation(self, event: SecurityEvent) -> None:
+    def _render_ntlm_validation(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4776 (NTLM credential validation)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1196,7 +1174,7 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_explicit_credentials(self, event: SecurityEvent) -> None:
+    def _render_explicit_credentials(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4648 (explicit credentials logon)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1223,19 +1201,23 @@ class WindowsEventEmitter(LogEmitter):
             "TargetInfo": auth.target_server or "localhost",
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
-            "NetworkAddress": auth.source_ip or "-",
-            "NetworkPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
+            "IpAddress": auth.source_ip or "-",
+            "IpPort": _windows_endpoint_port(auth.source_ip or "-", auth.source_port),
         }
         self.emit_event(event_data)
 
-    def _render_wfp_connection(self, event: SecurityEvent) -> None:
+    def _render_wfp_connection(self, event: CanonicalOccurrence) -> None:
         """Render Windows 5156 (WFP connection permitted)."""
         rng = self._event_rng(event)
         net = event.network
         host = self._get_host(event)
         proc = event.process
         is_outbound = net.src_ip == host.ip
-        pid = net.initiating_pid if net.initiating_pid > 0 else 4
+        local_process_pid = proc.pid if proc is not None and proc.pid > 0 else -1
+        if is_outbound:
+            pid = local_process_pid if local_process_pid > 0 else net.initiating_pid
+        else:
+            pid = local_process_pid if local_process_pid > 0 else net.responding_pid
         image = proc.image if proc else ""
         if is_outbound and net.protocol.lower() == "udp" and net.dst_port == 53:
             sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
@@ -1248,6 +1230,8 @@ class WindowsEventEmitter(LogEmitter):
                 if running is not None:
                     image = running.image
         if not image:
+            if pid <= 0:
+                return
             if pid == 4:
                 image = "System"
             else:
@@ -1356,7 +1340,7 @@ class WindowsEventEmitter(LogEmitter):
 
     # --- Phase 1: Kerberos Pre-Auth Failed (4771) ---
 
-    def _render_kerberos_preauth_failed(self, event: SecurityEvent) -> None:
+    def _render_kerberos_preauth_failed(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4771 (Kerberos pre-authentication failed)."""
         rng = self._event_rng(event)
         krb = event.kerberos
@@ -1386,7 +1370,7 @@ class WindowsEventEmitter(LogEmitter):
 
     # --- Phase 2: Security Log Cleared (1102) ---
 
-    def _render_log_cleared(self, event: SecurityEvent) -> None:
+    def _render_log_cleared(self, event: CanonicalOccurrence) -> None:
         """Render Windows 1102 (security log cleared)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1410,7 +1394,7 @@ class WindowsEventEmitter(LogEmitter):
 
     # --- Phase 3: Service Installed (4697) ---
 
-    def _render_service_installed(self, event: SecurityEvent) -> None:
+    def _render_service_installed(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4697 (service installed in the system)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1446,7 +1430,7 @@ class WindowsEventEmitter(LogEmitter):
         "scheduled_task_disabled": 4701,
     }
 
-    def _render_scheduled_task(self, event: SecurityEvent) -> None:
+    def _render_scheduled_task(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4698/4699/4700/4701 (scheduled task operations)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1481,7 +1465,7 @@ class WindowsEventEmitter(LogEmitter):
         "group_member_removed_universal": 4757,
     }
 
-    def _render_group_membership_change(self, event: SecurityEvent) -> None:
+    def _render_group_membership_change(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4728/4729/4732/4733/4756/4757 (group membership change)."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1511,15 +1495,15 @@ class WindowsEventEmitter(LogEmitter):
 
     # --- Phase 6: Account Management (4720/4723/4724/4726/4738) ---
 
-    def _render_account_created(self, event: SecurityEvent) -> None:
+    def _render_account_created(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4720 (user account created)."""
         self._render_account_full(event, 4720)
 
-    def _render_account_changed(self, event: SecurityEvent) -> None:
+    def _render_account_changed(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4738 (user account changed)."""
         self._render_account_full(event, 4738)
 
-    def _render_account_full(self, event: SecurityEvent, event_id: int) -> None:
+    def _render_account_full(self, event: CanonicalOccurrence, event_id: int) -> None:
         """Render 4720/4738 with full account property fields."""
         rng = self._event_rng(event)
         auth = event.auth
@@ -1550,20 +1534,20 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
-    def _render_account_deleted(self, event: SecurityEvent) -> None:
+    def _render_account_deleted(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4726 (user account deleted)."""
         self._render_account_simple(event, 4726, include_privs=True)
 
-    def _render_password_reset(self, event: SecurityEvent) -> None:
+    def _render_password_reset(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4724 (password reset attempt)."""
         self._render_account_simple(event, 4724, include_privs=False)
 
-    def _render_password_change(self, event: SecurityEvent) -> None:
+    def _render_password_change(self, event: CanonicalOccurrence) -> None:
         """Render Windows 4723 (password change attempt)."""
         self._render_account_simple(event, 4723, include_privs=True)
 
     def _render_account_simple(
-        self, event: SecurityEvent, event_id: int, include_privs: bool
+        self, event: CanonicalOccurrence, event_id: int, include_privs: bool
     ) -> None:
         """Render 4723/4724/4726 with minimal account fields."""
         rng = self._event_rng(event)
@@ -1609,13 +1593,12 @@ class WindowsEventEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
         # Buffer raw event dicts instead of rendered strings
         self._event_dicts: list[dict[str, Any]] = []
-        # Per-computer RecordID counters persist across flushes
-        self._record_id_counters: dict[str, int] = {}
         self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._current_storyline_origin: bool = False
+        self._emission_context = local()
         self._spool_dir: Path | None = None
         self._owns_spool_dir: bool = False
         self._spool_path: Path | None = None
@@ -1688,6 +1671,9 @@ class WindowsEventEmitter(LogEmitter):
         _normalize_wfp_layer_fields(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
+        host_type = getattr(self._emission_context, "host_type", "")
+        if host_type:
+            event_data["_host_type"] = host_type
         if self.threaded:
             self._emit_threaded(event_data)
         else:
@@ -2380,14 +2366,17 @@ class WindowsEventEmitter(LogEmitter):
             computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             sequence_model = self._record_id_sequences.setdefault(
-                counter_key, WindowsRecordIdSequence("security", counter_key)
+                counter_key,
+                WindowsRecordIdSequence(
+                    "security",
+                    counter_key,
+                    str(event.get("_host_type") or ""),
+                ),
             )
             event["EventRecordID"] = sequence_model.next(
                 event.get("TimeCreated"),
                 coerce_windows_event_id(event.get("EventID")),
             )
-            self._record_id_counters[counter_key] = sequence_model.current
-
             normalized_time = event.get("TimeCreated")
             if isinstance(normalized_time, datetime):
                 current_time = ensure_utc(normalized_time)

@@ -383,7 +383,7 @@ def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]
 
     Checks for addresses that should never appear in generated traffic
     (localhost, link-local, multicast). Same-host connections (src==dst) are
-    valid for host-based logs and handled separately via SecurityEvent.local_only.
+    valid for host-based logs and handled separately via OccurrenceBuilder.local_only.
 
     Args:
         src_ip: Source IP address

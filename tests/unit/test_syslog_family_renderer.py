@@ -24,7 +24,7 @@
 
 from datetime import UTC, datetime
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, SyslogContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.syslog import (
@@ -131,7 +131,7 @@ def test_syslog_close_preserves_canonical_sshd_child_pids(tmp_path) -> None:
     ]
     for timestamp, pid, source_ip, source_port in rows:
         emitter.emit(
-            SecurityEvent(
+            OccurrenceBuilder(
                 timestamp=timestamp,
                 event_type="syslog",
                 src_host=host,

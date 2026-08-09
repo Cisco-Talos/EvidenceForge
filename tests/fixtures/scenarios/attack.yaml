@@ -41,6 +41,22 @@ environment:
       os: "Windows Server 2019"
       type: domain_controller
 
+  network:
+    segments:
+      - name: workstations
+        cidr: "10.0.10.0/24"
+        exposure: internal
+      - name: servers
+        cidr: "10.0.1.0/24"
+        exposure: internal
+    sensors:
+      - name: core-network
+        type: network
+        placement: span
+        monitoring_segments: [workstations, servers]
+        direction: bidirectional
+        log_formats: [zeek]
+
 time_window:
   start: "2024-01-15T10:00:00Z"
   duration: "4h"

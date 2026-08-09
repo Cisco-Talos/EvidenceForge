@@ -169,7 +169,7 @@ class TestSystemdProcessLifecycle:
             for c in mock_emitters["ecar"].emit.call_args_list
             if c[0][0].event_type == "system_process_create"
         ][-1]
-        create_obj_id = create_event.edr.object_id
+        create_obj_id = create_event.identity_plan.object_id
 
         # Finished
         activity_gen.generate_system_process_termination(
@@ -187,7 +187,7 @@ class TestSystemdProcessLifecycle:
             for c in mock_emitters["ecar"].emit.call_args_list
             if c[0][0].event_type == "process_terminate"
         ][-1]
-        assert terminate_event.edr.object_id == create_obj_id
+        assert terminate_event.identity_plan.object_id == create_obj_id
         assert create_obj_id != ""
 
     def test_syslog_message_override_does_not_affect_cron(

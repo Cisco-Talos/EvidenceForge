@@ -234,12 +234,12 @@ class TestOverallDimension:
         assert result.score is not None
         assert len(result.sub_scores) == 2
 
-    def test_empty_records_score_perfect(self):
-        """No records means nothing to fail — default to 100."""
+    def test_empty_records_do_not_score_perfect(self):
+        """An empty dataset cannot prove source-schema conformance."""
         scorer = RecordFidelityScorer()
         scenario = MagicMock()
         result = scorer.score({}, scenario)
-        assert result.score == 100.0
+        assert result.score == 0.0
 
 
 class TestWindowsVariantMapCoverage:
@@ -275,6 +275,33 @@ class TestWindowsVariantMapCoverage:
 
         assert WINDOWS_VARIANT_MAP[4800] == "workstation_locked"
         assert WINDOWS_VARIANT_MAP[4801] == "workstation_unlocked"
+
+    def test_event_4648_provider_field_snapshot(self):
+        """Event 4648 uses provider-native XML names and manifest field order."""
+
+        from evidenceforge.formats import load_format
+
+        fmt = load_format("windows_event_security")
+        variant = next(item for item in fmt.variants if item.event_id == "4648")
+
+        assert [field.name for field in variant.fields] == [
+            "SubjectUserSid",
+            "SubjectUserName",
+            "SubjectDomainName",
+            "SubjectLogonId",
+            "LogonGuid",
+            "TargetUserName",
+            "TargetDomainName",
+            "TargetLogonGuid",
+            "TargetServerName",
+            "TargetInfo",
+            "ProcessId",
+            "ProcessName",
+            "IpAddress",
+            "IpPort",
+        ]
+        assert "NetworkAddress" not in fmt.output.template
+        assert "NetworkPort" not in fmt.output.template
 
     def test_sysmon_event_data_variant_resolves(self):
         """Sysmon EventID 3 must validate against its event-specific fields."""

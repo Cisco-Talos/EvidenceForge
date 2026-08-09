@@ -523,32 +523,21 @@ programs:
 
   - app: irqbalance
     weight: 1
+    parameter_profiles:
+      - {irq: "16", device: ahci, cpu: "0"}
+      - {irq: "24", device: ens160, cpu: "1"}
+      - {irq: "32", device: nvme0q1, cpu: "2"}
+      - {irq: "45", device: virtio0-input, cpu: "0"}
+      - {irq: "64", device: mlx5_comp0, cpu: "3"}
+      - {irq: "86", device: mlx5_comp1, cpu: "2"}
+      - {irq: "122", device: nvme0q2, cpu: "1"}
+      - {irq: "137", device: ens192, cpu: "3"}
+      - {irq: "154", device: virtio1-input, cpu: "2"}
+      - {irq: "181", device: mlx5_comp2, cpu: "0"}
     params:
-      cpu:
-        - "0"
-        - "1"
-        - "2"
-        - "3"
       numa_node:
         - "0"
         - "1"
-      irq:
-        - "16"
-        - "24"
-        - "32"
-        - "45"
-        - "64"
-        - "86"
-        - "122"
-        - "137"
-        - "154"
-        - "181"
-      device:
-        - ens160
-        - nvme0q1
-        - ahci
-        - virtio0-input
-        - mlx5_comp0
       affinity_mask:
         - "00000001"
         - "00000002"

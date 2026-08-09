@@ -103,6 +103,7 @@ environment:
       os: "Windows 11 Enterprise"
       type: workstation
       assigned_user: james.walker
+      services: [rdp, dns-client, ntp-client, smb-client, kerberos-client, ldap-client]
 
     - hostname: WS-SLIU-01
       ip: "10.20.10.14"
@@ -154,10 +155,13 @@ environment:
     segments:
       - name: workstations
         cidr: "10.20.10.0/24"
+        exposure: internal
       - name: servers
         cidr: "10.20.30.0/24"
+        exposure: internal
       - name: dmz
         cidr: "10.20.40.0/24"
+        exposure: both
 
     sensors:
       - name: zeek-core

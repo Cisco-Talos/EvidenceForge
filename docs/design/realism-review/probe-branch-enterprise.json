@@ -1,0 +1,828 @@
+{
+  "collection_window_epoch": [
+    1715688000.0,
+    1715709600.0
+  ],
+  "dataset": "/private/tmp/eforge-realism-review/branch-enterprise",
+  "files": {
+    "json": {
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/DC-BO-01.northstar-branch.local/ecar.json": 4622,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/FILE-BO-01.northstar-branch.local/ecar.json": 2295,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/PROXY-BO-01.northstar-branch.local/ecar.json": 2036,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WEB-BO-01.northstar-branch.local/ecar.json": 2224,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-LMORRIS-01.northstar-branch.local/ecar.json": 889,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-MPATEL-01.northstar-branch.local/ecar.json": 841,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json": 1088,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-OREED-01.northstar-branch.local/ecar.json": 850,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-VHALE-01.northstar-branch.local/ecar.json": 892,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/conn.json": 6032,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/dhcp.json": 47,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/dns.json": 1060,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json": 784,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/http.json": 662,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/ocsp.json": 36,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/pe.json": 2,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/ssl.json": 1011,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/x509.json": 577
+    },
+    "xml": {
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/DC-BO-01.northstar-branch.local/windows_event_security.xml": 4995,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/DC-BO-01.northstar-branch.local/windows_event_sysmon.xml": 855,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/FILE-BO-01.northstar-branch.local/windows_event_security.xml": 1767,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/FILE-BO-01.northstar-branch.local/windows_event_sysmon.xml": 464,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-LMORRIS-01.northstar-branch.local/windows_event_security.xml": 515,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-LMORRIS-01.northstar-branch.local/windows_event_sysmon.xml": 393,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-MPATEL-01.northstar-branch.local/windows_event_security.xml": 451,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-MPATEL-01.northstar-branch.local/windows_event_sysmon.xml": 320,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/windows_event_security.xml": 676,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/windows_event_sysmon.xml": 517,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-OREED-01.northstar-branch.local/windows_event_security.xml": 519,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-OREED-01.northstar-branch.local/windows_event_sysmon.xml": 354,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-VHALE-01.northstar-branch.local/windows_event_security.xml": 533,
+      "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-VHALE-01.northstar-branch.local/windows_event_sysmon.xml": 364
+    }
+  },
+  "findings": [
+    {
+      "check": "ecar_linux_login_parentage",
+      "evidence": {
+        "count": 1,
+        "sample_properties": {
+          "command_line": "login -- nina.kapoor",
+          "image_path": "/bin/login",
+          "logon_id": "0x54478db",
+          "parent_image_path": "/usr/lib/systemd/systemd",
+          "session_id": "80139",
+          "source_image_path": "/usr/lib/systemd/systemd",
+          "source_pid": "232541",
+          "source_principal": "nina.kapoor",
+          "source_process_uuid": "618f5f99-23b5-4279-877a-597090d265a6",
+          "src_pid": "232541"
+        },
+        "sample_record_id": "e158c4d7-7b18-4a89-a909-9016f4281a7d"
+      },
+      "message": "Linux /bin/login is parented by a per-user systemd process",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/PROXY-BO-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_failed_attempt_identity_unique",
+      "evidence": {
+        "count": 2,
+        "object_id": "8a64e603-c0da-4679-a55e-22d806053a40"
+      },
+      "message": "Multiple failed login attempts share one eCAR object identity",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-MPATEL-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_process_after_session_logout",
+      "evidence": {
+        "first_post_logout_timestamp_ms": 1715692090556,
+        "first_record_id": "27115596-0625-403f-a7ce-f0274dfea87b",
+        "logon_id": "0x83a3cf8",
+        "logout_timestamp_ms": 1715692089732.0,
+        "process_id": "08095bec-8195-4556-85ca-a6c394b4b665"
+      },
+      "message": "Process-owned evidence occurs after its owning logon session ended",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_process_after_session_logout",
+      "evidence": {
+        "first_post_logout_timestamp_ms": 1715692508621,
+        "first_record_id": "d65b34a9-86d2-449e-978b-1c4b53853e36",
+        "logon_id": "0x83a3cf8",
+        "logout_timestamp_ms": 1715692089732.0,
+        "process_id": "85132871-84e0-4b55-8580-d1dcb61e49e8"
+      },
+      "message": "Process-owned evidence occurs after its owning logon session ended",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_process_after_session_logout",
+      "evidence": {
+        "first_post_logout_timestamp_ms": 1715707913971,
+        "first_record_id": "0c7b34c0-f517-40f3-9c5f-d50122eff6c4",
+        "logon_id": "0x8399fb9",
+        "logout_timestamp_ms": 1715704534817.0,
+        "process_id": "3357e7da-c802-4253-a61c-c884e1769ac8"
+      },
+      "message": "Process-owned evidence occurs after its owning logon session ended",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_explorer_parentage",
+      "evidence": {
+        "count": 3,
+        "sample_properties": {
+          "command_line": "C:\\Windows\\explorer.exe",
+          "image_path": "C:\\Windows\\explorer.exe",
+          "logon_id": "0x83a3cf8",
+          "parent_image_path": "C:\\Windows\\System32\\services.exe",
+          "source_image_path": "C:\\Windows\\System32\\services.exe",
+          "source_pid": "5652",
+          "source_principal": "SYSTEM",
+          "source_process_uuid": "b71b461d-2a72-4cb9-8dd2-91af461ad4dd",
+          "src_pid": "5652"
+        },
+        "sample_record_id": "46494629-b919-41da-9902-3ce46bad9647"
+      },
+      "message": "Interactive explorer.exe is directly parented by services.exe",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 3,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/DC-BO-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 2,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/FILE-BO-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 1,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-LMORRIS-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 6,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-MPATEL-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 9,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "sysmon_logon_guid_immutable",
+      "evidence": {
+        "logon_guids": [
+          "{00000000-0000-0000-0000-000000000000}",
+          "{a314516d-f801-455d-9cfd-d6dab12a7f50}"
+        ],
+        "logon_id": "0x83a3cf8"
+      },
+      "message": "One Sysmon LogonId is associated with multiple LogonGuid values",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/windows_event_sysmon.xml",
+      "severity": "error"
+    },
+    {
+      "check": "sysmon_logon_guid_immutable",
+      "evidence": {
+        "logon_guids": [
+          "{00000000-0000-0000-0000-000000000000}",
+          "{b4a1f7fa-e78c-4da3-ac0f-51a8779b7bfa}"
+        ],
+        "logon_id": "0x8399fb9"
+      },
+      "message": "One Sysmon LogonId is associated with multiple LogonGuid values",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/windows_event_sysmon.xml",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 4,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-OREED-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "windows_4648_native_fields",
+      "evidence": {
+        "count": 2,
+        "sample_fields": [
+          "LogonGuid",
+          "NetworkAddress",
+          "NetworkPort",
+          "ProcessId",
+          "ProcessName",
+          "SubjectDomainName",
+          "SubjectLogonId",
+          "SubjectUserName",
+          "SubjectUserSid",
+          "TargetDomainName",
+          "TargetInfo",
+          "TargetLogonGuid",
+          "TargetServerName",
+          "TargetUserName"
+        ]
+      },
+      "message": "Event 4648 uses non-native network field names",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-VHALE-01.northstar-branch.local/windows_event_security.xml",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715688140.285453,
+        "conn_start": 1715688140.17309,
+        "file_end": 1715688140.286453,
+        "file_start": 1715688140.205459,
+        "fuid": "FESMyl3VXAeHQO6467",
+        "uid": "C156Dk1xEAdAcRyN97U"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715688926.6104581,
+        "conn_start": 1715688926.088313,
+        "file_end": 1715688926.612458,
+        "file_start": 1715688926.200434,
+        "fuid": "FZKTO5DyLhjAjX5fFz",
+        "uid": "ChjUiFKF74r34W0Df"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715689346.376563,
+        "conn_start": 1715689346.156085,
+        "file_end": 1715689346.377563,
+        "file_start": 1715689346.186743,
+        "fuid": "FHb8khILAjRO1w9Jajl",
+        "uid": "Cm9hobJgWJaDjsG8oL"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715690470.711502,
+        "conn_start": 1715690470.130662,
+        "file_end": 1715690470.712502,
+        "file_start": 1715690470.175058,
+        "fuid": "FNboTmKJsoqndpC4aX",
+        "uid": "CDl1wMOkw3hFlISyd"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715691143.349655,
+        "conn_start": 1715691142.884394,
+        "file_end": 1715691143.351655,
+        "file_start": 1715691143.331655,
+        "fuid": "Fl8SlmUKT40IBQUita",
+        "uid": "CFH626oUP7bxUMEdZK"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715691699.456627,
+        "conn_start": 1715691697.55864,
+        "file_end": 1715691699.457627,
+        "file_start": 1715691697.623977,
+        "fuid": "FMAzBL29kr2jniKBH",
+        "uid": "CgQ4jI7pMepVgWzjyC"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715694097.42003,
+        "conn_start": 1715694096.945599,
+        "file_end": 1715694097.42103,
+        "file_start": 1715694097.40103,
+        "fuid": "Fi1pgNkuFP6L9mNYWA",
+        "uid": "CCCcq0f91WM9tQamd"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715694574.620269,
+        "conn_start": 1715694574.07593,
+        "file_end": 1715694574.622269,
+        "file_start": 1715694574.133901,
+        "fuid": "FxXiWpLYLxbiMU8zMCM",
+        "uid": "Cbb8yAiTVp2gfSY0bH"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715695466.577979,
+        "conn_start": 1715695464.779608,
+        "file_end": 1715695466.578979,
+        "file_start": 1715695464.980643,
+        "fuid": "FnDqdBKcQcYeDjMDpe",
+        "uid": "Cj478g3cSxnK32MsAl8"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715696688.3775702,
+        "conn_start": 1715696688.131724,
+        "file_end": 1715696688.37857,
+        "file_start": 1715696688.137953,
+        "fuid": "FfCq3v1uKZxKAP1sSwX",
+        "uid": "C7MrCebrm9rSDcjK5d"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715696737.9993188,
+        "conn_start": 1715696735.680286,
+        "file_end": 1715696738.000319,
+        "file_start": 1715696735.78498,
+        "fuid": "F6LfkqsVnE0hADNeb0",
+        "uid": "Cvxp8XiSBCF92BlPT8"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715696748.796729,
+        "conn_start": 1715696745.260895,
+        "file_end": 1715696748.798729,
+        "file_start": 1715696745.43945,
+        "fuid": "F3CGlnIyqUnJFEVPCP",
+        "uid": "CbXhzjA3GdYIGHCc3d"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715697459.31835,
+        "conn_start": 1715697456.937091,
+        "file_end": 1715697459.3203502,
+        "file_start": 1715697457.071294,
+        "fuid": "FhCloQwqXt9yLjE5H",
+        "uid": "CxJMnfm3HBYIXQfZ2H5"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715701680.069345,
+        "conn_start": 1715701676.639691,
+        "file_end": 1715701680.0713449,
+        "file_start": 1715701676.748967,
+        "fuid": "FFLXErGhzNGc3A6i1",
+        "uid": "CppIsDp28XbAHVQ6Rr"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715704500.859596,
+        "conn_start": 1715704500.059654,
+        "file_end": 1715704500.860596,
+        "file_start": 1715704500.265728,
+        "fuid": "FcHUA8ceD3uHPuYBtX",
+        "uid": "C2FaUvREOqS5s5fpIl"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715707637.116846,
+        "conn_start": 1715707636.878241,
+        "file_end": 1715707637.117846,
+        "file_start": 1715707636.889083,
+        "fuid": "FdYoGIhCfvKrOQizi",
+        "uid": "C1byj8umxCK9sOtrGqc"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715707850.910464,
+        "conn_start": 1715707848.233421,
+        "file_end": 1715707850.912464,
+        "file_start": 1715707848.39695,
+        "fuid": "FywQaDmtFNlvtt3IKPX",
+        "uid": "CY4ub2AwopLQypBlxO"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715708257.918998,
+        "conn_start": 1715708257.451688,
+        "file_end": 1715708257.919998,
+        "file_start": 1715708257.899998,
+        "fuid": "FEXohQaOHFY12GMJzAV",
+        "uid": "CSyt4GC6uuH0OzJVGiL"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715708725.056516,
+        "conn_start": 1715708724.591686,
+        "file_end": 1715708725.058516,
+        "file_start": 1715708725.038516,
+        "fuid": "FEEng9wz41pWaMpJBZ",
+        "uid": "CN1gujtylIWw0p9kGpj"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715708730.933537,
+        "conn_start": 1715708729.935423,
+        "file_end": 1715708730.934537,
+        "file_start": 1715708729.991561,
+        "fuid": "Fmc6RVbbx0CYZGYP02",
+        "uid": "Czj8jFJJpP5wH3dxS"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_file_interval",
+      "evidence": {
+        "conn_end": 1715709171.958808,
+        "conn_start": 1715709171.153272,
+        "file_end": 1715709171.9608078,
+        "file_start": 1715709171.187826,
+        "fuid": "FKblEzKA2kFmbHA7Dn",
+        "uid": "CBkdNwJ72jQgs3oz8f"
+      },
+      "message": "File observation falls outside its connection interval",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "error"
+    },
+    {
+      "check": "zeek_ocsp_duration_distribution",
+      "evidence": {
+        "count": 36,
+        "duration": 0.02
+      },
+      "message": "Every OCSP file observation has exactly the same duration",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/files.json",
+      "severity": "warning"
+    },
+    {
+      "check": "zeek_aaaa_success_distribution",
+      "evidence": {
+        "count": 198
+      },
+      "message": "Every AAAA query succeeds with an answer",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/ZEEK-BO-CORE/dns.json",
+      "severity": "warning"
+    },
+    {
+      "check": "ecar_ssh_actor_overlapping_connections",
+      "evidence": {
+        "actor_id": "a7f54766-b84d-4a05-a5e9-c646923adeaf",
+        "first_interval": [
+          1715688159.049358,
+          1715691652.478359
+        ],
+        "first_record_id": "8bdf9835-20fc-4201-a940-4436cf5bf4ec",
+        "second_interval": [
+          1715688164.101978,
+          1715689193.081999
+        ],
+        "second_record_id": "7ce1b22e-caac-417d-8440-825e5e0aae39"
+      },
+      "message": "One SSH client process owns overlapping independent transports",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_ssh_actor_overlapping_connections",
+      "evidence": {
+        "actor_id": "85132871-84e0-4b55-8580-d1dcb61e49e8",
+        "first_interval": [
+          1715692002.579189,
+          1715693723.480252
+        ],
+        "first_record_id": "7e7ecafb-5542-4bb6-b20a-b58631b5c9ec",
+        "second_interval": [
+          1715692506.008709,
+          1715693977.023301
+        ],
+        "second_record_id": "d65b34a9-86d2-449e-978b-1c4b53853e36"
+      },
+      "message": "One SSH client process owns overlapping independent transports",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_ssh_actor_overlapping_connections",
+      "evidence": {
+        "actor_id": "a0f79f28-074a-4be7-b51d-e81932b0dc37",
+        "first_interval": [
+          1715693870.80043,
+          1715695246.6153471
+        ],
+        "first_record_id": "9012d098-21f5-4f35-8bb8-7b5098312c51",
+        "second_interval": [
+          1715694787.811816,
+          1715695860.651225
+        ],
+        "second_record_id": "117b0837-0968-4aa9-83b1-2fbdb9b61bc5"
+      },
+      "message": "One SSH client process owns overlapping independent transports",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_ssh_actor_overlapping_connections",
+      "evidence": {
+        "actor_id": "d105b641-5a82-4ff1-88ec-e2d0a71db74b",
+        "first_interval": [
+          1715703529.562111,
+          1715704377.041875
+        ],
+        "first_record_id": "c8aed0ef-7b7f-4600-a4e6-1490ba757a2f",
+        "second_interval": [
+          1715704218.523024,
+          1715705810.012938
+        ],
+        "second_record_id": "9f24c73c-bde8-404c-8e3a-bf50e555003d"
+      },
+      "message": "One SSH client process owns overlapping independent transports",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_ssh_actor_overlapping_connections",
+      "evidence": {
+        "actor_id": "c70fc7e2-1f31-4236-a22a-aa5fbab9b2d3",
+        "first_interval": [
+          1715707875.604967,
+          1715708285.483093
+        ],
+        "first_record_id": "95d7e9a2-9e10-47b3-907e-1ebeb1fd5adb",
+        "second_interval": [
+          1715708142.060802,
+          1715708359.29726
+        ],
+        "second_record_id": "ca61f3e4-52ab-419b-b371-d561b3c09b5d"
+      },
+      "message": "One SSH client process owns overlapping independent transports",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_rdp_transport_before_auth",
+      "evidence": {
+        "flow_record_id": "c3ddfeb2-2f1a-412e-b870-705b554e2934",
+        "flow_timestamp_ms": 1715696498142,
+        "login_path": "/private/tmp/eforge-realism-review/branch-enterprise/data/DC-BO-01.northstar-branch.local/ecar.json",
+        "login_record_id": "d779f273-e98d-47e2-afda-14c1854ac29d",
+        "login_timestamp_ms": 1715696497900,
+        "tuple": [
+          "10.44.10.24",
+          54160,
+          "10.44.20.10",
+          3389
+        ]
+      },
+      "message": "Source-visible RDP transport occurs after target authentication",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ecar_rdp_transport_before_auth",
+      "evidence": {
+        "flow_record_id": "f8b28b22-3f98-4159-8665-047e2d5c7363",
+        "flow_timestamp_ms": 1715693054903,
+        "login_path": "/private/tmp/eforge-realism-review/branch-enterprise/data/FILE-BO-01.northstar-branch.local/ecar.json",
+        "login_record_id": "c6118b6c-ace8-41c6-b12a-d857d24b810c",
+        "login_timestamp_ms": 1715693054231,
+        "tuple": [
+          "10.44.10.24",
+          52717,
+          "10.44.20.20",
+          3389
+        ]
+      },
+      "message": "Source-visible RDP transport occurs after target authentication",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/WS-NKAPOOR-01.northstar-branch.local/ecar.json",
+      "severity": "error"
+    },
+    {
+      "check": "ids_transport_semantics",
+      "evidence": {
+        "conn_state": "S0",
+        "line": 12,
+        "message": "GPL WEB_SERVER 403 Forbidden",
+        "resp_pkts": 0,
+        "sid": "2101411",
+        "tuple": [
+          "185.199.110.42",
+          53211,
+          "10.44.30.10",
+          80
+        ],
+        "zeek_uid": "CpFZfhQefW6f0iHWy"
+      },
+      "message": "Response-oriented IDS alert is attached to a response-less flow",
+      "path": "/private/tmp/eforge-realism-review/branch-enterprise/data/IDS-BO-EDGE/snort_alert.log",
+      "severity": "error"
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "by_check": {
+      "ecar_explorer_parentage": 1,
+      "ecar_failed_attempt_identity_unique": 1,
+      "ecar_linux_login_parentage": 1,
+      "ecar_process_after_session_logout": 3,
+      "ecar_rdp_transport_before_auth": 2,
+      "ecar_ssh_actor_overlapping_connections": 5,
+      "ids_transport_semantics": 1,
+      "sysmon_logon_guid_immutable": 2,
+      "windows_4648_native_fields": 7,
+      "zeek_aaaa_success_distribution": 1,
+      "zeek_file_interval": 21,
+      "zeek_ocsp_duration_distribution": 1
+    },
+    "by_severity": {
+      "error": 44,
+      "warning": 2
+    },
+    "total": 46
+  }
+}

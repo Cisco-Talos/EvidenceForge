@@ -25,8 +25,12 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter, zeek_format_observed
+from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    planned_zeek_connection_interval,
+    zeek_format_observed,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP = timedelta(milliseconds=1)
@@ -50,7 +54,7 @@ def _response_file_vectors(http: Any) -> tuple[list[str] | None, list[str] | Non
 class ZeekHttpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek http.log format (NDJSON).
 
-    Generates HTTP request/response logs. Requires both NetworkContext and HttpContext.
+    Generates HTTP request/response logs. Requires both NetworkTransactionPlan and HttpContext.
     Shares conn.log UID via event.network.zeek_uid.
     """
 
@@ -65,10 +69,10 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             tuple[str, str, int, str, int], tuple[datetime, datetime | None]
         ] = {}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         if event.event_type not in self._supported_types:
             return False
-        if event.network is None or event.http is None:
+        if event.network is None or event.protocol.http is None:
             return False
         # Standard Zeek cannot inspect TLS-encrypted traffic — only emit
         # http.log for unencrypted HTTP connections
@@ -78,13 +82,18 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             return False
         return True
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
-        http = event.http
+        http = event.protocol.http
         uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
-        if net.transaction is not None and http.canonical_request_time is not None:
-            conn_ts = net.transaction.started_at
+        planned_interval = planned_zeek_connection_interval(event)
+        if http.canonical_request_time is not None:
+            conn_ts = net.started_at
+            planned_close = net.closed_at
+        elif planned_interval is not None:
+            conn_ts, planned_close = planned_interval
         else:
+            planned_close = None
             conn_ts = _SOURCE_TIMING.source_time(
                 event,
                 "source.zeek_conn_start",
@@ -101,7 +110,11 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
         within = None
         latest_ts = None
         resp_fuids, resp_mime_types = _response_file_vectors(http)
-        if net.duration is not None and net.duration > 0:
+        if planned_close is not None:
+            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if resp_fuids else timedelta(microseconds=1)
+            latest_ts = max(conn_ts, planned_close - tail_gap)
+            within = (conn_ts, latest_ts)
+        elif net.duration is not None and net.duration > 0:
             tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if resp_fuids else timedelta(microseconds=1)
             latest_ts = conn_ts + timedelta(seconds=max(0.0, net.duration)) - tail_gap
             if latest_ts < conn_ts:

@@ -899,6 +899,53 @@ def test_cron_schedule_without_slot_jitter_stays_minute_aligned(linux_system):
     assert all(fire_time.microsecond == 0 for fire_time in fire_times)
 
 
+def test_scheduled_tasks_execute_in_timestamp_order_not_config_order(linux_system):
+    """Scheduled process state should follow occurrence time across task definitions."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    later_systemd_task = {
+        "service": "php-sessionclean",
+        "type": "systemd_timer",
+        "frequency": "daily",
+        "typical_hour": 12,
+        "jitter_minutes": 1,
+        "distro": "debian",
+    }
+    earlier_cron_task = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "frequency": "daily",
+        "typical_hour": 12,
+        "jitter_minutes": 1,
+        "distro": "debian",
+        "cron_user": "sysstat",
+        "cron_commands": {"debian": "debian-sa1 1 1"},
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [later_systemd_task, earlier_cron_task]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            random.Random(11),
+            {"cron": 1337, "systemd": 1},
+            False,
+            False,
+        )
+
+    calls = engine._emit_scheduled_event.call_args_list
+    assert [call.args[0]["service"] for call in calls] == [
+        "debian-sa1",
+        "php-sessionclean",
+    ]
+    assert [call.args[2] for call in calls] == sorted(call.args[2] for call in calls)
+
+
 def test_resolve_cron_command_rejects_non_string_overlay_values():
     """Cron command resolution should reject malformed truthy non-string values."""
     assert _resolve_cron_command({"all": True}, is_rhel_like=False) is None

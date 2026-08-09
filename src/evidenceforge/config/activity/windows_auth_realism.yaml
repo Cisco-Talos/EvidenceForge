@@ -10,6 +10,16 @@ workstation_lock:
   # shifted forward. Real users rarely lock/unlock in only a few seconds.
   min_unlock_gap_seconds: 127
 
+group_policy_refresh:
+  interval_minutes_min: 60
+  interval_minutes_max: 120
+  process_emission_probability: 0.18
+  command_profiles:
+    - {command_line: "gpupdate.exe", weight: 72}
+    - {command_line: "gpupdate.exe /target:computer", weight: 18}
+    - {command_line: "gpupdate.exe /force", weight: 8}
+    - {command_line: "gpupdate.exe /target:computer /force", weight: 2}
+
 failed_logon:
   local_interactive:
     logon_process_name: User32

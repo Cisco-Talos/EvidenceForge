@@ -56,7 +56,15 @@ def _scenario_with_storyline_dhcp() -> Scenario:
                 )
             ],
             systems=[
-                System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                System(
+                    hostname="DHCP-01",
+                    ip="10.0.0.2",
+                    os="Windows Server 2022",
+                    type="server",
+                    roles=["dhcp_server"],
+                    services=["windows-dhcp-server"],
+                ),
             ],
         ),
         time_window=TimeWindow(start="2024-01-15T10:00:00Z", duration="1m"),
@@ -157,6 +165,43 @@ def test_emit_dhcp_leases_handles_null_storyline(tmp_path):
         engine._dhcp_lease_state["TEST-01"]["next_renewal"]
         == kwargs["time"].timestamp() + kwargs["renewal_interval"]
     )
+
+
+def test_emit_dhcp_leases_is_independent_of_selected_output_formats(tmp_path):
+    """Canonical lease planning should not be gated on the Zeek DHCP emitter."""
+    scenario = Scenario.model_validate(
+        {**_scenario_with_storyline_dhcp().model_dump(), "storyline": None}
+    )
+    engine = GenerationEngine(scenario, tmp_path)
+    engine.start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    engine.warmup_start_time = engine.start_time - timedelta(hours=8)
+    engine.emitters = {}
+    engine.state_manager = Mock()
+    engine.activity_generator = Mock()
+
+    engine._emit_dhcp_leases()
+
+    engine.activity_generator.generate_dhcp_lease.assert_called_once()
+    assert engine._dhcp_lease_state["TEST-01"]["server_addr"] == "10.0.0.2"
+
+
+def test_emit_dhcp_leases_skips_world_without_distinct_server(tmp_path):
+    """A one-host world should not collapse that host into its own DHCP server."""
+    scenario = Scenario.model_validate(
+        {**_scenario_with_storyline_dhcp().model_dump(), "storyline": None}
+    )
+    scenario.environment.systems = [scenario.environment.systems[0]]
+    engine = GenerationEngine(scenario, tmp_path)
+    engine.start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    engine.warmup_start_time = engine.start_time - timedelta(hours=8)
+    engine.emitters = {"zeek_dhcp": Mock()}
+    engine.state_manager = Mock()
+    engine.activity_generator = Mock()
+
+    engine._emit_dhcp_leases()
+
+    engine.activity_generator.generate_dhcp_lease.assert_not_called()
+    assert engine._dhcp_lease_state == {}
 
 
 def test_storyline_dhcp_lease_time_in_hour_finds_authored_event(tmp_path):

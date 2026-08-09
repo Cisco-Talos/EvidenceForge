@@ -148,12 +148,12 @@ class TestObjectIdLifecycle:
 
         # Get objectID from the logon event
         logon_event = mock_emitters["ecar"].emit.call_args_list[0][0][0]
-        logon_obj_id = logon_event.edr.object_id
+        logon_obj_id = logon_event.identity_plan.object_id
 
         # Now logoff
         activity_gen.generate_logoff(test_user, win_system, timestamp, logon_id)
         logoff_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
-        logoff_obj_id = logoff_event.edr.object_id
+        logoff_obj_id = logoff_event.identity_plan.object_id
 
         assert logon_obj_id == logoff_obj_id
         assert logon_obj_id != ""
@@ -177,7 +177,7 @@ class TestObjectIdLifecycle:
                 create_event = evt
                 break
         assert create_event is not None
-        create_obj_id = create_event.edr.object_id
+        create_obj_id = create_event.identity_plan.object_id
 
         # Terminate
         activity_gen.generate_process_termination(
@@ -185,7 +185,7 @@ class TestObjectIdLifecycle:
         )
         terminate_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
         assert terminate_event.event_type == "process_terminate"
-        assert terminate_event.edr.object_id == create_obj_id
+        assert terminate_event.identity_plan.object_id == create_obj_id
 
     def test_linux_system_process_termination_preserves_original_logon(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -272,7 +272,7 @@ class TestObjectIdLifecycle:
 
         terminate_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
         assert terminate_event.event_type == "process_terminate"
-        assert terminate_event.edr.object_id == create_obj_id
+        assert terminate_event.identity_plan.object_id == create_obj_id
 
     def test_parent_chain_process_create_uses_state_object_id(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
@@ -299,11 +299,11 @@ class TestObjectIdLifecycle:
             and call[0][0].process.pid == parent_pid
         )
 
-        assert create_event.edr.object_id == state_manager.get_process_object_id(
+        assert create_event.identity_plan.object_id == state_manager.get_process_object_id(
             win_system.hostname,
             parent_pid,
         )
-        assert create_event.edr.object_id != ""
+        assert create_event.identity_plan.object_id != ""
 
 
 # ---- actorID Linkage ----
@@ -342,7 +342,7 @@ class TestActorIdLinkage:
                 child_event = evt
                 break
         assert child_event is not None
-        assert child_event.edr.actor_id == parent_obj_id
+        assert child_event.identity_plan.actor_id == parent_obj_id
 
     def test_failed_logon_gets_fresh_object_id(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
@@ -352,12 +352,12 @@ class TestActorIdLinkage:
         activity_gen.generate_failed_logon(test_user, win_system, timestamp)
 
         failed_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
-        assert failed_event.edr is not None
-        assert failed_event.edr.object_id != ""
+        assert failed_event.identity_plan is not None
+        assert failed_event.identity_plan.object_id != ""
         # Verify it's a valid UUID
-        uuid.UUID(failed_event.edr.object_id)
+        uuid.UUID(failed_event.identity_plan.object_id)
         # actor_id should be empty (no actor for failed logon)
-        assert failed_event.edr.actor_id == ""
+        assert failed_event.identity_plan.actor_id == ""
 
 
 # ---- EcarEmitter Rendering ----

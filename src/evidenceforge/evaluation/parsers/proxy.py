@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import LogParser, ParsedRecord, register_parser
+from . import LogParser, ParsedRecord, iter_bounded_text_lines, register_parser
 
 # Apache/Nginx combined format plus optional proxy key-value metadata:
 # client_ip - username [timestamp] "method url protocol" status bytes "referer" "user_agent"
@@ -97,12 +97,11 @@ class ProxyAccessParser(LogParser):
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         hostname = self._source_host_from_path(path)
-        with open(path) as f:
-            for i, line in enumerate(f, 1):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                yield self._parse_line(line, i, hostname=hostname)
+        for line_number, line in iter_bounded_text_lines(path):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            yield self._parse_line(line, line_number, hostname=hostname)
 
     @staticmethod
     def _source_host_from_path(path: Path) -> str | None:

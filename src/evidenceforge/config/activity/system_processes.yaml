@@ -266,21 +266,31 @@ system_services:
         filter_id: ["804", "812", "820", "828"]
       parent: search_indexer
 
-# Common loaded modules — the OS loader chain loaded by every Windows process.
-# These DLLs are injected by the kernel/NTDLL during process initialization;
-# no user-mode process runs without them. All default to signed=true,
-# signature="Microsoft Windows", signature_status="Valid".
+# Common startup-module candidates. NTDLL is the required user-mode loader;
+# other imports vary with the executable, dependency graph, and process instance.
+# startup_probability models occurrence in a host/executable dependency profile,
+# not source-local collection loss.
+# All entries default to signed=true, signature="Microsoft Windows",
+# signature_status="Valid".
 common_loaded_modules:
   windows:
     - path: "C:\\Windows\\System32\\ntdll.dll"
     - path: "C:\\Windows\\System32\\kernel32.dll"
+      startup_probability: 0.98
     - path: "C:\\Windows\\System32\\kernelbase.dll"
+      startup_probability: 0.96
     - path: "C:\\Windows\\System32\\msvcrt.dll"
+      startup_probability: 0.38
     - path: "C:\\Windows\\System32\\ucrtbase.dll"
+      startup_probability: 0.71
     - path: "C:\\Windows\\System32\\advapi32.dll"
+      startup_probability: 0.66
     - path: "C:\\Windows\\System32\\sechost.dll"
+      startup_probability: 0.44
     - path: "C:\\Windows\\System32\\rpcrt4.dll"
+      startup_probability: 0.52
     - path: "C:\\Windows\\System32\\bcryptprimitives.dll"
+      startup_probability: 0.47
 
 # Per-process loaded modules for processes not defined in system_services
 # or scheduled_tasks above. Same schema as loaded_modules on service entries.
@@ -347,18 +357,6 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\dnsapi.dll"
     - path: "C:\\Windows\\System32\\winhttp.dll"
     - path: "C:\\Windows\\System32\\wintrust.dll"
-    # Third-party service DLLs (survive Event 7 exclude filter)
-    - path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
-      signature: "Microsoft Corporation"
-      pe_metadata:
-        file_version: "10.8049.22439.1065"
-        description: "Microsoft Defender for Endpoint Sensor Command Proxy"
-        product: "Microsoft Defender for Endpoint"
-        company: "Microsoft Corporation"
-        original_filename: "SenseCncProxy.dll"
-    - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
-      signature: "Microsoft Corporation"
-
   powershell.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
     - path: "C:\\Windows\\System32\\ole32.dll"
@@ -395,6 +393,17 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\crypt32.dll"
     - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
       signature: "Microsoft Corporation"
+
+  SenseCncProxy.exe:
+    - path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
+      signature: "Microsoft Corporation"
+      load_phase: startup
+      pe_metadata:
+        file_version: "10.8049.22439.1065"
+        description: "Microsoft Defender for Endpoint Sensor Command Proxy"
+        product: "Microsoft Defender for Endpoint"
+        company: "Microsoft Corporation"
+        original_filename: "SenseCncProxy.dll"
 
 # System binaries: exe name -> full image path mapping.
 # Used by the engine for path resolution and by validation for
@@ -458,6 +467,7 @@ system_binaries:
     # --- Windows Defender / security ---
     - {exe: "MsMpEng.exe",              path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe"}
     - {exe: "MpCmdRun.exe",             path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpCmdRun.exe"}
+    - {exe: "SenseCncProxy.exe",        path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.exe"}
     - {exe: "vpnagent.exe",              path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"}
     - {exe: "PanGPS.exe",                path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"}
     - {exe: "ZSAService.exe",            path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"}

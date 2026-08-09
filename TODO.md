@@ -48,7 +48,60 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] Continue current-dev realism assessment only if another loop is needed;
+- [x] **P1** Complete realism-remediation Batches 0–2: approve the canonical contracts, add the
+  behavior-preserving contract foundation, and implement the session/process/authentication
+  vertical slice. See the [approved contracts](docs/design/realism-review/contract-proposals.md),
+  [foundation worklog](docs/worklog/2026-08-05-canonical-contract-foundation.md), and
+  [session/authentication worklog](docs/worklog/2026-08-05-session-auth-lifecycle.md).
+- [x] **P1** Run the isolated four-specialty blind panel against the post-Batch-2 integrated
+  output and verify material findings. The six originally targeted contradictions remain cleared,
+  but the panel exposed validated sibling lifecycle defects; see the
+  [panel summary](docs/design/realism-review/post-batch-2-blind/summary.md).
+- [x] **P1** Close the failed post-Batch-2 blind gate before Batch 3: repair host-scoped Linux PID
+  allocation, SSH responder process-observation ordering, Windows module startup/compatibility
+  timing, and Windows EventRecordID rate modeling, then regenerate and repeat the isolated panel.
+  The bounded gate passed after five repair loops; see the
+  [final panel summary](docs/design/realism-review/post-gate-loop5-blind/summary.md).
+- [x] **P1** Implement Batch 3, the network/protocol/IDS vertical slice: make the network plan
+  authoritative for source-visible intervals, protocol/file children, and IDS eligibility, with
+  full/filter/parallel projection-equivalence tests. This targets `REAL-005`, `REAL-007`, and
+  `REAL-009`. See the [Batch 3 worklog](docs/worklog/2026-08-07-network-protocol-ids.md) and
+  [empirical results](docs/design/realism-review/batch3-results.json).
+- [x] **P1** Implement Batch 4 world-capability and distribution-state contracts for `REAL-008`
+  and `REAL-012`, including the remaining AAAA and OCSP distribution findings. See the
+  [Batch 4 worklog](docs/worklog/2026-08-07-world-capability-distribution-state.md) and empirical
+  results package.
+- [x] **P1** Implement Batch 5 source-native projection and evaluator-validity work for
+  `REAL-010` and `REAL-011`, including the evaluator proof gaps recorded by Batch 4. See the
+  [Batch 5 worklog](docs/worklog/2026-08-07-projection-evaluation-validity.md) and
+  [empirical results](docs/design/realism-review/batch5-results.json).
+- [x] **P1** Complete Batch 6 input-safety, workload-budget, authoring, and reproducibility work,
+  including the deferred evaluator-memory capacity decision (`REAL-013`, `REAL-014`,
+  `SEC-001` through `SEC-010`, and `SEC-DEFER-001`). See the
+  [Batch 6 worklog](docs/worklog/2026-08-07-input-safety-budgets.md) and
+  [empirical results](docs/design/realism-review/batch6-results.json).
+- [x] **P2** Complete behavior-preserving Batch 7a compatibility cleanup: enforce closed dispatch
+  admission, remove observed-time state feedback and duplicate sensor NAT maps, delete unreachable
+  event aliases, refresh the path census, and reconcile architecture/scenario/evaluation/security
+  documentation. See the [Batch 7 worklog](docs/worklog/2026-08-07-compatibility-documentation.md)
+  and [results](docs/design/realism-review/batch7-results.json).
+- [x] **P2** Implement the approved direct Batch 7b migration: replace the mutable event carrier,
+  flat `NetworkContext`, `EdrContext` identity fields, TLS/X.509/OCSP/proxy/file views, singular IDS
+  input, and sequence-derived event IDs without internal compatibility layers. Preserve the CLI,
+  authored schema, and source formats; version the ground-truth schema. Optimize indexed lookup
+  speed while proving duration-stable retained state. See the Batch 7 worklog for the approved
+  implementation contract and [Batch 7b results](docs/design/realism-review/batch7b-results.json).
+- [x] **P1** Close the post-Batch-7b effectiveness gate before opening the cumulative PR to `dev`:
+  repair the controlled SSH source-order regression, inbound Windows 5156 local-process ownership,
+  file/application/transport loss accounting, clock-derived Linux PID allocation, and missing SSH
+  close ownership. The definitive repeat is byte-identical, the expanded probe is clean, and the
+  requested blind panel is complete. See the
+  [effectiveness report](docs/design/realism-review/post-batch7b-effectiveness/REPORT.md).
+- The complete dependency order and acceptance boundaries remain in the
+  [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
+  exact evidence, owners, remediation, and tests remain in
+  [the machine-readable finding register](docs/design/realism-review/findings.json).
+- [ ] Continue current-dev realism assessment only if a separately approved future loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.
 - [ ] **P1** Feed the latest post-fix Host-review priors into the next
@@ -77,6 +130,12 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P1** Make process-to-file and process-to-registry effects actor-native by construction:
+  stop attaching Defender, WER, CBS, Office MRU, UserAssist, and shell-state artifacts to arbitrary
+  live or newly launched processes, and add ProcessGuid/PID causality probes for each family.
+- [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
+  `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
+  session teardown unless an explicit hung/long-running outcome owns that lifecycle.
 - [ ] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
@@ -124,6 +183,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   host history, and add realistic network collection imperfections such as
   occasional Zeek `missed_bytes`, incomplete TLS/x509 companion evidence, and
   less curated IDS alert clustering.
+- [ ] **P2** Remove source-native network timing and loss lattices: avoid preserving identical
+  microsecond residues through integer-millisecond protocol offsets, model directional capture gaps
+  more often than symmetric `Gg`, and render response-triggered IDS alerts with response direction.
 - [ ] **P2** Track SOF-ELK HTTPD parser handling of domain-qualified and
   machine-account proxy usernames. The SOF-ELK target currently strips the
   Windows domain prefix from `DOMAIN\user` and the trailing `$` from `machine$`

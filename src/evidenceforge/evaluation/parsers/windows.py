@@ -32,8 +32,15 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     WINDOWS_SYSMON_SNARE_FILENAME,
 )
+from evidenceforge.models.exceptions import EvaluationLimitError
 
-from . import LogParser, ParsedRecord, register_parser
+from . import (
+    MAX_EVALUATION_RECORD_BYTES,
+    LogParser,
+    ParsedRecord,
+    iter_bounded_text_lines,
+    register_parser,
+)
 from .syslog import _infer_seed_year, _resolve_bsd_year
 
 # Namespace used in Windows Event XML
@@ -48,7 +55,6 @@ SNARE_SYSLOG_PATTERN = re.compile(
     r"(?P<hostname>\S+)\s+"
     r"(?P<payload>.*)$"
 )
-EXPANDED_FIELD_PATTERN = re.compile(r"(?P<name>[^:]+):\s+(?P<value>.*?)(?=\s{2}[^:]+:\s+|\s*$)")
 
 
 class _WindowsXmlParser(LogParser):
@@ -80,26 +86,34 @@ class _WindowsXmlParser(LogParser):
         event_index = 0
         in_event = False
         event_lines: list[str] = []
+        event_bytes = 0
 
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not in_event and EVENT_START_PATTERN.search(line):
-                    in_event = True
-                    event_lines = [line]
-                    if EVENT_END_PATTERN.search(line):
-                        event_index += 1
-                        yield self._parse_event("".join(event_lines), event_index)
-                        in_event = False
-                        event_lines = []
-                    continue
+        for _line_number, line in iter_bounded_text_lines(path):
+            if not in_event and EVENT_START_PATTERN.search(line):
+                in_event = True
+                event_lines = [line]
+                event_bytes = len(line.encode("utf-8"))
+                if EVENT_END_PATTERN.search(line):
+                    event_index += 1
+                    yield self._parse_event("".join(event_lines), event_index)
+                    in_event = False
+                    event_lines = []
+                    event_bytes = 0
+                continue
 
-                if in_event:
-                    event_lines.append(line)
-                    if EVENT_END_PATTERN.search(line):
-                        event_index += 1
-                        yield self._parse_event("".join(event_lines), event_index)
-                        in_event = False
-                        event_lines = []
+            if in_event:
+                event_bytes += len(line.encode("utf-8"))
+                if event_bytes > MAX_EVALUATION_RECORD_BYTES:
+                    raise EvaluationLimitError(
+                        f"Windows XML event exceeds {MAX_EVALUATION_RECORD_BYTES} bytes: {path}"
+                    )
+                event_lines.append(line)
+                if EVENT_END_PATTERN.search(line):
+                    event_index += 1
+                    yield self._parse_event("".join(event_lines), event_index)
+                    in_event = False
+                    event_lines = []
+                    event_bytes = 0
 
     def _parse_event(self, raw: str, index: int) -> ParsedRecord:
         fields: dict = {}
@@ -214,15 +228,14 @@ class _WindowsSnareParser(_WindowsXmlParser):
     def _parse_snare_file(self, path: Path) -> Iterator[ParsedRecord]:
         seed_year = _infer_seed_year(path, getattr(self, "scenario", None))
         last_ts: datetime | None = None
-        with path.open("r", encoding="utf-8") as handle:
-            for line_num, line in enumerate(handle, 1):
-                raw = line.rstrip("\n")
-                if not raw:
-                    continue
-                record = self._parse_snare_line(raw, line_num, seed_year, last_ts)
-                if record.timestamp is not None:
-                    last_ts = record.timestamp
-                yield record
+        for line_num, line in iter_bounded_text_lines(path):
+            raw = line.rstrip("\n")
+            if not raw:
+                continue
+            record = self._parse_snare_line(raw, line_num, seed_year, last_ts)
+            if record.timestamp is not None:
+                last_ts = record.timestamp
+            yield record
 
     def _parse_snare_line(
         self,
@@ -324,14 +337,28 @@ class _WindowsSnareParser(_WindowsXmlParser):
 
 
 def _parse_expanded_snare_fields(full_data: str) -> dict[str, str]:
-    """Extract Snare's flattened ``Name: value`` field suffix."""
-    parsed: dict[str, str] = {}
+    """Extract flattened ``Name: value`` fields in one bounded linear pass."""
+
     tail = full_data.split(":  ", 1)[1] if ":  " in full_data else full_data
-    for match in EXPANDED_FIELD_PATTERN.finditer(tail):
-        name = _snare_field_name(match.group("name").strip())
-        value = match.group("value").strip()
-        if name and value:
-            parsed[name] = value
+    parsed: dict[str, str] = {}
+    current_name = ""
+    current_value: list[str] = []
+
+    def commit() -> None:
+        value = "  ".join(current_value).strip()
+        if current_name and value:
+            parsed[current_name] = value
+
+    for segment in tail.split("  "):
+        raw_name, separator, raw_value = segment.partition(": ")
+        candidate_name = _snare_field_name(raw_name.strip()) if separator else ""
+        if separator and candidate_name:
+            commit()
+            current_name = candidate_name
+            current_value = [raw_value]
+        elif current_name:
+            current_value.append(segment)
+    commit()
     return parsed
 
 

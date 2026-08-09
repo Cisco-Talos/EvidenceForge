@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.network_factories import network_plan
+
 
 class TestZeekConnFormatAccuracy:
     """Verify synthetic Zeek conn.log matches real Zeek log structure."""
@@ -411,8 +413,8 @@ class TestZeekDnsFormatAccuracy:
         """dns.log timestamps should not exactly mirror conn.log timestamps."""
         from datetime import UTC
 
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import DnsContext, HostContext
         from evidenceforge.formats import load_format
         from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
@@ -420,7 +422,7 @@ class TestZeekDnsFormatAccuracy:
         output_file = tmp_path / "zeek_dns.json"
         emitter = ZeekDnsEmitter(format_def, output_file)
         ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -430,7 +432,7 @@ class TestZeekDnsFormatAccuracy:
                 os_category="windows",
                 system_type="workstation",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=53533,
                 dst_ip="10.0.0.53",
@@ -462,8 +464,8 @@ class TestZeekDnsFormatAccuracy:
         """dns.log timestamps should not render after the matching conn lifetime."""
         from datetime import UTC
 
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import DnsContext, HostContext
         from evidenceforge.formats import load_format
         from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
@@ -472,7 +474,7 @@ class TestZeekDnsFormatAccuracy:
         emitter = ZeekDnsEmitter(format_def, output_file)
         ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         duration = 0.0005607147741810154
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=ts,
             event_type="connection",
             src_host=HostContext(
@@ -482,7 +484,7 @@ class TestZeekDnsFormatAccuracy:
                 os_category="windows",
                 system_type="workstation",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.10",
                 src_port=53533,
                 dst_ip="10.0.0.53",

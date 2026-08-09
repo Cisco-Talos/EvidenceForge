@@ -33,6 +33,7 @@ from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, 
 def format_text_report(report: QualityReport, console: Console, verbose: bool = False) -> None:
     """Print a pillar-oriented quality report to the Rich console."""
     console.print()
+
     console.print("[bold]=== EvidenceForge Data Quality Report ===[/bold]")
     console.print(f"Scenario: {report.scenario_name}")
     console.print(f"Evaluated: {report.evaluated_at.strftime('%Y-%m-%dT%H:%M:%SZ')}")
@@ -76,6 +77,17 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
 
     console.print()
 
+    if report.categories:
+        console.print("[bold]Evaluation Categories:[/bold]")
+        for category in report.categories:
+            if category.score is None:
+                rendered = "[dim]N/A[/dim]"
+            else:
+                color = _score_color(category.score)
+                rendered = f"[{color}]{category.score:.0f}/100[/{color}]"
+            console.print(f"  {category.name}:".ljust(42) + rendered)
+        console.print()
+
     # Build sub-score key → acceptance criterion map for fast lookup
     ac_by_key: dict[str, AcceptanceCriterion] = {
         ac.sub_score_key: ac for ac in report.acceptance_criteria
@@ -116,8 +128,9 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
             asp_note = ""
             if c.aspirational is not None:
                 asp_note = f" (aspirational: {c.aspirational:.0f})"
+            actual_str = f"{c.actual:.1f}" if c.actual is not None else "unmeasured"
             console.print(
-                f"  [red]FAIL[/red] {c.name}: {c.actual:.1f} < {c.threshold:.0f} minimum{asp_note}"
+                f"  [red]FAIL[/red] {c.name}: {actual_str} < {c.threshold:.0f} minimum{asp_note}"
             )
 
     if verbose and report.acceptance_criteria:

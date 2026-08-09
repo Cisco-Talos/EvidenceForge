@@ -357,21 +357,23 @@ class TestScorePair:
 
 
 class TestScoreFieldAgreementEmptyRecords:
-    def test_empty_records_returns_100(self):
-        """No format data → no pairs can be compared → graceful 100.0."""
+    def test_empty_records_are_unmeasurable(self):
+        """No format data cannot prove cross-source agreement."""
         scorer = CrossSourceScorer()
         result = scorer._score_field_agreement({})
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
         assert result.key == "field_agreement"
 
-    def test_records_with_no_matching_formats_returns_100(self):
-        """Only formats with no pair definitions → no joins → 100.0."""
+    def test_records_with_no_matching_formats_are_unmeasurable(self):
+        """Only formats with no pair definitions produce no agreement denominator."""
         records = {
             "bash_history": [_rec("bash_history", {"username": "jsmith", "command": "ls"}, ts=T0)]
         }
         scorer = CrossSourceScorer()
         result = scorer._score_field_agreement(records)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +384,7 @@ class TestScoreFieldAgreementEmptyRecords:
 class TestProxyZeekHttpConnectExclusion:
     """CONNECT tunnel rows on both sides should be filtered out; only non-CONNECT
     rows are eligible for the pair join.  A lone CONNECT row therefore produces
-    zero matched pairs (no violation, no agreement) and the sub-score stays 100.
+    zero matched pairs (no violation and no evidence of agreement).
     """
 
     def _make_proxy(self, method: str, ts=None) -> ParsedRecord:
@@ -414,14 +416,15 @@ class TestProxyZeekHttpConnectExclusion:
         )
 
     def test_connect_rows_filtered_no_pairs_matched(self):
-        """A CONNECT proxy row + a CONNECT zeek_http row → zero matches → score=100."""
+        """A CONNECT proxy row plus Zeek row is outside the configured join contract."""
         records = {
             "proxy_access": [self._make_proxy("CONNECT")],
             "zeek_http": [self._make_zeek_http("CONNECT", 200)],
         }
         scorer = CrossSourceScorer()
         result = scorer._score_field_agreement(records)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
     def test_non_connect_rows_are_still_matched(self):
         """GET rows with matching status_code agree → score=100 (agreement found)."""

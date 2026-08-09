@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "review_baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "parent_commit": "03401ad064d3004ac1028a91da9fb22e4b210626",
+  "recorded_at": "2026-08-07",
+  "branch": "codex/batch7-compatibility-docs",
+  "remediation_batch": "7a",
+  "scope": {
+    "finding_ids": ["ARCH-001", "ARCH-002", "ARCH-003", "ARCH-008"],
+    "contracts": [
+      "closed dispatch admission for canonical event contracts",
+      "canonical state is independent of source-observation delay",
+      "sensor-local NAT tuple views derive from canonical transaction, NatContext, and topology",
+      "dead event aliases have neither producers nor emitter admission",
+      "public documentation and finding status match implemented behavior"
+    ]
+  },
+  "removed_compatibility_paths": [
+    {
+      "surface": "module_load",
+      "disposition": "removed unreachable eCAR emitter alias; image_load is the canonical kind"
+    },
+    {
+      "surface": "special_privileges",
+      "disposition": "removed unreachable Windows emitter alias; Event 4672 remains source-native logon fan-out"
+    },
+    {
+      "surface": "SecurityEvent._nat_swaps_by_sensor",
+      "disposition": "removed duplicate mutable tuple/locality map; NetworkObservationPlanner freezes the sensor view directly"
+    },
+    {
+      "surface": "delayed source copy to StateManager process-activity feedback",
+      "disposition": "removed observation-time mutation of canonical lifecycle state"
+    }
+  ],
+  "admission_contract": {
+    "boundary": "EventDispatcher after identity/lifecycle planning and before event ID, state, observation, or emitters",
+    "rejected": [
+      "unknown canonical event kind",
+      "missing required context",
+      "forbidden context",
+      "missing required identity plan",
+      "identity compatibility contradiction"
+    ],
+    "raw_exception": "RawLogEntry remains an explicit source-local escape hatch outside canonical cross-source guarantees",
+    "producer_repairs": [
+      "late process termination resolves the durable ended-process object identity",
+      "SSH bundle rejects unowned or contradictory supplied LogonID/object pairs and otherwise uses one StateManager-owned session identity"
+    ]
+  },
+  "retained_migration_surfaces": [
+    {
+      "surface": "mutable SecurityEvent carrier and string event_type",
+      "reason": "67 constructors and all consumers still use the carrier; replacement is a public/internal migration, not behavior-preserving cleanup"
+    },
+    {
+      "surface": "flat NetworkContext transaction compatibility fields",
+      "reason": "approximately 300 construction and projection references remain"
+    },
+    {
+      "surface": "EdrContext identity compatibility fields",
+      "reason": "many families acquire EventIdentityPlan at dispatch and still project the compatibility view"
+    },
+    {
+      "surface": "TLS, X.509, OCSP, proxy, and file mutable context views",
+      "reason": "canonical plans own migrated paths, while transparent/direct projection consumers remain"
+    },
+    {
+      "surface": "singular ids plus ids_alerts",
+      "reason": "authored and automatic alert inputs still use distinct compatibility shapes before common projection"
+    }
+  ],
+  "static_inventory": {
+    "authored_event_specs": 31,
+    "discovered_event_types": 64,
+    "security_event_constructors": 67,
+    "mutable_context_dataclasses": 38,
+    "plans_and_identities": 27,
+    "concrete_action_bundles": 51,
+    "concrete_formats": 23,
+    "classification_gaps": 0,
+    "emitter_contract_types_without_producer": 0,
+    "unresolved_dynamic_event_type_constructors": 0
+  },
+  "rendered_evidence": {
+    "complete_profile": {
+      "scenario": "scenarios/branch-office-example/scenario.yaml",
+      "parent_data_files": 40,
+      "current_data_files": 40,
+      "tree_sha256": "fbb7ba1a0dc745753f356755d6658ff345726d229e549f13fef39ab7f68d479e",
+      "result": "byte-identical parent and Batch 7 data trees"
+    },
+    "enterprise_standard": {
+      "scenario": "branch-office-example with in-memory observation_profile override",
+      "parent_probe_findings": 0,
+      "current_probe_findings": 0,
+      "result": "endpoint rows change where removal of observed-time state feedback changes later lifecycle selection; both parent and current rendered invariant probes are clean"
+    }
+  },
+  "commands": {
+    "inventory": "UV_CACHE_DIR=/private/tmp/eforge-uv-cache uv run python scripts/realism_review_inventory.py",
+    "focused_tests": "uv run pytest --no-cov tests/unit/test_event_contracts.py tests/unit/test_dispatcher.py tests/unit/test_network_observation.py tests/unit/test_zeek_nat.py tests/unit/test_zeek_ssl.py -q",
+    "non_slow_tests": "uv run pytest --no-cov -q",
+    "rendered_probe": "uv run python scripts/realism_review_probe.py <dataset> --output <report>",
+    "lint": "uv run ruff check .",
+    "format_check": "uv run ruff format --check .",
+    "diff_check": "git diff --check"
+  },
+  "quality_gates": [
+    {
+      "name": "focused_contract_and_network_tests",
+      "status": "passed",
+      "result": "146 passed"
+    },
+    {
+      "name": "producer_gap_regressions",
+      "status": "passed",
+      "result": "late process termination plus three direct SSH bundle variants passed after canonical identity repair"
+    },
+    {
+      "name": "non_slow_tests",
+      "status": "passed",
+      "result": "5230 passed, 41 skipped in 243.43 seconds on the unrestricted final run"
+    },
+    {
+      "name": "ruff_format_json_and_diff",
+      "status": "passed",
+      "result": "Ruff check passed; 460 files formatted; review JSON parses; git diff --check passed"
+    }
+  ],
+  "limitations": [
+    "The retained compatibility surfaces require separately approved migrations before removal.",
+    "The enterprise-profile output comparison is intentionally not byte-identical because the parent incorrectly fed source-observation delay back into canonical process state.",
+    "Generated datasets and temporary detached-worktree outputs remain untracked."
+  ]
+}

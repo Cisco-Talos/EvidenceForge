@@ -601,12 +601,20 @@ variants:
       - name: SubjectLogonId
         type: hex_string
         required: true
+      - name: LogonGuid
+        type: string
+        required: false
+        description: "GUID to correlate with Kerberos authentication"
       - name: TargetUserName
         type: string
         required: true
       - name: TargetDomainName
         type: string
         required: true
+      - name: TargetLogonGuid
+        type: string
+        required: false
+        description: "GUID for target logon correlation"
       - name: TargetServerName
         type: string
         required: true
@@ -619,20 +627,12 @@ variants:
       - name: ProcessName
         type: string
         required: true
-      - name: NetworkAddress
+      - name: IpAddress
         type: string
         required: false
-      - name: NetworkPort
+      - name: IpPort
         type: integer
         required: false
-      - name: LogonGuid
-        type: string
-        required: false
-        description: "GUID to correlate with Kerberos authentication"
-      - name: TargetLogonGuid
-        type: string
-        required: false
-        description: "GUID for target logon correlation"
 
   # EventID 4768: A Kerberos authentication ticket (TGT) was requested
   - name: kerberos_tgt
@@ -1338,8 +1338,8 @@ output:
         <Data Name="TargetInfo">{{ TargetInfo | default('-') }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="ProcessName">{{ ProcessName }}</Data>
-        <Data Name="NetworkAddress">{{ NetworkAddress | default('-') }}</Data>
-        <Data Name="NetworkPort">{{ '-' if (NetworkAddress | default('-')) == '-' else (NetworkPort | default(0)) }}</Data>
+        <Data Name="IpAddress">{{ IpAddress | default('-') }}</Data>
+        <Data Name="IpPort">{{ '-' if (IpAddress | default('-')) == '-' else (IpPort | default(0)) }}</Data>
         {% elif EventID == 4768 %}
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
         <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>

@@ -117,6 +117,26 @@ class TestLoadThresholds:
         gates = {key for _, key, _ in thresh.hard_gates()}
         assert "event_presence" in gates
 
+    def test_hard_gates_cover_all_high_impact_acceptance_contracts(self):
+        """Every source, invariant, and authored-scenario rejection contract is gating."""
+
+        thresh = load_thresholds()
+        gates = {key for _, key, _ in thresh.hard_gates()}
+
+        assert {
+            "spec_conformance",
+            "format_constraints",
+            "field_agreement",
+            "ids_integrity",
+            "causal_ordering",
+            "event_presence",
+            "intent_reconciliation",
+            "indicator_accuracy",
+            "pivot_linkability",
+            "temporal_integrity",
+            "storyline_trace_coverage",
+        } <= gates
+
     def test_defaults_fallback(self):
         """_defaults() should return a valid minimal EvalThresholds."""
         thresh = _defaults()

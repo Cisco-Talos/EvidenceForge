@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.output_targets import OutputTarget
@@ -265,7 +265,7 @@ class ProxyEmitter(HostMultiplexEmitter):
 
     Per-host FQDN directory routing: each proxy server gets its own access log.
 
-    Handles SecurityEvents with ProxyContext (fan-out from connection events).
+    Handles canonical occurrences with an aggregate proxy protocol plan.
     For HTTPS connections, emits a CONNECT entry only for the first request
     in a tunnel session (per client_ip + host), then subsequent requests
     reuse the existing tunnel without additional CONNECTs.
@@ -322,17 +322,17 @@ class ProxyEmitter(HostMultiplexEmitter):
         finally:
             self.format_def.output.header_template = header_template
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle connection events that carry a ProxyContext."""
-        return event.event_type in self._supported_types and event.proxy is not None
+        return event.event_type in self._supported_types and event.protocol.proxy is not None
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render ProxyContext to the configured proxy access format.
 
         For HTTPS (port 443), emits CONNECT entry only for the first request
         to a (proxy_fqdn, client_ip, host, dst_port) tuple within the tunnel timeout window.
         """
-        px = event.proxy
+        px = event.protocol.proxy
         net = event.network
         request_time = px.transaction.request_at if px.transaction is not None else event.timestamp
 

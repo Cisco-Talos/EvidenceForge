@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import ValidationError
 
 from evidenceforge.config import (
@@ -41,6 +40,7 @@ from evidenceforge.config import (
     get_formats_directory,
     get_personas_directory,
 )
+from evidenceforge.config.schemas import IdsSignaturePredicateSpec
 from evidenceforge.models.ids import IdsAlertPolicySpec
 
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
@@ -181,8 +181,9 @@ def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict
 def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
     """Load YAML file, returning (data, error_message)."""
     try:
-        with open(path) as f:
-            data = yaml.safe_load(f)
+        from evidenceforge.utils.yaml_loader import load_yaml_file
+
+        data = load_yaml_file(path)
         return data, None
     except Exception as e:
         return None, str(e)
@@ -488,6 +489,7 @@ def validate_config() -> ValidationResult:
         "activity/network_params.yaml": {
             "list_fields": {
                 "oui_prefixes": None,
+                "public_dns_resolvers": "name",
                 "public_ntp_servers": "name",
                 "dns_tunnel_ttl_choices": None,
                 "external_scanner_port_profiles": "name",
@@ -562,6 +564,7 @@ def validate_config() -> ValidationResult:
             "dict_fields": {
                 "relationships",
                 "endpoint_clock",
+                "windows_startup_modules",
                 "windows_event_time",
                 "network_sensor_observation",
             },
@@ -948,6 +951,29 @@ def validate_config() -> ValidationResult:
                 )
             )
 
+    def _validate_ids_signature_predicate(
+        file_name: str,
+        context: str,
+        signature: dict[str, object],
+    ) -> None:
+        """Validate structured IDS semantic requirements at every config boundary."""
+
+        predicate = signature.get("predicate")
+        if predicate is None and signature.get("inspection") is not None:
+            predicate = {"inspection": signature["inspection"]}
+        if predicate is None:
+            return
+        try:
+            IdsSignaturePredicateSpec.model_validate(predicate)
+        except ValidationError as exc:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{context} has invalid predicate: {exc.errors(include_url=False)}",
+                )
+            )
+
     # --- IDS Signature Integrity ---
     for i, sig in enumerate(ids_data.get("signatures", [])):
         sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
@@ -1005,6 +1031,7 @@ def validate_config() -> ValidationResult:
             "ids_signatures.yaml", f"Signature {sid}", sig, "priority", required=True
         )
         _validate_ids_numeric_field("ids_signatures.yaml", f"Signature {sid}", sig, "gid")
+        _validate_ids_signature_predicate("ids_signatures.yaml", f"Signature {sid}", sig)
         _record_ids_rule_identity("ids_signatures.yaml", sig.get("sid"), gid, sig.get("message"))
         templates = sig.get("dns_query_templates")
         if templates is not None:
@@ -1316,6 +1343,106 @@ def validate_config() -> ValidationResult:
                         "ERROR",
                         "timing_profiles.yaml",
                         f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
+                    )
+                )
+
+    startup_module_timing = timing_profiles_data.get("windows_startup_modules", {})
+    if not isinstance(startup_module_timing, dict):
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "timing_profiles.yaml",
+                "windows_startup_modules must be a mapping",
+            )
+        )
+    else:
+        initial_delay = startup_module_timing.get("initial_delay_us")
+        inter_load_gap = startup_module_timing.get("inter_load_gap_us")
+        for field_name, bounds in (
+            ("initial_delay_us", initial_delay),
+            ("inter_load_gap_us", inter_load_gap),
+        ):
+            if not isinstance(bounds, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name} must be a mapping",
+                    )
+                )
+                continue
+            min_value = bounds.get("min")
+            max_value = bounds.get("max")
+            if not isinstance(min_value, int) or isinstance(min_value, bool) or min_value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.min must be a positive integer",
+                    )
+                )
+            if not isinstance(max_value, int) or isinstance(max_value, bool) or max_value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.max must be a positive integer",
+                    )
+                )
+            if (
+                isinstance(min_value, int)
+                and not isinstance(min_value, bool)
+                and isinstance(max_value, int)
+                and not isinstance(max_value, bool)
+                and max_value < min_value
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.max must be >= min",
+                    )
+                )
+        if isinstance(inter_load_gap, dict):
+            median = inter_load_gap.get("median")
+            sigma = inter_load_gap.get("sigma")
+            if not isinstance(median, int) or isinstance(median, bool) or median <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.median must be a positive integer",
+                    )
+                )
+            if (
+                not isinstance(sigma, int | float)
+                or isinstance(sigma, bool)
+                or not math.isfinite(float(sigma))
+                or not 0.05 <= float(sigma) <= 3.0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.sigma must be finite and between 0.05 and 3.0",
+                    )
+                )
+            gap_min = inter_load_gap.get("min")
+            gap_max = inter_load_gap.get("max")
+            if (
+                isinstance(median, int)
+                and not isinstance(median, bool)
+                and isinstance(gap_min, int)
+                and not isinstance(gap_min, bool)
+                and isinstance(gap_max, int)
+                and not isinstance(gap_max, bool)
+                and not gap_min <= median <= gap_max
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.median must be within min/max",
                     )
                 )
 
@@ -2494,6 +2621,7 @@ def validate_config() -> ValidationResult:
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
         KerberosRealismConfig,
+        LoadedModuleEntry,
         MailPublicIdentitiesConfig,
         ObservationProfilesConfig,
         OuiEntry,
@@ -2502,6 +2630,7 @@ def validate_config() -> ValidationResult:
         ProcessNetworkEntry,
         ProxyUserAgentOverrideEntry,
         PublicDnsProfilesConfig,
+        PublicDnsResolverEntry,
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
@@ -2546,6 +2675,24 @@ def validate_config() -> ValidationResult:
                 "system_processes.yaml (scheduled_tasks)",
             )
         )
+        common_modules = (sys_proc_data.get("common_loaded_modules") or {}).get("windows", [])
+        if isinstance(common_modules, list):
+            _SCHEMA_CHECKS.append(
+                (
+                    common_modules,
+                    LoadedModuleEntry,
+                    "system_processes.yaml (common_loaded_modules.windows)",
+                )
+            )
+        for exe_name, modules in (sys_proc_data.get("process_loaded_modules") or {}).items():
+            if isinstance(modules, list):
+                _SCHEMA_CHECKS.append(
+                    (
+                        modules,
+                        LoadedModuleEntry,
+                        f"system_processes.yaml (process_loaded_modules.{exe_name})",
+                    )
+                )
         for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
             if isinstance(role_entries, list):
                 _SCHEMA_CHECKS.append(
@@ -2889,6 +3036,13 @@ def validate_config() -> ValidationResult:
     net_params = load_network_params()
     if net_params:
         _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
+        _SCHEMA_CHECKS.append(
+            (
+                net_params.get("public_dns_resolvers", []),
+                PublicDnsResolverEntry,
+                "network_params.yaml (public_dns_resolvers)",
+            )
+        )
         _SCHEMA_CHECKS.append(
             (
                 net_params.get("public_ntp_servers", []),
@@ -3260,6 +3414,9 @@ def validate_config() -> ValidationResult:
                 _validate_ids_numeric_field(
                     "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "gid"
                 )
+                _validate_ids_signature_predicate(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua
+                )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
@@ -3302,6 +3459,9 @@ def validate_config() -> ValidationResult:
                 )
                 _validate_ids_numeric_field(
                     "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "gid"
+                )
+                _validate_ids_signature_predicate(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate
                 )
                 threshold = ids_rate.get("threshold")
                 if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
@@ -3349,6 +3509,7 @@ def validate_config() -> ValidationResult:
                     "web_scan_presets.yaml", path_context, path_ids, "priority"
                 )
                 _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "gid")
+                _validate_ids_signature_predicate("web_scan_presets.yaml", path_context, path_ids)
 
     # --- RSAT tools validation ---
     from evidenceforge.generation.activity.rsat_tools import load_rsat_tools

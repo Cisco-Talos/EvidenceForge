@@ -925,7 +925,7 @@ class TestWindowsProcessTreeRealism:
         # Capture dispatched events
         dispatched = []
         ag.dispatcher = Mock()
-        ag.dispatcher.dispatch = lambda event: dispatched.append(event)
+        ag.dispatcher.dispatch_builder = lambda event: dispatched.append(event)
 
         ag.generate_process(
             user,

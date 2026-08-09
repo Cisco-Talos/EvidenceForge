@@ -70,14 +70,14 @@ class TestEdrFileEvent:
     def test_file_events_dispatched_canonically(
         self, activity_gen, test_user, win_system, state_manager, timestamp, mock_emitters
     ):
-        """FILE events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
+        """FILE events are now dispatched via OccurrenceBuilder canonical path (Phase 8.2)."""
         state_manager.set_current_time(timestamp)
-        # generate_process triggers probabilistic FILE events via SecurityEvent dispatch
+        # generate_process triggers probabilistic FILE events via OccurrenceBuilder dispatch
         # Verify by calling dispatch directly with a file_create event
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, FileContext
 
-        SecurityEvent(
+        OccurrenceBuilder(
             timestamp=timestamp,
             event_type="file_create",
             src_host=activity_gen._build_host_context(win_system),
@@ -96,11 +96,11 @@ class TestEdrRegistryEvent:
     def test_registry_events_dispatched_canonically(
         self, activity_gen, win_system, timestamp, mock_emitters
     ):
-        """REGISTRY events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
-        from evidenceforge.events.base import SecurityEvent
+        """REGISTRY events are now dispatched via OccurrenceBuilder canonical path (Phase 8.2)."""
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, RegistryContext
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=timestamp,
             event_type="registry_modify",
             src_host=activity_gen._build_host_context(win_system),
@@ -117,9 +117,9 @@ class TestEdrFlowEvent:
     def test_edr_receives_connection_events(
         self, activity_gen, state_manager, timestamp, mock_emitters
     ):
-        """EDR FLOW events are now dispatched via SecurityEvent canonical path (Phase 8.1)."""
+        """EDR FLOW events are now dispatched via OccurrenceBuilder canonical path (Phase 8.1)."""
         state_manager.set_current_time(timestamp)
-        # generate_connection dispatches SecurityEvent with event_type="connection"
+        # generate_connection dispatches OccurrenceBuilder with event_type="connection"
         # EcarEmitter.can_handle() returns True for "connection" and renders FLOW
         activity_gen.generate_connection(
             src_ip="10.0.10.1",
@@ -146,11 +146,11 @@ class TestEdrModuleEvent:
     def test_module_events_dispatched_canonically(
         self, activity_gen, win_system, timestamp, mock_emitters
     ):
-        """MODULE events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
-        from evidenceforge.events.base import SecurityEvent
+        """MODULE events are now dispatched via OccurrenceBuilder canonical path (Phase 8.2)."""
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, ImageLoadContext
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=timestamp,
             event_type="image_load",
             src_host=activity_gen._build_host_context(win_system),

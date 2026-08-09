@@ -202,7 +202,16 @@ class PlausibilityScorer(DimensionScorer):
                         f"({vis.get_os_category(hostname)})"
                     )
 
-        score = (100.0 * plausible / total) if total > 0 else 100.0
+        if total == 0:
+            return SubScore(
+                name="Value & OS Plausibility",
+                key="value_plausibility",
+                weight=0.25,
+                score=None,
+                skipped=True,
+                details="No records expose a checkable host or OS/value contract",
+            )
+        score = 100.0 * plausible / total
         return SubScore(
             name="Value & OS Plausibility",
             key="value_plausibility",
@@ -239,7 +248,16 @@ class PlausibilityScorer(DimensionScorer):
                         elif len(failures) < 10:
                             failures.append(f"[{format_name}] Rule '{rule['name']}' failed")
 
-        score = (100.0 * passing / total_applicable) if total_applicable > 0 else 100.0
+        if total_applicable == 0:
+            return SubScore(
+                name="Co-occurrence Rules",
+                key="co_occurrence",
+                weight=0.20,
+                score=None,
+                skipped=True,
+                details="No configured co-occurrence rule applies to this dataset",
+            )
+        score = 100.0 * passing / total_applicable
         return SubScore(
             name="Co-occurrence Rules",
             key="co_occurrence",
@@ -294,12 +312,13 @@ class PlausibilityScorer(DimensionScorer):
                 divergence_scores.append(field_score)
                 details_parts.append(f"{format_name}.{field_name}: {field_score:.0f}")
 
-        score = sum(divergence_scores) / len(divergence_scores) if divergence_scores else 100.0
+        score = sum(divergence_scores) / len(divergence_scores) if divergence_scores else None
         return SubScore(
             name="Distribution Fit",
             key="distribution_fit",
             weight=0.15,
             score=score,
+            skipped=not divergence_scores,
             details="; ".join(details_parts) if details_parts else "No distribution profiles",
         )
 
@@ -312,7 +331,8 @@ class PlausibilityScorer(DimensionScorer):
                 name="Cross-Source Field Agreement",
                 key="field_agreement",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No pair definitions loaded",
             )
 
@@ -359,7 +379,16 @@ class PlausibilityScorer(DimensionScorer):
         if len(failures) < 10:
             failures.extend(crypto_failures[: 10 - len(failures)])
 
-        score = (100.0 * total_agreeing / total_matched) if total_matched > 0 else 100.0
+        if total_matched == 0:
+            return SubScore(
+                name="Cross-Source Field Agreement",
+                key="field_agreement",
+                weight=0.15,
+                score=None,
+                skipped=True,
+                details="No configured cross-source pivots were jointly observable",
+            )
+        score = 100.0 * total_agreeing / total_matched
         return SubScore(
             name="Cross-Source Field Agreement",
             key="field_agreement",

@@ -24,7 +24,7 @@
 
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -38,7 +38,7 @@ class ZeekWeirdEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_weird.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Only handle connection events that carry WeirdContext."""
         return (
             event.event_type == "connection"
@@ -46,8 +46,8 @@ class ZeekWeirdEmitter(SensorMultiplexEmitter):
             and not (event.network is not None and event.network.application_layer_only)
         )
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Render weird.log entry from WeirdContext + NetworkContext."""
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Render weird.log entry from WeirdContext + NetworkTransactionPlan."""
         net = event.network
         weird = event.weird
         event_data = {

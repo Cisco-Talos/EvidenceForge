@@ -1,0 +1,36 @@
+{
+  "collection_window_epoch": [
+    1705309200.0,
+    1705316400.0
+  ],
+  "dataset": "/private/tmp/eforge-realism-review/baseline-only",
+  "files": {
+    "json": {
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/conn.json": 1382,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/dhcp.json": 11,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/dns.json": 450,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/files.json": 229,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/http.json": 40,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/ntp.json": 12,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/ocsp.json": 23,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/ssl.json": 562,
+      "/private/tmp/eforge-realism-review/baseline-only/data/zeek01/x509.json": 206
+    },
+    "xml": {
+      "/private/tmp/eforge-realism-review/baseline-only/data/DC-01.corp.example.com/windows_event_security.xml": 168,
+      "/private/tmp/eforge-realism-review/baseline-only/data/WS-DEV-01.corp.example.com/windows_event_security.xml": 272,
+      "/private/tmp/eforge-realism-review/baseline-only/data/WS-DEV-01.corp.example.com/windows_event_sysmon.xml": 151,
+      "/private/tmp/eforge-realism-review/baseline-only/data/WS-DEV-02.corp.example.com/windows_event_security.xml": 1032,
+      "/private/tmp/eforge-realism-review/baseline-only/data/WS-DEV-02.corp.example.com/windows_event_sysmon.xml": 582,
+      "/private/tmp/eforge-realism-review/baseline-only/data/WS-EXEC-01.corp.example.com/windows_event_security.xml": 493,
+      "/private/tmp/eforge-realism-review/baseline-only/data/WS-EXEC-01.corp.example.com/windows_event_sysmon.xml": 275
+    }
+  },
+  "findings": [],
+  "schema_version": 1,
+  "summary": {
+    "by_check": {},
+    "by_severity": {},
+    "total": 0
+  }
+}

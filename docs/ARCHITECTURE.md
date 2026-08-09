@@ -74,7 +74,7 @@ This separation means scenario creation benefits from LLM reasoning about attack
           │    ActivityGenerator         │
           │  Emits evidence against     │
           │  planner-owned state and    │
-          │  builds SecurityEvents      │
+          │  builds canonical occurrences      │
           │  with composable contexts   │
           │                              │
           │  CausalExpansionEngine       │
@@ -100,18 +100,21 @@ This separation means scenario creation benefits from LLM reasoning about attack
 
 ### Consistency by Construction
 
-The core architectural principle is that **two emitters cannot disagree about shared fields because there is only one source of truth.**
+The architectural principle is that **two emitters cannot disagree about shared fields because
+there is only one source of truth.** Producers populate a private `OccurrenceBuilder`; the
+dispatcher validates and seals it into a frozen `CanonicalOccurrence` before state, observation,
+or projection can consume it.
 
-A `SecurityEvent` object carries all the data for one logical evidence-producing
+A `CanonicalOccurrence` object carries all the data for one logical evidence-producing
 occurrence. Multiple contexts on that event describe facets of the same occurrence
 when those facts must agree across sources. For example, a process-created
-occurrence can carry `AuthContext`, `ProcessContext`, and `EdrContext` so Windows,
+occurrence can carry `AuthContext`, `ProcessContext`, and `EventIdentityPlan` so Windows,
 Sysmon, and endpoint telemetry render the same PID, LogonID, parent, image, and
 actor identity.
 
 Multi-phase activities are modeled one level higher, as action bundles. An action
-bundle represents a real-world activity that can produce several coordinated
-`SecurityEvent`s. For example, an SSH session may produce transport connection
+bundle represents a real-world activity that can produce several coordinated canonical
+occurrences. For example, an SSH session may produce transport connection
 evidence, SSH auth syslog messages, endpoint `USER_SESSION` login/logout rows,
 sshd/bash process evidence, bash history commands, and close/teardown evidence.
 An email delivery similarly routes through the email action bundle, which owns
@@ -119,7 +122,7 @@ message identity, SMTP hop sequence, route-aware `Received` headers, artifacts,
 and TLS visibility while delegating DNS and TCP evidence to the existing DNS and
 network-connection bundles. The bundle owns lifecycle, timing constraints,
 observation intent, and durable anchors across those events; each
-`SecurityEvent` remains the canonical evidence unit dispatched to state and
+`CanonicalOccurrence` remains the canonical evidence unit dispatched to state and
 emitters.
 
 Bundle contracts compose only through canonical semantic layers. A higher-level
@@ -132,10 +135,10 @@ Windows XML event can be validated against sibling evidence, but it must not
 trigger generation of that sibling evidence; the sibling must come from a
 canonical event, context, or upstream bundle.
 
-`SecurityEvent.timestamp` is canonical world time. Source-native timestamps are
+`CanonicalOccurrence.timestamp` is canonical world time. Source-native timestamps are
 planned separately by `SourceTimingPlanner`
 (`src/evidenceforge/generation/source_timing.py`) and stored on
-`SecurityEvent.source_timing` during dispatch. Migrated emitters ask the planner
+`CanonicalOccurrence.source_timing` during dispatch. Migrated emitters ask the planner
 for a source time with explicit bounds instead of adding independent jitter
 locally. Causally related rows are constrained (`A < B` within one source
 stream), equal canonical timestamps are ordered only when a relationship requires
@@ -178,14 +181,17 @@ foundation for multi-event timing. It resolves preferred timestamps, hard
 not-before/not-after bounds, lifecycle windows, and directed "after this evidence
 by at least this gap" relationships deterministically. `SourceTimingPlanner`
 already uses this graph for paired source rows and "source after source" timing;
-future action bundles should use it when one activity produces dependent
-`SecurityEvent`s whose source-native observations must not invert.
+future action bundles should use it when one activity produces dependent canonical
+occurrences whose source-native observations must not invert.
 
 ```
-            ActionBundle / ActivityGenerator
+          ActionBundle / ActivityGenerator
                    │
                    ▼
-        ┌─── SecurityEvent ───┐
+          private OccurrenceBuilder
+                   │ validate + seal
+                   ▼
+        ┌─── CanonicalOccurrence ───┐
         │ timestamp: 09:15:23 │
         │ src_host: LNX-001   │
         │ auth:               │
@@ -220,40 +226,54 @@ log entries for that connection. A topology may omit sensors entirely; canonical
 connection activity, endpoint evidence, proxy logs, and application logs still
 model the activity, but no sensor-backed network logs are written.
 
-**Network Address Translation:** When firewall sensors have `nat_rules`, the dispatcher computes NAT translations for permitted cross-boundary connections. The `NatContext` on `SecurityEvent` carries mapped IPs. The ASA emitter renders both real and mapped addresses (305011/305012 + parenthesized IPs in Built messages). Zeek emitters swap IPs for post-NAT sensors via `_nat_swaps_by_sensor`, so inside sensors see real IPs while outside sensors see translated IPs.
+**Network Address Translation:** When firewall sensors have `nat_rules`, the dispatcher computes
+NAT translations for permitted cross-boundary connections. `NatContext` owns the translation and
+the finalized network transaction owns the canonical tuple. `NetworkObservationPlanner` combines
+those facts with sensor topology and freezes one `NetworkSensorObservation` tuple/locality view per
+sensor. The ASA emitter renders both real and mapped addresses (305011/305012 plus parenthesized
+addresses in Built messages); Zeek and IDS emitters consume the frozen sensor views, so inside
+sensors see real addresses while outside sensors see translated addresses. No mutable per-emitter
+NAT swap map is retained on the event.
 
 ---
 
 ## Part 2: Internals (For Contributors)
 
-### SecurityEvent Canonical Model
+### Canonical Occurrence Model
 
-The `SecurityEvent` dataclass (`src/evidenceforge/events/base.py`) is the central data structure:
+`src/evidenceforge/events/base.py` defines a private mutable `OccurrenceBuilder` construction
+surface and the frozen `CanonicalOccurrence` publication boundary:
 
 ```
-SecurityEvent
+CanonicalOccurrence
 ├── timestamp: datetime (UTC)
-├── event_type: str ("logon", "process_create", "connection", ...)
+├── event_type: EventKind (closed internal enum)
 ├── src_host: HostContext (originating system — hostname, IP, OS, domain, FQDN)
 ├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
 ├── process: ProcessContext (pid, parent_pid, image, command_line, start_time)
 ├── remote_thread: RemoteThreadContext (target_pid, new_thread_id, start_address)
-├── network: NetworkContext (src/dst IP/port, protocol, zeek_uid, bytes)
+├── network: NetworkTransactionPlan (src/dst IP/port, protocol, zeek_uid, bytes)
 ├── dns: DnsContext (query, type, response, TTL)
 ├── file: FileContext (path, hash, operation)
 ├── registry: RegistryContext (key, value, operation)
-├── ids: IdsContext (signature, severity, classification)
+├── ids_alerts: tuple[IdsAlertPlan, ...] (structured, validated IDS attachments)
 ├── syslog: SyslogContext (app_name, message, pid, facility, severity)
 ├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command)
-├── ... (27 context types total)
+├── protocol: ProtocolTransactionPlan
+│   └── TLS, HTTP, X.509 chain, OCSP, proxy, PE, and file-transfer subplans
+├── ... (typed semantic context fields plus immutable plans)
+├── identity_plan: EventIdentityPlan (typed object/actor/session/process identity)
+├── occurrence_key: SemanticOccurrenceKey (required action-relative identity)
+├── contract_seal: ShadowSealResult (immutable dispatch-admission snapshot)
 ├── source_timing: SourceTimingPlan (planned source-native timestamps)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```
 
-All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined in `src/evidenceforge/events/contexts.py`.
+Contexts and plans use slotted dataclasses for compact storage. Published shared-truth plans are
+frozen; construction-only drafts remain private to their planner or builder.
 
 **Key design decisions:**
 - Host context uses a dual `src_host`/`dst_host` model — `src_host` is the system that originates or performs the action; `dst_host` is the target or receiver. For single-host events only one is set; for network events both may be set when both endpoints are known
@@ -261,18 +281,59 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
 - Contexts describe facets of one occurrence. They must not be used to pack a
   whole multi-phase activity into one event. If connection, auth, session open,
   process creation, command execution, and session close are distinct occurrences,
-  coordinate them with an action bundle and emit distinct `SecurityEvent`s.
-- All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
+  coordinate them with an action bundle and emit distinct canonical occurrences.
+- Only `OccurrenceBuilder` is mutable. `dispatch_builder()` completes identity/lifecycle planning,
+  derives the semantic occurrence key, validates legal context combinations, seals a deep
+  snapshot, and then calls the sealed-only `dispatch()` path.
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
-- `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
+- `RawProjectionRequest` serves the explicit user-facing `raw` event type. It is routed directly
+  to one source projector and remains outside canonical cross-source consistency guarantees.
+
+`src/evidenceforge/events/contracts.py` defines the closed `EventKind`, `ContextKind`, and
+`FormatKind` domains plus one `EventKindContract` per currently produced canonical kind. The
+dispatcher captures an immutable `CanonicalOccurrenceSnapshot` during contract validation and
+enforces missing/forbidden context and identity rules before deriving semantic occurrence
+identity, applying state, or routing to observation and projection. `shadow_seal()` is the
+table-driven validator used by inventory, tests, and the seal boundary. The user-facing `raw`
+path remains outside the registry and outside
+cross-source consistency guarantees. The unreachable emitter aliases `module_load` and
+`special_privileges` were removed; the canonical image-load kind is `image_load`, while Windows
+Event 4672 is a source-native fan-out of its owning elevated logon rather than a second canonical
+occurrence.
+
+`ActionAnchor.action_id` and `SemanticOccurrenceKey` provide stable action-relative identity.
+Instance keys use domain identities such as a connection, transfer, or authentication-attempt
+key; positional ordinals are reserved for otherwise indistinguishable peer repetitions and never
+depend on global dispatch order.
+
+Internal occurrence identity is deliberately namespaced away from source-native identifiers.
+`occurrence_id` is for action/ground-truth/observation reconciliation; it never replaces Windows
+`EventID` or `EventRecordID`, Zeek UID/FUID, eCAR record/object UUIDs, Snort GID/SID, syslog
+sequence fields, or another external schema field. Projectors may use private occurrence metadata
+to make source-native allocation deterministic, but they must render the source's own morphology
+and must never expose the internal identifier verbatim.
+
+Network application truth is one `ProtocolTransactionPlan` aggregate composed from focused frozen
+subplans for TLS, HTTP, certificate presentation/X.509, OCSP, proxy, PE, and transferred files.
+This is one aggregate per canonical network occurrence, not one plan per rendered log row: it
+keeps shared references together while avoiding a universal optional-field bag.
+
+`AuthoredIntentLedger` (`src/evidenceforge/generation/intent_ledger.py`) is captured from the
+validated scenario before planning. It remains independent from generated occurrence and
+observation data. `IntentExecutionLedger` records planner acknowledgement, stable action and
+occurrence identities, and intent-scoped source-observation outcomes
+at the dispatcher boundary. `GROUND_TRUTH.json` projects one reconciliation row for every authored
+typed storyline or red-herring specification, including rows that failed to plan or produced no
+event dictionary. Ground-truth schema v2 exposes semantic occurrence IDs and no longer exposes a
+dispatch-sequence identifier.
 
 ### Action Bundles
 
 Action bundles sit between world/storyline/baseline intent and canonical
-`SecurityEvent` dispatch:
+occurrence dispatch:
 
 ```
-intent -> action bundle -> lifecycle/timing/observation -> SecurityEvents -> dispatcher/state/emitters
+intent -> action bundle -> lifecycle/timing/observation -> canonical occurrences -> dispatcher/state/emitters
 ```
 
 The source of intent can be a storyline event, background/persona scheduler,
@@ -356,10 +417,9 @@ Network-connection callers supply one logical connection occurrence, and
 source/destination host semantics, source-port allocation, hostname/DNS/TLS/HTTP
 and file metadata, proxy/firewall/IDS/EDR flow correlation, packet accounting,
 visibility handoff, Zeek UID/state identity, source endpoint process ownership,
-and Windows WFP companions. Higher-level bundles still call the public
-`generate_connection()` compatibility entrypoint, but connection truth is routed
-through this shared bundle boundary before becoming one canonical
-`SecurityEvent` plus any source-native companion evidence. Endpoint FLOW
+and Windows WFP companions. Higher-level bundles call the internal
+`generate_connection()` adapter. Connection truth is routed through this shared bundle boundary
+before becoming one `CanonicalOccurrence` plus any source-native companion evidence. Endpoint FLOW
 timestamps are bounded by the canonical source-visible connection interval that
 is stored in state after Zeek/source observation jitter is resolved. When a very
 short connection cannot also satisfy source-visible process-create ordering, the
@@ -466,8 +526,8 @@ activity-key-to-command resolution, SSH/session-readiness alignment,
 per-user/per-host history scheduling, bash-history event emission, and optional
 foreground process telemetry through existing process helpers. The current slice
 keeps command pools, lifecycle clamps, and process side-effect builders as
-adapter hooks while moving the orchestration boundary above individual
-`SecurityEvent`s.
+adapter hooks while moving the orchestration boundary above individual canonical
+occurrences.
 
 Process-execution callers supply one process create or process terminate intent.
 `ProcessExecutionActionBundle` and `ProcessTerminationActionBundle` own the
@@ -523,9 +583,9 @@ Action bundles own cross-event concerns:
   leases, file transfers, and proxy transactions.
 - Temporal constraints across dependent evidence.
 - Observation intent and source-family eligibility.
-- Expansion into one or more canonical `SecurityEvent`s.
+- Expansion into one or more canonical occurrences.
 
-`SecurityEvent` remains the shared truth unit underneath the bundle. Emitters still
+`CanonicalOccurrence` remains the shared truth unit underneath the bundle. Emitters still
 receive only canonical events and source-local render rules; they do not inspect or
 execute action bundles directly.
 
@@ -548,16 +608,34 @@ does not need cross-source lifecycle, timing, state, or identity ownership.
 The compiled world-model layer (`src/evidenceforge/generation/world_model.py`) sits above the canonical event model and answers the realism question the event model does not: "why would this user/system do this here?"
 
 - `WorldModel` compiles canonical host capabilities and user placement from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
+- Capabilities are typed and compiled once for DHCP servers, DNS resolvers, domain controllers,
+  forward proxies, SSH receivers, and RDP receivers; baseline and storyline consumers do not
+  independently reinterpret roles or services
+- Distinct-peer requests exclude the requesting host. Missing capability remains explicit:
+  optional baseline families skip, authored DHCP intent fails validation, and neither path invents
+  a hostname, address, or role
+- Validated public DNS/NTP configuration represents explicit external infrastructure for eligible
+  traffic; it does not turn into a synthetic scenario host
 - `WorldPlanner` centralizes session bootstrap for interactive, network, SSH, and RDP access, including remote source-host selection and planner-owned session allocation
 - Baseline and storyline call this shared layer instead of maintaining separate SSH/RDP/logon heuristics
-- `ActivityGenerator` then emits host/network evidence against that precomputed state using the canonical `SecurityEvent` pipeline
+- `ActivityGenerator` then emits host/network evidence against that precomputed state using the
+  `OccurrenceBuilder` → `CanonicalOccurrence` pipeline
+
+Distribution choices that must persist across a lifecycle live with their owner rather than being
+resampled by renderers. For example, the DHCP bundle selects T1 once per lease, the OCSP bundle
+plans response duration once per transaction, and observation applies one coherent decision to an
+OCSP transaction's Zeek HTTP/file/OCSP companions. Stable per-name DNS capability and host-scoped
+GPO/device profiles similarly prevent independently sampled source fingerprints.
 
 ### EventDispatcher
 
 The dispatcher (`src/evidenceforge/events/dispatcher.py`) routes events through two layers:
 
 ```
-SecurityEvent
+OccurrenceBuilder
+    │ validate + seal
+    ▼
+CanonicalOccurrence
     │
     ├──▶ StateManager.apply(event)    [side effects: session/process/connection state]
     │
@@ -593,8 +671,8 @@ StateManager
 
 **ID allocation pattern:**
 1. `WorldPlanner` or `ActivityGenerator` calls `state_manager.create_session()` / `create_process()` / `open_connection()` to allocate durable IDs and ownership metadata
-2. `ActivityGenerator` builds a `SecurityEvent` with those IDs
-3. Dispatches the event
+2. `ActivityGenerator` builds an `OccurrenceBuilder` with those IDs
+3. The dispatcher validates, seals, and publishes the `CanonicalOccurrence`
 4. `StateManager.apply()` records state from the event (teardown, byte updates — never allocates IDs)
 
 **Zeek UID correlation:** All Zeek log types for the same network connection share a `zeek_uid` stored on `OpenConnection`. This is the critical cross-log correlation key — conn.log, dns.log, http.log, ssl.log all reference the same UID.
@@ -609,9 +687,9 @@ All emitters inherit from `LogEmitter` (`src/evidenceforge/generation/emitters/b
 LogEmitter (ABC)
 ├── _supported_types: set[str]       # Which event types this emitter handles
 ├── can_handle(event) → bool         # Format eligibility check
-├── emit(event: SecurityEvent)       # New path: type-safe, context-aware
-├── emit_event(data: dict)           # Legacy path: raw dict rendering
-├── emit_raw(entry: RawLogEntry)     # Escape hatch (user `raw` event type only)
+├── emit(event: CanonicalOccurrence)  # Sealed, type-safe canonical projection
+├── emit_event(data: dict)            # Internal source-record buffering/rendering
+├── emit_raw(data: dict)              # RawProjectionRequest escape hatch only
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
@@ -622,7 +700,7 @@ LogEmitter (ABC)
 │   ├── ZeekHttpEmitter              # http.log
 │   ├── ZeekSslEmitter               # ssl.log
 │   └── ... (10 more Zeek types)
-├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EdrContext)
+├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EventIdentityPlan)
 ├── SyslogEmitter                    # Linux syslog (default RFC5424 or sof-elk RFC3164/year)
 ├── BashHistoryEmitter               # Per-user bash history
 ├── SnortEmitter                     # Snort IDS alerts
@@ -643,9 +721,11 @@ legacy/default during evaluation.
 
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 
-**Two rendering paths:**
-- `emit(SecurityEvent)` — primary path for all event types (storyline + baseline)
-- `emit_event(dict)` — legacy path for user `raw` event type in scenario YAML only
+**Two admission paths:**
+- `emit(CanonicalOccurrence)` — canonical path for baseline, storyline, startup, red-herring, and
+  causal occurrences
+- `dispatch_raw(RawProjectionRequest)` → `emit_raw(dict)` — explicitly source-local raw escape
+  hatch; it cannot create sibling evidence or claim cross-source consistency
 
 ### Format Definition System
 
@@ -702,6 +782,8 @@ EvaluationEngine
 └── QualityReport
     ├── overall_score: 0-100
     ├── pillars: list[PillarScore]
+    ├── categories: source schema, canonical invariants, scenario completeness,
+    │               distribution realism, optional expert comparison
     ├── acceptance_criteria: pass/fail (hard gates only)
     ├── aspirational_met / aspirational_total
     ├── flags: list[str]
@@ -718,6 +800,13 @@ but has zero score weight. Older datasets skip it explicitly unless their
 scenario authors IDS attachments. Storyline pivot linkability is inferred from
 typed stable indicators; it connects consecutive events per indicator rather
 than scoring unrelated globally consecutive steps.
+
+Required acceptance measures are non-vacuous: missing or unmeasurable hard gates fail rather than
+disappearing from the verdict, while explicitly inapplicable scenario-free checks render as `N/A`.
+The zero-weight intent-reconciliation gate independently rebuilds authored intent from the scenario
+and compares IDs and authored metadata with canonical ground truth. Observation-profile exclusions
+remain valid only when the matching manifest records dropped, filtered, delayed, or out-of-window
+source evidence.
 
 - **Grace period:** Events within the scenario's `logon_grace_period` (default 30m) from scenario start are exempt from causal ordering checks, since data collection begins mid-session with pre-existing user sessions.
 - **Per-rule tolerance:** Rules can specify a `tolerance` fraction (e.g., 0.03 for DNS→TCP) allowing a percentage of failures without penalty. Used for intentional direct-IP baseline connections.
@@ -784,7 +873,7 @@ ActivityGenerator.generate_connection()
     │             compute timing offset → call generate_*()
     │             (recursion guard: _expanding flag prevents re-expansion)
     │
-    └──▶ Build SecurityEvent → dispatch
+    └──▶ Build OccurrenceBuilder → validate/seal → dispatch CanonicalOccurrence
 ```
 
 **Key components:**

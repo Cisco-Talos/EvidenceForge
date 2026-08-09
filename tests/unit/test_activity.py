@@ -29,8 +29,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext, ProxyContext
+from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
+from evidenceforge.events.contexts import FirewallContext, HttpContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import (
@@ -109,6 +109,7 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
+    _apply_plaintext_http_policy,
     _extract_http_url_from_command,
     _extract_image_from_command,
     _http_context_from_process_command,
@@ -129,6 +130,7 @@ from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
 from evidenceforge.utils.rng import reset_thread_rng
+from tests.network_factories import network_plan
 
 
 def test_linux_trivial_command_lifetime_is_subsecond():
@@ -304,7 +306,49 @@ class TestProcessHttpCommandCorrelation:
 
         normalized = _normalize_http_context_for_source_native_response(http)
 
-        assert normalized.resp_mime_types == ["text/html"]
+        assert normalized.resp_mime_types == ("text/html",)
+
+    def test_http_normalization_removes_head_response_body(self):
+        """HEAD response metadata must not claim entity-body bytes."""
+        http = HttpContext(
+            method="HEAD",
+            host="portal.example.com",
+            uri="/sitemap.xml",
+            response_body_len=478,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/xml"],
+        )
+
+        normalized = _normalize_http_context_for_source_native_response(http)
+
+        assert normalized.response_body_len == 0
+        assert normalized.resp_mime_types == ()
+
+    def test_plaintext_redirect_does_not_restore_head_response_body(self, monkeypatch):
+        """Redirect policy must preserve bodyless HEAD semantics."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.proxy_uri.plaintext_http_redirect_status",
+            lambda *_args, **_kwargs: 301,
+        )
+        http = HttpContext(
+            method="HEAD",
+            host="portal.example.com",
+            uri="/sitemap.xml",
+            response_body_len=0,
+            status_code=200,
+            status_msg="OK",
+        )
+
+        redirected = _apply_plaintext_http_policy(
+            http,
+            hostname="portal.example.com",
+            dst_ip="203.0.113.25",
+            dst_port=80,
+        )
+
+        assert redirected.status_code in {301, 302}
+        assert redirected.response_body_len == 0
 
     def test_http_context_from_curl_command_preserves_url_and_user_agent(self):
         """CLI HTTP command lines should drive the canonical HTTP flow metadata."""
@@ -370,7 +414,7 @@ class TestProcessHttpCommandCorrelation:
         expected_size = response_size_for_status(200, "cdn.example.com", "/favicon.ico")
         assert first_http.response_body_len == expected_size
         assert second_http.response_body_len == expected_size
-        assert first_http.resp_mime_types == ["image/x-icon"]
+        assert first_http.resp_mime_types == ("image/x-icon",)
 
     def test_proxy_context_preserves_cli_http_user_agent(self):
         """Proxy logs should not replace a caller-provided CLI User-Agent."""
@@ -595,7 +639,7 @@ class TestNetworkValidation:
     """Tests for network connection validation."""
 
     def test_same_src_dst_is_valid(self):
-        """Same-IP connections are valid (handled by SecurityEvent.local_only)."""
+        """Same-IP connections are valid (handled by OccurrenceBuilder.local_only)."""
         is_invalid, _reason = _is_invalid_network_connection("10.0.0.1", "10.0.0.1")
 
         assert is_invalid is False
@@ -680,7 +724,7 @@ class TestActivityGenerator:
     def test_generate_logon_creates_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """generate_logon should create session and dispatch SecurityEvent."""
+        """generate_logon should create session and dispatch OccurrenceBuilder."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -692,7 +736,7 @@ class TestActivityGenerator:
         assert sessions[0].logon_id == logon_id
         assert sessions[0].username == test_user.username
 
-        # Verify emitters received SecurityEvent via dispatch
+        # Verify emitters received OccurrenceBuilder via dispatch
         assert mock_emitters["windows_event_security"].emit.called
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "logon"
@@ -1669,7 +1713,7 @@ class TestActivityGenerator:
         assert first_logout.auth.session_id == first_login.auth.session_id
 
     def test_interactive_logons_get_distinct_userinit_parents(
-        self, activity_gen, test_user, test_system, state_manager
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
         """Interactive shells should not all inherit one long-lived userinit.exe parent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -1714,6 +1758,19 @@ class TestActivityGenerator:
             test_system.hostname, sessions[second_logon].explorer_pid
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
+        logon_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        caller_pids = {
+            event.auth.logon_id: event.auth.process_pid
+            for event in logon_events
+            if event.auth is not None
+        }
+        assert caller_pids[first_logon] == sessions[first_logon].session_winlogon_pid
+        assert caller_pids[second_logon] == sessions[second_logon].session_winlogon_pid
+        assert caller_pids[first_logon] != caller_pids[second_logon]
 
     def test_repeated_explorer_creation_reuses_session_shell(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2212,7 +2269,7 @@ class TestActivityGenerator:
 
         activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
 
-        # SecurityEvent dispatched to Windows emitter
+        # OccurrenceBuilder dispatched to Windows emitter
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 2
         assert event.auth.source_ip == "-"
@@ -2896,11 +2953,11 @@ class TestActivityGenerator:
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445}
         assert len({event.network.conn_state for event in scan_events}) > 1
         assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
-        assert all(event.http is None for event in scan_events)
-        assert all(event.ssl is None for event in scan_events)
-        assert all(event.x509 is None for event in scan_events)
-        assert all(event.ocsp is None for event in scan_events)
-        assert all(event.file_transfer is None for event in scan_events)
+        assert all(event.protocol.http is None for event in scan_events)
+        assert all(event.protocol.ssl is None for event in scan_events)
+        assert all(event.protocol.leaf_certificate is None for event in scan_events)
+        assert all(event.protocol.ocsp is None for event in scan_events)
+        assert all(event.protocol.primary_file_transfer is None for event in scan_events)
 
     def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
         """Nmap command probe bundles should expose deterministic anchors."""
@@ -2977,7 +3034,7 @@ class TestActivityGenerator:
             test_user, test_system, timestamp, logon_type=3, source_ip=source_ip
         )
 
-        # SecurityEvent dispatched to Windows emitter
+        # OccurrenceBuilder dispatched to Windows emitter
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 3
         assert event.auth.source_ip == source_ip
@@ -3107,7 +3164,7 @@ class TestActivityGenerator:
         assert logon_event.remote_auth.primary_transport is not None
         assert (
             logon_event.remote_auth.primary_transport.transaction_id
-            == network_event.network.transaction.stable_id
+            == network_event.network.stable_id
         )
         assert network_event.lifecycle.parent_group_id == logon_event.remote_auth.stable_id
         session = state_manager.get_session(logon_event.auth.logon_id)
@@ -3139,7 +3196,7 @@ class TestActivityGenerator:
             for call in mock_emitters["zeek_conn"].emit.call_args_list
             if call[0][0].event_type == "connection"
         )
-        transaction_id = network_event.network.transaction.stable_id
+        transaction_id = network_event.network.stable_id
 
         activity_gen.generate_logon(
             test_user,
@@ -3797,6 +3854,7 @@ class TestActivityGenerator:
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
 
+        sessions_before = len(state_manager.state.active_sessions)
         activity_gen.generate_machine_account_logon(
             hostname="WKS-01",
             machine_username="WKS-01$",
@@ -3831,10 +3889,14 @@ class TestActivityGenerator:
         assert machine_logon.remote_auth.primary_transport is not None
         assert machine_logon.remote_auth.primary_transport.role == "target_service"
         assert machine_logon.remote_auth.primary_transport.tuple.dst_port in {389, 445}
-        assert machine_logon.edr.object_id == machine_logoff.edr.object_id
+        assert machine_logon.identity_plan.object_id == machine_logoff.identity_plan.object_id
         assert machine_logon.lifecycle.group_id == machine_logoff.lifecycle.group_id
         assert machine_logon.lifecycle.phase == "start"
         assert machine_logoff.lifecycle.phase == "closure"
+        assert len(state_manager.state.active_sessions) == sessions_before
+        identity = state_manager.get_session_identity(machine_logon.auth.logon_id)
+        assert identity is not None
+        assert identity.object_id == machine_logon.identity_plan.object_id
         service_connection = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
@@ -3844,7 +3906,7 @@ class TestActivityGenerator:
         assert machine_logon.auth.source_port == service_connection.network.src_port
         assert (
             machine_logon.remote_auth.primary_transport.transaction_id
-            == service_connection.network.transaction.stable_id
+            == service_connection.network.stable_id
         )
         assert all(
             event.kerberos.source_port != machine_logon.auth.source_port
@@ -4184,7 +4246,7 @@ class TestActivityGenerator:
             call.args[0]
             for emitter in mock_emitters.values()
             for call in emitter.emit.call_args_list
-            if call.args and isinstance(call.args[0], SecurityEvent)
+            if call.args and isinstance(call.args[0], CanonicalOccurrence)
         ]
         process_event = next(
             event
@@ -4234,7 +4296,7 @@ class TestActivityGenerator:
             call.args[0]
             for emitter in mock_emitters.values()
             for call in emitter.emit.call_args_list
-            if call.args and isinstance(call.args[0], SecurityEvent)
+            if call.args and isinstance(call.args[0], CanonicalOccurrence)
         ]
         matching = [
             event
@@ -4286,7 +4348,7 @@ class TestActivityGenerator:
             call.args[0]
             for emitter in mock_emitters.values()
             for call in emitter.emit.call_args_list
-            if call.args and isinstance(call.args[0], SecurityEvent)
+            if call.args and isinstance(call.args[0], CanonicalOccurrence)
         ]
         assert any(
             event.event_type == "process_create"
@@ -4330,7 +4392,7 @@ class TestActivityGenerator:
             call.args[0]
             for emitter in mock_emitters.values()
             for call in emitter.emit.call_args_list
-            if call.args and isinstance(call.args[0], SecurityEvent)
+            if call.args and isinstance(call.args[0], CanonicalOccurrence)
         ]
         assert any(
             event.event_type == "process_create"
@@ -4357,7 +4419,7 @@ class TestActivityGenerator:
         # Verify session ended
         assert len(state_manager.get_sessions_for_user(test_user.username)) == 0
 
-        # Verify Windows emitter received logoff SecurityEvent via dispatch
+        # Verify Windows emitter received logoff OccurrenceBuilder via dispatch
         # Last emit() call should be the logoff (logon was the first)
         emit_calls = mock_emitters["windows_event_security"].emit.call_args_list
         logoff_event = emit_calls[-1][0][0]
@@ -4478,7 +4540,7 @@ class TestActivityGenerator:
         assert isinstance(pid, int)
         assert pid > 0
 
-        # Verify Windows emitter received process_create SecurityEvent
+        # Verify Windows emitter received process_create OccurrenceBuilder
         # (may not be last call due to probabilistic file/registry/module events after process)
         assert mock_emitters["windows_event_security"].emit.called
         process_events = [
@@ -5267,10 +5329,10 @@ class TestActivityGenerator:
         assert connection_event.process.image == r"C:\Windows\System32\OpenSSH\ssh.exe"
         assert connection_event.process.username == test_user.username
 
-    def test_workstation_ssh_owner_is_scoped_to_command_target(
+    def test_workstation_ssh_owner_is_one_shot_per_transport(
         self, activity_gen, test_user, state_manager
     ):
-        """Target-bearing SSH client processes should not be reused across hosts."""
+        """Each SSH transport should have a distinct client unless multiplexing is explicit."""
         timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
         workstation = System(
             hostname="WS-AJOHNSON-01",
@@ -5344,9 +5406,70 @@ class TestActivityGenerator:
         assert app_proc is not None
         assert proxy_proc is not None
         assert app_pid != proxy_pid
-        assert app_reuse_pid == app_pid
+        assert app_reuse_pid not in {app_pid, proxy_pid}
         assert app_proc.command_line == "ssh.exe APP-INT-01"
         assert proxy_proc.command_line == "ssh.exe PROXY-01"
+
+    def test_connection_owner_process_is_not_reused_across_logon_sessions(
+        self, activity_gen, test_user, state_manager
+    ):
+        """A process from an ended session cannot own a new session's transport."""
+        first_time = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(first_time - timedelta(minutes=10))
+        first_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(first_time)
+        first_pid, _ = activity_gen._ensure_user_connection_owner_process(
+            source_system=workstation,
+            time=first_time,
+            service="smb",
+            dst_port=445,
+            os_category="windows",
+            hostname="FILE-SRV-01",
+            ssh_attempted_username=None,
+        )
+        first_process = state_manager.get_process(workstation.hostname, first_pid)
+        assert first_process is not None
+        assert first_process.logon_id == first_logon_id
+
+        state_manager.end_session(first_logon_id, first_time + timedelta(minutes=1))
+        second_time = first_time + timedelta(minutes=5)
+        state_manager.set_current_time(second_time - timedelta(minutes=1))
+        second_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(second_time)
+        second_pid, _ = activity_gen._ensure_user_connection_owner_process(
+            source_system=workstation,
+            time=second_time,
+            service="smb",
+            dst_port=445,
+            os_category="windows",
+            hostname="FILE-SRV-01",
+            ssh_attempted_username=None,
+        )
+
+        second_process = state_manager.get_process(workstation.hostname, second_pid)
+        assert second_process is not None
+        assert second_pid != first_pid
+        assert second_process.logon_id == second_logon_id
 
     def test_ssh_session_windows_client_command_names_remote_user(
         self, activity_gen, state_manager, mock_emitters
@@ -6224,36 +6347,12 @@ class TestActivityGenerator:
         test_system,
         state_manager,
         mock_emitters,
-        monkeypatch,
     ):
-        """Probabilistic process ImageLoad events should carry DLL profile signer fields."""
-
-        class ModuleLoadRandom(random.Random):
-            def __init__(self):
-                super().__init__(7)
-                self._random_values = iter([0.99, 0.01])
-
-            def random(self):
-                return next(self._random_values, 0.99)
-
-        import evidenceforge.generation.activity.dll_load_profiles as dll_profiles
+        """Startup ImageLoad events should carry DLL profile signer fields."""
 
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
-        monkeypatch.setattr(generator_module, "_get_rng", ModuleLoadRandom)
-        monkeypatch.setattr(
-            dll_profiles,
-            "get_dlls_for_process",
-            lambda _exe: [
-                {
-                    "path": r"C:\Program Files\Mozilla Firefox\mozglue.dll",
-                    "signed": True,
-                    "signature": "Mozilla Corporation",
-                    "signature_status": "Valid",
-                }
-            ],
-        )
 
         activity_gen.generate_process(
             test_user,
@@ -6270,10 +6369,15 @@ class TestActivityGenerator:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
             if call.args[0].event_type == "image_load"
         ]
-        assert image_load_events
-        assert image_load_events[-1].image_load.image_loaded.endswith("mozglue.dll")
-        assert image_load_events[-1].image_load.signature == "Mozilla Corporation"
-        assert image_load_events[-1].image_load.signature_status == "Valid"
+        mozglue = next(
+            event
+            for event in image_load_events
+            if event.image_load.image_loaded.endswith("mozglue.dll")
+        )
+        assert mozglue.image_load.signature == "Mozilla Corporation"
+        assert mozglue.image_load.signature_status == "Valid"
+        assert mozglue.image_load.load_phase == "startup"
+        assert mozglue.image_load.load_order > 0
 
     def test_image_load_is_clamped_after_process_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -6299,7 +6403,7 @@ class TestActivityGenerator:
             session_start + timedelta(minutes=1),
             pid,
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-            r"C:\Windows\System32\kernel32.dll",
+            r"C:\Windows\System32\netapi32.dll",
         )
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
@@ -6331,7 +6435,7 @@ class TestActivityGenerator:
             session_start + timedelta(seconds=6),
             pid,
             r"C:\Program Files\Zoom\bin\Zoom.exe",
-            r"C:\Users\{username}\AppData\Roaming\Zoom\bin\zVideoApp.dll",
+            r"C:\Users\{username}\AppData\Roaming\Zoom\bin\meetingPlugin.dll",
         )
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
@@ -6629,10 +6733,10 @@ class TestActivityGenerator:
         ]
 
         assert [event.auth.logon_type for event in ecar_logons] == [2, 7]
-        assert ecar_logons[0].edr.object_id
-        assert ecar_logons[1].edr.object_id
-        assert ecar_logons[1].edr.object_id != ecar_logons[0].edr.object_id
-        assert ecar_logons[1].edr.actor_id == ecar_logons[0].edr.object_id
+        assert ecar_logons[0].identity_plan.object_id
+        assert ecar_logons[1].identity_plan.object_id
+        assert ecar_logons[1].identity_plan.object_id != ecar_logons[0].identity_plan.object_id
+        assert ecar_logons[1].identity_plan.actor_id == ecar_logons[0].identity_plan.object_id
 
     def test_workstation_lock_unlock_reject_network_session_luid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -6920,12 +7024,12 @@ class TestActivityGenerator:
         assert process_access.process_access is not None
         assert process_access.process_access.target_pid == target_pid
         assert process_access.process_access.target_process_object_id == target_obj_id
-        assert process_access.edr.actor_id == source_obj_id
+        assert process_access.identity_plan.actor_id == source_obj_id
         assert event.remote_thread is not None
         assert event.remote_thread.target_pid == target_pid
         assert event.remote_thread.target_process_object_id == target_obj_id
-        assert event.remote_thread.thread_object_id == event.edr.object_id
-        assert event.edr.actor_id == source_obj_id
+        assert event.remote_thread.thread_object_id == event.identity_plan.object_id
+        assert event.identity_plan.actor_id == source_obj_id
         assert event.remote_thread.start_address > 0
         assert event.remote_thread.start_address >= 0x00007FF600000000
         assert event.remote_thread.stack_base < 0x0000800000000000
@@ -7052,14 +7156,26 @@ class TestActivityGenerator:
             if call[0][0].event_type == "image_load"
         ]
         assert module_events
-        event = module_events[-1]
-        from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
+        from evidenceforge.generation.activity.dll_load_profiles import (
+            get_startup_dlls_for_process,
+        )
 
-        profile_paths = {entry["path"] for entry in get_dlls_for_process("firefox.exe")}
-        assert event.image_load.image_loaded in profile_paths
+        profile_paths = {entry["path"] for entry in get_startup_dlls_for_process("firefox.exe")}
+        emitted_paths = {event.image_load.image_loaded for event in module_events}
+        assert emitted_paths <= profile_paths
+        assert any(path.lower().endswith("\\ntdll.dll") for path in emitted_paths)
+        assert [event.image_load.load_order for event in module_events] == list(
+            range(1, len(module_events) + 1)
+        )
+        assert all(event.image_load.load_phase == "startup" for event in module_events)
+        assert all(
+            timestamp < event.timestamp < timestamp + timedelta(milliseconds=100)
+            for event in module_events
+        )
+        event = module_events[-1]
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
-        assert event.edr.actor_id
+        assert event.identity_plan.actor_id
         activity_gen.generate_image_load(
             test_user,
             test_system,
@@ -7162,7 +7278,7 @@ class TestActivityGenerator:
             timestamp + timedelta(minutes=5),
             pid,
             r"C:\Windows\System32\taskhostw.exe",
-            r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+            r"C:\Windows\System32\taskschd.dll",
         )
         activity_gen.generate_image_load(
             test_user,
@@ -7170,7 +7286,7 @@ class TestActivityGenerator:
             timestamp + timedelta(hours=2),
             pid,
             r"C:\Windows\System32\taskhostw.exe",
-            r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+            r"C:\Windows\System32\taskschd.dll",
         )
 
         module_events = [
@@ -7179,6 +7295,34 @@ class TestActivityGenerator:
             if call.args[0].event_type == "image_load"
         ]
         assert len(module_events) == 1
+
+    def test_image_load_rejects_known_third_party_module_for_wrong_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Configured vendor modules should not attach to an unrelated executable."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            pid,
+            r"C:\Windows\System32\svchost.exe",
+            r"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnapi.dll",
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
 
     def test_process_termination_waits_for_recorded_dependent_activity(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -7275,11 +7419,15 @@ class TestActivityGenerator:
         activity_gen.generate_wfp_connection(
             system=test_system,
             time=timestamp,
-            src_ip=test_system.ip,
-            src_port=50123,
-            dst_ip="10.0.0.20",
-            dst_port=8080,
-            protocol="tcp",
+            network=network_plan(
+                src_ip=test_system.ip,
+                src_port=50123,
+                dst_ip="10.0.0.20",
+                dst_port=8080,
+                protocol="tcp",
+                source_visible_start_time=timestamp,
+                initiating_pid=pid,
+            ),
             pid=pid,
         )
 
@@ -7406,7 +7554,7 @@ class TestActivityGenerator:
         assert target_wfp.src_host.hostname == dc_system.hostname
         assert target_wfp.network.src_ip == test_system.ip
         assert target_wfp.network.dst_ip == dc_system.ip
-        assert target_wfp.network.initiating_pid == lsass_pid
+        assert target_wfp.network.responding_pid == lsass_pid
         assert target_wfp.process.image.endswith("lsass.exe")
         connection_event = next(
             call.args[0]
@@ -7415,7 +7563,7 @@ class TestActivityGenerator:
         )
         assert target_wfp.lifecycle is not None
         assert target_wfp.lifecycle.parent_group_id is None
-        assert target_wfp.lifecycle.group_id == connection_event.network.transaction.stable_id
+        assert target_wfp.lifecycle.group_id == connection_event.network.stable_id
 
     def test_failed_inbound_windows_probe_does_not_emit_target_wfp(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -7560,11 +7708,15 @@ class TestActivityGenerator:
         activity_gen.generate_wfp_connection(
             system=test_system,
             time=timestamp,
-            src_ip=test_system.ip,
-            src_port=50123,
-            dst_ip="10.0.0.20",
-            dst_port=8080,
-            protocol="tcp",
+            network=network_plan(
+                src_ip=test_system.ip,
+                src_port=50123,
+                dst_ip="10.0.0.20",
+                dst_port=8080,
+                protocol="tcp",
+                source_visible_start_time=timestamp,
+                initiating_pid=5156,
+            ),
             pid=5156,
         )
 
@@ -8683,7 +8835,7 @@ class TestActivityGenerator:
         assert child.timestamp == requested_time
 
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
-        """generate_connection should open connection and dispatch SecurityEvent."""
+        """generate_connection should open connection and dispatch OccurrenceBuilder."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         src_ip = "10.0.0.1"
@@ -8705,7 +8857,7 @@ class TestActivityGenerator:
         assert uid
         assert len(uid) > 0
 
-        # Verify Zeek emitter received connection SecurityEvent
+        # Verify Zeek emitter received connection OccurrenceBuilder
         assert mock_emitters["zeek_conn"].emit.called
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.event_type == "connection"
@@ -8808,7 +8960,7 @@ class TestActivityGenerator:
             visibility_engine = _Visibility()
 
             @staticmethod
-            def dispatch(event):
+            def dispatch_builder(event):
                 captured.append(event)
 
             @staticmethod
@@ -8859,8 +9011,8 @@ class TestActivityGenerator:
         assert event.dst_host is not None
         assert event.dst_host.hostname == "WEB-EXT-01"
         assert "web_server" in event.dst_host.roles
-        assert event.http is not None
-        assert event.http.uri == "/ehr/admin/upload.php"
+        assert event.protocol.http is not None
+        assert event.protocol.http.uri == "/ehr/admin/upload.php"
 
     def test_generate_connection_with_topology_but_no_sensors_still_dispatches(
         self,
@@ -8892,7 +9044,7 @@ class TestActivityGenerator:
             visibility_engine = visibility
 
             @staticmethod
-            def dispatch(event):
+            def dispatch_builder(event):
                 captured.append(event)
 
             @staticmethod
@@ -8930,13 +9082,13 @@ class TestActivityGenerator:
         state_manager,
     ):
         """Canonical context and state should share the finalized transport interval."""
-        captured: list[SecurityEvent] = []
+        captured: list[OccurrenceBuilder] = []
 
         class _Dispatcher:
             visibility_engine = None
 
             @staticmethod
-            def dispatch(event):
+            def dispatch_builder(event):
                 captured.append(event)
 
             @staticmethod
@@ -8962,19 +9114,19 @@ class TestActivityGenerator:
 
         event = captured[-1]
         connection = state_manager.get_connection(event.network.conn_id)
-        assert event.network.transaction is not None
-        assert event.network.transaction.started_at == event.timestamp
-        assert event.network.transaction.hostname
-        assert event.network.transaction.outcome == "success"
-        assert event.network.transaction.phase_times[0] == (
+        assert event.network is not None
+        assert event.network.started_at == event.timestamp
+        assert event.network.hostname
+        assert event.network.outcome == "success"
+        assert event.network.phase_times[0] == (
             "transport_start",
             event.timestamp,
         )
-        assert event.network.source_visible_start_time == event.timestamp
-        assert event.network.source_visible_close_time == event.timestamp + timedelta(seconds=0.04)
+        assert event.network.started_at == event.timestamp
+        assert event.network.closed_at == event.timestamp + timedelta(seconds=0.04)
         assert connection is not None
-        assert connection.start_time == event.network.source_visible_start_time
-        assert connection.close_time == event.network.source_visible_close_time
+        assert connection.start_time == event.network.started_at
+        assert connection.close_time == event.network.closed_at
 
     def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters
@@ -9252,7 +9404,7 @@ class TestActivityGenerator:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.http.trans_depth == 1
+        assert event.protocol.http.trans_depth == 1
         assert http.trans_depth == 4
 
     def test_generate_connection_reuses_http_uid_for_persistent_transactions(self, state_manager):
@@ -9277,7 +9429,7 @@ class TestActivityGenerator:
             )
         )
         http_emitter = CollectorEmitter(
-            lambda event: event.event_type == "connection" and event.http is not None
+            lambda event: event.event_type == "connection" and event.protocol.http is not None
         )
         edr_emitter = CollectorEmitter(
             lambda event: (
@@ -9350,11 +9502,11 @@ class TestActivityGenerator:
         first_event, second_event = http_emitter.events
         assert first_event.network.zeek_uid == first_uid
         assert first_event.network.application_layer_only is False
-        assert first_event.http.trans_depth == 1
+        assert first_event.protocol.http.trans_depth == 1
         assert second_event.network.zeek_uid == first_uid
         assert second_event.network.src_port == first_event.network.src_port
         assert second_event.network.application_layer_only is True
-        assert second_event.http.trans_depth == 2
+        assert second_event.protocol.http.trans_depth == 2
 
     def test_generate_connection_orders_reused_http_transactions_by_depth(self, state_manager):
         """Persistent request timestamps should advance with assigned transaction depth."""
@@ -9364,7 +9516,7 @@ class TestActivityGenerator:
                 self.events = []
 
             def can_handle(self, event):
-                return event.event_type == "connection" and event.http is not None
+                return event.event_type == "connection" and event.protocol.http is not None
 
             def emit(self, event):
                 self.events.append(event)
@@ -9405,8 +9557,10 @@ class TestActivityGenerator:
         third_uid = emit_request(500, 3, "/asset-b.js")
 
         assert first_uid == second_uid == third_uid
-        assert [event.http.trans_depth for event in http_emitter.events] == [1, 2, 3]
-        request_times = [event.http.canonical_request_time for event in http_emitter.events]
+        assert [event.protocol.http.trans_depth for event in http_emitter.events] == [1, 2, 3]
+        request_times = [
+            event.protocol.http.canonical_request_time for event in http_emitter.events
+        ]
         assert request_times == sorted(request_times)
         assert request_times[2] > request_times[1]
 
@@ -9446,7 +9600,7 @@ class TestActivityGenerator:
         assert event.network.conn_state == "SF"
         assert event.network.orig_bytes < 1_200
         assert 120 <= event.network.resp_bytes < 900
-        assert event.network.resp_bytes > event.http.response_body_len
+        assert event.network.resp_bytes > event.protocol.http.response_body_len
 
     def test_generate_connection_derives_tls_bytes_from_http_flow_context(
         self, activity_gen, state_manager, mock_emitters
@@ -9483,7 +9637,7 @@ class TestActivityGenerator:
 
         assert event.network.conn_state == "SF"
         assert event.network.service == "ssl"
-        assert event.network.resp_bytes >= event.http.flow_response_body_len
+        assert event.network.resp_bytes >= event.protocol.http.flow_response_body_len
         assert event.network.resp_pkts >= 300
         assert event.network.resp_ip_bytes >= event.network.resp_bytes
 
@@ -9509,7 +9663,7 @@ class TestActivityGenerator:
             )
         )
         http_emitter = CollectorEmitter(
-            lambda event: event.event_type == "connection" and event.http is not None
+            lambda event: event.event_type == "connection" and event.protocol.http is not None
         )
         emitters = {
             "zeek_conn": conn_emitter,
@@ -9569,10 +9723,10 @@ class TestActivityGenerator:
         assert len(conn_emitter.events) == 2
         assert len(http_emitter.events) == 2
         assert http_emitter.events[1].network.application_layer_only is False
-        assert http_emitter.events[1].http.trans_depth == 1
+        assert http_emitter.events[1].protocol.http.trans_depth == 1
 
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
-        """generate_connection should include byte counts in NetworkContext."""
+        """generate_connection should include byte counts in NetworkTransactionPlan."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         orig_bytes = 1000
@@ -9623,7 +9777,7 @@ class TestActivityGenerator:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         net = event.network
         assert net.resp_bytes > body_len
-        assert net.resp_bytes != event.http.response_body_len
+        assert net.resp_bytes != event.protocol.http.response_body_len
         assert net.duration is not None and net.duration >= 0.04
 
     def test_tls_conn_resp_bytes_cover_certificate_file_bytes(
@@ -9647,7 +9801,7 @@ class TestActivityGenerator:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        cert_payload = sum(certificate_file_size(cert) for cert in event.x509_chain)
+        cert_payload = sum(certificate_file_size(cert) for cert in event.protocol.x509_chain)
         assert cert_payload > 0
         assert event.network.resp_bytes >= cert_payload
         max_cert_delay_ms = max(
@@ -9657,10 +9811,10 @@ class TestActivityGenerator:
                 fuid=cert.fuid,
                 position=idx,
             )
-            for idx, cert in enumerate(event.x509_chain)
+            for idx, cert in enumerate(event.protocol.x509_chain)
         )
         assert event.network.duration >= (max_cert_delay_ms / 1000.0)
-        assert event.network.duration >= 1.05 + (0.075 * len(event.x509_chain))
+        assert event.network.duration >= 1.05 + (0.075 * len(event.protocol.x509_chain))
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters
@@ -9857,7 +10011,7 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, "logon")
 
-        # Logon (and possibly logoff for Type 3) dispatched via SecurityEvent
+        # Logon (and possibly logoff for Type 3) dispatched via OccurrenceBuilder
         emitter = mock_emitters["windows_event_security"]
         assert emitter.emit.called
         first_event = emitter.emit.call_args_list[0][0][0]
@@ -10929,6 +11083,59 @@ class TestActivityGenerator:
         ]
         assert len(user_managers) == 1
 
+    def test_linux_server_console_login_is_not_child_of_user_systemd(
+        self, activity_gen, test_user, state_manager
+    ):
+        """Server console ancestry should be system manager -> login -> shell."""
+        session_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(session_time)
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+            start_time=session_time,
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid}}
+
+        shell_pid = activity_gen.ensure_linux_session_shell(
+            user=test_user,
+            target_system=linux,
+            logon_id=logon_id,
+            logon_time=session_time,
+            activity_time=session_time + timedelta(minutes=5),
+        )
+
+        assert shell_pid is not None
+        shell = state_manager.get_process(linux.hostname, shell_pid)
+        assert shell is not None
+        login = state_manager.get_process(linux.hostname, shell.parent_pid)
+        assert login is not None
+        assert login.image == "/bin/login"
+        assert login.parent_pid == systemd_pid
+        assert not any(
+            process.command_line == "/usr/lib/systemd/systemd --user"
+            and process.logon_id == logon_id
+            for process in state_manager.get_processes_on_system(linux.hostname)
+        )
+
     def test_linux_workstation_python_requests_proxy_stays_unattributed(
         self, activity_gen, test_user, state_manager
     ):
@@ -11689,7 +11896,7 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, "connection_web")
 
-        # Connection dispatched as SecurityEvent
+        # Connection dispatched as OccurrenceBuilder
         assert mock_emitters["zeek_conn"].emit.called
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.service in ["http", "ssl"]
@@ -11770,42 +11977,6 @@ class TestActivityGenerator:
             activity_gen.execute_baseline_activity(test_user, system, timestamp, "connection_test")
 
         assert not mock_emitters["zeek_conn"].emit.called
-
-    def test_event_record_id_increments(self, activity_gen, test_user, test_system):
-        """EventRecordID should increment per-host for each Windows event."""
-        id1 = activity_gen._get_next_event_record_id("HOST-A")
-        id2 = activity_gen._get_next_event_record_id("HOST-A")
-        id3 = activity_gen._get_next_event_record_id("HOST-A")
-
-        assert id2 == id1 + 1
-        assert id3 == id2 + 1
-
-    def test_event_record_id_per_host_independent(self):
-        """EventRecordIDs should be independent per hostname."""
-        state_manager = StateManager()
-        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
-        activity_gen = ActivityGenerator(state_manager, emitters)
-
-        id_a1 = activity_gen._get_next_event_record_id("HOST-A")
-        id_b1 = activity_gen._get_next_event_record_id("HOST-B")
-        id_a2 = activity_gen._get_next_event_record_id("HOST-A")
-        id_b2 = activity_gen._get_next_event_record_id("HOST-B")
-
-        # Each host increments independently
-        assert id_a2 == id_a1 + 1
-        assert id_b2 == id_b1 + 1
-        # Different hosts may have different starting values
-        assert id_a1 != id_b1 or True  # Starting values are seeded from hostname
-
-    def test_event_record_id_starts_in_valid_range(self):
-        """EventRecordID should start at a random offset per host (1000-50000)."""
-        state_manager = StateManager()
-        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
-        activity_gen = ActivityGenerator(state_manager, emitters)
-
-        first_id = activity_gen._get_next_event_record_id("TEST-HOST")
-
-        assert 1001 <= first_id <= 50001
 
     def test_generate_connection_calculates_packet_counts(
         self, activity_gen, state_manager, mock_emitters
@@ -11993,10 +12164,10 @@ def test_public_sni_on_private_destination_uses_public_ca(activity_gen, monkeypa
     """Public SNI observed through private listener addresses should not use internal CA."""
     monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (100, 0))
     activity_gen._ad_domain = "corp.local"
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="198.51.100.44",
             src_port=49152,
             dst_ip="10.0.3.10",
@@ -12026,19 +12197,19 @@ def test_public_sni_on_private_destination_uses_public_ca(activity_gen, monkeypa
         allow_failure=False,
     )
 
-    assert event.x509 is not None
-    assert event.x509.certificate_subject == "CN=portal.example.com"
-    assert "Enterprise Issuing CA" not in event.x509.certificate_issuer
+    assert event.protocol.leaf_certificate is not None
+    assert event.protocol.leaf_certificate.certificate_subject == "CN=portal.example.com"
+    assert "Enterprise Issuing CA" not in event.protocol.leaf_certificate.certificate_issuer
 
 
 def test_internal_sni_on_private_destination_uses_enterprise_ca(activity_gen, monkeypatch):
     """Internal SNI on private addresses should keep enterprise certificate semantics."""
     monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (100, 0))
     activity_gen._ad_domain = "corp.local"
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.1.10",
             src_port=49152,
             dst_ip="10.0.3.10",
@@ -12068,10 +12239,11 @@ def test_internal_sni_on_private_destination_uses_enterprise_ca(activity_gen, mo
         allow_failure=False,
     )
 
-    assert event.x509 is not None
-    assert event.x509.certificate_subject == "CN=portal.corp.local"
+    assert event.protocol.leaf_certificate is not None
+    assert event.protocol.leaf_certificate.certificate_subject == "CN=portal.corp.local"
     assert (
-        event.x509.certificate_issuer == "CN=Enterprise Enterprise Issuing CA, O=Enterprise, C=US"
+        event.protocol.leaf_certificate.certificate_issuer
+        == "CN=Enterprise Enterprise Issuing CA, O=Enterprise, C=US"
     )
 
 
@@ -12087,10 +12259,10 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
     """Failed TLS handshakes should keep byte counts aligned with Zeek history."""
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=timestamp,
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.0.10",
             src_port=49152,
             dst_ip="93.184.216.34",
@@ -12119,8 +12291,8 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
         rng=random.Random(4),
     )
 
-    assert event.ssl is not None
-    assert event.ssl.established is False
+    assert event.protocol.ssl is not None
+    assert event.protocol.ssl.established is False
     assert event.network.conn_state == "S1"
     assert event.network.history in {"ShAD", "ShADd"}
     assert "D" in event.network.history

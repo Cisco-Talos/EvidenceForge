@@ -89,6 +89,14 @@ ocsp:
   this_update_max_skew_seconds: 3600
   next_update_min_seconds: 28800
   next_update_max_seconds: 604800
+  response:
+    size_bytes_min: 900
+    size_bytes_max: 2500
+    latency_ms_min: 18
+    latency_ms_max: 240
+    throughput_bytes_per_second_min: 40000
+    throughput_bytes_per_second_max: 400000
+    file_duration_floor_ms: 3
   request_path:
     # OCSP-over-HTTP GET carries a base64-encoded DER OCSPRequest in the
     # path, not a short human-sized token. Prefixes mirror common DER/base64

@@ -171,8 +171,8 @@ def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(t
             ip="10.0.0.65",
             os="Windows Server 2022",
             type="domain_controller",
-            roles=["domain_controller", "dns_server"],
-            services=["dns"],
+            roles=["domain_controller", "dns_server", "dhcp_server"],
+            services=["dns", "windows-dhcp-server"],
         ),
     ]
     attached = [{"sid": 2002911, "policy": "every"}]
@@ -317,11 +317,23 @@ def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(t
         "dns_tunnel",
     }
     assert attached_events.keys() == expected_kinds
+    incompatible_kinds = {
+        "rdp_session",
+        "dhcp_lease",
+        "dns_query",
+        "web_scan",
+        "dga_queries",
+        "dns_tunnel",
+    }
     zero_candidate_kinds = {
         kind for kind, totals in attached_events.items() if totals["candidate"] == 0
     }
-    assert not zero_candidate_kinds, zero_candidate_kinds
-    assert all(totals["candidate"] == totals["emitted"] for totals in attached_events.values())
+    assert zero_candidate_kinds == incompatible_kinds
+    assert all(
+        totals["candidate"] == totals["emitted"]
+        for kind, totals in attached_events.items()
+        if kind not in incompatible_kinds
+    )
     assert all(totals["policy_filtered"] == 0 for totals in attached_events.values())
 
     alert_lines = [

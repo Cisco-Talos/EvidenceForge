@@ -8,8 +8,9 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import HttpContext, ProxyContext
+from tests.network_factories import network_plan
 
 
 def _parse_proxy_fields(line: str) -> dict:
@@ -19,12 +20,12 @@ def _parse_proxy_fields(line: str) -> dict:
     return record.fields
 
 
-def _proxy_event_with_username(username: str) -> SecurityEvent:
+def _proxy_event_with_username(username: str) -> OccurrenceBuilder:
     """Return a minimal proxy event with an authenticated username."""
-    return SecurityEvent(
+    return OccurrenceBuilder(
         timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
         event_type="connection",
-        network=NetworkContext(
+        network=network_plan(
             src_ip="10.0.10.50",
             src_port=54321,
             dst_ip="93.184.216.34",
@@ -70,10 +71,10 @@ class TestProxyEmitterReferrer:
         fmt = load_format("proxy_access")
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="93.184.216.34",
@@ -108,10 +109,10 @@ class TestProxyEmitterReferrer:
         fmt = load_format("proxy_access")
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="93.184.216.34",
@@ -194,10 +195,10 @@ class TestProxyEmitterReferrer:
             datetime(2024, 3, 15, 10, 1, 0, tzinfo=UTC),
             datetime(2024, 3, 15, 10, 3, 0, tzinfo=UTC),
         ]:
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=ts,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -398,10 +399,10 @@ class TestProxyActionSemantics:
         fmt = load_format("proxy_access")
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="93.184.216.34",
@@ -444,10 +445,10 @@ class TestProxyActionSemantics:
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
         emitter.configure_output_target("sof-elk")
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="93.184.216.34",
@@ -485,10 +486,10 @@ class TestProxyActionSemantics:
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
 
         for idx in range(5):
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 3, 15, 10, 0, idx * 5, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="10.0.3.10",
@@ -527,10 +528,10 @@ class TestProxyActionSemantics:
         emitter = ProxyEmitter(fmt, tmp_path)
         emitter.configure_output_target("splunk")
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="93.184.216.34",
@@ -612,10 +613,10 @@ class TestProxyActionSemantics:
         fmt = load_format("proxy_access")
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="10.0.20.10",
@@ -668,10 +669,10 @@ class TestProxyActionSemantics:
         fmt = load_format("proxy_access")
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="10.0.20.10",
@@ -718,10 +719,10 @@ class TestProxyActionSemantics:
         fmt = load_format("proxy_access")
         emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.50",
                 src_port=54321,
                 dst_ip="10.0.20.10",
@@ -776,10 +777,10 @@ class TestProxyActionSemantics:
 
         base_ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
         for i in range(5):
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=base_ts + timedelta(seconds=i * 2),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -817,10 +818,10 @@ class TestProxyActionSemantics:
 
         base_ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
         for ts in [base_ts + timedelta(minutes=30), base_ts]:
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=ts,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -857,10 +858,10 @@ class TestProxyActionSemantics:
         ts2 = ts1 + timedelta(minutes=10)  # Well past 5-minute timeout
 
         for ts in [ts1, ts2]:
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=ts,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -895,10 +896,10 @@ class TestProxyActionSemantics:
 
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
         for host in ["example.com", "google.com", "github.com"]:
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=ts,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -934,10 +935,10 @@ class TestProxyActionSemantics:
 
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
         for proxy_fqdn in ["PROXY-01", "PROXY-02"]:
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=ts,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",

@@ -51,6 +51,13 @@ def min_unlock_gap_seconds() -> int:
     return max(_MIN_UNLOCK_GAP_SECONDS, min(seconds, _MAX_UNLOCK_GAP_SECONDS))
 
 
+def group_policy_refresh_config() -> dict[str, Any]:
+    """Return host-scoped Group Policy refresh scheduling and command profiles."""
+
+    config = load_windows_auth_realism().get("group_policy_refresh", {})
+    return config if isinstance(config, dict) else {}
+
+
 def failed_logon_config() -> dict[str, Any]:
     """Return failed-logon source-native field profiles."""
     config = load_windows_auth_realism().get("failed_logon", {})

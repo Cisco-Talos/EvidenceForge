@@ -214,6 +214,43 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_contradictory_ids_predicate(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 900001,
+                        "rev": 1,
+                        "message": "response without response evidence",
+                        "classification": "misc-activity",
+                        "priority": 2,
+                        "proto": "tcp",
+                        "dst_port": 80,
+                        "direction": "in",
+                        "predicate": {
+                            "phase": "response",
+                            "payload_direction": "resp",
+                            "minimum_payload_bytes": 1,
+                            "application_protocol": "http",
+                        },
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "invalid predicate" in issue.message
+            and "requires_response" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import endpoint_noise
 
@@ -1182,6 +1219,37 @@ class TestValidateConfig:
             and issue.file == "timing_profiles.yaml"
             and "endpoint_clock.profiles.complete.windows.host_offset_ms.max must be >= min"
             in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_startup_module_timing(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        real_loader = timing_profiles.load_timing_profiles
+
+        def load_invalid_timing_profiles():
+            data = real_loader()
+            startup = dict(data.get("windows_startup_modules", {}))
+            gaps = dict(startup.get("inter_load_gap_us", {}))
+            gaps["sigma"] = 0
+            gaps["median"] = gaps.get("max", 1) + 1
+            startup["inter_load_gap_us"] = gaps
+            return {**data, "windows_startup_modules": startup}
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "inter_load_gap_us.sigma" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "inter_load_gap_us.median must be within min/max" in issue.message
             for issue in result.issues
         )
 
@@ -2506,6 +2574,8 @@ class TestValidateConfig:
             if app == "irqbalance":
                 assert all("{}" not in message and "{0}" not in message for message in messages)
                 assert all("from CPU" not in message for message in messages)
+                assert entry.get("parameter_profiles")
+                assert not {"irq", "device", "cpu"}.intersection(entry.get("params") or {})
             if app == "polkitd":
                 assert any("action {action_id}" in message for message in messages)
                 assert all(
@@ -2525,6 +2595,21 @@ class TestValidateConfig:
                     assert "UDP+EDNS0 instead of UDP+EDNS0" not in rendered
 
         assert checked_apps == high_volume_apps
+
+    def test_irqbalance_uses_atomic_irq_device_cpu_profiles(self):
+        """IRQ/device/CPU values should be selected as one coherent configured unit."""
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        irqbalance = next(
+            entry for entry in load_extra_syslog_messages() if entry["app"] == "irqbalance"
+        )
+        profiles = irqbalance["parameter_profiles"]
+
+        assert profiles
+        assert all(set(profile) == {"irq", "device", "cpu"} for profile in profiles)
+        irq_to_device = {profile["irq"]: profile["device"] for profile in profiles}
+        assert len(irq_to_device) == len(profiles)
+        assert len(set(irq_to_device.values())) == len(profiles)
 
     def test_extra_syslog_linux_maintenance_texture_excludes_schedule_native_cron(self):
         from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages

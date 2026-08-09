@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    FileSensorObservation,
+    NatSensorObservation,
     NetworkSensorObservation,
     NetworkTrafficLedger,
     NetworkTuple,
@@ -23,12 +25,14 @@ from evidenceforge.generation.activity.timing_profiles import (
     firewall_observation_timing,
     network_sensor_observation_timing,
 )
+from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.utils.ids import _has_synthetic_marker
 from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
-    from evidenceforge.events.base import SecurityEvent
+    from evidenceforge.events.base import CanonicalOccurrence
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+    from evidenceforge.models.scenario import NetworkSensor
 
 
 def derive_sensor_identifier(canonical_id: str, sensor_identity: str) -> str:
@@ -62,15 +66,15 @@ class NetworkObservationPlanner:
 
     def plan(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         visible_formats: set[str],
     ) -> tuple[NetworkSensorObservation, ...]:
         """Return deterministic observations for every visible network sensor."""
 
         network = event.network
-        if network is None or network.transaction is None:
+        if network is None:
             return ()
-        transaction = network.transaction
+        transaction = network
         sensor_formats = self._sensor_formats(event, visible_formats)
         canonical_file_ids = self._canonical_file_ids(event)
         canonical_connection_ids = self._canonical_connection_ids(event)
@@ -93,7 +97,7 @@ class NetworkObservationPlanner:
                 if self.visibility_engine is not None
                 else "unspecified"
             )
-            tuple_view = self._tuple_view(event, sensor_identity)
+            tuple_view, local_orig, local_resp = self._sensor_view(event, sensor)
             observed_start = self._observed_time(
                 transaction.started_at,
                 timing,
@@ -124,6 +128,16 @@ class NetworkObservationPlanner:
                 observed_close,
             )
             firewall_teardown_observed = self._before_output_end(firewall_teardown)
+            observed_traffic = self._observed_traffic(
+                transaction.traffic,
+                timing,
+                sensor_identity,
+                transaction.stable_id,
+                transaction.protocol,
+            )
+            history, file_observations, request_body_len, response_body_len = (
+                self._observed_protocol(event, observed_traffic)
+            )
             observations.append(
                 NetworkSensorObservation(
                     sensor_identity=sensor_identity,
@@ -142,31 +156,25 @@ class NetworkObservationPlanner:
                         (file_id, derive_sensor_identifier(file_id, sensor_identity))
                         for file_id in canonical_file_ids
                     ),
-                    local_orig=bool(
-                        event._nat_swaps_by_sensor.get(sensor_identity, {}).get(
-                            "local_orig",
-                            network.local_orig,
-                        )
-                    ),
-                    local_resp=bool(
-                        event._nat_swaps_by_sensor.get(sensor_identity, {}).get(
-                            "local_resp",
-                            network.local_resp,
-                        )
-                    ),
+                    local_orig=local_orig,
+                    local_resp=local_resp,
                     observed_start_time=observed_start,
                     observed_close_time=observed_close,
-                    traffic=self._observed_traffic(
-                        transaction.traffic,
-                        timing,
-                        sensor_identity,
-                        transaction.stable_id,
-                        transaction.protocol,
-                    ),
+                    traffic=observed_traffic,
                     visible_formats=frozenset(formats),
+                    history=history,
+                    file_observations=file_observations,
+                    http_request_body_len=request_body_len,
+                    http_response_body_len=response_body_len,
                     firewall_teardown_reason=firewall_reason,
                     firewall_teardown_time=firewall_teardown,
                     firewall_teardown_observed=firewall_teardown_observed,
+                    nat=self._nat_observation(
+                        event,
+                        observed_start,
+                        observed_close,
+                        firewall_teardown,
+                    ),
                 )
             )
         return tuple(observations)
@@ -184,9 +192,151 @@ class NetworkObservationPlanner:
             gate = gate.replace(tzinfo=None)
         return candidate < gate
 
+    @classmethod
+    def _observed_protocol(
+        cls,
+        event: CanonicalOccurrence,
+        traffic: NetworkTrafficLedger,
+    ) -> tuple[str, tuple[FileSensorObservation, ...], int | None, int | None]:
+        """Freeze application completeness implied by one sensor's traffic ledger."""
+
+        network = event.network
+        if network is None:
+            return "", (), None, None
+
+        history = network.history
+        if network.protocol.lower() == "tcp":
+            if traffic.missed_orig_bytes > 0 and "G" not in history:
+                history += "G"
+            if traffic.missed_resp_bytes > 0 and "g" not in history:
+                history += "g"
+
+        orig_ratio = cls._payload_observation_ratio(
+            network.traffic.orig.payload_bytes,
+            traffic.orig.payload_bytes,
+        )
+        resp_ratio = cls._payload_observation_ratio(
+            network.traffic.resp.payload_bytes,
+            traffic.resp.payload_bytes,
+        )
+        files: list[FileSensorObservation] = []
+        for transfer in event.protocol.file_transfers:
+            ratio = orig_ratio if transfer.is_orig else resp_ratio
+            total = transfer.total_bytes
+            accounted_total = (
+                total if total is not None else transfer.seen_bytes + transfer.missing_bytes
+            )
+            seen = min(transfer.seen_bytes, int(transfer.seen_bytes * ratio))
+            missing = max(transfer.missing_bytes, accounted_total - seen)
+            files.append(
+                FileSensorObservation(
+                    canonical_id=transfer.fuid,
+                    seen_bytes=seen,
+                    total_bytes=total,
+                    missing_bytes=missing,
+                    analyzers_visible=missing == 0 and not transfer.timedout,
+                )
+            )
+
+        for certificate in event.protocol.x509_chain:
+            total = certificate_file_size(certificate)
+            seen = int(total * resp_ratio)
+            files.append(
+                FileSensorObservation(
+                    canonical_id=certificate.fuid,
+                    seen_bytes=seen,
+                    total_bytes=total,
+                    missing_bytes=total - seen,
+                    analyzers_visible=seen == total,
+                )
+            )
+
+        request_body_len = None
+        response_body_len = None
+        http = event.protocol.http
+        if http is not None:
+            canonical_request = max(
+                0,
+                http.flow_request_body_len
+                if http.flow_request_body_len is not None
+                else http.request_body_len,
+            )
+            canonical_response = max(
+                0,
+                http.flow_response_body_len
+                if http.flow_response_body_len is not None
+                else http.response_body_len,
+            )
+            request_body_len = min(http.request_body_len, int(canonical_request * orig_ratio))
+            response_body_len = min(http.response_body_len, int(canonical_response * resp_ratio))
+
+        return history, tuple(files), request_body_len, response_body_len
+
+    @staticmethod
+    def _payload_observation_ratio(canonical_bytes: int, observed_bytes: int) -> float:
+        """Return the bounded fraction of canonical payload visible at one sensor."""
+
+        if canonical_bytes <= 0:
+            return 1.0
+        return min(1.0, max(0.0, observed_bytes / canonical_bytes))
+
+    @staticmethod
+    def _nat_observation(
+        event: CanonicalOccurrence,
+        observed_start: datetime,
+        observed_close: datetime | None,
+        firewall_teardown: datetime | None,
+    ) -> NatSensorObservation | None:
+        """Freeze local/global address roles and translation lifetime for one sensor."""
+
+        nat = event.nat
+        network = event.network
+        if nat is None or network is None:
+            return None
+        transaction = network
+        teardown_time = None
+        if nat.nat_type == "dynamic_pat":
+            teardown_time = firewall_teardown or observed_close
+        if nat.mapped_src_ip != transaction.src_ip or nat.mapped_src_port != transaction.src_port:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="source",
+                local_ip=transaction.src_ip,
+                local_port=transaction.src_port,
+                global_ip=nat.mapped_src_ip,
+                global_port=nat.mapped_src_port,
+                built_time=observed_start,
+                teardown_time=teardown_time,
+            )
+        public_dst_ip = nat.pre_nat_dst_ip or transaction.dst_ip
+        public_dst_port = nat.pre_nat_dst_port or transaction.dst_port
+        if nat.mapped_dst_ip != public_dst_ip or nat.mapped_dst_port != public_dst_port:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="destination",
+                local_ip=nat.mapped_dst_ip,
+                local_port=nat.mapped_dst_port,
+                global_ip=public_dst_ip,
+                global_port=public_dst_port,
+                built_time=observed_start,
+                teardown_time=teardown_time,
+            )
+        if nat.pre_nat_dst_ip:
+            return NatSensorObservation(
+                nat_type=nat.nat_type,
+                direction="destination",
+                local_ip=transaction.dst_ip,
+                local_port=transaction.dst_port,
+                global_ip=nat.pre_nat_dst_ip,
+                global_port=public_dst_port,
+                built_time=observed_start,
+                teardown_time=teardown_time,
+            )
+        return None
+
     @staticmethod
     def _firewall_teardown_plan(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         formats: set[str],
         sensor_identity: str,
         observed_start: datetime,
@@ -200,17 +350,9 @@ class NetworkObservationPlanner:
         if network is None or network.protocol != "tcp":
             return "", observed_close or observed_start
         timing: FirewallObservationTiming = firewall_observation_timing(sensor_identity)
-        state = (
-            network.transaction.conn_state
-            if network.transaction is not None
-            else network.conn_state
-        )
-        traffic = network.transaction.traffic if network.transaction is not None else None
-        payload_bytes = (
-            traffic.orig.payload_bytes + traffic.resp.payload_bytes
-            if traffic is not None
-            else max(0, network.orig_bytes or 0) + max(0, network.resp_bytes or 0)
-        )
+        state = network.conn_state
+        traffic = network.traffic
+        payload_bytes = traffic.orig.payload_bytes + traffic.resp.payload_bytes
         if state in {"S0", "S1", "SH", "SHR"} and payload_bytes == 0:
             return (
                 "SYN Timeout",
@@ -226,7 +368,7 @@ class NetworkObservationPlanner:
 
     @staticmethod
     def _sensor_formats(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         visible_formats: set[str],
     ) -> dict[str, set[str]]:
         sensor_formats: dict[str, set[str]] = {}
@@ -237,52 +379,99 @@ class NetworkObservationPlanner:
                 sensor_formats.setdefault(sensor_identity, set()).add(format_name)
         return sensor_formats
 
-    @staticmethod
-    def _tuple_view(event: SecurityEvent, sensor_identity: str) -> NetworkTuple:
-        transaction = event.network.transaction
-        swaps = event._nat_swaps_by_sensor.get(sensor_identity, {})
-        return NetworkTuple(
-            src_ip=str(swaps.get("src_ip", transaction.src_ip)),
-            src_port=int(swaps.get("src_port", transaction.src_port)),
-            dst_ip=str(swaps.get("dst_ip", transaction.dst_ip)),
-            dst_port=int(swaps.get("dst_port", transaction.dst_port)),
+    def _sensor_view(
+        self,
+        event: CanonicalOccurrence,
+        sensor: NetworkSensor | None,
+    ) -> tuple[NetworkTuple, bool, bool]:
+        """Derive one sensor's tuple and locality directly from topology and NAT truth."""
+
+        network = event.network
+        transaction = network
+        tuple_view = NetworkTuple(
+            src_ip=network.src_ip,
+            src_port=network.src_port,
+            dst_ip=network.dst_ip,
+            dst_port=network.dst_port,
+            protocol=network.protocol,
+        )
+        local_orig = network.local_orig
+        local_resp = network.local_resp
+        nat = event.nat
+        if (
+            nat is None
+            or sensor is None
+            or sensor.type == "firewall"
+            or self.visibility_engine is None
+        ):
+            return tuple_view, local_orig, local_resp
+
+        sensor_segments = set(sensor.monitoring_segments)
+        inbound = nat.nat_type == "static" and bool(
+            nat.pre_nat_dst_ip or (nat.mapped_dst_ip and nat.mapped_dst_ip != transaction.dst_ip)
+        )
+        if inbound:
+            local_dst_ip = nat.mapped_dst_ip or transaction.dst_ip
+            local_dst_port = nat.mapped_dst_port or transaction.dst_port
+            global_dst_ip = nat.pre_nat_dst_ip or transaction.dst_ip
+            global_dst_port = nat.pre_nat_dst_port or transaction.dst_port
+            local_segments = self.visibility_engine._resolve_ip_segments(local_dst_ip)
+            inside = bool(sensor_segments & local_segments)
+            tuple_view = NetworkTuple(
+                src_ip=transaction.src_ip,
+                src_port=transaction.src_port,
+                dst_ip=local_dst_ip if inside else global_dst_ip,
+                dst_port=local_dst_port if inside else global_dst_port,
+                protocol=transaction.protocol,
+            )
+            return tuple_view, local_orig, local_resp or inside
+
+        source_segments = self.visibility_engine._resolve_ip_segments(transaction.src_ip)
+        if sensor_segments & source_segments:
+            return tuple_view, local_orig, local_resp
+        tuple_view = NetworkTuple(
+            src_ip=nat.mapped_src_ip or transaction.src_ip,
+            src_port=nat.mapped_src_port or transaction.src_port,
+            dst_ip=nat.mapped_dst_ip or transaction.dst_ip,
+            dst_port=nat.mapped_dst_port or transaction.dst_port,
             protocol=transaction.protocol,
         )
+        return tuple_view, local_orig, local_resp
 
     @staticmethod
-    def _canonical_file_ids(event: SecurityEvent) -> tuple[str, ...]:
+    def _canonical_file_ids(event: CanonicalOccurrence) -> tuple[str, ...]:
         values: list[str] = []
 
         def add(candidate: object) -> None:
             if isinstance(candidate, str) and candidate and candidate not in values:
                 values.append(candidate)
 
-        if event.file_transfer is not None:
-            add(event.file_transfer.fuid)
-        for transfer in event.file_transfers:
+        if event.protocol.primary_file_transfer is not None:
+            add(event.protocol.primary_file_transfer.fuid)
+        for transfer in event.protocol.file_transfers:
             add(transfer.fuid)
-        if event.ssl is not None:
-            for value in event.ssl.cert_chain_fuids:
+        if event.protocol.ssl is not None:
+            for value in event.protocol.ssl.cert_chain_fuids:
                 add(value)
-        if event.http is not None:
-            for value in event.http.resp_fuids:
+        if event.protocol.http is not None:
+            for value in event.protocol.http.resp_fuids:
                 add(value)
         if event.smtp is not None:
             for value in event.smtp.fuids:
                 add(value)
-        if event.x509 is not None:
-            add(event.x509.fuid)
-        for certificate in event.x509_chain:
+        if event.protocol.leaf_certificate is not None:
+            add(event.protocol.leaf_certificate.fuid)
+        for certificate in event.protocol.x509_chain:
             add(certificate.fuid)
-        if event.ocsp is not None:
-            add(event.ocsp.id)
-        if event.pe is not None:
-            add(event.pe.id)
+        if event.protocol.ocsp is not None:
+            add(event.protocol.ocsp.id)
+        if event.protocol.pe is not None:
+            add(event.protocol.pe.id)
         return tuple(values)
 
     @staticmethod
-    def _canonical_connection_ids(event: SecurityEvent) -> tuple[str, ...]:
-        values = [event.network.transaction.zeek_uid]
+    def _canonical_connection_ids(event: CanonicalOccurrence) -> tuple[str, ...]:
+        values = [event.network.zeek_uid]
         if event.dhcp is not None:
             values.extend(uid for uid in event.dhcp.uids if uid and uid not in values)
         return tuple(values)

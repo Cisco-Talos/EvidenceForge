@@ -122,7 +122,7 @@ class HostMultiplexEmitter(LogEmitter):
 
     Subclasses implement:
     - _render_event(): Convert event data to formatted string
-    - can_handle(): Filter SecurityEvents
+    - can_handle(): Filter canonical occurrences
     - emit(): Extract host FQDN and call emit_to_host()
     """
 

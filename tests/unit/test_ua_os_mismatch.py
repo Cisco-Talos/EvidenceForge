@@ -478,10 +478,10 @@ class TestProxyUriOsFiltering:
         event = next(
             call.args[0]
             for call in generator.dispatcher.emitters["proxy_access"].emit.call_args_list
-            if call.args[0].proxy is not None
+            if call.args[0].protocol.proxy is not None
         )
-        assert "Windows NT" not in event.proxy.user_agent
-        assert "Edg/" not in event.proxy.user_agent
+        assert "Windows NT" not in event.protocol.proxy.user_agent
+        assert "Edg/" not in event.protocol.proxy.user_agent
 
     def test_external_browser_context_preserves_existing_user_agent(self):
         """Anonymous public web clients should not collapse to one proxy UA scope."""
