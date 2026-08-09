@@ -620,6 +620,11 @@ class TestObservationProfiles:
                 protocol="tcp",
                 zeek_uid="CUID123456789",
             ),
+            lifecycle=ActionLifecycleContext(
+                group_id="http-request-1",
+                canonical_start=_make_ts(),
+                phase="start",
+            ),
         )
         second = SecurityEvent(
             timestamp=_make_ts() + timedelta(milliseconds=600),
@@ -632,6 +637,11 @@ class TestObservationProfiles:
                 protocol="tcp",
                 zeek_uid="CUID123456789",
                 application_layer_only=True,
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id="http-request-2",
+                canonical_start=_make_ts() + timedelta(milliseconds=600),
+                phase="start",
             ),
         )
 
