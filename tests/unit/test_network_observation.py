@@ -81,6 +81,7 @@ def _network_event(
     start: datetime = T0,
     stable_id: str = "network:test-transaction",
     protocol: str = "udp",
+    zeek_uid: str = "CObservationTest1",
 ) -> SecurityEvent:
     duration = 2.5
     network = NetworkContext(
@@ -90,7 +91,7 @@ def _network_event(
         dst_port=53,
         protocol=protocol,
         service="dns",
-        zeek_uid="CObservationTest1",
+        zeek_uid=zeek_uid,
         conn_id="conn-observation-test",
         duration=duration,
         source_visible_start_time=start,
@@ -191,6 +192,7 @@ def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> N
         event = _network_event(
             start=T0 + timedelta(seconds=index * 3),
             stable_id=f"network:distributed-texture:{index}",
+            zeek_uid=f"CDistributedTexture{index}",
         )
         observations = _observation_by_sensor(planner.plan(event, {"zeek_conn", "zeek_dns"}))
         source = observations["source-tap"]
@@ -203,6 +205,32 @@ def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> N
     assert differing_traffic >= 20
     assert any(offset < 0 for offset in relative_offsets)
     assert any(offset > 0 for offset in relative_offsets)
+
+
+def test_same_connection_observations_preserve_canonical_request_order() -> None:
+    """Per-sensor timing texture cannot reorder transactions on one TCP stream."""
+
+    planner = NetworkObservationPlanner(_visibility_engine())
+    first_event = _network_event(
+        start=T0,
+        stable_id="network:http-parent",
+        protocol="tcp",
+    )
+    second_event = _network_event(
+        start=T0 + timedelta(milliseconds=1),
+        stable_id="network:http-child",
+        protocol="tcp",
+    )
+    second_event.network.application_layer_only = True
+
+    first = _observation_by_sensor(planner.plan(first_event, {"zeek_conn", "zeek_dns"}))
+    second = _observation_by_sensor(planner.plan(second_event, {"zeek_conn", "zeek_dns"}))
+
+    for sensor_identity in first:
+        observed_delta = (
+            second[sensor_identity].observed_start_time - first[sensor_identity].observed_start_time
+        )
+        assert timedelta(microseconds=990) <= observed_delta <= timedelta(microseconds=1010)
 
 
 def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatch) -> None:

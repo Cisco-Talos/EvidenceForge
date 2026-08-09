@@ -82,11 +82,7 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
         net = event.network
         http = event.http
         uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
-        if (
-            event.network_observations_planned
-            and net.transaction is not None
-            and http.canonical_request_time is not None
-        ):
+        if net.transaction is not None and http.canonical_request_time is not None:
             conn_ts = net.transaction.started_at
         else:
             conn_ts = _SOURCE_TIMING.source_time(
@@ -143,11 +139,12 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
                 within=within,
             )
         previous_ts = self._last_http_ts_by_uid.get(uid_key)
-        if previous_ts is not None and event_ts <= previous_ts:
+        if canonical_request_time is None and previous_ts is not None and event_ts <= previous_ts:
             event_ts = previous_ts + _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP
         if latest_ts is not None and event_ts > latest_ts:
             event_ts = latest_ts
-        self._last_http_ts_by_uid[uid_key] = event_ts
+        if previous_ts is None or event_ts > previous_ts:
+            self._last_http_ts_by_uid[uid_key] = event_ts
         _SOURCE_TIMING.record_source_time(
             event,
             "source.zeek_http_request",

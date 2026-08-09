@@ -413,6 +413,60 @@ class TestHttpRenderTiming:
         assert [row["trans_depth"] for row in rows] == [1, 2]
         assert rows[1]["ts"] > rows[0]["ts"]
 
+    def test_canonical_request_times_survive_out_of_order_emitter_calls(self, tmp_path):
+        """Canonical packet order wins when concurrent dispatch calls arrive out of order."""
+        fmt = load_format("zeek_http")
+        output = tmp_path / "http.json"
+        emitter = ZeekHttpEmitter(fmt, output, buffer_size=10)
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        def make_event(trans_depth: int, offset_ms: int) -> SecurityEvent:
+            request_time = base_ts + timedelta(milliseconds=offset_ms)
+            network = NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="93.184.216.34",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="ChttpCanonicalOrder",
+                duration=1.0,
+                source_visible_start_time=base_ts,
+                source_visible_close_time=base_ts + timedelta(seconds=1),
+                orig_bytes=500,
+                resp_bytes=1500,
+                conn_state="SF",
+                history="ShADadfF",
+            )
+            network.finalize_transaction(
+                "network:http-canonical-order",
+                hostname="example.com",
+                phase_times=(
+                    ("transport_start", base_ts),
+                    ("transport_close", base_ts + timedelta(seconds=1)),
+                ),
+            )
+            return SecurityEvent(
+                timestamp=request_time,
+                event_type="connection",
+                network=network,
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=f"/asset-{trans_depth}",
+                    trans_depth=trans_depth,
+                    canonical_request_time=request_time,
+                ),
+            )
+
+        emitter.emit(make_event(2, 20))
+        emitter.emit(make_event(1, 10))
+        emitter.close()
+
+        rows = [json.loads(line) for line in output.read_text().splitlines()]
+        assert [row["trans_depth"] for row in rows] == [1, 2]
+        assert rows[0]["ts"] < rows[1]["ts"]
+
     def test_application_layer_transaction_stays_inside_first_parent_lifetime(
         self, tmp_path, monkeypatch
     ):

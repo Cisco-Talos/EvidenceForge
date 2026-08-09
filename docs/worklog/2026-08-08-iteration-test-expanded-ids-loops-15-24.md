@@ -90,3 +90,39 @@ hourly stale-process cleanup ignored registered foreground deadlines and replace
 them with its generic 30-minute-to-hours policy. Stale cleanup now consumes the
 canonical bounded deadline when present, and out-of-order generation anchors a
 deadline to the actual process start rather than an earlier intent timestamp.
+
+## Loop 17 Outcome
+
+- Commits `eba43cd9`, `ed2e4d80`, and `318dfe59`; final full suite 5,082 passed
+  and 41 skipped; Ruff passed.
+- Rendered package probe: 45/45 APT frontends paired, 109.884-second maximum,
+  zero intervals over 180 seconds, zero overlaps, zero helper-parent errors, and
+  zero APT-to-DNF state writes.
+- Automated evaluation passed at 95.88584018050257 over 89,215 records with
+  exact IDS integrity at 233/233.
+- Initial blind synthetic-confidence scores were 28/72/79/92, average 67.75.
+  Verdict disagreement triggered deliberation, which ended unanimously Synthetic
+  at average synthetic confidence 83.5.
+- Highest-impact new defect: HTTP transaction timestamps reverse `trans_depth`
+  within nine UIDs and change request order across two matched sensor views.
+
+## Loop 18 Family Contract
+
+- **Selected family:** ordered HTTP transaction timing across source observations.
+- **Finding classification:** `new_family` hard contradiction.
+- **Owning abstraction:** canonical HTTP persistent-connection transaction order
+  plus `SourceTimingPlanner` sensor clock/observation timing.
+- **Invariant:** within a sensor, HTTP/1.x rows for one UID are monotonic by
+  `trans_depth`; all sensors observing the same TCP stream preserve the same
+  request order. Sensor offset, drift, and latency may alter absolute timestamps
+  but never reorder packets or requests.
+- **Entry paths:** browsing-session multiplexing, explicit proxy HTTP, storyline
+  HTTP, repeated persistent connections, and per-source observation delay.
+- **Consumers:** Zeek HTTP rows, paired core/DMZ views, connection intervals,
+  HTTP/file fan-out, evaluator probes, and network-forensics review.
+- **Layer rationale:** HTTP emitters correctly expose supplied timestamps; request
+  sequence is canonical transaction truth and sensor clocks are source-timing
+  truth. Independent record jitter at rendering time cannot safely own either.
+- **Sibling risks:** preserve legitimate missing rows without changing later depth
+  order, retain absolute sensor clock texture, keep rows inside connection bounds,
+  and avoid forcing identical UIDs or timestamps across independent sensors.

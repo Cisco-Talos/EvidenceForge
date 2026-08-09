@@ -2466,6 +2466,8 @@ class NetworkTransactionPlanner:
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),
         )
+        if event.http is not None and event.http.canonical_request_time is None:
+            event.http.canonical_request_time = event.timestamp
         event = event.build_event(generator_module)
 
         # Automatic weird.log synthesis is intentionally disabled for now. The

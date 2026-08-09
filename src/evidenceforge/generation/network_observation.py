@@ -66,6 +66,7 @@ class NetworkObservationPlanner:
         if network is None or network.transaction is None:
             return ()
         transaction = network.transaction
+        observation_timing_id = transaction.zeek_uid or transaction.stable_id
         sensor_formats = self._sensor_formats(event, visible_formats)
         canonical_file_ids = self._canonical_file_ids(event)
         canonical_connection_ids = self._canonical_connection_ids(event)
@@ -94,7 +95,7 @@ class NetworkObservationPlanner:
                 timing,
                 sensor_identity,
                 path_role,
-                transaction.stable_id,
+                observation_timing_id,
             )
             observed_close = (
                 self._observed_time(
@@ -102,7 +103,7 @@ class NetworkObservationPlanner:
                     timing,
                     sensor_identity,
                     path_role,
-                    transaction.stable_id,
+                    observation_timing_id,
                 )
                 if transaction.closed_at is not None
                 else None
