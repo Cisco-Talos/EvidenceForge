@@ -4322,6 +4322,11 @@ class ActivityGenerator:
             ensure_utc(termination_time),
         )
 
+    def foreground_process_termination_time(self, hostname: str, pid: int) -> datetime | None:
+        """Return the canonical bounded-process deadline, when one is registered."""
+        finalizer = self._foreground_process_finalizers.get((hostname, pid))
+        return finalizer[4] if finalizer is not None else None
+
     def finalize_foreground_process_lifetimes(self, end_time: datetime) -> None:
         """Close any tracked one-shot foreground shell processes still running.
 
@@ -6224,7 +6229,12 @@ class ActivityGenerator:
         lifetime = _linux_foreground_lifetime(image, command_line)
         if lifetime is None:
             return
-        termination_time = ensure_utc(time) + timedelta(seconds=rng.uniform(*lifetime))
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        process_anchor = max(
+            ensure_utc(time),
+            ensure_utc(running.start_time) if running is not None else ensure_utc(time),
+        )
+        termination_time = process_anchor + timedelta(seconds=rng.uniform(*lifetime))
         self._remember_foreground_process_finalizer(
             system=source_system,
             user=User(username=username, full_name=username, email=f"{username}@example.local"),
@@ -6236,7 +6246,7 @@ class ActivityGenerator:
 
         if not image.lower().startswith("/usr/lib/apt/methods/"):
             return
-        helper = self.state_manager.get_process(source_system.hostname, pid)
+        helper = running
         active = self._linux_apt_frontends.get(source_system.hostname)
         if helper is None or active is None or helper.parent_pid != active[0]:
             return
@@ -6278,9 +6288,10 @@ class ActivityGenerator:
             existing_pid = -1
             running = None
         if running is not None:
+            process_anchor = max(ensure_utc(helper_time), ensure_utc(running.start_time))
             termination_time = max(
                 active[1],
-                helper_time + timedelta(seconds=rng.uniform(35.0, 90.0)),
+                process_anchor + timedelta(seconds=rng.uniform(35.0, 90.0)),
             )
             self._linux_apt_frontends[source_system.hostname] = (
                 existing_pid,
@@ -6314,7 +6325,12 @@ class ActivityGenerator:
         )
         if frontend_pid <= 0:
             return systemd_pid
-        termination_time = helper_time + timedelta(seconds=rng.uniform(35.0, 90.0))
+        frontend = self.state_manager.get_process(source_system.hostname, frontend_pid)
+        process_anchor = max(
+            ensure_utc(helper_time),
+            ensure_utc(frontend.start_time) if frontend is not None else ensure_utc(helper_time),
+        )
+        termination_time = process_anchor + timedelta(seconds=rng.uniform(35.0, 90.0))
         self._linux_apt_frontends[source_system.hostname] = (
             frontend_pid,
             termination_time,

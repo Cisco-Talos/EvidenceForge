@@ -85,3 +85,8 @@ without registering their one-shot finalizers. Those helpers were closed only by
 later lifecycle cleanup, stretching both helper and parent intervals for hours.
 The family fix now registers bounded helper closure at the canonical system-owner
 boundary and extends the serialized APT frontend just beyond its last helper.
+The next rendered probe exposed a higher-priority consumer of the same state:
+hourly stale-process cleanup ignored registered foreground deadlines and replaced
+them with its generic 30-minute-to-hours policy. Stale cleanup now consumes the
+canonical bounded deadline when present, and out-of-order generation anchors a
+deadline to the actual process start rather than an earlier intent timestamp.

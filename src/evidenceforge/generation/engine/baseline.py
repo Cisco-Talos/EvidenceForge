@@ -4693,6 +4693,16 @@ class BaselineMixin:
                     continue
 
                 is_short_lived = any(p in image_lower for p in short_lived)
+                planned_end_fn = getattr(
+                    self.activity_generator,
+                    "foreground_process_termination_time",
+                    None,
+                )
+                planned_end = (
+                    planned_end_fn(system.hostname, proc.pid) if callable(planned_end_fn) else None
+                )
+                if not isinstance(planned_end, datetime):
+                    planned_end = None
                 lifetime_rng = random.Random(
                     _stable_seed(
                         "windows_stale_process_lifetime:"
@@ -4704,7 +4714,7 @@ class BaselineMixin:
                     proc.command_line,
                     lifetime_rng,
                 )
-                target_end = proc.start_time + timedelta(seconds=target_lifetime)
+                target_end = planned_end or (proc.start_time + timedelta(seconds=target_lifetime))
                 if current_hour < target_end:
                     continue
 
@@ -4718,7 +4728,10 @@ class BaselineMixin:
                         )
                     ),
                 )
-                termination_probability = 0.95 if bounded_lifetime is not None else 0.72
+                if planned_end is not None:
+                    termination_probability = 1.0
+                else:
+                    termination_probability = 0.95 if bounded_lifetime is not None else 0.72
                 if rng.random() < termination_probability:
                     actor = self._find_actor(proc.username)
                     if not actor:
@@ -4737,7 +4750,11 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    term_time = target_end + timedelta(seconds=rng.uniform(0.2, 75.0))
+                    term_time = (
+                        target_end
+                        if planned_end is not None
+                        else target_end + timedelta(seconds=rng.uniform(0.2, 75.0))
+                    )
                     if is_short_lived and term_time > current_hour + timedelta(hours=1):
                         continue
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:

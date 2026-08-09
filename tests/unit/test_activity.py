@@ -4976,6 +4976,39 @@ class TestActivityGenerator:
         assert frontend_end is not None
         assert timestamp < helper_end < frontend_end < timestamp + timedelta(minutes=3)
 
+    def test_system_owner_deadline_anchors_to_actual_process_start(
+        self, activity_gen, state_manager
+    ):
+        """Out-of-order package intent cannot schedule closure before process creation."""
+        state_time = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        requested_time = state_time - timedelta(minutes=15)
+        server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+        )
+        state_manager.set_current_time(state_time)
+
+        helper_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=server,
+            time=requested_time,
+            key="apt_proxy_method:https",
+            image="/usr/lib/apt/methods/https",
+            command_line="/usr/lib/apt/methods/https",
+            username="root",
+        )
+        helper = state_manager.get_process(server.hostname, helper_pid)
+        deadline = activity_gen.foreground_process_termination_time(
+            server.hostname,
+            helper_pid,
+        )
+
+        assert helper is not None
+        assert deadline is not None
+        assert helper.start_time < deadline <= helper.start_time + timedelta(seconds=60)
+
     def test_workstation_ssh_connection_materializes_user_owner(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
