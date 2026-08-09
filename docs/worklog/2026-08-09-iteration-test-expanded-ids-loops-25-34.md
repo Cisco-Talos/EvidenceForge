@@ -361,3 +361,24 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** preserve daemon PID continuity, legitimate startup/reload
   evidence, role-aware services, bounded queue variation, deterministic output,
   and avoid fixed per-host caps as a new distribution fingerprint.
+
+## Loop 34 Outcome
+
+- **Commits:** `481a48d1 fix: preserve durable rsyslog health state` and
+  `772ebabc fix: vary rsyslog health observation volume`.
+- **Verification:** 154 focused system-traffic/config tests passed; config
+  validation found zero issues across 87 files; final full suite passed with
+  5,121 tests and 41 skips; Ruff checks passed.
+- **Generation and eval:** 85,372 fresh records across 20 sources; automated
+  score 96.416020607975, PASS across every hard gate, with 100% event presence.
+- **Hard probe:** zero ambient reload/socket/worker/retry state-transition rows;
+  50 durable rsyslog health observations across nine hosts with varied per-host
+  counts from 2 to 10 and monotonic checkpoints.
+- **Blind panel:** initial Real 3-1 at 17/30/12/89. Mandatory disagreement and
+  77-point-spread deliberation ended Synthetic 3-1 at 68/63/31/93, average
+  63.75.
+- **Target result:** no reviewer repeated the unsupported rsyslog transition
+  defect; the selected family passed.
+- **Next backlog family:** stateful, role-aware monitoring with stable dependency
+  inventories and supervised attempt lifecycles (bounded timeout, retry/backoff,
+  cancellation, and worker replacement consequences).
