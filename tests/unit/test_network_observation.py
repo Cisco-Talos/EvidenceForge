@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -183,7 +184,7 @@ def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> Non
 
 
 def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> None:
-    """Default distributed taps should not clone every cross-sensor observation."""
+    """Distributed taps vary accounting while nearby clock offsets stay coherent."""
 
     planner = NetworkObservationPlanner(_visibility_engine())
     differing_traffic = 0
@@ -203,8 +204,32 @@ def test_distributed_taps_have_sensor_local_timing_and_accounting_texture() -> N
         )
 
     assert differing_traffic >= 20
-    assert any(offset < 0 for offset in relative_offsets)
-    assert any(offset > 0 for offset in relative_offsets)
+    assert statistics.pstdev(relative_offsets) < 0.005
+    assert max(relative_offsets) - min(relative_offsets) < 0.015
+
+
+def test_clock_wander_is_shared_by_nearby_flows_and_changes_slowly() -> None:
+    """A sensor clock follows time, not independent transaction identities."""
+
+    planner = NetworkObservationPlanner(_visibility_engine())
+    observed_offsets: list[float] = []
+    for index in range(60):
+        event = _network_event(
+            start=T0 + timedelta(seconds=index),
+            stable_id=f"network:clock-coherence:{index}",
+            zeek_uid=f"CClockCoherence{index}",
+        )
+        observation = _observation_by_sensor(planner.plan(event, {"zeek_conn", "zeek_dns"}))[
+            "source-tap"
+        ]
+        observed_offsets.append((observation.observed_start_time - event.timestamp).total_seconds())
+
+    assert max(observed_offsets) - min(observed_offsets) < 0.001
+    consecutive_changes = [
+        abs(current - previous)
+        for previous, current in zip(observed_offsets, observed_offsets[1:], strict=False)
+    ]
+    assert max(consecutive_changes) < 0.0001
 
 
 def test_same_connection_observations_preserve_canonical_request_order() -> None:

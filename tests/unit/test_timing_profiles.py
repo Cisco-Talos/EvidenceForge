@@ -204,7 +204,8 @@ def test_timing_profiles_load_default_relationship():
     assert sensor_timing.path_delay_min_us == 500
     assert sensor_timing.path_delay_max_us == 25000
     assert sensor_timing.clock_drift_min_ppm == -1
-    assert sensor_timing.event_jitter_max_us == 90000
+    assert sensor_timing.event_jitter_min_us == -1500
+    assert sensor_timing.event_jitter_max_us == 1500
     assert sensor_timing.capture_loss_probability == 0.12
 
     endpoint_timing = endpoint_clock_timing("enterprise_standard", "windows")

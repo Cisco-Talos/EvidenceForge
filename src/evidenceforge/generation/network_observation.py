@@ -66,7 +66,6 @@ class NetworkObservationPlanner:
         if network is None or network.transaction is None:
             return ()
         transaction = network.transaction
-        observation_timing_id = transaction.zeek_uid or transaction.stable_id
         sensor_formats = self._sensor_formats(event, visible_formats)
         canonical_file_ids = self._canonical_file_ids(event)
         canonical_connection_ids = self._canonical_connection_ids(event)
@@ -95,7 +94,6 @@ class NetworkObservationPlanner:
                 timing,
                 sensor_identity,
                 path_role,
-                observation_timing_id,
             )
             observed_close = (
                 self._observed_time(
@@ -103,7 +101,6 @@ class NetworkObservationPlanner:
                     timing,
                     sensor_identity,
                     path_role,
-                    observation_timing_id,
                 )
                 if transaction.closed_at is not None
                 else None
@@ -277,7 +274,6 @@ class NetworkObservationPlanner:
         timing: NetworkSensorObservationTiming,
         sensor_identity: str,
         path_role: str,
-        transaction_id: str,
     ) -> datetime:
         offset_us = cls._bounded_int(
             "clock-offset",
@@ -300,16 +296,51 @@ class NetworkObservationPlanner:
             sensor_identity,
             path_role,
         )
-        jitter_us = cls._bounded_int(
-            "event-jitter",
+        clock_wander_us = cls._clock_wander_us(
+            canonical_time,
             timing.event_jitter_min_us,
             timing.event_jitter_max_us,
             sensor_identity,
-            transaction_id,
         )
         return canonical_time + timedelta(
-            microseconds=offset_us + drift_us + route_delay_us + jitter_us
+            microseconds=offset_us + drift_us + route_delay_us + clock_wander_us
         )
+
+    @classmethod
+    def _clock_wander_us(
+        cls,
+        canonical_time: datetime,
+        minimum: int,
+        maximum: int,
+        sensor_identity: str,
+    ) -> int:
+        """Return slowly varying sensor clock noise, never per-flow timestamp jitter."""
+
+        if maximum <= minimum:
+            return minimum
+        bucket_seconds = 300
+        day_start = canonical_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_since_day_start = (canonical_time - day_start).total_seconds()
+        bucket = int(seconds_since_day_start // bucket_seconds)
+        fraction = (seconds_since_day_start % bucket_seconds) / bucket_seconds
+        day_key = day_start.date().isoformat()
+        current = cls._bounded_int(
+            "clock-wander",
+            minimum,
+            maximum,
+            sensor_identity,
+            day_key,
+            str(bucket),
+        )
+        following = cls._bounded_int(
+            "clock-wander",
+            minimum,
+            maximum,
+            sensor_identity,
+            day_key,
+            str(bucket + 1),
+        )
+        return round(current + ((following - current) * fraction))
 
     @staticmethod
     def _bounded_int(label: str, minimum: int, maximum: int, *parts: str) -> int:

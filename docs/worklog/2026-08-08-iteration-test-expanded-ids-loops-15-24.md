@@ -197,3 +197,36 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** static NAT must remain configuration state without per-flow
   xlate churn; denies must not allocate translations; UDP ordering must match TCP;
   and connection/xlate teardown order must remain dependency-compatible.
+
+## Loop 20 Outcome
+
+- Commits `20f08d56` and `2ed74a5d`; full suite 5,092 passed and 41
+  skipped; Ruff and config validation passed.
+- Rendered probe: 1,107/1,107 translation allocations preceded their matching
+  connection build and all releases followed the connection close. The probe
+  caught and fixed nine SYN-timeout sibling releases before blind review.
+- Automated evaluation passed at 96.17321730394976 over 86,721 records with
+  exact IDS integrity at 221/221.
+- Initial blind scores were 22/32/71/91, average 54.0. Deliberation ended
+  unanimously Synthetic at 72.5, with final scores 63/67/77/83.
+- Highest-impact next defect: independent per-flow core/DMZ sensor timestamp
+  jitter produces nonphysical relative-clock scatter on nearby clean packets.
+
+## Loop 21 Family Contract
+
+- **Selected family:** sensor clock and packet-time coherence.
+- **Finding classification:** `new_family` physical distribution defect.
+- **Owning abstraction:** `NetworkObservationPlanner` source clock projection
+  plus data-driven network observation timing profiles.
+- **Invariant:** all records from one sensor use one clock function composed of
+  stable offset, bounded drift, slowly varying clock wander, and stable path
+  delay. Transaction identity must not independently perturb packet time.
+- **Entry paths:** all canonical TCP/UDP/ICMP connections, protocol-child fan-out,
+  dual-sensor paths, explicit proxy traffic, and IDS/firewall observations.
+- **Consumers:** Zeek connection/protocol logs, Snort correlation, ASA timing,
+  connection intervals, and cross-sensor forensic matching.
+- **Layer rationale:** canonical packets already have ordered times; only the
+  source-observation projection owns how each sensor clock transforms them.
+- **Sibling risks:** preserve distinct sensor offsets, HTTP transaction order,
+  DNS RTT containment, start/close duration, loss accounting, and deterministic
+  path-specific timing without making sensor timestamps identical.

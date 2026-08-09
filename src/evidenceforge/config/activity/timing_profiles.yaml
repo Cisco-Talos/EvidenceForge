@@ -332,8 +332,9 @@ endpoint_clock:
 network_sensor_observation:
   # Default assumes distributed security infrastructure where core, DMZ, and
   # packet-broker taps observe the same flow through different capture paths.
-  # Sensor clocks remain controlled, but buffering and path differences should
-  # not make dual-sensor rows look mechanically cloned.
+  # Sensor clocks remain controlled. The event_jitter envelope is interpreted
+  # as slow clock wander shared by nearby observations, never independent
+  # per-flow timestamp noise.
   default_profile: distributed_taps
   profiles:
     distributed_taps:
@@ -347,8 +348,8 @@ network_sensor_observation:
         min: 500
         max: 25000
       event_jitter_us:
-        min: -90000
-        max: 90000
+        min: -1500
+        max: 1500
       capture_loss:
         probability: 0.12
         min_fraction: 0.0005
