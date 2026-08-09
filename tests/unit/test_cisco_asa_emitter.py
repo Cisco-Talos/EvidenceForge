@@ -23,6 +23,7 @@
 """Unit tests for Cisco ASA firewall emitter."""
 
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1177,3 +1178,34 @@ class TestNatRecords:
         assert match is not None
         assert int(match.group(1)) == 30
         assert int((teardown_ts - built_ts).total_seconds()) == int(match.group(1))
+
+    def test_syn_timeout_releases_dynamic_translation_after_connection(
+        self,
+        asa_emitter,
+        tmp_path,
+    ):
+        """A zero-duration S0 flow must retain its xlate until the SYN timeout."""
+        event = self._make_nat_event()
+        event = replace(
+            event,
+            network=replace(
+                event.network,
+                conn_state="S0",
+                duration=0.0,
+                orig_bytes=0,
+                resp_bytes=0,
+            ),
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        message_ids = [
+            line.split("%ASA-6-", maxsplit=1)[1].split(":", maxsplit=1)[0] for line in lines
+        ]
+        assert message_ids == ["305011", "302013", "302014", "305012"]
+        teardown = next(line for line in lines if "302014" in line)
+        release = next(line for line in lines if "305012" in line)
+        assert teardown[5:20] == release[5:20]
+        assert "duration 0:00:30" in teardown
+        assert "duration 0:00:30" in release

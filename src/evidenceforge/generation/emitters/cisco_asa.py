@@ -487,7 +487,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                 )
-                teardown_emitted = self._emit_teardown(
+                teardown_ts = self._emit_teardown(
                     sensor_event,
                     sensor_net,
                     protocol,
@@ -499,16 +499,16 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     observation,
                 )
                 if sensor_event.nat and sensor_event.nat.nat_type != "static":
-                    if teardown_emitted:
-                        self._emit_nat_teardown(
-                            sensor_event,
-                            sensor_net,
-                            protocol,
-                            src_iface,
-                            dst_iface,
-                            sensor_hostname,
-                            fw_hostname,
-                        )
+                    self._emit_nat_teardown(
+                        sensor_event,
+                        sensor_net,
+                        protocol,
+                        src_iface,
+                        dst_iface,
+                        sensor_hostname,
+                        fw_hostname,
+                        teardown_ts,
+                    )
 
     def _emit_built(
         self,
@@ -604,7 +604,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostname: str,
         fw_hostname: str,
         observation: Any | None = None,
-    ) -> bool:
+    ) -> datetime:
         """Emit a Teardown connection record (302014/302016/302021)."""
         if observation is not None and observation.firewall_teardown_time is not None:
             reason = observation.firewall_teardown_reason
@@ -666,7 +666,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,
         }
         self._dispatch(event_data)
-        return True
+        return teardown_ts
 
     def _emit_deny(
         self,
@@ -790,6 +790,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         dst_iface: str,
         sensor_hostname: str,
         fw_hostname: str,
+        teardown_ts: datetime,
     ) -> None:
         """Emit a NAT translation Teardown record (305012)."""
         nat = event.nat
@@ -797,10 +798,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             return
         nat_label = "dynamic" if nat.nat_type == "dynamic_pat" else "static"
         proto_upper = protocol.upper()
-        duration = self._format_duration(net.duration)
-        teardown_ts = event.timestamp
-        if net.duration and net.duration > 0:
-            teardown_ts = event.timestamp + timedelta(seconds=net.duration)
+        duration = self._format_duration(max(0.0, (teardown_ts - event.timestamp).total_seconds()))
         is_src_nat = nat.mapped_src_ip != net.src_ip
         if is_src_nat:
             mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
