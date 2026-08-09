@@ -399,6 +399,16 @@ class ProxyEmitter(HostMultiplexEmitter):
             "proxy_action": _proxy_action(px),
             "_host_fqdn": px.proxy_fqdn,
         }
+        if str(px.method).upper() == "CONNECT":
+            event_data["byte_scope"] = "connect-control-message"
+            if net is not None:
+                event_data["tunnel_cs_bytes"] = max(0, int(net.orig_bytes or 0))
+                event_data["tunnel_sc_bytes"] = max(0, int(net.resp_bytes or 0))
+                if net.duration is not None:
+                    event_data["tunnel_duration_ms"] = max(
+                        0,
+                        round(float(net.duration) * 1000),
+                    )
         self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:

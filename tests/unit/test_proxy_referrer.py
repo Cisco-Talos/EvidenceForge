@@ -727,6 +727,9 @@ class TestProxyActionSemantics:
                 dst_ip="10.0.20.10",
                 dst_port=8080,
                 protocol="tcp",
+                orig_bytes=2_048,
+                resp_bytes=1_024,
+                duration=0.75,
             ),
             proxy=ProxyContext(
                 client_ip="10.0.10.50",
@@ -750,6 +753,10 @@ class TestProxyActionSemantics:
         assert len(rendered_lines) == 1
         denied_fields = _parse_proxy_fields(rendered_lines[0])
         assert denied_fields["method"] == "CONNECT"
+        assert denied_fields["byte_scope"] == "connect-control-message"
+        assert denied_fields["tunnel_cs_bytes"] == 2048
+        assert denied_fields["tunnel_sc_bytes"] == 1024
+        assert denied_fields["tunnel_duration_ms"] == 750
         assert denied_fields["status_code"] == 403
         assert denied_fields["proxy_action"] == "deny"
         assert denied_fields["ssl_bump_action"] == "terminate"
