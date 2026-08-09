@@ -1896,7 +1896,14 @@ class TestExplicitProxyVisibility:
         assert proc.parent_pid != shell_pid
         parent = generator.state_manager.get_process(linux_system.hostname, proc.parent_pid)
         assert parent is not None
-        assert parent.image == "/usr/lib/systemd/systemd"
+        assert parent.image == "/usr/bin/apt-get"
+        assert parent.start_time < proc.start_time
+        grandparent = generator.state_manager.get_process(
+            linux_system.hostname,
+            parent.parent_pid,
+        )
+        assert grandparent is not None
+        assert grandparent.image == "/usr/lib/systemd/systemd"
 
     def test_linux_background_helper_process_drops_ended_user_session_parent(self):
         generator, _emitters = _generator(

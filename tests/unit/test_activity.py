@@ -4857,6 +4857,41 @@ class TestActivityGenerator:
             command_line,
         )
 
+    @pytest.mark.parametrize("method", ["http", "https"])
+    def test_apt_method_connection_owner_has_frontend_parent(
+        self, activity_gen, state_manager, method
+    ):
+        """APT transport helpers should be children of a live apt-get frontend."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+        )
+        state_manager.set_current_time(timestamp)
+
+        helper_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=server,
+            time=timestamp,
+            key=f"apt_proxy_method:{method}",
+            image=f"/usr/lib/apt/methods/{method}",
+            command_line=f"/usr/lib/apt/methods/{method}",
+            username="root",
+        )
+
+        helper = state_manager.get_process(server.hostname, helper_pid)
+        assert helper is not None
+        frontend = state_manager.get_process(server.hostname, helper.parent_pid)
+        assert frontend is not None
+        assert frontend.image == "/usr/bin/apt-get"
+        assert frontend.command_line == "apt-get update"
+        assert frontend.start_time < helper.start_time
+        systemd = state_manager.get_process(server.hostname, frontend.parent_pid)
+        assert systemd is not None
+        assert systemd.image == "/usr/lib/systemd/systemd"
+
     def test_workstation_ssh_connection_materializes_user_owner(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

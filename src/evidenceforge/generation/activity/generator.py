@@ -6164,6 +6164,12 @@ class ActivityGenerator:
             parent_pid = self._windows_system_parent_fallback(source_system, process_time)
         else:
             parent_pid = self._linux_system_parent_fallback(source_system, process_time)
+            if image.lower().startswith("/usr/lib/apt/methods/"):
+                parent_pid = self._ensure_linux_apt_frontend_process(
+                    source_system=source_system,
+                    helper_time=process_time,
+                    rng=process_rng,
+                )
         pid = self.generate_system_process(
             source_system,
             process_time,
@@ -6181,6 +6187,56 @@ class ActivityGenerator:
             return pid, running.image if running is not None else image
         self.state_manager.set_current_time(time)
         return -1, None
+
+    def _ensure_linux_apt_frontend_process(
+        self,
+        *,
+        source_system: System,
+        helper_time: datetime,
+        rng: random.Random,
+    ) -> int:
+        """Create or reuse the APT frontend that owns a transport method helper."""
+        image = "/usr/bin/apt-get"
+        command_line = "apt-get update"
+        key = "apt_update_frontend"
+        existing_pid = self._active_matching_process_pid(
+            source_system=source_system,
+            time=helper_time,
+            key=key,
+            image=image,
+            username="root",
+            command_line=command_line,
+        )
+        if existing_pid > 0:
+            self.state_manager.update_process_activity_time(
+                source_system.hostname,
+                existing_pid,
+                helper_time,
+            )
+            return existing_pid
+
+        frontend_time = helper_time - timedelta(milliseconds=rng.randint(80, 650))
+        systemd_pid = self._linux_system_parent_fallback(source_system, frontend_time)
+        frontend_pid = self.generate_system_process(
+            source_system,
+            frontend_time,
+            image,
+            command_line,
+            parent_pid=systemd_pid,
+            username="root",
+            emit_linux_syslog=False,
+        )
+        if frontend_pid <= 0:
+            return systemd_pid
+        if not hasattr(self, "_system_pids"):
+            self._system_pids = {}
+        self._system_pids.setdefault(source_system.hostname, {})[key] = frontend_pid
+        self.state_manager.update_process_activity_time(
+            source_system.hostname,
+            frontend_pid,
+            helper_time,
+        )
+        return frontend_pid
 
     def _active_matching_process_pid(
         self,
