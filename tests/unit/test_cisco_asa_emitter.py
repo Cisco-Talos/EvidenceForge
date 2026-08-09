@@ -984,6 +984,33 @@ class TestNatRecords:
             in nat_built_lines[0]
         )
 
+    @pytest.mark.parametrize(
+        ("protocol", "connection_msg_id"),
+        [("tcp", "302013"), ("udp", "302015")],
+    )
+    def test_dynamic_translation_wraps_connection_lifecycle(
+        self,
+        asa_emitter,
+        tmp_path,
+        protocol,
+        connection_msg_id,
+    ):
+        """Dynamic xlate allocation must precede connection state and outlive it."""
+        event = self._make_nat_event(protocol=protocol)
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        message_ids = [
+            line.split("%ASA-6-", maxsplit=1)[1].split(":", maxsplit=1)[0] for line in lines
+        ]
+        assert message_ids == [
+            "305011",
+            connection_msg_id,
+            str(int(connection_msg_id) + 1),
+            "305012",
+        ]
+
     def test_305012_emitted_for_nat_teardown(self, asa_emitter, tmp_path):
         """A permitted connection with NatContext should emit a 305012 Teardown translation record."""
         event = self._make_nat_event()

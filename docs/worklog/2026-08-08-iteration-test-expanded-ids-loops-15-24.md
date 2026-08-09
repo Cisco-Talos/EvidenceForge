@@ -163,3 +163,37 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** retain legitimate failure-driven retries, serialize package
   managers, preserve source-local observation loss, avoid removing useful
   maintenance diversity, and keep existing process/session lifecycle invariants.
+
+## Loop 19 Outcome
+
+- Commit `294d2c80`; full suite 5,089 passed and 41 skipped; Ruff passed.
+- Automated evaluation passed at 96.17321730394976 over 86,721 records with
+  exact IDS integrity at 221/221.
+- Fleet probe: four APT frontends across four hosts; six non-forced Group Policy
+  refreshes; 134 paired Windows health checks with 55.498-second maximum; one
+  repeated non-DHCP registry-state tuple.
+- Initial blind scores were 22/84/71/91, average 67.0. Deliberation corrected a
+  false Linux-syslog absence claim and ended unanimously Synthetic at average
+  synthetic confidence 92.25.
+- Highest-impact new defect: all 1,090 ASA dynamic translation builds follow the
+  connection build that already consumes the translated tuple.
+
+## Loop 20 Family Contract
+
+- **Selected family:** ASA NAT and connection transaction ownership.
+- **Finding classification:** `new_family` hard contradiction.
+- **Owning abstraction:** Cisco ASA source-native firewall transaction rendering.
+- **Invariant:** a dynamic translation allocation (`305011`) precedes the
+  connection build (`302013`/`302015`) that consumes its mapped tuple; connection
+  teardown (`302014`/`302016`) precedes translation release (`305012`).
+- **Entry paths:** inside-to-outside and DMZ-to-outside dynamic PAT for TCP and
+  UDP, canonical firewall observations, explicit-proxy egress, and storyline or
+  baseline connections traversing the perimeter firewall.
+- **Consumers:** Cisco ASA logs, ASA parser/evaluator, NAT integration tests,
+  detection review, and SIEM stateful correlation.
+- **Layer rationale:** canonical NAT context already owns the translated tuple;
+  the defect is the source-native order in which one emitter renders the two
+  records. No upstream identity, timing, or routing truth needs to change.
+- **Sibling risks:** static NAT must remain configuration state without per-flow
+  xlate churn; denies must not allocate translations; UDP ordering must match TCP;
+  and connection/xlate teardown order must remain dependency-compatible.

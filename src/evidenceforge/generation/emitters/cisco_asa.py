@@ -467,16 +467,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             else:
                 if src_iface == dst_iface and event.nat is None:
                     continue
-                self._emit_built(
-                    sensor_event,
-                    sensor_net,
-                    protocol,
-                    conn_id,
-                    src_iface,
-                    dst_iface,
-                    sensor_hostname,
-                    fw_hostname,
-                )
                 if sensor_event.nat and sensor_event.nat.nat_type != "static":
                     self._emit_nat_built(
                         sensor_event,
@@ -487,6 +477,16 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                         sensor_hostname,
                         fw_hostname,
                     )
+                self._emit_built(
+                    sensor_event,
+                    sensor_net,
+                    protocol,
+                    conn_id,
+                    src_iface,
+                    dst_iface,
+                    sensor_hostname,
+                    fw_hostname,
+                )
                 teardown_emitted = self._emit_teardown(
                     sensor_event,
                     sensor_net,
