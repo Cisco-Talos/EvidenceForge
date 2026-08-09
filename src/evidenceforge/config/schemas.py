@@ -1533,6 +1533,7 @@ class WindowsFailedLogonConfig(BaseModel, extra="forbid"):
     """Windows failed-logon profile config."""
 
     local_interactive: WindowsFailedLogonLocalProfile
+    batch: WindowsFailedLogonLocalProfile | None = None
     network: WindowsFailedLogonNetworkProfile
 
 

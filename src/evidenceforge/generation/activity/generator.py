@@ -4170,6 +4170,8 @@ class ActivityGenerator:
         )
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
+        self._failed_logon_attempt_times: dict[tuple[str, str, int, str], list[datetime]] = {}
+        self._failed_logon_attempt_lock = Lock()
         self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
         self._visible_account_created_at: dict[str, datetime] = {}
         self._visible_account_kerberos_transport_emitted: set[tuple[str, str, str]] = set()
@@ -9773,6 +9775,24 @@ class ActivityGenerator:
 
         # Use target_username if provided, otherwise use the actor's username
         effective_username = target_username or user.username
+        normalized_time = self._normalize_failed_logon_attempt_time(
+            hostname=system.hostname,
+            username=effective_username,
+            logon_type=logon_type,
+            source_ip=auth_source_ip,
+            requested_time=time,
+        )
+        if normalized_time is None:
+            logger.debug(
+                "Suppressing duplicate failed logon attempt: user=%s host=%s type=%s time=%s",
+                effective_username,
+                system.hostname,
+                logon_type,
+                time,
+            )
+            return
+        time = normalized_time
+        self.state_manager.set_current_time(time)
 
         # Determine failure substatus with source-native account-state semantics.
         # Ordinary known/enabled accounts should fail as bad passwords; locked
@@ -9855,6 +9875,11 @@ class ActivityGenerator:
                     source_ip,
                     linux_ssh_source_port or failed_profile["source_port"],
                 )
+            ),
+            lifecycle=ActionLifecycleContext(
+                group_id=request.stable_id,
+                canonical_start=time,
+                phase="dependent",
             ),
         )
 
@@ -10043,6 +10068,37 @@ class ActivityGenerator:
             return system_subject
         return system_subject
 
+    def _normalize_failed_logon_attempt_time(
+        self,
+        *,
+        hostname: str,
+        username: str,
+        logon_type: int,
+        source_ip: str,
+        requested_time: datetime,
+    ) -> datetime | None:
+        """Deduplicate one auth attempt and space distinct interactive retries."""
+        key = (hostname.lower(), username.lower(), logon_type, source_ip.lower())
+        duplicate_window = timedelta(milliseconds=500)
+        interactive_gap = timedelta(seconds=2)
+        with self._failed_logon_attempt_lock:
+            prior_times = self._failed_logon_attempt_times.setdefault(key, [])
+            if any(abs(requested_time - prior) <= duplicate_window for prior in prior_times):
+                return None
+
+            normalized_time = requested_time
+            if logon_type in (2, 7, 11):
+                while conflicts := [
+                    prior for prior in prior_times if abs(normalized_time - prior) < interactive_gap
+                ]:
+                    normalized_time = max(conflicts) + interactive_gap
+
+            prior_times.append(normalized_time)
+            prior_times.sort()
+            if len(prior_times) > 32:
+                del prior_times[:-32]
+            return normalized_time
+
     def _failed_logon_profile(
         self,
         logon_type: int,
@@ -10063,6 +10119,21 @@ class ActivityGenerator:
                 "process_pid": winlogon_pid,
                 "process_name": process_name,
                 "workstation_name": system.hostname,
+                "source_port": 0,
+                "network_port": 0,
+                "emit_network_probability": 0.0,
+            }
+
+        if logon_type == 4:
+            batch = config.get("batch", {})
+            process_name = str(batch.get("process_name") or r"C:\Windows\System32\svchost.exe")
+            return {
+                "auth_package": str(batch.get("authentication_package_name") or "Negotiate"),
+                "logon_process": str(batch.get("logon_process_name") or "Advapi"),
+                "lm_package": "-",
+                "process_pid": self._get_system_pid(system.hostname, "svchost", 0x4C0),
+                "process_name": process_name,
+                "workstation_name": "-",
                 "source_port": 0,
                 "network_port": 0,
                 "emit_network_probability": 0.0,
@@ -10114,7 +10185,7 @@ class ActivityGenerator:
         rng: random.Random,
     ) -> dict[str, bool]:
         """Choose which DC-side failed-auth validation evidence to emit."""
-        if logon_type in (2, 5, 7, 11):
+        if logon_type in (2, 4, 5, 7, 11):
             return {"emit_4776": False, "emit_4771": False}
         config = failed_logon_config().get("network", {})
         paths = [

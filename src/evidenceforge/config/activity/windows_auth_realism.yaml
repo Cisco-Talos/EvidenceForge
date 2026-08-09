@@ -15,6 +15,10 @@ failed_logon:
     logon_process_name: User32
     authentication_package_name: Negotiate
     process_name: "C:\\Windows\\System32\\winlogon.exe"
+  batch:
+    logon_process_name: Advapi
+    authentication_package_name: Negotiate
+    process_name: "C:\\Windows\\System32\\svchost.exe"
   network:
     validation_path_weights:
       ntlm_only:
