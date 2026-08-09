@@ -1,0 +1,8 @@
+# Native Snort classification.config display descriptions. Canonical alert
+# plans retain the classtype identifier; only fast-alert rendering resolves it.
+classifications:
+  attempted-recon: "Attempted Information Leak"
+  icmp-event: "Generic ICMP event"
+  misc-activity: "Misc activity"
+  policy-violation: "Potential Corporate Privacy Violation"
+  potentially-bad-traffic: "Potentially Bad Traffic"

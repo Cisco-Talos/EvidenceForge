@@ -1158,6 +1158,14 @@ class SysmonEventEmitter(LogEmitter):
             username=target_username,
         )
         target_guid = self._get_stable_process_guid(host.hostname, target_pid, event.timestamp)
+        source_user = self._format_user(proc.username or target_username, host.netbios_domain)
+        target_identity = event.identity_plan.target if event.identity_plan is not None else None
+        target_principal = str(getattr(target_identity, "principal", "") or "")
+        target_user = (
+            self._format_user(target_principal, host.netbios_domain)
+            if target_principal
+            else "NT AUTHORITY\\SYSTEM"
+        )
 
         event_data = {
             "EventID": 8,
@@ -1178,6 +1186,8 @@ class SysmonEventEmitter(LogEmitter):
             "StartAddress": f"0x{remote_thread.start_address:08X}" if remote_thread else "0x0",
             "StartModule": remote_thread.start_module if remote_thread else "",
             "StartFunction": remote_thread.start_function if remote_thread else "",
+            "SourceUser": source_user,
+            "TargetUser": target_user,
         }
         self.emit_event(event_data)
 

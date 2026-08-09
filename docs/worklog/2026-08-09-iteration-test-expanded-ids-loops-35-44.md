@@ -34,3 +34,24 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** SIEM parsing, ordered XML fixtures, Snort classification
   semantics, Event 8 identity ownership, format validation, and deterministic
   output.
+
+## Loop 36 Outcome
+
+- **Generation/eval:** 85,173 newly generated records; 95.91073999984621;
+  automated FAIL only on pivot linkability (50/100). Canonical invariants,
+  schemas, field agreement, IDS integrity, and causal ordering passed.
+- **Blind panel:** Real/Inconclusive/Synthetic/Synthetic at 32/49/67/78,
+  average 56.5.
+- **Deliberation:** likely Synthetic 3-1 at 55/63/72/77, average 66.8.
+- **Loop 35 target confirmation:** none of the four fresh reports repeated the
+  Snort-classification, Security-4624-order, or Sysmon-Event-8-user defects.
+- **Fresh selected family:** half-open source admission for endpoint lifecycle
+  closures at the collection boundary.
+- **Owning abstraction:** final source observation admission in the canonical
+  dispatcher, after lifecycle expansion and source-native timing.
+- **Invariant:** every discrete source record has a visible timestamp in
+  `[output_start, output_end)`; in-progress objects remain open when their
+  closure occurs after the window.
+- **Sibling risks:** process/logon lifecycle pairing, cross-source termination
+  agreement, source observation jitter, sensor interval records, and documented
+  collection-profile tail semantics.

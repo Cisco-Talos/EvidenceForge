@@ -557,6 +557,8 @@ output:
         <Data Name="StartAddress">{{ StartAddress }}</Data>
         <Data Name="StartModule">{{ StartModule | default('') }}</Data>
         <Data Name="StartFunction">{{ StartFunction | default('') }}</Data>
+        <Data Name="SourceUser">{{ SourceUser }}</Data>
+        <Data Name="TargetUser">{{ TargetUser }}</Data>
         {% elif EventID == 10 %}
         <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>

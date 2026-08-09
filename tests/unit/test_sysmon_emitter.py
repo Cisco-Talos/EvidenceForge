@@ -212,6 +212,8 @@ class TestSysmonEventEmitter:
             "StartAddress": "0x02060000",
             "StartModule": r"C:\Windows\System32\kernel32.dll",
             "StartFunction": "BaseThreadInitThunk",
+            "SourceUser": r"CORP\jsmith",
+            "TargetUser": r"CORP\target",
         }
 
         emitter.emit_event(event_data)
@@ -228,6 +230,8 @@ class TestSysmonEventEmitter:
         assert '<Data Name="StartAddress">0x02060000</Data>' in content
         assert '<Data Name="StartModule">C:\\Windows\\System32\\kernel32.dll</Data>' in content
         assert '<Data Name="StartFunction">BaseThreadInitThunk</Data>' in content
+        assert r'<Data Name="SourceUser">CORP\jsmith</Data>' in content
+        assert r'<Data Name="TargetUser">CORP\target</Data>' in content
 
     def test_emit_sysmon_process_terminate(self, format_def, temp_output):
         """Test emitting Sysmon Event 5 (ProcessTerminate)."""
@@ -497,6 +501,8 @@ class TestSysmonEventEmitter:
         assert '<Data Name="StartAddress">0x02060000</Data>' in content
         assert '<Data Name="StartModule">C:\\Windows\\System32\\ntdll.dll</Data>' in content
         assert '<Data Name="StartFunction">NtCreateThreadEx</Data>' in content
+        assert r'<Data Name="SourceUser">CORP\jsmith</Data>' in content
+        assert r'<Data Name="TargetUser">NT AUTHORITY\SYSTEM</Data>' in content
 
     def test_process_terminate_guid_uses_process_create_render_time(self, format_def, tmp_path):
         """Event 5 ProcessGuid should match Event 1 even after process state is removed."""

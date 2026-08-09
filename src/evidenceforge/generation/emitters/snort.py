@@ -32,6 +32,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from evidenceforge.config.snort_classifications import snort_classification_description
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.contexts import (
     IdsAlertPolicyContext,
@@ -144,7 +145,9 @@ class SnortEmitter(SensorMultiplexEmitter):
             "gid": event_data.get("gid", 1),
             "sid": event_data.get("sid"),
             "rev": event_data.get("rev", 1),
-            "classification": event_data.get("classification"),
+            "classification": snort_classification_description(
+                str(event_data.get("classification") or "")
+            ),
             "priority": event_data.get("priority"),
             "protocol": proto.upper() if proto else None,
             "src_ip": event_data.get("src_ip") or event_data.get("id.orig_h"),

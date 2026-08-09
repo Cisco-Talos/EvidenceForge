@@ -11,6 +11,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from evidenceforge.config.snort_classifications import snort_classification_description
+
 
 def normalize_ids_alert(sensor: str, fields: dict[str, Any]) -> dict[str, Any]:
     """Return the stable, source-native IDS fields covered by integrity evaluation."""
@@ -29,7 +31,9 @@ def normalize_ids_alert(sensor: str, fields: dict[str, Any]) -> dict[str, Any]:
         "sid": int(fields["sid"]),
         "rev": int(fields.get("rev", 1)),
         "message": str(fields.get("message") or "").strip(),
-        "classification": str(fields.get("classification") or "").strip(),
+        "classification": snort_classification_description(
+            str(fields.get("classification") or "").strip()
+        ),
         "priority": int(fields.get("priority", 0)),
         "protocol": str(fields.get("protocol") or fields.get("proto") or "").upper(),
         "src_ip": _normalize_ip(fields.get("src_ip") or fields.get("id.orig_h")),

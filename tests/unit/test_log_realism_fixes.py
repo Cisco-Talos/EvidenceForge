@@ -108,6 +108,8 @@ class TestSnortRevField:
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
         assert "[1:384:1]" in output
+        assert "[Classification: Generic ICMP event]" in output
+        assert "[Classification: icmp-event]" not in output
 
 
 class TestIdsAlertActionBundle:

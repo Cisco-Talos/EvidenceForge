@@ -332,6 +332,7 @@ class TestWindowsEventEmitter:
         assert '<Data Name="WorkstationName">WS-01</Data>' in content
         assert "<Computer>FS-01.example.com</Computer>" in content
         assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+        assert content.index('Name="TargetLinkedLogonId"') < content.index('Name="ElevatedToken"')
 
     def test_kerberos_network_logon_can_render_blank_workstation_name(
         self, format_def, temp_output

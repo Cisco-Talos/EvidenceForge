@@ -197,15 +197,15 @@ variants:
         required: false
         description: "Virtual account indicator"
 
-      - name: ElevatedToken
-        type: string
-        required: false
-        description: "Elevated token indicator (Yes/No)"
-
       - name: TargetLinkedLogonId
         type: hex_string
         required: false
         description: "Linked logon ID for split-token logons"
+
+      - name: ElevatedToken
+        type: string
+        required: false
+        description: "Elevated token indicator (Yes/No)"
 
       - name: RemoteUserID
         type: sid
@@ -1265,8 +1265,8 @@ output:
         <Data Name="TargetOutboundUserName">{{ TargetOutboundUserName | default('-') }}</Data>
         <Data Name="TargetOutboundDomainName">{{ TargetOutboundDomainName | default('-') }}</Data>
         <Data Name="VirtualAccount">{{ VirtualAccount | default('%%1843') }}</Data>
-        <Data Name="ElevatedToken">{{ ElevatedToken | default('%%1842') }}</Data>
         <Data Name="TargetLinkedLogonId">{{ TargetLinkedLogonId | default('0x0') }}</Data>
+        <Data Name="ElevatedToken">{{ ElevatedToken | default('%%1842') }}</Data>
         {% elif EventID == 4634 %}
         <Data Name="TargetUserSid">{{ TargetUserSid }}</Data>
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
