@@ -306,7 +306,6 @@ programs:
       action_id:
         - org.freedesktop.systemd1.manage-units
         - org.freedesktop.packagekit.system-update
-        - org.freedesktop.timedate1.set-timezone
       auth_user:
         - root
         - deploy
@@ -327,7 +326,6 @@ programs:
       process_path:
         - /usr/bin/systemctl
         - /usr/lib/packagekit/packagekitd
-        - /usr/bin/timedatectl
     messages:
       - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
       - "Subject unix-process:{0}:{monotonic_start} is authorized for action {action_id}"

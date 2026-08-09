@@ -2090,6 +2090,36 @@ class BaselineMixin:
             return str(action), str(process)
         return rng.choice(profiles)
 
+    def _polkit_action_profile_for_system(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        system: Any,
+    ) -> tuple[str, str]:
+        """Choose an action that respects durable host configuration state."""
+        action_id, process_path = self._polkit_action_profile(entry, rng)
+        if action_id != "org.freedesktop.timedate1.set-timezone":
+            return action_id, process_path
+
+        mutated_hosts = getattr(self, "_linux_timezone_mutation_hosts", set())
+        if system.type == "workstation" and system.hostname not in mutated_hosts:
+            return action_id, process_path
+
+        params = entry.get("params") or {}
+        alternatives = [
+            (candidate_action, candidate_process)
+            for candidate_action, processes in self._polkit_action_process_paths().items()
+            if candidate_action != "org.freedesktop.timedate1.set-timezone"
+            and (
+                not params.get("action_id")
+                or candidate_action in {str(item) for item in params["action_id"]}
+            )
+            for candidate_process in processes
+        ]
+        if alternatives:
+            return rng.choice(alternatives)
+        return "org.freedesktop.systemd1.manage-units", "/usr/bin/systemctl"
+
     def _polkit_process_start_ticks(
         self,
         hostname: str,
@@ -2127,19 +2157,37 @@ class BaselineMixin:
         start_ticks = int((uptime_seconds - age_seconds) * 100) + rng.randint(0, 99)
         return str(max(100, start_ticks))
 
-    @staticmethod
-    def _polkit_action_command_line(action_id: str, process_path: str, rng: random.Random) -> str:
+    def _polkit_action_command_line(
+        self,
+        action_id: str,
+        process_path: str,
+        rng: random.Random,
+        system: Any,
+    ) -> str:
         """Return a plausible command line for a polkit-authorized process."""
         executable = process_path.rsplit("/", 1)[-1]
         if executable == "timedatectl":
-            timezone = rng.choice(
-                [
-                    "America/New_York",
-                    "America/Chicago",
-                    "UTC",
-                    "Etc/UTC",
-                ]
+            timezone_state = getattr(self, "_linux_effective_timezones", None)
+            if timezone_state is None:
+                timezone_state = {}
+                self._linux_effective_timezones = timezone_state
+            current_timezone = timezone_state.get(system.hostname)
+            if current_timezone is None:
+                scenario_timezone = getattr(getattr(self, "_scenario_tz", None), "key", "UTC")
+                current_timezone = str(scenario_timezone)
+            candidates = ["America/New_York", "America/Chicago", "UTC"]
+            normalized_current = (
+                "UTC" if current_timezone in {"UTC", "Etc/UTC"} else current_timezone
             )
+            timezone = rng.choice(
+                [candidate for candidate in candidates if candidate != normalized_current]
+            )
+            timezone_state[system.hostname] = timezone
+            mutated_hosts = getattr(self, "_linux_timezone_mutation_hosts", None)
+            if mutated_hosts is None:
+                mutated_hosts = set()
+                self._linux_timezone_mutation_hosts = mutated_hosts
+            mutated_hosts.add(system.hostname)
             return f"{process_path} set-timezone {timezone}"
         if executable == "systemctl":
             if action_id == "org.freedesktop.login1.reboot":
@@ -2209,7 +2257,12 @@ class BaselineMixin:
         parent_pid = 1
         if sys_pids:
             parent_pid = sys_pids.get("systemd", sys_pids.get("dbus", 1))
-        command_line = self._polkit_action_command_line(action_id, process_path, rng)
+        command_line = self._polkit_action_command_line(
+            action_id,
+            process_path,
+            rng,
+            system,
+        )
         username = subject_user if subject_user else "root"
         if _get_os_category(system.os) == "linux" and self._polkit_action_process_is_user_cli(
             process_path
@@ -2293,7 +2346,11 @@ class BaselineMixin:
             if template.startswith("Registered"):
                 host_agents.append(agent)
 
-        action_id, action_process_path = self._polkit_action_profile(entry, rng)
+        action_id, action_process_path = self._polkit_action_profile_for_system(
+            entry,
+            rng,
+            system,
+        )
         subject_user = rng.choice(
             (entry.get("params") or {}).get("subject_user") or ["root", "admin", "deploy"]
         )

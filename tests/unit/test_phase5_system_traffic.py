@@ -26,6 +26,7 @@ import random
 import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -333,6 +334,33 @@ def test_polkit_action_messages_pair_action_with_source_native_program(linux_sys
         path = re.search(r"\[([^]]+)\]", message)
         if path is not None:
             assert path.group(1) in allowed_paths[action]
+
+
+def test_polkit_timezone_mutation_is_workstation_only_and_single_use(linux_system, state_manager):
+    """Baseline timezone mutation is never a recurring server-side action."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine._scenario_tz = ZoneInfo("America/New_York")
+    entry = {
+        "params": {"action_id": ["org.freedesktop.timedate1.set-timezone"]},
+    }
+    rng = random.Random(7)
+
+    action, process = engine._polkit_action_profile_for_system(entry, rng, linux_system)
+
+    assert action == "org.freedesktop.systemd1.manage-units"
+    assert process == "/usr/bin/systemctl"
+
+    workstation = linux_system.model_copy(update={"type": "workstation"})
+    action, process = engine._polkit_action_profile_for_system(entry, rng, workstation)
+    command = engine._polkit_action_command_line(action, process, rng, workstation)
+    next_action, next_process = engine._polkit_action_profile_for_system(entry, rng, workstation)
+
+    assert command.startswith("/usr/bin/timedatectl set-timezone ")
+    assert not command.endswith(" America/New_York")
+    assert engine._linux_effective_timezones[workstation.hostname] in command
+    assert next_action == "org.freedesktop.systemd1.manage-units"
+    assert next_process == "/usr/bin/systemctl"
 
 
 def test_polkit_action_messages_materialize_companion_process(linux_system, state_manager):
