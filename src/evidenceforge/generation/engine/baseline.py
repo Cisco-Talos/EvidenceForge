@@ -1835,6 +1835,51 @@ class BaselineMixin:
         fd_state[hostname] = current
         return current
 
+    def _render_rsyslog_health_message(
+        self,
+        entry: dict[str, Any],
+        hostname: str,
+        rng: random.Random,
+    ) -> str:
+        """Render ambient rsyslog health from durable per-host queue state.
+
+        State-changing reload, socket, worker, and retry messages are excluded
+        from this ambient path; their evidence belongs to the corresponding
+        service or configuration mutation.
+        """
+
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        states = getattr(self, "_linux_rsyslog_health", None)
+        if states is None:
+            states = {}
+            self._linux_rsyslog_health = states
+        state = states.get(hostname)
+        if state is None:
+            seed = _stable_seed(f"rsyslog_health:{hostname}")
+            state = {
+                "checkpoint": 10_000 + (seed % 90_000),
+                "pending": 2 + ((seed >> 12) % 35),
+                "workers": 1 + ((seed >> 20) % 3),
+            }
+            states[hostname] = state
+
+        processed = rng.randint(20, 850)
+        arrivals = rng.randint(10, 900)
+        state["checkpoint"] += min(processed, state["pending"] + arrivals)
+        state["pending"] = max(0, min(4096, state["pending"] + arrivals - processed))
+        return render_extra_syslog_message(
+            entry,
+            rng,
+            positional_value=state["checkpoint"],
+            system_services=[],
+            values={
+                "checkpoint": state["checkpoint"],
+                "pending": state["pending"],
+                "worker_count": state["workers"],
+            },
+        )
+
     def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
         """Return a plausible monotonic system bus name suffix for one host."""
         bus_state = getattr(self, "_linux_dbus_bus_ids", None)
@@ -9211,12 +9256,10 @@ class BaselineMixin:
                             sys_pids=sys_pids,
                         )
                     elif app == "rsyslogd":
-                        msg = render_extra_syslog_message(
+                        msg = self._render_rsyslog_health_message(
                             entry,
+                            system.hostname,
                             rng,
-                            positional_value=rng.randint(1000, 99999),
-                            system_services=system.services,
-                            values={"fd": self._next_rsyslog_fd(system.hostname, rng)},
                         )
                     elif app == "sudo":
                         values = {"interface": primary_interface}

@@ -38,21 +38,8 @@ programs:
 
   - app: rsyslogd
     weight: 1
+    max_per_host_window: 10
     params:
-      action_name:
-        - send_remote
-        - fwd_core
-        - local_file
-        - dyn_file_cache
-      conf_file:
-        - /etc/rsyslog.d/20-forwarding.conf
-        - /etc/rsyslog.d/50-default.conf
-        - /etc/rsyslog.conf
-      module_name:
-        - imjournal
-        - imuxsock
-        - omfwd
-        - omfile
       queue_name:
         - fwdRule1
         - action-remote
@@ -66,19 +53,13 @@ programs:
         - "1"
         - "2"
         - "3"
-      fd:
-        - "4"
-        - "6"
-        - "7"
-        - "9"
+      checkpoint:
+        - "10000"
+      pending:
+        - "12"
     messages:
-      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {fd}"
-      - "configuration reload completed after SIGHUP, reload id {}"
-      - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {}"
-      - "action '{action_name}' resumed after retry {}, next retry disabled"
-      - "module {module_name}: worker thread pool adjusted to {worker_count}"
-      - "configuration file {conf_file} reloaded, checksum {}"
-      - "main Q: queue {queue_name} has {} messages pending, worker threads {worker_count}"
+      - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {checkpoint}"
+      - "main Q: queue {queue_name} has {pending} messages pending, worker threads {worker_count}"
 
   - app: sudo
     transient: true

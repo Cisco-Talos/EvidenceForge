@@ -165,6 +165,33 @@ def test_rsyslog_fd_state_stays_process_local(linux_system):
     assert fds == sorted(fds)
 
 
+def test_rsyslog_ambient_health_uses_durable_queue_state(linux_system):
+    """Ambient rsyslog rows report evolving state without inventing reloads."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    rng = random.Random(81)
+    entry = {
+        "app": "rsyslogd",
+        "params": {
+            "relay_target": ["logrelay01"],
+            "queue_name": ["fwdRule1"],
+            "worker_count": ["9"],
+        },
+        "messages": [
+            "omfwd: target {relay_target} using disk-assisted queue {queue_name}, "
+            "checkpoint {checkpoint}"
+        ],
+    }
+
+    first = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
+    second = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
+
+    first_checkpoint = int(first.rsplit(" ", 1)[-1])
+    second_checkpoint = int(second.rsplit(" ", 1)[-1])
+    assert second_checkpoint > first_checkpoint
+    assert "reload" not in first.lower()
+    assert "reload" not in second.lower()
+
+
 def test_journald_housekeeping_is_sparse_over_visible_window(linux_system):
     """Journald capacity rows should be housekeeping, not high-frequency filler."""
     engine = type("FakeEngine", (BaselineMixin,), {})()
