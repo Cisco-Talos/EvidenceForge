@@ -1879,6 +1879,8 @@ def _windows_foreground_lifetime(
     if exe_name in {"curl.exe", "curl", "wget.exe", "wget"}:
         return (0.8, 12.0)
     if exe_name == "service-healthcheck.exe":
+        if "--service" in command:
+            return None
         return (2.0, 45.0)
     if exe_name in {
         "whoami.exe",
@@ -5998,11 +6000,30 @@ class ActivityGenerator:
                     "SYSTEM",
                 )
             if dst_port in {80, 443, 8080, 8443} or service_name in {"http", "ssl", "https"}:
+                user_agent = ((http.user_agent if http is not None else "") or "").lower()
+                if "microsoft-cryptoapi" in user_agent:
+                    return (
+                        "cryptsvc",
+                        r"C:\Windows\System32\svchost.exe",
+                        "svchost.exe -k NetworkService -p -s CryptSvc",
+                        "NETWORK SERVICE",
+                    )
+                if any(token in user_agent for token in ("windows-update-agent", "bits/")):
+                    return (
+                        "windows_update_client",
+                        r"C:\Windows\System32\svchost.exe",
+                        "svchost.exe -k netsvcs -p -s UsoSvc",
+                        "SYSTEM",
+                    )
+                if not any(
+                    token in user_agent for token in ("go-http-client/", "meridian-servicehealth/")
+                ):
+                    return None
+                image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
                 return (
-                    f"service_healthcheck:{target}",
-                    r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe",
-                    rf'"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe" '
-                    rf'--target "{target}"',
+                    "service_healthcheck_agent",
+                    image,
+                    f'"{image}" --service',
                     "SYSTEM",
                 )
             if dst_port == 445 or service_name == "smb":
@@ -7217,7 +7238,7 @@ class ActivityGenerator:
         if server_like_source:
             if ua.startswith("go-http-client/"):
                 image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
-                return image, f'"{image}" --url "{target_url}"'
+                return image, f'"{image}" --service'
             if ua.startswith("apache-httpclient/"):
                 image = r"C:\Program Files\Eclipse Adoptium\jdk-17\bin\java.exe"
                 return image, f'"{image}" -jar C:\\ProgramData\\Meridian\\integration-worker.jar'

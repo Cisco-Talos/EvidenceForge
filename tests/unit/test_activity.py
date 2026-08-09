@@ -4707,8 +4707,8 @@ class TestActivityGenerator:
         assert connection_event.process.image == "/usr/sbin/apache2"
         assert connection_event.process.username == "www-data"
 
-    def test_proxy_service_owner_is_not_reused_across_targets(self, activity_gen, state_manager):
-        """Target-bearing service-health owners should match the current proxy host."""
+    def test_proxy_service_agent_is_reused_across_targets(self, activity_gen, state_manager):
+        """One durable service agent owns probes to multiple destinations."""
         timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
         dc_system = System(
             hostname="DC-01",
@@ -4755,9 +4755,11 @@ class TestActivityGenerator:
         second_proc = state_manager.get_process(dc_system.hostname, second_pid)
         assert first_proc is not None
         assert second_proc is not None
-        assert first_pid != second_pid
-        assert "config.zscaler.net" in first_proc.command_line
-        assert "secure-client-updates.cisco.com" in second_proc.command_line
+        assert first_pid == second_pid
+        assert first_proc.command_line.endswith("--service")
+        assert first_proc.command_line == second_proc.command_line
+        assert "config.zscaler.net" not in first_proc.command_line
+        assert "secure-client-updates.cisco.com" not in second_proc.command_line
 
     def test_service_connection_owner_command_lines_do_not_leak_planning_notes(self, activity_gen):
         """Rendered endpoint command lines should not contain hidden generation labels."""
@@ -4883,6 +4885,41 @@ class TestActivityGenerator:
             test_system.hostname,
             pid,
             process.start_time,
+        )
+
+    def test_windows_healthcheck_service_agent_is_durable_and_target_agnostic(
+        self, activity_gen, state_manager, test_system
+    ):
+        """The installed monitoring service owns multiple probes without worker churn."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        image = r"C:\Program Files\Meridian\ServiceHealth\service-healthcheck.exe"
+        command_line = f'"{image}" --service'
+        state_manager.set_current_time(timestamp)
+
+        first_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=test_system,
+            time=timestamp,
+            key="service_healthcheck_agent",
+            image=image,
+            command_line=command_line,
+            username="SYSTEM",
+        )
+        second_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=test_system,
+            time=timestamp + timedelta(minutes=5),
+            key="service_healthcheck_agent",
+            image=image,
+            command_line=command_line,
+            username="SYSTEM",
+        )
+
+        assert first_pid == second_pid
+        assert "--target" not in command_line
+        activity_gen.finalize_foreground_process_lifetimes(timestamp + timedelta(hours=1))
+        assert not activity_gen._process_termination_recorded(
+            test_system.hostname,
+            first_pid,
+            timestamp,
         )
 
     @pytest.mark.parametrize("method", ["http", "https"])

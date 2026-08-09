@@ -443,7 +443,8 @@ def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
     assert hint is not None
     image, command_line = hint
     assert image.endswith("service-healthcheck.exe")
-    assert "api.westbridge-services.net" in command_line
+    assert command_line.endswith("--service")
+    assert "api.westbridge-services.net" not in command_line
 
 
 def test_server_proxy_package_user_agents_are_destination_aware():
@@ -2525,7 +2526,8 @@ class TestExplicitProxyVisibility:
         assert hint is not None
         image, command_line = hint
         assert image.endswith("service-healthcheck.exe")
-        assert "status.example.com" in command_line
+        assert command_line.endswith("--service")
+        assert "status.example.com" not in command_line
 
     def test_windows_server_proxy_helper_uses_system_owner_despite_user_session(self):
         generator, _emitters = _generator(
@@ -2608,6 +2610,7 @@ class TestExplicitProxyVisibility:
         assert proc.logon_id == "0x3e7"
         assert proc.parent_pid == services_pid
         assert proc.parent_pid != explorer_pid
+        assert proc.command_line.endswith("--service")
 
     def test_one_shot_proxy_client_process_terminates_after_request(self):
         generator, _emitters = _generator(

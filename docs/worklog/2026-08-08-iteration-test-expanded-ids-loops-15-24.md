@@ -262,3 +262,35 @@ deadline to the actual process start rather than an earlier intent timestamp.
 - **Sibling risks:** retain TCP loss/missed-byte texture, never fabricate partial
   UDP/ICMP payload mutation, preserve packet/IP-byte arithmetic, and avoid
   suppressing protocol children without a modeled whole-packet observation.
+
+## Loop 22 Outcome
+
+- Commit `0e75af19`; full suite 5,094 passed and 41 skipped; Ruff passed.
+- The hard probe matched 1,943 dual-sensor flows. All 809 clean datagram pairs
+  retained identical counters, with zero symmetric one-byte mutations. A second
+  ICMP-aware review confirmed all 1,702 clean equal-packet pairs agree.
+- Automated evaluation passed at 96.22321730394975 over 86,721 records, with
+  221/221 IDS integrity checks passing.
+- Initial blind scores were 22/32/23/91, average 42.0. Deliberation ended Real
+  by a 3-1 vote at 39.5, final scores 30/35/27/66.
+- Highest-impact next defect: Windows server HTTP ownership creates 134 short,
+  overlapping `service-healthcheck.exe` workers with target-specific command
+  lines, including traffic better owned by native Windows update services.
+
+## Loop 23 Family Contract
+
+- **Selected family:** Windows service HTTP process ownership and lifecycle.
+- **Finding classification:** `new_family` strong host-realism defect.
+- **Owning abstraction:** activity-layer connection-owner selection and process
+  lifecycle, plus explicit-proxy client process hints.
+- **Invariant:** an installed monitoring agent is one durable, target-agnostic
+  service process per host; Windows update and CryptoAPI traffic is owned by the
+  relevant native service; generic server HTTP is not relabeled as monitoring.
+- **Entry paths:** direct and explicit-proxy HTTP/HTTPS system traffic.
+- **Consumers:** canonical process state, eCAR process/flow records, Sysmon
+  process/network evidence, and proxy-correlated endpoint ownership.
+- **Layer rationale:** emitters render the canonical process owner correctly;
+  the activity layer currently chooses the wrong executable and lifetime.
+- **Sibling risks:** preserve one-shot explicit health commands, Linux owners,
+  Go/Meridian monitoring user agents, CryptoAPI/Windows Update identities,
+  stable proxy ownership, and non-overlapping process lifetimes.
