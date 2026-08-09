@@ -3254,6 +3254,37 @@ class TestActivityGenerator:
         assert event.auth.privilege_list
         assert "SeDebugPrivilege" in event.auth.privilege_list
 
+    def test_repeated_logon_request_claims_one_privilege_companion(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Identical successful-logon intents claim one 4672 companion."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        admin = User(
+            username="admin.lee",
+            full_name="Admin Lee",
+            email="admin.lee@example.com",
+            persona="sysadmin",
+            enabled=True,
+        )
+
+        with patch.object(activity_gen, "_should_elevate", return_value=True):
+            for _ in range(2):
+                activity_gen.generate_logon(
+                    admin,
+                    test_system,
+                    timestamp,
+                    logon_type=7,
+                    logon_id="0x4f2a1b",
+                )
+
+        logons = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        assert len(logons) == 2
+        assert [event.auth.emit_special_privileges for event in logons] == [True, False]
+
     def test_workstation_unlock_enforces_configured_minimum_gap(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

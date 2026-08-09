@@ -1239,6 +1239,48 @@ class TestWindowsEventEmitter:
         assert logon["TimeCreated"] == expected_logon_time
         assert privilege["TimeCreated"] == expected_logon_time + expected_privilege_delta
 
+    def test_special_privileges_stay_with_reused_logon_id_occurrence(self, format_def, temp_output):
+        """4672 repair must not cluster earlier companions beside a later unlock."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        first_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        unlock_time = first_time + timedelta(hours=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4624,
+                "_auth_occurrence_id": "initial",
+                "TimeCreated": first_time,
+                "Computer": "WS-TEST-01.corp.local",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4672,
+                "_auth_occurrence_id": "initial",
+                "TimeCreated": first_time,
+                "Computer": "WS-TEST-01.corp.local",
+                "SubjectLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4624,
+                "_auth_occurrence_id": "unlock",
+                "TimeCreated": unlock_time,
+                "Computer": "WS-TEST-01.corp.local",
+                "TargetLogonId": "0xf63a33e",
+            },
+            {
+                "EventID": 4672,
+                "_auth_occurrence_id": "unlock",
+                "TimeCreated": unlock_time,
+                "Computer": "WS-TEST-01.corp.local",
+                "SubjectLogonId": "0xf63a33e",
+            },
+        ]
+
+        emitter._shift_special_privileges_after_logons()
+
+        privileges = [event for event in emitter._event_dicts if event["EventID"] == 4672]
+        assert first_time < privileges[0]["TimeCreated"] < first_time + timedelta(seconds=1)
+        assert unlock_time < privileges[1]["TimeCreated"] < unlock_time + timedelta(seconds=1)
+
     def test_flush_does_not_repair_remote_auth_transport_ordering(
         self, format_def, temp_output, monkeypatch
     ):

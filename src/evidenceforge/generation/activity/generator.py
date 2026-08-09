@@ -4172,6 +4172,8 @@ class ActivityGenerator:
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._failed_logon_attempt_times: dict[tuple[str, str, int, str], list[datetime]] = {}
         self._failed_logon_attempt_lock = Lock()
+        self._privileged_auth_occurrences: set[str] = set()
+        self._privileged_auth_occurrence_lock = Lock()
         self._software_deployment_key = "default"
         self._scenario_end_time = datetime.max.replace(tzinfo=UTC)
         self._singleton_application_intervals: dict[
@@ -9264,6 +9266,9 @@ class ActivityGenerator:
         if requires_logon_guid or not (session_for_guid and session_for_guid.logon_guid):
             self.state_manager.update_session_metadata(logon_id, logon_guid=auth_logon_guid)
         elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
+        emit_special_privileges = elevated and self._claim_privileged_auth_occurrence(
+            request.stable_id
+        )
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
         )
@@ -9319,6 +9324,7 @@ class ActivityGenerator:
                 source_ip=auth_source_ip,
                 source_port=source_port or 0,
                 elevated=elevated,
+                emit_special_privileges=emit_special_privileges,
                 logon_process=auth_pkg.get("LogonProcessName", ""),
                 lm_package=auth_pkg.get("LmPackageName", "-"),
                 logon_guid=auth_logon_guid,
@@ -24758,6 +24764,14 @@ class ActivityGenerator:
             probability = default_probability
         probability = max(0.0, min(probability, 1.0))
         return rng.random() < probability
+
+    def _claim_privileged_auth_occurrence(self, occurrence_id: str) -> bool:
+        """Claim one 4672 companion for a canonical successful-logon occurrence."""
+        with self._privileged_auth_occurrence_lock:
+            if occurrence_id in self._privileged_auth_occurrences:
+                return False
+            self._privileged_auth_occurrences.add(occurrence_id)
+            return True
 
     def _select_auth_package(self, logon_type: int) -> dict[str, str]:
         """Select auth package, LogonProcessName, and LogonGuid based on logon type.

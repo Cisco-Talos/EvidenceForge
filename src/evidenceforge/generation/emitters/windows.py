@@ -166,6 +166,23 @@ def _windows_logon_session_key(
     return (computer, normalized_logon_id)
 
 
+def _matching_privilege_logon_time(
+    event: dict[str, Any],
+    occurrence_times: dict[str, datetime],
+    session_times: dict[tuple[str, str], list[datetime]],
+) -> datetime | None:
+    """Return the triggering 4624 time for one rendered 4672 companion."""
+    occurrence_id = str(event.get("_auth_occurrence_id") or "")
+    if occurrence_id and occurrence_id in occurrence_times:
+        return occurrence_times[occurrence_id]
+    timestamp = event.get("TimeCreated")
+    key = _windows_logon_session_key(event, "SubjectLogonId")
+    candidates = session_times.get(key, []) if key is not None else []
+    if not isinstance(timestamp, datetime) or not candidates:
+        return None
+    return min(candidates, key=lambda candidate: abs((candidate - timestamp).total_seconds()))
+
+
 def _nearest_auth_transport_time(
     transport_times: dict[tuple[str, str, str], list[datetime]],
     key: tuple[str, str, str],
@@ -668,6 +685,7 @@ class WindowsEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 4624,
+            "_auth_occurrence_id": event.event_id,
             "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
@@ -699,10 +717,11 @@ class WindowsEventEmitter(LogEmitter):
         self.emit_event(event_data)
 
         # 4672 special privileges (when auth.elevated is True)
-        if auth.elevated:
+        if auth.elevated and auth.emit_special_privileges:
             privs = auth.privilege_list or _special_privilege_fallback(auth.username)
             priv_data = {
                 "EventID": 4672,
+                "_auth_occurrence_id": event.event_id,
                 "TimeCreated": event.timestamp,
                 "Computer": host.fqdn,
                 "Channel": "Security",
@@ -1007,6 +1026,7 @@ class WindowsEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 4624,
+            "_auth_occurrence_id": event.event_id,
             "TimeCreated": event.timestamp,
             "Computer": host.fqdn,
             "Channel": "Security",
@@ -1044,9 +1064,10 @@ class WindowsEventEmitter(LogEmitter):
         self.emit_event(event_data)
 
         # 4672 special privileges for machine accounts
-        if auth.elevated:
+        if auth.elevated and auth.emit_special_privileges:
             priv_data = {
                 "EventID": 4672,
+                "_auth_occurrence_id": event.event_id,
                 "TimeCreated": event.timestamp,
                 "Computer": host.fqdn,
                 "Channel": "Security",
@@ -1681,6 +1702,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # Strip internal metadata keys before rendering
         event_data.pop("_storyline_origin", None)
+        event_data.pop("_auth_occurrence_id", None)
 
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
@@ -2050,15 +2072,19 @@ class WindowsEventEmitter(LogEmitter):
         self._update_spooled_events_unlocked(updates)
 
     def _shift_spooled_special_privileges_after_logons_unlocked(self) -> None:
-        """Keep spooled 4672 rows after the final same-session 4624 timestamp."""
-        logon_times: dict[tuple[str, str], datetime] = {}
+        """Keep each spooled 4672 after its triggering 4624 occurrence."""
+        occurrence_times: dict[str, datetime] = {}
+        session_times: dict[tuple[str, str], list[datetime]] = {}
         for _, event in self._iter_spooled_rows_unlocked():
             if event.get("EventID") != 4624:
                 continue
             ts = event.get("TimeCreated")
             key = _windows_logon_session_key(event, "TargetLogonId")
             if isinstance(ts, datetime) and key is not None:
-                logon_times[key] = max(ts, logon_times.get(key, ts))
+                session_times.setdefault(key, []).append(ts)
+                occurrence_id = str(event.get("_auth_occurrence_id") or "")
+                if occurrence_id:
+                    occurrence_times[occurrence_id] = ts
 
         updates: list[tuple[str, str, int]] = []
         for rowid, event in self._iter_spooled_rows_unlocked():
@@ -2066,11 +2092,19 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             ts = event.get("TimeCreated")
             key = _windows_logon_session_key(event, "SubjectLogonId")
-            logon_time = logon_times.get(key) if key is not None else None
-            if isinstance(ts, datetime) and logon_time is not None and ts <= logon_time:
+            logon_time = _matching_privilege_logon_time(event, occurrence_times, session_times)
+            occurrence_id = str(event.get("_auth_occurrence_id") or "")
+            if (
+                isinstance(ts, datetime)
+                and key is not None
+                and logon_time is not None
+                and ts <= logon_time
+            ):
                 event["TimeCreated"] = logon_time + sample_timing_delta(
                     "windows.special_privilege_after_logon",
-                    seed_parts=(*key, logon_time),
+                    seed_parts=(
+                        (*key, occurrence_id, logon_time) if occurrence_id else (*key, logon_time)
+                    ),
                 )
                 updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
                 if len(updates) >= 1000:
@@ -2541,26 +2575,38 @@ class WindowsEventEmitter(LogEmitter):
                 )
 
     def _shift_special_privileges_after_logons(self) -> None:
-        """Keep 4672 special-privilege rows after the same-session 4624 row."""
-        logon_times: dict[tuple[str, str], datetime] = {}
+        """Keep each 4672 after its triggering same-session 4624 occurrence."""
+        occurrence_times: dict[str, datetime] = {}
+        session_times: dict[tuple[str, str], list[datetime]] = {}
         for event in self._event_dicts:
             if event.get("EventID") != 4624:
                 continue
             ts = event.get("TimeCreated")
             key = _windows_logon_session_key(event, "TargetLogonId")
             if isinstance(ts, datetime) and key is not None:
-                logon_times[key] = max(ts, logon_times.get(key, ts))
+                session_times.setdefault(key, []).append(ts)
+                occurrence_id = str(event.get("_auth_occurrence_id") or "")
+                if occurrence_id:
+                    occurrence_times[occurrence_id] = ts
 
         for event in self._event_dicts:
             if event.get("EventID") != 4672:
                 continue
             ts = event.get("TimeCreated")
             key = _windows_logon_session_key(event, "SubjectLogonId")
-            logon_time = logon_times.get(key) if key is not None else None
-            if isinstance(ts, datetime) and logon_time is not None and ts <= logon_time:
+            logon_time = _matching_privilege_logon_time(event, occurrence_times, session_times)
+            occurrence_id = str(event.get("_auth_occurrence_id") or "")
+            if (
+                isinstance(ts, datetime)
+                and key is not None
+                and logon_time is not None
+                and ts <= logon_time
+            ):
                 event["TimeCreated"] = logon_time + sample_timing_delta(
                     "windows.special_privilege_after_logon",
-                    seed_parts=(*key, logon_time),
+                    seed_parts=(
+                        (*key, occurrence_id, logon_time) if occurrence_id else (*key, logon_time)
+                    ),
                 )
 
     @staticmethod

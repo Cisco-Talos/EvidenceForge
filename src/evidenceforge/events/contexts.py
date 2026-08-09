@@ -76,6 +76,7 @@ class AuthContext:
     source_ip: str = ""
     source_port: int = 0
     elevated: bool = False
+    emit_special_privileges: bool = True
     logon_process: str = ""  # LogonProcessName (User32, Kerberos, NtLmSsp)
     lm_package: str = ""  # LmPackageName (-, NTLM V2)
     logon_guid: str = ""  # LogonGuid ({uuid} or null GUID)

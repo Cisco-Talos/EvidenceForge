@@ -102,3 +102,44 @@ or a synthetic-confidence spread above 30 points.
 - **Sibling risks:** preserve multiple principals/sessions, explicit storyline
   processes, deterministic cohort selection, process termination, application
   diversity outside compatibility groups, and Linux behavior.
+
+## Loop 27 Outcome
+
+- **Commits:** `b96a96be fix: unify endpoint control software state`,
+  `4a816bcc fix: preserve endpoint singleton planning`,
+  `d5c6900a fix: enforce software cohort for network owners`, and
+  `b7275437 fix: claim endpoint singleton intervals atomically`.
+- **Verification:** final full suite passed with 5,105 tests and 41 skips;
+  repository-wide Ruff lint and format checks passed.
+- **Generation and eval:** 84,268 records; automated score
+  96.25815833259675, PASS across every hard gate.
+- **Hard probe:** Cisco was the only endpoint-control family (nine records),
+  GlobalProtect and Zscaler were absent, and seven UI session groups had zero
+  same-session visible overlaps.
+- **Blind panel:** initial scores were 12/64/17/42, average 33.75. Deliberation
+  triggered on verdict disagreement and a 52-point spread, ending Synthetic
+  3-1 at 51.25 with final scores 54/67/26/58.
+- **Target result:** every reviewer recognized the coherent endpoint-control
+  cohort; none repeated the prior cross-vendor or singleton-overlap finding.
+- **Highest next root contract:** idempotent Event 4672 privileged-authentication
+  companion ownership per qualifying host and Logon ID occurrence.
+
+## Loop 28 Family Contract
+
+- **Selected family:** Windows Event 4672 privileged-authentication companion
+  cardinality and timestamp repair.
+- **Finding classification:** `new_family` canonical cardinality/timing defect.
+- **Owning abstraction:** successful-logon action bundle plus Windows Security
+  source-timing repair for reused interactive Logon IDs.
+- **Invariant:** one qualifying 4624 occurrence produces at most one 4672
+  companion; timestamp repair pairs that companion with its triggering 4624,
+  never relocates earlier same-LUID companions beside a later unlock, and
+  concurrent compatibility entry paths cannot duplicate the occurrence.
+- **Entry paths:** interactive logon, workstation unlock Type 7, network/service/
+  batch logon, RDP, remote-auth compatibility, and machine-account logon.
+- **Consumers:** Windows Security XML, privileged-session detections, record-ID
+  sequencing, auth timelines, and blind detection review.
+- **Sibling risks:** preserve distinct privilege assignments for distinct logon
+  occurrences, stable reused LUID semantics, 4624-before-4672 ordering after
+  source delay, source-native submillisecond spacing, and standalone explicit
+  4672 storyline events.
