@@ -43,3 +43,36 @@ finding is carried forward into target selection.
   supplied truth correctly.
 - **Sibling risks:** cover both `http` and `https` helpers, frontend reuse only
   while active, ordering before the helper, and unchanged DNF/YUM ownership.
+
+## Loop 16 Outcome
+
+- Commit `490e363b`; full suite 5,077 passed and 41 skipped; Ruff passed.
+- Rendered probe: 62/62 helpers had a visible preceding `apt-get` parent; zero
+  direct PID-1 helper ancestry remained.
+- Automated evaluation passed at 96.47643566860552 over 87,468 records.
+- Blind scores were 83/88/72/95, average 84.5. The direct parent defect was
+  fixed, but the new frontend lacked a bounded serialized lifecycle and exposed
+  APT-to-DNF state mixing. Loop 17 remains on the package-manager family to fix
+  this latest-change regression before selecting an unrelated target.
+
+## Loop 17 Family Contract
+
+- **Selected family:** serialized package-manager frontend lifecycle and
+  distro-native state effects.
+- **Finding classification:** `exact_regression` plus `sibling_defect` from loop 16.
+- **Owning abstraction:** canonical Linux package-manager process lifecycle;
+  data-driven EDR package-state profiles.
+- **Invariant:** a host has at most one visible APT frontend transaction at a
+  time; helpers extend that transaction briefly, and the frontend terminates
+  after its last helper. APT/dpkg write only Debian state, while DNF/YUM/RPM
+  write only RPM state.
+- **Entry paths:** proxy/direct APT HTTP and HTTPS helpers, repeated repository
+  requests, foreground package commands, and generic file side effects.
+- **Consumers:** process state, eCAR PROCESS/FLOW/FILE, lifecycle probes, config
+  validation, and endpoint/detection review.
+- **Layer rationale:** transaction concurrency and closure belong to canonical
+  process lifecycle state; path enumerables belong to config. Renderers own
+  neither fact.
+- **Sibling risks:** helper fan-out must reuse a still-live frontend, requests
+  after closure must create a new frontend, parent termination must follow all
+  children, and RPM-family behavior must remain unchanged.

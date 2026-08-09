@@ -4205,6 +4205,7 @@ class ActivityGenerator:
         self._foreground_process_finalizers: ExpiringIndex[
             tuple[str, int], tuple[System, str, str, str, datetime]
         ] = ExpiringIndex(deadline=lambda finalizer: finalizer[4].timestamp())
+        self._linux_apt_frontends: dict[str, tuple[int, datetime]] = {}
         self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
         self._last_one_shot_cli_launch_by_exe: dict[tuple[str, str, str, str], datetime] = {}
         self._last_one_shot_cli_launch_by_command: dict[
@@ -6198,16 +6199,30 @@ class ActivityGenerator:
         """Create or reuse the APT frontend that owns a transport method helper."""
         image = "/usr/bin/apt-get"
         command_line = "apt-get update"
-        key = "apt_update_frontend"
-        existing_pid = self._active_matching_process_pid(
-            source_system=source_system,
-            time=helper_time,
-            key=key,
-            image=image,
-            username="root",
-            command_line=command_line,
-        )
-        if existing_pid > 0:
+        active = self._linux_apt_frontends.get(source_system.hostname)
+        if active is not None and ensure_utc(helper_time) < ensure_utc(active[1]):
+            existing_pid = active[0]
+            running = self.state_manager.get_process(source_system.hostname, existing_pid)
+        else:
+            existing_pid = -1
+            running = None
+        if running is not None:
+            termination_time = max(
+                active[1],
+                helper_time + timedelta(seconds=rng.uniform(35.0, 90.0)),
+            )
+            self._linux_apt_frontends[source_system.hostname] = (
+                existing_pid,
+                termination_time,
+            )
+            self._remember_foreground_process_finalizer(
+                system=source_system,
+                user=User(username="root", full_name="root", email="root@example.local"),
+                pid=existing_pid,
+                process_name=image,
+                logon_id="0x3e7",
+                termination_time=termination_time,
+            )
             self.state_manager.update_process_activity_time(
                 source_system.hostname,
                 existing_pid,
@@ -6228,9 +6243,19 @@ class ActivityGenerator:
         )
         if frontend_pid <= 0:
             return systemd_pid
-        if not hasattr(self, "_system_pids"):
-            self._system_pids = {}
-        self._system_pids.setdefault(source_system.hostname, {})[key] = frontend_pid
+        termination_time = helper_time + timedelta(seconds=rng.uniform(35.0, 90.0))
+        self._linux_apt_frontends[source_system.hostname] = (
+            frontend_pid,
+            termination_time,
+        )
+        self._remember_foreground_process_finalizer(
+            system=source_system,
+            user=User(username="root", full_name="root", email="root@example.local"),
+            pid=frontend_pid,
+            process_name=image,
+            logon_id="0x3e7",
+            termination_time=termination_time,
+        )
         self.state_manager.update_process_activity_time(
             source_system.hostname,
             frontend_pid,

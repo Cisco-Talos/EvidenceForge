@@ -178,7 +178,19 @@ class TestLoadEdrPools:
 
         assert effect is not None
         _action, path = effect
-        assert path.startswith(("/var/log/apt/", "/var/lib/dpkg/", "/var/lib/dnf/"))
+        assert path.startswith(("/var/log/apt/", "/var/lib/dpkg/"))
+        assert not path.startswith("/var/lib/dnf/")
+
+    def test_root_dnf_keeps_only_rpm_state_side_effects(self):
+        effect = select_file_side_effect(
+            process_name="/usr/bin/dnf",
+            command_line="dnf makecache --timer",
+            os_category="linux",
+            rng=random.Random(5),
+            user="root",
+        )
+
+        assert effect == ("modify", "/var/lib/dnf/history.sqlite")
 
 
 class TestFilePaths:

@@ -4892,6 +4892,43 @@ class TestActivityGenerator:
         assert systemd is not None
         assert systemd.image == "/usr/lib/systemd/systemd"
 
+    def test_apt_frontend_reuses_active_transaction_and_closes(self, activity_gen, state_manager):
+        """APT helper fan-out should share one bounded serialized frontend."""
+        first_time = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["app_server"],
+        )
+        state_manager.set_current_time(first_time)
+
+        first_pid = activity_gen._ensure_linux_apt_frontend_process(
+            source_system=server,
+            helper_time=first_time,
+            rng=random.Random(1),
+        )
+        second_pid = activity_gen._ensure_linux_apt_frontend_process(
+            source_system=server,
+            helper_time=first_time + timedelta(seconds=10),
+            rng=random.Random(2),
+        )
+
+        assert second_pid == first_pid
+        _pid, termination_time = activity_gen._linux_apt_frontends[server.hostname]
+        assert first_time + timedelta(seconds=35) < termination_time
+        assert termination_time < first_time + timedelta(seconds=101)
+        frontend = state_manager.get_process(server.hostname, first_pid)
+        assert frontend is not None
+        frontend_start = frontend.start_time
+        activity_gen.finalize_foreground_process_lifetimes(first_time + timedelta(minutes=3))
+        assert activity_gen._process_termination_recorded(
+            server.hostname,
+            first_pid,
+            frontend_start,
+        )
+
     def test_workstation_ssh_connection_materializes_user_owner(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
