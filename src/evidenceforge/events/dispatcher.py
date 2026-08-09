@@ -489,8 +489,6 @@ class EventDispatcher:
             self.output_end_time,
         ):
             return False
-        if lifecycle.phase == "closure":
-            return True
         if self.output_start_time is not None and self._is_before(
             visible_time,
             self.output_start_time,

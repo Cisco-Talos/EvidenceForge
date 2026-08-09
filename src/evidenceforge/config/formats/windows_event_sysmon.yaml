@@ -199,6 +199,12 @@ variants:
       - name: StartFunction
         type: string
         required: false
+      - name: SourceUser
+        type: string
+        required: true
+      - name: TargetUser
+        type: string
+        required: true
 
   # Sysmon EventID 10: ProcessAccess
   - name: sysmon_process_access

@@ -232,6 +232,12 @@ class TestSysmonEventEmitter:
         assert '<Data Name="StartFunction">BaseThreadInitThunk</Data>' in content
         assert r'<Data Name="SourceUser">CORP\jsmith</Data>' in content
         assert r'<Data Name="TargetUser">CORP\target</Data>' in content
+        variant = next(
+            candidate
+            for candidate in format_def.variants
+            if candidate.name == "sysmon_create_remote_thread"
+        )
+        assert [field.name for field in variant.fields][-2:] == ["SourceUser", "TargetUser"]
 
     def test_emit_sysmon_process_terminate(self, format_def, temp_output):
         """Test emitting Sysmon Event 5 (ProcessTerminate)."""

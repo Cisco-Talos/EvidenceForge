@@ -1092,8 +1092,8 @@ def test_half_open_end_suppresses_group_start_and_dependents_but_updates_state()
     emitter.emit.assert_not_called()
 
 
-def test_closure_tail_is_admitted_only_when_group_started_before_end() -> None:
-    """Closure rows may trail the slice only for an already-admitted action."""
+def test_closure_after_end_is_suppressed_even_when_group_started_before_end() -> None:
+    """A still-open action does not leak a discrete closure beyond the slice."""
 
     state_manager = MagicMock(spec=StateManager)
     emitter = _mock_emitter()
@@ -1119,12 +1119,12 @@ def test_closure_tail_is_admitted_only_when_group_started_before_end() -> None:
     dispatcher.dispatch_builder(admitted)
     dispatcher.dispatch_builder(suppressed)
 
-    _assert_published_once(emitter.emit, admitted)
+    emitter.emit.assert_not_called()
     assert state_manager.apply.call_count == 2
 
 
-def test_nested_child_action_has_independent_admission() -> None:
-    """A child beginning at end is suppressed without removing its parent's tail."""
+def test_nested_parent_closure_and_child_start_at_end_are_both_suppressed() -> None:
+    """Both closure and child records respect the half-open source interval."""
 
     state_manager = MagicMock(spec=StateManager)
     emitter = _mock_emitter()
@@ -1151,7 +1151,7 @@ def test_nested_child_action_has_independent_admission() -> None:
     dispatcher.dispatch_builder(parent_closure)
     dispatcher.dispatch_builder(child_start)
 
-    _assert_published_once(emitter.emit, parent_closure)
+    emitter.emit.assert_not_called()
 
 
 def test_sensor_observation_at_end_is_suppressed_without_emitter_fallback() -> None:

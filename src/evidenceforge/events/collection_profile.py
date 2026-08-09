@@ -124,9 +124,9 @@ def build_collection_profile(
                 ],
                 primary_window=collection_window,
                 tail_policy=(
-                    "Endpoint exports can include lifecycle closure rows after the primary "
-                    "window when the initiating process, logon, service, or shell session was "
-                    "visible or already active near the boundary."
+                    "Endpoint exports use the half-open primary window. A process, logon, "
+                    "service, or shell session still active at the end remains open in the "
+                    "slice; its later lifecycle closure row is not included."
                 ),
                 ordering=(
                     "Host files are sorted by source event timestamp after collector "

@@ -1022,7 +1022,7 @@ class TestGenerationEngine:
             for family in profile["source_families"]
             if family["family"] == "endpoint_telemetry"
         )
-        assert "lifecycle closure rows after the primary window" in endpoint_family["tail_policy"]
+        assert "still active at the end remains open" in endpoint_family["tail_policy"]
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

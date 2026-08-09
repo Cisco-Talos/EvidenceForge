@@ -55,3 +55,26 @@ Splunk harness test, which passed unrestricted.
 - **Sibling risks:** process/logon lifecycle pairing, cross-source termination
   agreement, source observation jitter, sensor interval records, and documented
   collection-profile tail semantics.
+
+## Loop 37 Outcome
+
+- **Generation/eval:** 85,138 newly generated records; 95.91042019060161;
+  automated FAIL only on pivot linkability (50/100). Schemas, canonical
+  invariants, field agreement, IDS integrity, and causal ordering passed.
+- **Blind panel:** unanimous Synthetic at 76/71/72/68, average 71.75. No
+  deliberation trigger: all verdict confidences were at least 84 and score spread
+  was eight points.
+- **Loop 36 target confirmation:** zero records at or after the 18:00 cutoff and
+  no fresh reviewer repeated the endpoint termination-tail finding.
+- **Rejected finding:** the reported Security 5156 direction inversion used the
+  WFP message tokens backwards. Microsoft source-native semantics confirm that
+  `%%14592`/`%%14610` is inbound receive/accept and
+  `%%14593`/`%%14611` is outbound connect, matching current tuple placement.
+- **Fresh selected family:** sensor-local file completeness before dependent
+  X.509, OCSP, and PE analyzers.
+- **Owning abstraction:** frozen network sensor observation plan; emitters only
+  render the analyzer visibility already decided for each file and sensor.
+- **Invariant:** incomplete file observations cannot yield full decoded analyzer
+  rows or full-file fingerprints; complete observations retain canonical IDs.
+- **Sibling risks:** SSL certificate FUID references, files.log hashes/analyzers,
+  OCSP HTTP fan-out, PE analysis, multi-sensor variance, and parser ordering.
