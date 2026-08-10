@@ -21,11 +21,11 @@ from evidenceforge.events.contexts import (
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import IdsAlertActionBundle, IdsAlertRequest
 from evidenceforge.generation.activity.generator import _TLS_VERSION_VALUES, _TLS_VERSION_WEIGHTS
-from evidenceforge.generation.emitters.snort import SnortEmitter
-from evidenceforge.generation.engine.baseline import (
-    _baseline_ssh_auth_method,
-    _baseline_ssh_client_key,
+from evidenceforge.generation.activity.ssh_identity import (
+    baseline_ssh_auth_method,
+    baseline_ssh_client_key,
 )
+from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.utils.rng import _stable_seed
 from tests.network_factories import network_plan
 
@@ -454,34 +454,34 @@ class TestTlsCipherStability:
 class TestSshKeyFingerprint:
     def test_different_source_hosts_get_different_keys(self):
         keys = {
-            _baseline_ssh_client_key(src_ip, "admin")
+            baseline_ssh_client_key(src_ip, "admin")
             for src_ip in ["10.10.1.10", "10.10.1.20", "10.10.1.30", "10.10.1.40"]
         }
         assert len(keys) == 4, f"Expected 4 unique keys, got {len(keys)}"
 
     def test_same_source_host_and_user_keeps_key_across_targets(self):
         keys = {
-            _baseline_ssh_client_key("10.10.1.10", "admin")
+            baseline_ssh_client_key("10.10.1.10", "admin")
             for _target in ["10.10.2.10", "10.10.2.20", "10.10.3.10"]
         }
         assert len(keys) == 1
 
     def test_same_source_host_different_users_get_different_keys(self):
         keys = {
-            _baseline_ssh_client_key("10.10.1.10", username)
+            baseline_ssh_client_key("10.10.1.10", username)
             for username in ["admin", "root", "aisha.johnson", "marcus.chen"]
         }
         assert len(keys) == 4, f"Expected 4 user-scoped keys, got {len(keys)}"
 
     def test_auth_method_is_stable_for_client_user_target_policy(self):
         methods = {
-            _baseline_ssh_auth_method("10.10.1.10", "10.10.3.10", "admin") for _session in range(10)
+            baseline_ssh_auth_method("10.10.1.10", "10.10.3.10", "admin") for _session in range(10)
         }
         assert len(methods) == 1
 
     def test_auth_policy_varies_across_fleet_tuples(self):
         methods = {
-            _baseline_ssh_auth_method(
+            baseline_ssh_auth_method(
                 f"10.10.1.{source_octet}",
                 f"10.10.2.{target_octet}",
                 username,

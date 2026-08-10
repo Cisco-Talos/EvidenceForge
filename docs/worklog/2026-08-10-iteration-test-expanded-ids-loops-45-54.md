@@ -123,3 +123,43 @@ reviewers only a new data-only copy plus the shared assessment guidance.
   Key identity now belongs to client/user across targets, while auth method is
   stable for each client/user/target tuple.
 - **Focused tests:** 158 passed, one skipped across baseline and realism tests.
+
+## Loop 48 Family Contract
+
+- **Selected family:** Windows interactive session bootstrap process lifecycle
+  and teardown timing.
+- **Classification:** `sibling_defect`; every interactive/RDP session uses the
+  same winlogon-userinit-Explorer bootstrap and session-close path.
+- **Owning abstraction:** canonical session/process state and lifecycle before
+  Windows Security, Sysmon, and eCAR observation/rendering.
+- **Invariant:** session bootstrap processes visible at termination have a
+  compatible visible create; userinit exits after shell handoff rather than at
+  logout; child-before-parent teardown uses source-compatible variable timing,
+  not a fleet-wide fixed cadence.
+- **Entry paths:** Type 2, 10, and 11 logons, lazily repaired Explorer shells,
+  baseline and storyline sessions, authoritative and ordinary logoff.
+- **Consumers:** StateManager process/session ownership, Windows 4688/4689,
+  Sysmon 1/5, eCAR PROCESS CREATE/TERMINATE and actor references, process
+  lifecycle finalizers, and detector joins.
+- **Layer rationale:** the contradiction exists in canonical process lifetime
+  and session teardown state. Emitter-only timestamp changes would leave
+  userinit alive and termination-only process identities in other sources.
+- **Sibling risks:** logon caller visibility, SYSTEM versus user ownership,
+  Explorer parent identity, early userinit termination, RDP shell timing,
+  source-observation delay, child-before-parent order, and PID cleanup.
+
+## Loop 48 Outcome
+
+- **Generation/eval:** 81,305 fresh records; 96.41560731459667; FAIL only on
+  pivot linkability (51.6129/100).
+- **Loop 47 family probe:** 109 successful SSH auth rows across 20 tuples; zero
+  mixed-method tuples and zero modeled admin identities with multiple keys.
+- **Blind panel:** Inconclusive/Synthetic/Inconclusive/Real at 39/66/41/34,
+  average 45.0; disagreement and a 32-point spread triggered deliberation.
+- **Deliberation:** final 49/64/43/52; Inconclusive consensus score 52,
+  confidence 84.
+- **Selected family:** Windows session shell lifecycle. Bootstrap helpers now
+  emit creates, userinit exits after Explorer handoff, and logout spacing is
+  process-scoped rather than fixed at 50 ms.
+- **Focused tests:** 488 passed across activity, process-lifetime, and state
+  suites, including the new shell-lifecycle regression.
