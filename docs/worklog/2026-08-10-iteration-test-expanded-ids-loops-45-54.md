@@ -163,3 +163,24 @@ reviewers only a new data-only copy plus the shared assessment guidance.
   process-scoped rather than fixed at 50 ms.
 - **Focused tests:** 488 passed across activity, process-lifetime, and state
   suites, including the new shell-lifecycle regression.
+
+## Loop 49 Family Contract
+
+- Fresh generation: 83,559 records from commit `81fc795c`.
+- Automated eval: 96.2863 (Parseability 100.0, Plausibility 97.3484, Causality
+  90.3902, Timing 96.7584).
+- Initial blind synthetic-confidence: Hunter 66, Detection 66, Network 68, Host 56;
+  average 64.0. Verdict disagreement triggered deliberation; final panel average 68.5.
+- Selected only from Loop 49 evidence: duplicate RDP session bootstrap. Two hosts each showed
+  one Type 10 login but two `userinit.exe → explorer.exe` chains under the same Logon ID.
+- Contract: one active Windows interactive session owns at most one initial shell bootstrap
+  chain; a repeated renderer/compatibility request must reuse the live session Explorer.
+
+## Loop 49 Outcome
+
+- Added idempotent shell-bootstrap ownership at the canonical logon lifecycle boundary.
+- Added a regression that renders the same active Logon ID twice and asserts exactly one
+  `winlogon.exe`, one `userinit.exe`, and one `explorer.exe` create chain.
+- Focused activity/spawn/RDP/world-model verification: 439 passed.
+- Loop 50 must generate fresh output from the committed fix and use a new blind panel before
+  selecting another family.
