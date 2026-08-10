@@ -1950,6 +1950,15 @@ class TestActivityGenerator:
             end_time=timestamp + timedelta(hours=1),
         )
         assert session.explorer_pid is None
+        assert (
+            activity_gen._ensure_session_explorer_pid(
+                test_system,
+                test_user,
+                timestamp + timedelta(seconds=1),
+                logon_id,
+            )
+            is None
+        )
 
         activity_gen.generate_logon(
             test_user,

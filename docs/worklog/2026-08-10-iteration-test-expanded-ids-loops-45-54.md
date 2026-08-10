@@ -203,3 +203,24 @@ reviewers only a new data-only copy plus the shared assessment guidance.
   Logon ID; no second shell chain may be created.
 - Focused activity/state/spawn/RDP/world verification: 541 passed.
 - Highest fresh deferred target: fleet-global Event 5156 thread-ID universe.
+
+## Loop 51 Family Contract
+
+- Fresh generation/eval: 83,559 records, 96.2863.
+- Blind scores: Hunter 76, Detection 68, Network 74, Host 78; average 74.0. All verdicts
+  Synthetic, spread 10, so no deliberation.
+- Detection independently reproduced the duplicate RDP shell chain. The post-fix probe also
+  found both one-login/two-chain groups unchanged.
+- Root cause: future-dated termination retains an identity with a future end time but removes it
+  from the live map. Lazy Explorer repair only queried live state and recreated bootstrap.
+- Contract: process activity at canonical time must use interval state (`start <= time < end`),
+  including retained identities, rather than equating current live-map membership with history.
+
+## Loop 51 Outcome
+
+- Added `StateManager.is_process_active_at()` over live and retained identities.
+- Retained each session's initial Explorer PID and made lazy repair suppress duplicate bootstrap
+  when the original shell spans the requested canonical time; genuine later restart remains valid.
+- Focused activity/state/spawn/RDP/world verification: 541 passed.
+- Fresh deferred targets: registry-effect ownership, executable lifetime profiles, and source
+  timing texture.

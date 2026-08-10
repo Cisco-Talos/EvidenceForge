@@ -69,6 +69,7 @@ class ActiveSession:
     session_id: int = 0
     explorer_pid: int | None = None
     windows_shell_bootstrapped: bool = False
+    initial_explorer_pid: int | None = None
     session_shell_pid: int | None = None  # Linux: per-session bash login shell
     session_user_manager_pid: int | None = None  # Linux: per-session systemd --user
     session_winlogon_pid: int | None = None  # Windows: per-RDP-session winlogon
