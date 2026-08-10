@@ -411,6 +411,82 @@ class TestSslUidCorrelation:
 
             assert not (output_dir / "core" / "x509.json").exists()
 
+    def test_incomplete_certificate_file_suppresses_sensor_ssl_fuid_reference(self):
+        """ssl.log must not retain a certificate FUID when sensor x509 analysis failed."""
+
+        ssl_format = load_format("zeek_ssl")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            emitter = ZeekSslEmitter(ssl_format, output_dir, sensor_hostnames=["core"])
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            certificate = X509Context(
+                fuid="FIncompleteCert1",
+                fingerprint="a" * 40,
+                certificate_serial="01",
+                certificate_subject="CN=example.com",
+                certificate_issuer="CN=Example CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+            )
+            event = OccurrenceBuilder(
+                timestamp=event_time,
+                event_type="connection",
+                network=network_plan(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CIncompleteCert1",
+                    conn_state="SF",
+                ),
+                ssl=SslContext(
+                    version="TLSv12",
+                    cipher="TLS_AES_128_GCM_SHA256",
+                    cert_chain_fuids=[certificate.fuid],
+                ),
+                x509=certificate,
+            )
+            event.network_observations = (
+                NetworkSensorObservation(
+                    sensor_identity="core",
+                    path_role="source_side",
+                    capture_profile="lossy",
+                    tuple_view=NetworkTuple(
+                        src_ip="10.0.0.1",
+                        src_port=50000,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                    ),
+                    connection_uid="CObservedIncomplete1",
+                    connection_ids=(),
+                    file_ids=((certificate.fuid, "FObservedIncomplete1"),),
+                    local_orig=True,
+                    local_resp=False,
+                    observed_start_time=event_time,
+                    observed_close_time=event_time + timedelta(seconds=1),
+                    traffic=event.network.traffic,
+                    visible_formats=frozenset({"zeek_ssl", "zeek_files", "zeek_x509"}),
+                    file_observations=(
+                        FileSensorObservation(
+                            canonical_id=certificate.fuid,
+                            seen_bytes=1276,
+                            total_bytes=1279,
+                            missing_bytes=3,
+                            analyzers_visible=False,
+                        ),
+                    ),
+                ),
+            )
+            event.network_observations_planned = True
+
+            emitter.emit(event)
+            emitter.close()
+
+            ssl_row = json.loads((output_dir / "core" / "ssl.json").read_text())
+            assert "cert_chain_fuids" not in ssl_row
+
     def test_files_host_lists_follow_sensor_nat_view(self):
         """files.log tx/rx hosts should agree with the same-sensor conn endpoint view."""
         files_fmt = load_format("zeek_files")

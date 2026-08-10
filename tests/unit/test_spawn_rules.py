@@ -865,7 +865,9 @@ class TestWindowsProcessTreeRealism:
 
         created_proc = state_manager.get_process(win_system.hostname, created_pid)
         assert created_proc is not None
-        parent_proc = state_manager.get_process(win_system.hostname, created_proc.parent_pid)
+        parent_proc = state_manager.get_process_identity(
+            win_system.hostname, created_proc.parent_pid
+        )
         assert parent_proc is not None
         parent_exe = parent_proc.image.rsplit("\\", 1)[-1].lower()
         assert parent_exe in {"userinit.exe", "winlogon.exe", "services.exe"}, (

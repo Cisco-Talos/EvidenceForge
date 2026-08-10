@@ -293,6 +293,34 @@ class TestFilePaths:
 
         assert effect is None
 
+    def test_generic_windows_paths_exclude_unowned_system_temp_template(self):
+        """Generic churn must not assign one Windows Temp grammar to arbitrary processes."""
+        paths = get_file_paths("windows")
+
+        assert not any(path.startswith("C:\\Windows\\Temp\\") for path in paths)
+
+        installer_paths = {
+            effect[1]
+            for seed in range(20)
+            if (
+                effect := select_file_side_effect(
+                    process_name=r"C:\Windows\System32\msiexec.exe",
+                    command_line="msiexec.exe /i package.msi /quiet",
+                    os_category="windows",
+                    rng=random.Random(seed),
+                    user="SYSTEM",
+                )
+            )
+            is not None
+        }
+        assert any(path.startswith(r"C:\Windows\Temp\MSI") for path in installer_paths)
+        assert all(
+            path.startswith(
+                (r"C:\Windows\Temp\MSI", "C:\\Windows\\SoftwareDistribution\\Download\\")
+            )
+            for path in installer_paths
+        )
+
     def test_linux_generic_paths_avoid_action_incompatible_sources(self):
         paths = get_file_paths("linux")
         assert not any(re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", path) for path in paths)

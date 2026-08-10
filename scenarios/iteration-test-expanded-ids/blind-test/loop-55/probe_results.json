@@ -1,0 +1,9 @@
+{
+  "windows_temp_file_ownership_probe": {
+    "sysmon_event_11_total": 11,
+    "generic_numeric_windows_temp": 0,
+    "installer_msi_windows_temp": 0,
+    "generic_owners": {},
+    "result": "pass"
+  }
+}

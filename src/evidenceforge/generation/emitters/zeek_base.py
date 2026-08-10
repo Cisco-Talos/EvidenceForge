@@ -519,10 +519,25 @@ class SensorMultiplexEmitter(LogEmitter):
         for fuid_list_field in ("cert_chain_fuids", "resp_fuids", "fuids"):
             fuid_values = render_data.get(fuid_list_field)
             if isinstance(fuid_values, (list, tuple)):
-                render_data[fuid_list_field] = [
+                if fuid_list_field == "cert_chain_fuids":
+                    fuid_values = [
+                        fuid
+                        for fuid in fuid_values
+                        if not isinstance(fuid, str)
+                        or (
+                            (file_observation := observation.file_observation(fuid)) is not None
+                            and file_observation.analyzers_visible
+                        )
+                    ]
+                projected_fuids = [
                     observation.file_id(fuid) if isinstance(fuid, str) else fuid
                     for fuid in fuid_values
                 ]
+                render_data[fuid_list_field] = (
+                    projected_fuids
+                    if projected_fuids or fuid_list_field != "cert_chain_fuids"
+                    else None
+                )
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Render and route to sensor writers.

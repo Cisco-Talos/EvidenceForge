@@ -1,0 +1,64 @@
+EvidenceForge Data Quality Evaluation
+Output directory: 
+scenarios/iteration-test-expanded-ids/blind-test/loop-56/output
+Scenario: 
+/Users/dabianco/projects/SURGe/EvidenceForge/scenarios/iteration-test-expanded-i
+ds/scenario.yaml
+✓ Loaded scenario: iteration-test-expanded-ids
+
+  Dim 4: Timing                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:06
+  Parsed 84,790 records from 20 sources ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:01
+
+=== EvidenceForge Data Quality Report ===
+Scenario: iteration-test-expanded-ids
+Evaluated: 2026-08-10T16:16:04Z
+Total records: 84,790 across 20 sources
+Observation profile: enterprise_standard (manifest loaded)
+
+Overall Quality Score: 96/100
+Aspirational targets: 16/21 (76%)
+
+Evaluation Categories:
+  Parseability & Source Schema:           100/100
+  Canonical Cross-Source Invariants:      100/100
+  Declared Scenario Completeness:         89/100
+  Distribution & Realism Diagnostics:     94/100
+  Optional Expert Comparison:             N/A
+
+Pillar Scores:
+  1. Parseability:                        100/100
+     Spec Conformance:                    100/100  [min:95 PASS] [asp:99 met]
+     Format Constraints:                  100/100  [min:90 PASS] [asp:98 met]
+  2. Plausibility:                        97/100
+     Value & OS Plausibility:             100/100  [min:95 PASS] [asp:99 met]
+     Co-occurrence Rules:                 100/100
+     Distribution Fit:                    81/100
+     Cross-Source Field Agreement:        100/100  [min:85 PASS] [asp:97 met]
+     User Behavioral Diversity:           100/100
+     Anomaly Rate:                        100/100
+     IDS Correlation Integrity:           100/100  [min:100 PASS] [asp:100 met]
+  3. Causality:                           90/100
+     Causal Ordering:                     100/100  [min:90 PASS] [asp:99 met]
+     Event Presence:                      98/100  [min:85 PASS] [asp:95 met]
+     Indicator Accuracy:                  98/100  [min:85 PASS] [asp:95 met]
+     Pivot Linkability:                   50/100  [min:80 FAIL] [asp:95 below]
+     Temporal Integrity:                  93/100  [min:85 PASS] [asp:95 below]
+     Storyline Trace Coverage:            94/100  [min:80 PASS] [asp:95 below] 
+raw:93
+     Intent Reconciliation:               100/100  [min:100 PASS] [asp:100 met]
+  4. Timing:                              96/100
+     Attack Chain Timing:                 100/100
+     Human Burstiness:                    99/100
+     System Process Regularity:           78/100
+     Diurnal Pattern:                     N/A
+     Volume Adequacy:                     100/100
+     Rate Plausibility:                   100/100
+
+Acceptance: FAIL (hard requirements not met)
+
+Failed hard requirements:
+  FAIL causality.pivot_linkability: 50.0 < 80 minimum (aspirational: 95)
+
+Flags:
+  - [HARD] causality.pivot_linkability: 50.0 < 80.0 threshold
+

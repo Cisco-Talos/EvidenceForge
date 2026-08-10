@@ -1804,6 +1804,64 @@ class TestActivityGenerator:
         assert caller_pids[second_logon] == sessions[second_logon].session_winlogon_pid
         assert caller_pids[first_logon] != caller_pids[second_logon]
 
+    def test_windows_session_shell_has_visible_lifecycle_and_varied_teardown(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Session shell helpers should not appear as fixed-cadence termination-only rows."""
+        logon_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            logon_time,
+            logon_type=2,
+        )
+        logoff_time = logon_time + timedelta(hours=1)
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            logoff_time,
+            logon_id,
+            logon_type=2,
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        shell_names = {"winlogon.exe", "userinit.exe", "explorer.exe"}
+        creates = {
+            event.process.image.rsplit("\\", 1)[-1].lower(): event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image.rsplit("\\", 1)[-1].lower() in shell_names
+        }
+        terminations = [
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.image.rsplit("\\", 1)[-1].lower() in shell_names
+        ]
+
+        assert set(creates) == shell_names
+        by_name = {event.process.image.rsplit("\\", 1)[-1].lower(): event for event in terminations}
+        assert set(by_name) == shell_names
+        assert creates["explorer.exe"].timestamp < by_name["userinit.exe"].timestamp
+        assert by_name["userinit.exe"].timestamp < logoff_time - timedelta(minutes=50)
+        logout_gap = abs(by_name["winlogon.exe"].timestamp - by_name["explorer.exe"].timestamp)
+        assert logout_gap != timedelta(milliseconds=50)
+
     def test_repeated_explorer_creation_reuses_session_shell(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1857,6 +1915,74 @@ class TestActivityGenerator:
             )
             for event in emitted
         )
+
+    def test_repeated_logon_render_does_not_duplicate_session_shell(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """One active Logon ID must own only one Windows shell bootstrap chain."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=10,
+            source_ip="192.0.2.25",
+            emit_network_evidence=False,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        first_explorer_pid = session.explorer_pid
+        assert first_explorer_pid is not None
+        state_manager.end_process(
+            test_system.hostname,
+            first_explorer_pid,
+            end_time=timestamp + timedelta(hours=1),
+        )
+        assert session.explorer_pid is None
+        assert (
+            activity_gen._ensure_session_explorer_pid(
+                test_system,
+                test_user,
+                timestamp + timedelta(seconds=1),
+                logon_id,
+            )
+            is None
+        )
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp + timedelta(milliseconds=12),
+            logon_type=10,
+            source_ip="192.0.2.25",
+            emit_network_evidence=False,
+            logon_id=logon_id,
+        )
+
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is None
+        assert session.windows_shell_bootstrapped is True
+        shell_creates = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.rsplit("\\", 1)[-1].lower()
+            in {"winlogon.exe", "userinit.exe", "explorer.exe"}
+        ]
+        assert len(shell_creates) == 3
 
     def test_repeated_one_shot_cli_processes_get_human_scale_spacing(
         self, activity_gen, test_user, test_system, state_manager
@@ -5036,6 +5162,12 @@ class TestActivityGenerator:
             proc = activity_gen.state_manager.get_process(system.hostname, pid)
             assert proc is not None
             assert "#" not in proc.command_line
+
+        smb_proc = activity_gen.state_manager.get_process(db_server.hostname, smb_pid)
+        assert smb_proc is not None
+        assert smb_proc.image == "/usr/bin/smbclient"
+        assert "//FILE-SRV-01.meridianhcs.local/Shared" in smb_proc.command_line
+        assert "rsyncd" not in smb_proc.command_line
 
     def test_one_shot_connection_owner_starts_near_first_network_action(
         self, activity_gen, state_manager
@@ -8264,9 +8396,16 @@ class TestActivityGenerator:
         ]
         process = next(event for event in emitted if event.event_type == "process_create")
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        terminated = next(event for event in emitted if event.event_type == "process_terminate")
         assert explicit.auth.process_pid == process.process.pid
         assert explicit.auth.process_pid > 0
         assert process.timestamp < explicit.timestamp
+        assert process.process.command_line.startswith("runas.exe /netonly /user:admin01 ")
+        assert r"\\dc01\ADMIN$" in process.process.command_line
+        assert terminated.process.pid == process.process.pid
+        assert (
+            timedelta(seconds=1) < terminated.timestamp - explicit.timestamp < timedelta(seconds=8)
+        )
 
     def test_generate_explicit_credentials_handles_missing_caller_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

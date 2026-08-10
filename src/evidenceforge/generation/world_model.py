@@ -22,6 +22,10 @@ from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_dns_resolver_ips, public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
+from evidenceforge.generation.activity.ssh_identity import (
+    baseline_ssh_auth_method,
+    baseline_ssh_client_key,
+)
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -1408,6 +1412,8 @@ class WorldPlanner:
                 min_duration,
                 (required_until - logon_time).total_seconds() + rng.uniform(20.0, 90.0),
             )
+        auth_method = baseline_ssh_auth_method(plan.source_ip, plan.target_system.ip, user.username)
+        key_type, key_hash = baseline_ssh_client_key(plan.source_ip, user.username)
         uid, logon_id = self.activity_generator._execute_ssh_session_bundle(
             user=user,
             target_system=plan.target_system,
@@ -1416,6 +1422,9 @@ class WorldPlanner:
             source_system=plan.source_system,
             source_port=source_port,
             min_duration=min_duration,
+            auth_method=auth_method,
+            public_key_type=key_type if auth_method == "publickey" else "",
+            public_key_hash=key_hash if auth_method == "publickey" else "",
             emit_session_close=True,
             defer_session_close=True,
             session_end_plan=session_end_plan,

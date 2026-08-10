@@ -169,6 +169,19 @@ class WindowsRemoteAdminExecutor(Protocol):
         """Generate canonical process-create evidence."""
         ...
 
+    def generate_process_termination(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+        **kwargs: Any,
+    ) -> None:
+        """Generate canonical process-termination evidence."""
+        ...
+
     def _clamp_after_visible_process_create(
         self,
         system: System,
@@ -266,7 +279,10 @@ class ExplicitCredentialUseActionBundle:
             self._request.system,
             subject_logon_id,
         )
-        process_pid = self._resolve_process_pid(subject_user, subject_logon_id)
+        process_pid, materialized_caller = self._resolve_process_pid(
+            subject_user,
+            subject_logon_id,
+        )
         event_time = self._request.time
         if process_pid > 0:
             event_time = self._executor._clamp_after_visible_process_create(
@@ -313,11 +329,26 @@ class ExplicitCredentialUseActionBundle:
             ),
         )
         self._executor.dispatcher.dispatch_builder(event)
+        if materialized_caller:
+            lifetime_ms = 1800 + (_stable_seed(f"{self._request.stable_id}:caller_lifetime") % 5201)
+            self._executor.generate_process_termination(
+                subject_user,
+                self._request.system,
+                event_time + timedelta(milliseconds=lifetime_ms),
+                process_pid,
+                self._request.process_name,
+                subject_logon_id,
+            )
 
-    def _resolve_process_pid(self, subject_user: User, subject_logon_id: str) -> int:
-        """Return or materialize the caller process for the 4648 event."""
+    def _resolve_process_pid(
+        self,
+        subject_user: User,
+        subject_logon_id: str,
+    ) -> tuple[int, bool]:
+        """Return the caller PID and whether this bundle materialized it."""
 
         process_pid = self._request.process_pid or 0
+        materialized_caller = False
         if process_pid > 0 and self._request.process_name:
             running_process = self._executor.state_manager.get_process(
                 self._request.system.hostname,
@@ -341,9 +372,32 @@ class ExplicitCredentialUseActionBundle:
                 process_time,
                 subject_logon_id,
                 self._request.process_name,
-                ntpath.basename(self._request.process_name),
+                self._materialized_caller_command_line(),
             )
-        return process_pid
+            materialized_caller = True
+        return process_pid, materialized_caller
+
+    def _materialized_caller_command_line(self) -> str:
+        """Return action-native command semantics for a generated caller process."""
+
+        process_name = self._request.process_name
+        basename = ntpath.basename(process_name)
+        basename_lower = basename.lower()
+        target_username = self._request.target_username
+        target_server = self._request.target_server or self._request.system.hostname
+        if basename_lower == "runas.exe":
+            target = target_server.split(".", 1)[0]
+            return (
+                f'{basename} /netonly /user:{target_username} "cmd.exe /c dir \\\\{target}\\ADMIN$"'
+            )
+        if basename_lower == "mmc.exe":
+            return f"{basename} compmgmt.msc /computer={target_server}"
+        if basename_lower in {"powershell.exe", "pwsh.exe"}:
+            return (
+                f'{basename} -NoProfile -Command "Get-CimInstance Win32_OperatingSystem '
+                f"-ComputerName '{target_server}' -Credential '{target_username}'\""
+            )
+        return f'{basename} "{target_server}"'
 
 
 class WindowsServiceInstallActionBundle:

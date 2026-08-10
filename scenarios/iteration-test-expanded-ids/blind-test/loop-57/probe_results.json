@@ -1,0 +1,12 @@
+{
+  "previous_loop_fix": "SSH receiver lifecycle ownership",
+  "scp_receiver_process_creates_for_file_pid": 1,
+  "scp_file_pid_matches_auth_sshd_pid": true,
+  "scp_receiver_process_terminated": true,
+  "scp_duplicate_receiver_process": false,
+  "closed_sshd_sessions_with_visible_process_create": 120,
+  "closed_sshd_sessions_with_visible_process_termination": 85,
+  "closed_sshd_sessions_missing_visible_process_termination": 35,
+  "selected_scp_contract_result": "PASS",
+  "broader_ssh_termination_sibling_result": "FAIL"
+}

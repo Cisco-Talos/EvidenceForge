@@ -3729,6 +3729,7 @@ class StorylineMixin:
                             resp_bytes=resp_bytes,
                             auth_method="publickey",
                             emit_session_close=True,
+                            defer_session_close=True,
                             source="storyline_scp",
                         )
                         self._emit_scp_receiver_artifacts(

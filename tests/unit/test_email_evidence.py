@@ -84,6 +84,45 @@ def _header_names(message_text: str) -> list[str]:
     return names
 
 
+@pytest.mark.parametrize(
+    "browser_image",
+    [
+        r"C:\Program Files\Google\Chrome\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\msedge.exe",
+    ],
+)
+def test_browser_email_artifacts_do_not_use_outlook_private_cache(browser_image: str) -> None:
+    """OWA browser activity should own browser/download paths, not Outlook caches."""
+    generator = object.__new__(ActivityGenerator)
+    user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.test")
+    system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+    email_ctx = EmailContext(
+        message_id="<message@example.test>",
+        artifact_id="message-artifact",
+        envelope_from="sender@example.test",
+        header_from="sender@example.test",
+    )
+
+    message_path = generator._email_message_cache_path(
+        user,
+        system,
+        email_ctx,
+        browser_image,
+    )
+    attachment_path = generator._email_recipient_attachment_path(
+        user,
+        system,
+        "invoice.pdf",
+        browser_image,
+        email_ctx.artifact_id,
+    )
+
+    assert "Outlook" not in message_path
+    assert "Content.Outlook" not in attachment_path
+    assert "Cache_Data" in message_path
+    assert attachment_path.endswith(r"\Downloads\invoice.pdf")
+
+
 def _received_header_datetimes(message_text: str) -> list[str]:
     return [
         line.rsplit(";", 1)[-1].strip()
@@ -1012,7 +1051,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     assert set(cert_fuids) <= {row["fuid"] for row in file_records}
     x509_ids = {row["id"] for row in x509_records}
     assert x509_ids
-    assert x509_ids <= set(cert_fuids)
+    assert set(cert_fuids) <= x509_ids
     conn_by_uid = {row["uid"]: row for row in conn_records}
     assert all(conn_by_uid[uid]["orig_bytes"] > 1000 for uid in starttls_uids)
     safe_isp_relay = public_safe_mail_hostname("smtp.isp.example")

@@ -57,6 +57,24 @@ public_dns_resolvers:
     operator: "Cisco OpenDNS"
     weight: 10
 
+# Globally assigned networks that are implausible as ordinary Internet visitors.
+# These US Department of Defense allocations may satisfy ipaddress.is_global,
+# but should not appear in the synthetic residential/business client population.
+external_client_excluded_cidrs:
+  - "6.0.0.0/8"
+  - "7.0.0.0/8"
+  - "11.0.0.0/8"
+  - "21.0.0.0/8"
+  - "22.0.0.0/8"
+  - "26.0.0.0/8"
+  - "28.0.0.0/8"
+  - "29.0.0.0/8"
+  - "30.0.0.0/8"
+  - "33.0.0.0/8"
+  - "55.0.0.0/8"
+  - "214.0.0.0/8"
+  - "215.0.0.0/8"
+
 public_ntp_servers:
   - name: "time-a-g.nist.gov"
     ip: "129.6.15.28"

@@ -21,6 +21,10 @@ from evidenceforge.events.contexts import (
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import IdsAlertActionBundle, IdsAlertRequest
 from evidenceforge.generation.activity.generator import _TLS_VERSION_VALUES, _TLS_VERSION_WEIGHTS
+from evidenceforge.generation.activity.ssh_identity import (
+    baseline_ssh_auth_method,
+    baseline_ssh_client_key,
+)
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.utils.rng import _stable_seed
 from tests.network_factories import network_plan
@@ -449,45 +453,44 @@ class TestTlsCipherStability:
 
 class TestSshKeyFingerprint:
     def test_different_source_hosts_get_different_keys(self):
-        keys = set()
-        for src_ip in ["10.10.1.10", "10.10.1.20", "10.10.1.30", "10.10.1.40"]:
-            _key_rng = random.Random(_stable_seed(f"ssh_client_key:{src_ip}:WEB-EXT-01:admin"))
-            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-            key_hash = "".join(
-                _key_rng.choices(
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
-                )
-            )
-            keys.add(f"{key_type}:{key_hash}")
+        keys = {
+            baseline_ssh_client_key(src_ip, "admin")
+            for src_ip in ["10.10.1.10", "10.10.1.20", "10.10.1.30", "10.10.1.40"]
+        }
         assert len(keys) == 4, f"Expected 4 unique keys, got {len(keys)}"
 
-    def test_same_source_host_and_user_gets_same_key(self):
-        keys = []
-        for _ in range(3):
-            _key_rng = random.Random(_stable_seed("ssh_client_key:10.10.1.10:WEB-EXT-01:admin"))
-            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-            key_hash = "".join(
-                _key_rng.choices(
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
-                )
-            )
-            keys.append(f"{key_type}:{key_hash}")
-        assert keys[0] == keys[1] == keys[2]
+    def test_same_source_host_and_user_keeps_key_across_targets(self):
+        keys = {
+            baseline_ssh_client_key("10.10.1.10", "admin")
+            for _target in ["10.10.2.10", "10.10.2.20", "10.10.3.10"]
+        }
+        assert len(keys) == 1
 
     def test_same_source_host_different_users_get_different_keys(self):
-        keys = set()
-        for username in ["admin", "root", "aisha.johnson", "marcus.chen"]:
-            _key_rng = random.Random(
-                _stable_seed(f"ssh_client_key:10.10.1.10:WEB-EXT-01:{username}")
-            )
-            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-            key_hash = "".join(
-                _key_rng.choices(
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
-                )
-            )
-            keys.add(f"{key_type}:{key_hash}")
+        keys = {
+            baseline_ssh_client_key("10.10.1.10", username)
+            for username in ["admin", "root", "aisha.johnson", "marcus.chen"]
+        }
         assert len(keys) == 4, f"Expected 4 user-scoped keys, got {len(keys)}"
+
+    def test_auth_method_is_stable_for_client_user_target_policy(self):
+        methods = {
+            baseline_ssh_auth_method("10.10.1.10", "10.10.3.10", "admin") for _session in range(10)
+        }
+        assert len(methods) == 1
+
+    def test_auth_policy_varies_across_fleet_tuples(self):
+        methods = {
+            baseline_ssh_auth_method(
+                f"10.10.1.{source_octet}",
+                f"10.10.2.{target_octet}",
+                username,
+            )
+            for source_octet in range(10, 15)
+            for target_octet in range(20, 25)
+            for username in ("admin", "deploy")
+        }
+        assert methods == {"password", "publickey"}
 
 
 # ── eCAR NAT-aware IP ────────────────────────────────────────────────────

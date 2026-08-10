@@ -47,7 +47,6 @@ from evidenceforge.generation.activity.generator import (
 )
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
-    _LINUX_AMBIENT_SSH_NOISE_BAND,
     _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
     _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
     BaselineMixin,
@@ -2293,7 +2292,7 @@ class TestBaselineSshTiming:
     """Regression tests for baseline SSH connection/syslog correlation."""
 
     def test_disconnect_uses_same_duration_as_generated_connection(self):
-        """Baseline SSH disconnect timing should share the bundle transport duration."""
+        """Routine SSH should have one world-planned generation path."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
@@ -2301,30 +2300,22 @@ class TestBaselineSshTiming:
         source = inspect.getsource(BaselineMixin)
         assert "_linux_remote_admin_hour_probability(system)" in source
         assert "_linux_remote_admin_session_count(rng, system)" in source
-        assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
-        assert "generate_ssh_session(" in source
-        assert "duration=ssh_duration" in source
-        assert "max(1.0, ssh_duration)" in source
-        assert "emit_session_close=disconnect_time < self.end_time" in source
-        assert 'source="baseline_ssh_noise"' in source
+        assert "bootstrap_user_session(" in source
+        assert 'session_kind="ssh"' in source
+        assert "allow_existing=True" in source
+        assert 'source="baseline_ssh_noise"' not in source
 
-    def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
-        """Generic syslog SSH churn should not blanket every Linux host."""
+    def test_syslog_noise_does_not_own_remote_admin_sessions(self):
+        """Ambient syslog must not independently synthesize SSH sessions."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
-        assert _LINUX_AMBIENT_SSH_NOISE_BAND <= 0.01
         assert _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY <= 0.35
         assert _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY <= 0.25
-        assert 'source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server"' in (
-            source
-        )
-        assert "ssh_identity = self._pick_baseline_ssh_identity" in source
-        assert "at_time=ts" in source
-        assert "ssh_user_model, src_sys_obj = ssh_identity" in source
-        assert "ssh_user = ssh_user_model.username" in source
+        assert "_LINUX_AMBIENT_SSH_NOISE_BAND" not in source
+        assert 'source="baseline_ssh_noise"' not in source
 
 
 class TestBaselineRegistryRealism:

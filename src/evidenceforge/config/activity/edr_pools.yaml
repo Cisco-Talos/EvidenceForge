@@ -291,7 +291,6 @@ file_paths_windows:
   - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
   # System paths
   - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
-  - "C:\\Windows\\Temp\\{rand}.tmp"
   - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
   - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
 

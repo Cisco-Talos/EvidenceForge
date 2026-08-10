@@ -6052,7 +6052,7 @@ class ActivityGenerator:
         """Return source-native process metadata for a service-owned connection."""
         service_name = (service or "").lower()
         roles = {str(role).lower() for role in (getattr(source_system, "roles", []) or [])}
-        target = hostname or "internal-service"
+        target = hostname or (http.host if http is not None else "") or "internal-service"
 
         if os_category == "windows":
             if service_name in {"kerberos", "ldap"} or dst_port in {88, 389}:
@@ -6147,22 +6147,15 @@ class ActivityGenerator:
 
         if service_name == "smb" or dst_port == 445:
             return (
-                "backup_agent",
-                "/usr/sbin/rsyncd",
-                "/usr/sbin/rsyncd --daemon --config=/etc/rsyncd.conf",
+                f"smbclient:{target}",
+                "/usr/bin/smbclient",
+                f"smbclient //{target}/Shared --use-kerberos=required -c 'ls'",
                 "root",
             )
 
         if dst_port in {80, 443, 8080, 8443} or service_name in {"http", "ssl", "https"}:
             user_agent = (http.user_agent if http is not None else "") or ""
             user_agent_lower = user_agent.lower()
-            if "mail_server" in roles:
-                return (
-                    "postfix",
-                    "/usr/lib/postfix/sbin/smtp",
-                    "smtp -n smtp -t unix -u",
-                    "postfix",
-                )
             if "forward_proxy" in roles:
                 return (
                     "squid",
@@ -6509,6 +6502,7 @@ class ActivityGenerator:
             "scp.exe",
             "sftp",
             "sftp.exe",
+            "smbclient",
             "gvfsd-smb-browse",
             "java",
             "java.exe",
@@ -6532,6 +6526,7 @@ class ActivityGenerator:
                     "scp.exe ",
                     "sftp ",
                     "sftp.exe ",
+                    "smbclient ",
                     "smb://",
                 )
             )
@@ -7384,6 +7379,19 @@ class ActivityGenerator:
             if package_hint is not None:
                 return package_hint
             if server_like_source:
+                if ua.startswith("curl/") or " curl/" in ua:
+                    return "/usr/bin/curl", f"curl --proxy {proxy_url} {target_url}"
+                if ua.startswith("wget/") or " wget/" in ua:
+                    return (
+                        "/usr/bin/wget",
+                        f"wget -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
+                    )
+                if ua.startswith("python-requests/"):
+                    return (
+                        "/usr/bin/python3",
+                        f"/usr/bin/python3 /opt/meridian/bin/proxy_healthcheck.py "
+                        f"--target {hostname}",
+                    )
                 if ua.startswith("go-http-client/"):
                     return "/usr/local/bin/service-healthcheck", (
                         f"service-healthcheck --url {target_url}"
@@ -7549,6 +7557,15 @@ class ActivityGenerator:
 
         if not self._is_proxy_server_like_source(source_system):
             return None
+        if exe_name in {"curl", "wget", "python", "python3"} and (
+            self._connection_owner_requires_exact_command_line(image, command_line)
+        ):
+            return (
+                f"{exe_name}_proxy_client:{command_line}",
+                image,
+                command_line,
+                "root",
+            )
         if exe_name == "service-healthcheck":
             return (
                 f"service_healthcheck_proxy:{command_line}",
@@ -8537,12 +8554,15 @@ class ActivityGenerator:
             "nginx",
             "npm",
             "php-fpm",
+            "postfix",
             "ps",
             "python",
             "python3",
             "sed",
             "service-healthcheck",
             "sh",
+            "smtp",
+            "smtpd",
             "systemctl",
             "tail",
             "vim",
@@ -9551,6 +9571,17 @@ class ActivityGenerator:
                         None,
                     )
                     if parent_for_chain is not None:
+                        caller_start = time - timedelta(
+                            milliseconds=700
+                            + (
+                                _stable_seed(
+                                    "windows_session_winlogon_start:"
+                                    f"{system.hostname}:{logon_id}:{time.isoformat()}"
+                                )
+                                % 1801
+                            )
+                        )
+                        self.state_manager.set_current_time(caller_start)
                         logon_caller_pid = self.state_manager.create_process(
                             system.hostname,
                             parent_for_chain,
@@ -9560,6 +9591,7 @@ class ActivityGenerator:
                             "System",
                             logon_id=logon_id,
                         )
+                        self.state_manager.set_current_time(time)
                         session_for_caller.session_winlogon_pid = logon_caller_pid
                         session_for_caller.process_tree_root = logon_caller_pid
                 if logon_caller_pid > 0:
@@ -9765,7 +9797,7 @@ class ActivityGenerator:
                         if pid and self.state_manager.get_process(system.hostname, pid):
                             parent_for_chain = pid
                             break
-                    if parent_for_chain is not None:
+                    if parent_for_chain is not None and not session.windows_shell_bootstrapped:
                         winlogon_pid = session.session_winlogon_pid
                         if winlogon_pid is None:
                             winlogon_pid = self.state_manager.create_process(
@@ -9778,26 +9810,17 @@ class ActivityGenerator:
                                 logon_id=logon_id,
                             )
                             session.session_winlogon_pid = winlogon_pid
-                        userinit_pid = self.state_manager.create_process(
-                            system.hostname,
-                            winlogon_pid,
-                            r"C:\Windows\System32\userinit.exe",
-                            "userinit.exe",
-                            user.username,
-                            "Medium",
-                            logon_id=logon_id,
-                        )
-                        explorer_pid = self.state_manager.create_process(
-                            system.hostname,
-                            userinit_pid,
-                            r"C:\Windows\explorer.exe",
-                            "explorer.exe",
-                            user.username,
-                            "Medium",
-                            logon_id=logon_id,
+                        explorer_pid = self._create_windows_session_shell_lifecycle(
+                            user=user,
+                            system=system,
+                            session=session,
+                            winlogon_pid=winlogon_pid,
+                            logon_time=time,
                         )
                         session.explorer_pid = explorer_pid
+                        session.initial_explorer_pid = explorer_pid
                         session.process_tree_root = winlogon_pid
+                        session.windows_shell_bootstrapped = True
                 session.last_activity_time = time
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
@@ -10812,14 +10835,24 @@ class ActivityGenerator:
                 key=lambda proc: (_session_process_depth(proc.pid), proc.start_time, proc.pid),
                 reverse=True,
             )
+            termination_gaps_ms: list[int] = []
             if authoritative_end_plan is not None:
                 termination_span = timedelta(
                     milliseconds=min(3000, max(250, 100 * (len(session_processes) + 1)))
                 )
             else:
-                termination_span = timedelta(
-                    milliseconds=max(500, 50 * (len(session_processes) + 1))
-                )
+                termination_gaps_ms = [
+                    40
+                    + (
+                        _stable_seed(
+                            "windows_session_process_termination_gap:"
+                            f"{session.system}:{logon_id}:{proc.pid}:{time.isoformat()}"
+                        )
+                        % 361
+                    )
+                    for proc in session_processes
+                ]
+                termination_span = timedelta(milliseconds=max(500, sum(termination_gaps_ms) + 150))
             termination_start = time - termination_span
             prior_visible_termination = self._session_process_source_terminate_times.get(
                 (session.system, logon_id)
@@ -10827,6 +10860,7 @@ class ActivityGenerator:
             visible_termination_times = (
                 [prior_visible_termination] if prior_visible_termination is not None else []
             )
+            cumulative_gap_ms = 0
             for ordinal, session_process in enumerate(session_processes):
                 if authoritative_end_plan is not None:
                     slot_ms = (
@@ -10842,8 +10876,9 @@ class ActivityGenerator:
                     )
                 else:
                     requested_termination_time = termination_start + timedelta(
-                        milliseconds=50 * ordinal
+                        milliseconds=cumulative_gap_ms
                     )
+                    cumulative_gap_ms += termination_gaps_ms[ordinal]
                 self.generate_process_termination(
                     user=user,
                     system=system,
@@ -17258,7 +17293,18 @@ class ActivityGenerator:
                     rf"{profile}\AppData\Roaming\Thunderbird\Profiles\{token.lower()}.default-release"
                     rf"\ImapMail\{self._email_domain(user.email)}\INBOX"
                 )
-            return rf"{profile}\AppData\Local\Microsoft\Outlook\RoamCache\{token}.dat"
+            if exe_name == "outlook.exe":
+                return rf"{profile}\AppData\Local\Microsoft\Outlook\RoamCache\{token}.dat"
+            if exe_name in {"chrome.exe", "msedge.exe"}:
+                vendor_path = r"Microsoft\Edge" if exe_name == "msedge.exe" else r"Google\Chrome"
+                return (
+                    rf"{profile}\AppData\Local\{vendor_path}\User Data\Default"
+                    rf"\Cache\Cache_Data\f_{token.lower()}"
+                )
+            return (
+                rf"{profile}\AppData\Local\Packages"
+                rf"\microsoft.windowscommunicationsapps_8wekyb3d8bbwe\LocalState\{token}.dat"
+            )
         return f"/home/{user.username}/.thunderbird/{token.lower()}.default-release/ImapMail/INBOX"
 
     def _email_recipient_attachment_path(
@@ -17278,6 +17324,14 @@ class ActivityGenerator:
                 return (
                     rf"{profile}\AppData\Local\Thunderbird\Profiles\{token.lower()}.default-release"
                     rf"\cache2\entries\{filename}"
+                )
+            if exe_name in {"chrome.exe", "msedge.exe"}:
+                return rf"{profile}\Downloads\{filename}"
+            if exe_name != "outlook.exe":
+                return (
+                    rf"{profile}\AppData\Local\Packages"
+                    rf"\microsoft.windowscommunicationsapps_8wekyb3d8bbwe"
+                    rf"\LocalState\Attachments\{token}\{filename}"
                 )
             return (
                 rf"{profile}\AppData\Local\Microsoft\Windows\INetCache"
@@ -17697,6 +17751,7 @@ class ActivityGenerator:
         public_key_type: str = "",
         public_key_hash: str = "",
         emit_session_close: bool = False,
+        defer_session_close: bool = False,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
         source: str = "activity_generator",
@@ -17732,6 +17787,7 @@ class ActivityGenerator:
             public_key_type=public_key_type,
             public_key_hash=public_key_hash,
             emit_session_close=emit_session_close,
+            defer_session_close=defer_session_close,
             session_end_plan=session_end_plan,
             ids_alerts=list(ids_alerts or []),
             source=source,
@@ -26135,6 +26191,171 @@ class ActivityGenerator:
                 return session.explorer_pid
         return None
 
+    def _emit_windows_session_process_create(
+        self,
+        *,
+        system: System,
+        session: ActiveSession,
+        pid: int,
+        event_username: str,
+        event_logon_id: str,
+        integrity_level: str,
+    ) -> None:
+        """Emit the source-visible create for an existing session bootstrap process."""
+        if self.process_source_create_time(system.hostname, pid) is not None:
+            return
+        running_proc = self.state_manager.get_process(system.hostname, pid)
+        if running_proc is None:
+            return
+        _, token_elevation, mandatory_label = _windows_token_profile(
+            event_username,
+            integrity_level,
+        )
+        event = OccurrenceBuilder(
+            timestamp=running_proc.start_time,
+            event_type="process_create",
+            src_host=self._build_host_context(system),
+            auth=AuthContext(
+                username=event_username,
+                user_sid=self._get_sid(event_username),
+                logon_id=event_logon_id,
+                session_id=session.session_id,
+                logon_type=session.logon_type,
+                elevated=integrity_level in {"High", "System"},
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=running_proc.parent_pid,
+                image=running_proc.image,
+                command_line=running_proc.command_line,
+                username=event_username,
+                integrity_level=integrity_level,
+                logon_id=event_logon_id,
+                parent_image=self._lookup_parent_image(system.hostname, running_proc.parent_pid),
+                parent_command_line=self._lookup_parent_command_line(
+                    system.hostname,
+                    running_proc.parent_pid,
+                ),
+                parent_start_time=self._lookup_parent_start_time(
+                    system.hostname,
+                    running_proc.parent_pid,
+                ),
+                token_elevation=token_elevation,
+                mandatory_label=mandatory_label,
+                start_time=running_proc.start_time,
+                current_directory=self._derive_current_directory(
+                    system=system,
+                    username=event_username,
+                    process_name=running_proc.image,
+                    command_line=running_proc.command_line,
+                    parent_pid=running_proc.parent_pid,
+                    logon_type=session.logon_type,
+                ),
+            ),
+        )
+        self._record_process_source_create_time(system.hostname, pid, event)
+        self.dispatcher.dispatch_builder(event)
+        self._record_process_source_create_time(system.hostname, pid, event)
+
+    def _create_windows_session_shell_lifecycle(
+        self,
+        *,
+        user: User,
+        system: System,
+        session: ActiveSession,
+        winlogon_pid: int,
+        logon_time: datetime,
+    ) -> int:
+        """Create a visible Windows session shell and end userinit after handoff."""
+        original_time = self.state_manager.state.current_time
+        try:
+            self._emit_windows_session_process_create(
+                system=system,
+                session=session,
+                pid=winlogon_pid,
+                event_username="SYSTEM",
+                event_logon_id="0x3e7",
+                integrity_level="System",
+            )
+            userinit_time = logon_time + timedelta(
+                milliseconds=80
+                + (
+                    _stable_seed(
+                        "windows_session_userinit_start:"
+                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
+                    )
+                    % 171
+                )
+            )
+            self.state_manager.set_current_time(userinit_time)
+            userinit_pid = self.state_manager.create_process(
+                system.hostname,
+                winlogon_pid,
+                r"C:\Windows\System32\userinit.exe",
+                "userinit.exe",
+                user.username,
+                "Medium",
+                logon_id=session.logon_id,
+            )
+            self._emit_windows_session_process_create(
+                system=system,
+                session=session,
+                pid=userinit_pid,
+                event_username=user.username,
+                event_logon_id=session.logon_id,
+                integrity_level="Medium",
+            )
+            explorer_time = userinit_time + timedelta(
+                milliseconds=150
+                + (
+                    _stable_seed(
+                        "windows_session_explorer_start:"
+                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
+                    )
+                    % 251
+                )
+            )
+            self.state_manager.set_current_time(explorer_time)
+            explorer_pid = self.state_manager.create_process(
+                system.hostname,
+                userinit_pid,
+                r"C:\Windows\explorer.exe",
+                "explorer.exe",
+                user.username,
+                "Medium",
+                logon_id=session.logon_id,
+            )
+            self._emit_windows_session_process_create(
+                system=system,
+                session=session,
+                pid=explorer_pid,
+                event_username=user.username,
+                event_logon_id=session.logon_id,
+                integrity_level="Medium",
+            )
+            userinit_end = explorer_time + timedelta(
+                milliseconds=650
+                + (
+                    _stable_seed(
+                        "windows_session_userinit_end:"
+                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
+                    )
+                    % 4351
+                )
+            )
+            self.generate_process_termination(
+                user=user,
+                system=system,
+                time=userinit_end,
+                pid=userinit_pid,
+                process_name=r"C:\Windows\System32\userinit.exe",
+                logon_id=session.logon_id,
+            )
+            return explorer_pid
+        finally:
+            if original_time is not None:
+                self.state_manager.set_current_time(original_time)
+
     def _ensure_session_explorer_pid(
         self,
         system: System,
@@ -26154,6 +26375,16 @@ class ActivityGenerator:
             return None
         if session.logon_type in {3, 5} or session.session_kind in {"network", "service"}:
             return None
+        if session.windows_shell_bootstrapped and session.initial_explorer_pid is not None:
+            initial_pid = session.initial_explorer_pid
+            if self.state_manager.get_process(system.hostname, initial_pid) is not None:
+                session.explorer_pid = initial_pid
+                return initial_pid
+            # Future-dated teardown may have eagerly removed the process from live
+            # state. It remains the session's shell at this canonical time, so do not
+            # render a second bootstrap. A genuinely ended shell may be repaired.
+            if self.state_manager.is_process_active_at(system.hostname, initial_pid, time):
+                return None
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         parent_for_chain = None
@@ -26166,7 +26397,7 @@ class ActivityGenerator:
             return None
 
         original_time = self.state_manager.state.current_time
-        chain_time = max(session.start_time, time - timedelta(milliseconds=250))
+        chain_time = max(session.start_time, time - timedelta(seconds=1))
         self.state_manager.set_current_time(chain_time)
         try:
             winlogon_pid = session.session_winlogon_pid
@@ -26183,25 +26414,17 @@ class ActivityGenerator:
                 session.session_winlogon_pid = winlogon_pid
                 session.process_tree_root = winlogon_pid
 
-            userinit_pid = self.state_manager.create_process(
-                system.hostname,
-                winlogon_pid,
-                r"C:\Windows\System32\userinit.exe",
-                "userinit.exe",
-                user.username,
-                "Medium",
-                logon_id=logon_id,
-            )
-            explorer_pid = self.state_manager.create_process(
-                system.hostname,
-                userinit_pid,
-                r"C:\Windows\explorer.exe",
-                "explorer.exe",
-                user.username,
-                "Medium",
-                logon_id=logon_id,
+            explorer_pid = self._create_windows_session_shell_lifecycle(
+                user=user,
+                system=system,
+                session=session,
+                winlogon_pid=winlogon_pid,
+                logon_time=chain_time,
             )
             session.explorer_pid = explorer_pid
+            if session.initial_explorer_pid is None:
+                session.initial_explorer_pid = explorer_pid
+            session.windows_shell_bootstrapped = True
             return explorer_pid
         finally:
             if original_time is not None:
@@ -26232,17 +26455,28 @@ class ActivityGenerator:
             if explorer is None:
                 continue
             parent_pid = explorer.parent_pid
-            if parent_pid and self._is_pid_active_at(system, parent_pid, time):
+            if (
+                parent_pid
+                and self.state_manager.get_process(system.hostname, parent_pid) is not None
+                and self._is_pid_active_at(system, parent_pid, time)
+            ):
                 return parent_pid
-            if session.session_winlogon_pid and self._is_pid_active_at(
-                system, session.session_winlogon_pid, time
+            if (
+                session.session_winlogon_pid
+                and self.state_manager.get_process(system.hostname, session.session_winlogon_pid)
+                is not None
+                and self._is_pid_active_at(system, session.session_winlogon_pid, time)
             ):
                 return session.session_winlogon_pid
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         for role in ("userinit", "winlogon", "services", "wininit"):
             pid = sys_pids.get(role)
-            if pid and self._is_pid_active_at(system, pid, time):
+            if (
+                pid
+                and self.state_manager.get_process(system.hostname, pid) is not None
+                and self._is_pid_active_at(system, pid, time)
+            ):
                 return pid
         return sys_pids.get("winlogon", sys_pids.get("services", 4))
 

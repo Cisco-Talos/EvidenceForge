@@ -38,7 +38,10 @@ from datetime import datetime, timedelta
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
-from evidenceforge.generation.activity.network_params import load_network_params
+from evidenceforge.generation.activity.network_params import (
+    external_client_excluded_cidrs,
+    load_network_params,
+)
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
     CiscoAsaEmitter,
@@ -921,10 +924,15 @@ class EmitterSetupMixin:
         import ipaddress as _ipa_ext
 
         org_nets = getattr(self, "_org_cidr_networks", [])
+        excluded_nets = [
+            _ipa_ext.ip_network(cidr, strict=False) for cidr in external_client_excluded_cidrs()
+        ]
         for _ in range(1000):  # safety bound
             ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
             addr = _ipa_ext.ip_address(ip)
             if not addr.is_global:
+                continue
+            if any(addr in net for net in excluded_nets):
                 continue
             # Exclude org's own CIDRs
             if org_nets:

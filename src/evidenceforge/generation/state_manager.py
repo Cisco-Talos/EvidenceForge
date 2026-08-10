@@ -1810,6 +1810,19 @@ class StateManager:
             key = (system, pid)
             return self.state.running_processes.get(key)
 
+    def is_process_active_at(self, system: str, pid: int, time: datetime) -> bool:
+        """Return whether a live or retained process identity spans ``time``."""
+        with self._lock:
+            process = self.state.running_processes.get((system, pid))
+            if process is None:
+                process = self._ended_processes_by_key.get((system, pid))
+            if process is None:
+                return False
+            effective_time = ensure_utc(time)
+            return process.start_time <= effective_time and (
+                process.end_time is None or effective_time < process.end_time
+            )
+
     def get_session_object_id(self, logon_id: str) -> str:
         """Get the eCAR objectID for a session."""
         with self._lock:
@@ -1841,6 +1854,35 @@ class StateManager:
             activity_time = ensure_utc(activity_time)
             if proc.last_activity_time is None or activity_time > proc.last_activity_time:
                 proc.last_activity_time = activity_time
+            return True
+
+    def assign_process_to_session(self, system: str, pid: int, logon_id: str) -> bool:
+        """Attach a running process to its owning active session.
+
+        This is used when a tuple-scoped responder must be materialized before
+        authentication has finished allocating the session identity. Secondary
+        indexes are refreshed so later session closure can find the process.
+        """
+        with self._lock:
+            key = (system, pid)
+            process = self.state.running_processes.get(key)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if process is None or session is None or session.system != system:
+                return False
+            if process.logon_id:
+                current_logon_id = self._resolve_logon_id(process.logon_id)
+                if current_logon_id != resolved_logon_id and current_logon_id not in {
+                    "0x3e4",
+                    "0x3e5",
+                    "0x3e7",
+                }:
+                    raise StateError(
+                        f"Process {pid} on {system} already belongs to session "
+                        f"{process.logon_id}, not {logon_id}"
+                    )
+            process.logon_id = resolved_logon_id
+            self._running_processes.refresh(key)
             return True
 
     def update_session_activity_time(self, logon_id: str, activity_time: datetime) -> bool:
