@@ -99,6 +99,11 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             overlay["public_dns_resolvers"],
             "name",
         )
+    if "external_client_excluded_cidrs" in overlay:
+        result["external_client_excluded_cidrs"] = extend_list(
+            default.get("external_client_excluded_cidrs", []),
+            overlay["external_client_excluded_cidrs"],
+        )
     if isinstance(overlay.get("dns_tunnel_rtt"), dict):
         result["dns_tunnel_rtt"] = dict(overlay["dns_tunnel_rtt"])
     if "dns_tunnel_response_templates" in overlay:
@@ -165,6 +170,14 @@ def public_dns_resolvers() -> list[dict[str, Any]]:
 
     resolvers = load_network_params().get("public_dns_resolvers", [])
     return [resolver for resolver in resolvers if isinstance(resolver, dict)]
+
+
+def external_client_excluded_cidrs() -> list[str]:
+    """Return globally assigned CIDRs unsuitable for ordinary external clients."""
+    values = load_network_params().get("external_client_excluded_cidrs", [])
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if isinstance(value, str) and value]
 
 
 def public_dns_resolver_ips(scope_key: str | None = None) -> list[str]:

@@ -167,6 +167,27 @@ def test_generate_external_ip_excludes_non_global_special_use_ranges():
     assert ipaddress.ip_address(ip).is_global
 
 
+def test_generate_external_ip_excludes_implausible_dod_client_ranges():
+    """Ordinary external web clients must not be allocated from DoD networks."""
+    from unittest.mock import MagicMock
+
+    from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+    octets = [29, 176, 39, 5, 45, 33, 49, 112]
+
+    def rigged_randint(lo, hi):
+        value = octets.pop(0)
+        assert lo <= value <= hi
+        return value
+
+    rng = MagicMock()
+    rng.randint = rigged_randint
+    obj = MagicMock(spec=[])
+    obj._org_cidr_networks = []
+
+    assert EmitterSetupMixin._generate_external_client_ip(obj, rng) == "45.33.49.112"
+
+
 def test_random_activity_external_ip_excludes_rfc5737():
     """Activity-level external IP fallback must avoid documentation ranges."""
     from evidenceforge.generation.activity.network import _generate_random_external_ip

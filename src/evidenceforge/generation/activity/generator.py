@@ -25838,7 +25838,8 @@ class ActivityGenerator:
         """Check whether a PID exists and has started by the requested time."""
         if pid == 4 and _get_os_category(system.os) == "windows":
             return True
-        return self.state_manager.is_process_active_at(system.hostname, pid, time)
+        proc = self.state_manager.get_process(system.hostname, pid)
+        return proc is not None and proc.start_time <= time
 
     def _is_valid_process_parent_at(
         self,
@@ -26359,7 +26360,7 @@ class ActivityGenerator:
             # Future-dated teardown may have eagerly removed the process from live
             # state. It remains the session's shell at this canonical time, so do not
             # render a second bootstrap. A genuinely ended shell may be repaired.
-            if self._is_pid_active_at(system, initial_pid, time):
+            if self.state_manager.is_process_active_at(system.hostname, initial_pid, time):
                 return None
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})

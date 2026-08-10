@@ -224,3 +224,21 @@ reviewers only a new data-only copy plus the shared assessment guidance.
 - Focused activity/state/spawn/RDP/world verification: 541 passed.
 - Fresh deferred targets: registry-effect ownership, executable lifetime profiles, and source
   timing texture.
+
+## Loop 52 Family Contract
+
+- Fresh generation/eval: 82,371 records, 96.3674.
+- Blind scores: Hunter 78, Detection 57, Network 64, Host 68; average 66.75. All verdicts
+  Synthetic, spread 21, so no deliberation.
+- The fresh post-fix probe found zero single-logon duplicate RDP shell groups.
+- Fresh reviewers identified ordinary web clients in globally assigned but operationally
+  implausible government networks, including 29/8.
+- Contract: external-client generation must satisfy both protocol-level routability and the
+  modeled population's operational identity; `is_global` alone is insufficient.
+
+## Loop 52 Outcome
+
+- Added data-driven `external_client_excluded_cidrs` policy in network parameters.
+- The shared external-client allocator excludes configured DoD networks in addition to existing
+  special-use and organization CIDR checks.
+- Added a deterministic 29/8 regression; focused external-IP/network verification: 39 passed.
