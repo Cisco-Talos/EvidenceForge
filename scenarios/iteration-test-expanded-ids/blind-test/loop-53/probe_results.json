@@ -1,0 +1,7 @@
+{
+  "external_client_excluded_network_probe": {
+    "source_ip_values_examined": 36378,
+    "excluded_network_hits": 0,
+    "sample": []
+  }
+}

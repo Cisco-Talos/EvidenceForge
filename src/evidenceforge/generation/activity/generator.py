@@ -6147,9 +6147,9 @@ class ActivityGenerator:
 
         if service_name == "smb" or dst_port == 445:
             return (
-                "backup_agent",
-                "/usr/sbin/rsyncd",
-                "/usr/sbin/rsyncd --daemon --config=/etc/rsyncd.conf",
+                f"smbclient:{target}",
+                "/usr/bin/smbclient",
+                f"smbclient //{target}/Shared --use-kerberos=required -c 'ls'",
                 "root",
             )
 
@@ -6502,6 +6502,7 @@ class ActivityGenerator:
             "scp.exe",
             "sftp",
             "sftp.exe",
+            "smbclient",
             "gvfsd-smb-browse",
             "java",
             "java.exe",
@@ -6525,6 +6526,7 @@ class ActivityGenerator:
                     "scp.exe ",
                     "sftp ",
                     "sftp.exe ",
+                    "smbclient ",
                     "smb://",
                 )
             )

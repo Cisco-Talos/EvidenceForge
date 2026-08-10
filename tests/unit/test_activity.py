@@ -5163,6 +5163,12 @@ class TestActivityGenerator:
             assert proc is not None
             assert "#" not in proc.command_line
 
+        smb_proc = activity_gen.state_manager.get_process(db_server.hostname, smb_pid)
+        assert smb_proc is not None
+        assert smb_proc.image == "/usr/bin/smbclient"
+        assert "//FILE-SRV-01.meridianhcs.local/Shared" in smb_proc.command_line
+        assert "rsyncd" not in smb_proc.command_line
+
     def test_one_shot_connection_owner_starts_near_first_network_action(
         self, activity_gen, state_manager
     ):

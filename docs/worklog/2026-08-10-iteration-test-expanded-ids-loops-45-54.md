@@ -242,3 +242,22 @@ reviewers only a new data-only copy plus the shared assessment guidance.
 - The shared external-client allocator excludes configured DoD networks in addition to existing
   special-use and organization CIDR checks.
 - Added a deterministic 29/8 regression; focused external-IP/network verification: 39 passed.
+
+## Loop 53 Family Contract
+
+- Fresh generation/eval: 83,084 records, 96.2327.
+- Initial blind scores: Hunter 46, Detection 84, Network 30, Host 86; average 61.5. Mixed
+  verdicts and a 56-point spread triggered deliberation.
+- Deliberation converged unanimously on Synthetic at 82/89/88/93, average 88.0.
+- Detection proved 138 completed SMB/445 sessions on six Linux roles were owned by `rsyncd`;
+  Zeek success state and bidirectional bytes exclude a failed-probe explanation.
+- Contract: canonical Linux SMB activity must be owned by an SMB/CIFS-capable client whose
+  command and lifecycle identify the same target; `rsyncd` is not an SMB implementation.
+
+## Loop 53 Outcome
+
+- Replaced the shared Linux SMB service owner with target-bearing `/usr/bin/smbclient` and
+  Kerberos-authenticated share semantics.
+- Added SMB clients to exact-command and one-shot lifecycle classification.
+- The Loop 52 external-network probe examined 36,378 source-IP values with zero excluded hits.
+- Full activity-generator verification: 352 passed.
