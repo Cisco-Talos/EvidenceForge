@@ -1,0 +1,19 @@
+{
+  "single_logon_duplicate_shell_groups": 2,
+  "groups": [
+    {
+      "hostname": "WS-AJOHNSON-01",
+      "logon_id": "0x2700aee",
+      "logons": 1,
+      "userinit": 2,
+      "explorer": 2
+    },
+    {
+      "hostname": "WS-MCHEN-01",
+      "logon_id": "0x6db5d40",
+      "logons": 1,
+      "userinit": 2,
+      "explorer": 2
+    }
+  ]
+}

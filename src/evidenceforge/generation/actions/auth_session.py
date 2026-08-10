@@ -245,6 +245,14 @@ class WorkstationLockRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkstationLockResult:
+    """Outcome of attempting one workstation-lock state transition."""
+
+    emitted: bool
+    skipped_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkstationUnlockRequest:
     """Intent for one workstation unlock event."""
 
@@ -300,7 +308,10 @@ class AuthSessionExecutor(Protocol):
         """Expand one anonymous logon request into canonical evidence."""
         ...
 
-    def _execute_workstation_lock_bundle(self, request: WorkstationLockRequest) -> None:
+    def _execute_workstation_lock_bundle(
+        self,
+        request: WorkstationLockRequest,
+    ) -> WorkstationLockResult:
         """Expand one workstation lock request into canonical evidence."""
         ...
 
@@ -491,10 +502,10 @@ class WorkstationLockActionBundle:
             source=self._request.source,
         )
 
-    def execute(self) -> None:
-        """Emit workstation-lock evidence."""
+    def execute(self) -> WorkstationLockResult:
+        """Emit workstation-lock evidence and report whether a transition occurred."""
 
-        self._executor._execute_workstation_lock_bundle(self._request)
+        return self._executor._execute_workstation_lock_bundle(self._request)
 
 
 class WorkstationUnlockActionBundle:

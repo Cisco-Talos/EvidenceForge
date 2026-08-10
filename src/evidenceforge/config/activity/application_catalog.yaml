@@ -131,6 +131,7 @@ applications:
 
   - id: outlook
     display_name: "Microsoft Outlook"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE'
@@ -234,6 +235,7 @@ applications:
 
   - id: teams
     display_name: "Microsoft Teams"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe'
@@ -244,9 +246,9 @@ applications:
           company: "Microsoft Corporation"
           original_filename: "Teams.exe"
         command_templates:
-          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=renderer'
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --processStart Teams.exe'
         children:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=renderer'
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]
@@ -254,6 +256,7 @@ applications:
 
   - id: onedrive
     display_name: "Microsoft OneDrive"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe'
@@ -765,6 +768,7 @@ applications:
   # ===== Workstation-Normal Expansion Apps =====
   - id: slack
     display_name: "Slack"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\slack\Slack.exe'
@@ -797,6 +801,7 @@ applications:
 
   - id: zoom
     display_name: "Zoom Workplace"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe'
@@ -829,6 +834,7 @@ applications:
 
   - id: webex
     display_name: "Cisco Webex"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Cisco Spark\Webex.exe'
@@ -861,6 +867,7 @@ applications:
 
   - id: dropbox
     display_name: "Dropbox"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files (x86)\Dropbox\Client\Dropbox.exe'
@@ -892,6 +899,7 @@ applications:
 
   - id: google_drive_desktop
     display_name: "Google Drive for Desktop"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe'
@@ -921,6 +929,7 @@ applications:
 
   - id: citrix_workspace
     display_name: "Citrix Workspace"
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files (x86)\Citrix\ICA Client\SelfServicePlugin\SelfService.exe'
@@ -949,6 +958,9 @@ applications:
 
   - id: cisco_secure_client
     display_name: "Cisco Secure Client"
+    compatibility_group: remote_access_stack
+    compatibility_option: cisco_secure_client
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe'
@@ -978,6 +990,9 @@ applications:
 
   - id: globalprotect
     display_name: "GlobalProtect"
+    compatibility_group: remote_access_stack
+    compatibility_option: globalprotect
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe'
@@ -1007,6 +1022,9 @@ applications:
 
   - id: zscaler_client_connector
     display_name: "Zscaler Client Connector"
+    compatibility_group: remote_access_stack
+    compatibility_option: zscaler
+    singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Program Files\Zscaler\ZSATray\ZSATray.exe'

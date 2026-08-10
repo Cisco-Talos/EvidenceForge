@@ -173,8 +173,12 @@ event as a separate record on Linux.
 | 4776 | NTLM Credential Validation | Authentication | Field names: TargetUserName (not LogonAccount), Workstation (not SourceWorkstation). Status reflects validation success or failure. |
 | 5156 | WFP Connection Permitted | Network | Application path uses device format (`\device\harddiskvolume1\...`). Direction: %%14592=Inbound, %%14593=Outbound. |
 
+EventRecordIDs are assigned in one final chronological pass per host/channel. Because this format
+is a selected projection rather than a complete EVTX channel, gaps model omitted same-channel
+records. Hidden counts are derived from elapsed time and conservative host/channel background
+rates, with a peak-rate safety bound; Security Event 1102 starts a new channel epoch at record 1.
+
 **Known Limitations:**
-- EventRecordIDs use probabilistic gaps (15% chance +2-8, 3% chance +20-200) rather than correlating with unlogged events
 - Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses the System process (PID 4, now properly registered)
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
 - SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts
@@ -297,9 +301,9 @@ that RFC5424 shape. The `sof-elk` target emits a BSD/RFC3164 envelope
 partitions files by event year so SOF-ELK can recover the timestamp year from
 the archive path. `eforge eval` accepts both current target variants plus older
 legacy RFC5424 and flat BSD/RFC3164 files. All generated syslog entries are
-rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive
+rendered from `SyslogContext` on `CanonicalOccurrence` — the emitter doesn't derive
 messages from other contexts. Multi-phase activities such as SSH sessions are
-coordinated by action-bundle semantics above individual `SecurityEvent`s: the
+coordinated by action-bundle semantics above individual canonical occurrences: the
 bundle owns lifecycle, ordering, source timing, and shared identities, while each
 syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
 failed-password rows reuse the same source port as the companion Zeek SSH
@@ -343,7 +347,7 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 **File:** `snort_alert.log`
 **Format:** Snort fast alert format
 
-Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
+Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical CanonicalOccurrence dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
 Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`,
 `port_scan`, `dns_query`, `dga_queries`, `dns_tunnel`, and `web_scan` events can
@@ -370,7 +374,7 @@ candidate/emitted/policy-filtered sensor totals. Policy suppression is also
 reported as `filtered` IDS evidence in `OBSERVATION_MANIFEST.json`; collection
 drops and output-window clipping are distinct and never advance filter counters.
 
-The optional schema-v1 `ids_evaluation` section in `GROUND_TRUTH.json` is the
+The optional `ids_evaluation` section in ground-truth schema v2 is the
 automated acceptance contract. For each sensor and `(gid, sid)` it records
 candidate, emitted, policy-filtered, visible/delayed, and authorized-origin
 totals plus a SHA-256 digest over normalized alerts in file order. Normalization

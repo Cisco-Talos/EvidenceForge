@@ -316,6 +316,39 @@ class TestSystemProcessProtection:
                 f"System process '{role}' was incorrectly terminated"
             )
 
+    def test_stale_cleanup_honors_registered_foreground_deadline(
+        self, state_manager, mock_emitters, linux_system
+    ):
+        """Hourly cleanup must consume a bounded lifecycle instead of resampling it."""
+        engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, linux_system)
+        activity_generator = engine.activity_generator
+        start_time = datetime(2024, 3, 15, 8, 10, tzinfo=UTC)
+        deadline = start_time + timedelta(seconds=45)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            linux_system.hostname,
+            pids["systemd"],
+            "/usr/bin/apt-get",
+            "apt-get update",
+            "root",
+            "System",
+            logon_id="0x3e7",
+        )
+        activity_generator._remember_foreground_process_finalizer(
+            system=linux_system,
+            user=User(username="root", full_name="root", email="root@example.test"),
+            pid=pid,
+            process_name="/usr/bin/apt-get",
+            logon_id="0x3e7",
+            termination_time=deadline,
+        )
+        activity_generator.generate_process_termination = Mock()
+
+        engine._terminate_stale_processes(start_time + timedelta(hours=1))
+
+        activity_generator.generate_process_termination.assert_called_once()
+        assert activity_generator.generate_process_termination.call_args.kwargs["time"] == deadline
+
 
 class TestProtectionListCompleteness:
     """Verify the protection list covers all seeded process names."""

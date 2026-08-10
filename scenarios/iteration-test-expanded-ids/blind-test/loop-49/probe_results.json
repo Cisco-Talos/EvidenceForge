@@ -1,0 +1,147 @@
+{
+  "counts": {
+    "explorer.exe:CREATE": 21,
+    "explorer.exe:TERMINATE": 15,
+    "userinit.exe:CREATE": 21,
+    "userinit.exe:TERMINATE": 21,
+    "winlogon.exe:CREATE": 19,
+    "winlogon.exe:TERMINATE": 14
+  },
+  "lifetimes_seconds": {
+    "explorer.exe": {
+      "count": 8,
+      "max": 13945.679,
+      "min": 8205.373,
+      "unique": 8
+    },
+    "userinit.exe": {
+      "count": 21,
+      "max": 5.32,
+      "min": 1.074,
+      "unique": 20
+    },
+    "winlogon.exe": {
+      "count": 7,
+      "max": 13947.002,
+      "min": 8207.147,
+      "unique": 7
+    }
+  },
+  "objects": 75,
+  "records": 111,
+  "teardown_interprocess_gaps_ms": {
+    "count": 21,
+    "exact_50ms": 0,
+    "max": 13944796,
+    "min": 75,
+    "unique": 20
+  },
+  "termination_only_examples": [
+    [
+      "212cc48d-954a-489e-a751-9c880dfc09c9",
+      "explorer.exe"
+    ],
+    [
+      "afd29b8d-f125-4fda-b7ba-a2e943307d42",
+      "winlogon.exe"
+    ],
+    [
+      "5e079e3d-998f-4de4-88a3-9cb31dde25c3",
+      "explorer.exe"
+    ],
+    [
+      "91373f87-c667-4b63-8de8-db39a34ceaf5",
+      "winlogon.exe"
+    ],
+    [
+      "0987565c-2779-4d73-8f5b-d3de1a5f10ed",
+      "explorer.exe"
+    ],
+    [
+      "614468c3-eb07-4a0d-9f72-8fc111899860",
+      "winlogon.exe"
+    ],
+    [
+      "767834e7-3fc6-4c9f-8527-b1cce36c7aad",
+      "explorer.exe"
+    ],
+    [
+      "6daa20dd-d4e5-4ea6-a54d-b839e70a0041",
+      "winlogon.exe"
+    ],
+    [
+      "3ba538f1-fe94-4560-aa21-a50f5fb6e123",
+      "explorer.exe"
+    ],
+    [
+      "726c316f-4f02-4eca-a24b-80536a162cd1",
+      "winlogon.exe"
+    ]
+  ],
+  "termination_only_objects": 14,
+  "rdp_duplicate_bootstrap": {
+    "groups": [
+      {
+        "explorer": [
+          {
+            "objectID": "e6111f7b-e2b2-4bc2-9eb8-ffabc6c0ca67",
+            "pid": 6676,
+            "timestamp_ms": 1710775202212
+          },
+          {
+            "objectID": "735fcb3a-2ef3-48e6-89c6-91e49006a75b",
+            "pid": 6652,
+            "timestamp_ms": 1710775202212
+          }
+        ],
+        "hostname": "WS-AJOHNSON-01",
+        "logon_id": "0x2700aee",
+        "logons": 1,
+        "userinit": [
+          {
+            "objectID": "6d0eb86d-854a-4da2-972a-a3da60c687d1",
+            "pid": 6660,
+            "timestamp_ms": 1710775202061
+          },
+          {
+            "objectID": "42fe84b6-8aa2-40cd-82f6-118542582f30",
+            "pid": 6624,
+            "timestamp_ms": 1710775202061
+          }
+        ],
+        "winlogon": []
+      },
+      {
+        "explorer": [
+          {
+            "objectID": "e29f018f-9c21-4fbb-99a5-fc935138055d",
+            "pid": 9304,
+            "timestamp_ms": 1710774815769
+          },
+          {
+            "objectID": "c871f794-0916-44d9-aa61-1764cdc7b4ee",
+            "pid": 9088,
+            "timestamp_ms": 1710774815769
+          }
+        ],
+        "hostname": "WS-MCHEN-01",
+        "logon_id": "0x6db5d40",
+        "logons": 1,
+        "userinit": [
+          {
+            "objectID": "21ebe06a-d066-472c-a2eb-a132f09c352c",
+            "pid": 9292,
+            "timestamp_ms": 1710774815442
+          },
+          {
+            "objectID": "9b47c830-7376-4479-9234-2da86ca6f8cf",
+            "pid": 9084,
+            "timestamp_ms": 1710774815442
+          }
+        ],
+        "winlogon": []
+      }
+    ],
+    "single_logon_duplicate_shell_groups": 2
+  }
+}

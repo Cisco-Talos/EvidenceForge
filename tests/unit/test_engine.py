@@ -1022,7 +1022,7 @@ class TestGenerationEngine:
             for family in profile["source_families"]
             if family["family"] == "endpoint_telemetry"
         )
-        assert "lifecycle closure rows after the primary window" in endpoint_family["tail_policy"]
+        assert "still active at the end remains open" in endpoint_family["tail_policy"]
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
@@ -1196,17 +1196,6 @@ class TestGenerationEngine:
 
         # Should not raise exception
         engine.generate()
-
-    def test_get_next_event_record_id_increments(self, minimal_scenario, tmp_path):
-        """Event record IDs should increment sequentially."""
-        engine = GenerationEngine(minimal_scenario, tmp_path)
-
-        id1 = engine._get_next_event_record_id()
-        id2 = engine._get_next_event_record_id()
-        id3 = engine._get_next_event_record_id()
-
-        assert id2 == id1 + 1
-        assert id3 == id2 + 1
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

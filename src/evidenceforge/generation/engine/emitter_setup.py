@@ -38,7 +38,10 @@ from datetime import datetime, timedelta
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
-from evidenceforge.generation.activity.network_params import load_network_params, public_ntp_ips
+from evidenceforge.generation.activity.network_params import (
+    external_client_excluded_cidrs,
+    load_network_params,
+)
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
     CiscoAsaEmitter,
@@ -65,7 +68,11 @@ from evidenceforge.generation.emitters import (
     ZeekX509Emitter,
 )
 from evidenceforge.generation.identity import IdentityDirectory
-from evidenceforge.generation.world_model import database_services_for_host
+from evidenceforge.generation.world_model import (
+    HostCapability,
+    WorldModel,
+    database_services_for_host,
+)
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
@@ -160,16 +167,6 @@ _HOST_FORMATS = {
     "bash_history",
     "web_access",
     "proxy_access",
-}
-
-# Service name -> (port, zeek_service) mapping for database detection
-DB_SERVICE_MAP = {
-    "mssql": (1433, "mssql"),
-    "sql server": (1433, "mssql"),
-    "mysql": (3306, "mysql"),
-    "mariadb": (3306, "mysql"),
-    "postgres": (5432, "postgresql"),
-    "postgresql": (5432, "postgresql"),
 }
 
 
@@ -353,13 +350,18 @@ class EmitterSetupMixin:
         but establish lease state. Lease times and MACs are stored in
         _dhcp_lease_state for periodic renewal in _generate_system_traffic().
         """
-        if "zeek_dhcp" not in self.emitters:
-            return
         rng = random.Random(_stable_seed("dhcp_leases"))
         from evidenceforge.utils.ids import generate_zeek_uid
 
         # Track lease state for periodic renewals
         self._dhcp_lease_state: dict[str, dict] = {}
+        world_model = getattr(self, "world_model", None)
+        if world_model is None:
+            ad_domain = getattr(self, "_ad_domain", self._resolve_ad_domain())
+            world_model = WorldModel(self.scenario, ad_domain)
+            self.world_model = world_model
+        if not world_model.dhcp_servers:
+            return
         # Stagger across first 5 minutes using per-host deterministic offsets
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
@@ -396,9 +398,15 @@ class EmitterSetupMixin:
             ts = base_time + timedelta(seconds=offset)
             uid = generate_zeek_uid("C")
             lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
-            infra_ips = getattr(self, "_infra_ips", {})
-            dhcp_servers = infra_ips.get("dc") or infra_ips.get("dns") or ["10.0.0.1"]
-            dhcp_server = dhcp_servers[0] if isinstance(dhcp_servers, list) else dhcp_servers
+            dhcp_servers = world_model.systems_with_capability(
+                HostCapability.DHCP_SERVER,
+                distinct_from=system,
+            )
+            if not dhcp_servers:
+                continue
+            dhcp_server = dhcp_servers[
+                _stable_seed(f"dhcp_server:{system.hostname}") % len(dhcp_servers)
+            ].ip
             renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
@@ -416,6 +424,7 @@ class EmitterSetupMixin:
                 "lease_time": lease_time,
                 "last_renewal": ts.timestamp(),
                 "next_renewal": ts.timestamp() + renewal_interval,
+                "renewal_interval": renewal_interval,
                 "server_addr": dhcp_server,
                 "system": system,
             }
@@ -454,67 +463,14 @@ class EmitterSetupMixin:
         return "corp.local"
 
     def _detect_infrastructure_ips(self) -> dict[str, str | list]:
-        """Detect infrastructure IPs from scenario systems.
+        """Return the authoritative world-model infrastructure projection."""
 
-        Scans system hostnames/types/services for role hints and
-        maps them to IPs. Falls back to defaults for missing roles.
-        """
-        if hasattr(self, "world_model"):
-            return self.world_model.to_infrastructure_ips()
-
-        infra: dict[str, str | list] = {
-            "dns": [],
-            "ntp": [],  # Populated from DCs (AD) or external (non-domain)
-            "dc": [],
-            "dc_hostnames": [],
-            "db_servers": [],
-            "exchange": None,
-        }
-
-        for system in self.scenario.environment.systems:
-            hn = system.hostname.lower()
-            stype = system.type.lower() if system.type else ""
-            if "dc" in hn or stype == "domain_controller":
-                infra["dc"].append(system.ip)
-                infra["dc_hostnames"].append(system.hostname)
-                if system.ip not in infra["dns"]:
-                    infra["dns"].append(system.ip)
-            elif "dns" in hn:
-                if system.ip not in infra["dns"]:
-                    infra["dns"].append(system.ip)
-            elif "ntp" in hn:
-                infra["ntp"] = [system.ip]
-            elif "exch" in hn or "mail" in hn or stype == "mail_server":
-                infra["exchange"] = system.ip
-
-            for svc in system.services:
-                svc_lower = svc.lower()
-                for svc_key, (port, zeek_svc) in DB_SERVICE_MAP.items():
-                    if svc_key in svc_lower:
-                        infra["db_servers"].append(
-                            {
-                                "ip": system.ip,
-                                "port": port,
-                                "service": zeek_svc,
-                            }
-                        )
-                        break
-
-        if not infra["dns"]:
-            infra["dns"] = ["10.0.0.1"]
-        if not infra["dc"]:
-            infra["dc"] = [infra["dns"][0]]
-            infra["dc_hostnames"] = ["DC-01"]
-
-        # AD environments: workstations sync NTP from the DC (W32Time service).
-        # Only use external NIST servers for non-domain environments.
-        if not infra["ntp"]:
-            if infra["dc"]:
-                infra["ntp"] = list(infra["dc"])
-            else:
-                infra["ntp"] = public_ntp_ips() or ["129.6.15.28", "132.163.97.1"]
-
-        return infra
+        world_model = getattr(self, "world_model", None)
+        if world_model is None:
+            ad_domain = getattr(self, "_ad_domain", self._resolve_ad_domain())
+            world_model = WorldModel(self.scenario, ad_domain)
+            self.world_model = world_model
+        return world_model.to_infrastructure_ips()
 
     def _build_service_defaults(self) -> dict[str, list[str]]:
         """Build per-system service lists, auto-populating defaults if empty."""
@@ -624,7 +580,11 @@ class EmitterSetupMixin:
         self.activity_generator._system_pids = self._system_pids
         self.activity_generator._all_system_ips = [s.ip for s in self.scenario.environment.systems]
         self.activity_generator._db_servers = self._infra_ips.get("db_servers", [])
-        self.activity_generator._dns_server_ips = self._infra_ips.get("dns", ["10.0.0.1"])
+        self.activity_generator._dns_server_ips = self._infra_ips.get("dns", [])
+        world_model = getattr(self, "world_model", None)
+        self.activity_generator._dns_server_ips_are_public_fallback = bool(
+            world_model is not None and not world_model.dns_servers
+        )
         self.activity_generator._exchange_ip = self._infra_ips.get("exchange")
         self.activity_generator._dc_hostnames = self._infra_ips.get("dc_hostnames", [])
         self.activity_generator._dc_ips = self._infra_ips.get("dc", [])
@@ -964,10 +924,15 @@ class EmitterSetupMixin:
         import ipaddress as _ipa_ext
 
         org_nets = getattr(self, "_org_cidr_networks", [])
+        excluded_nets = [
+            _ipa_ext.ip_network(cidr, strict=False) for cidr in external_client_excluded_cidrs()
+        ]
         for _ in range(1000):  # safety bound
             ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
             addr = _ipa_ext.ip_address(ip)
             if not addr.is_global:
+                continue
+            if any(addr in net for net in excluded_nets):
                 continue
             # Exclude org's own CIDRs
             if org_nets:

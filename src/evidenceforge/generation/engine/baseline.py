@@ -41,6 +41,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import (
     BrowserSessionActionBundle,
     BrowserSessionRequest,
@@ -48,7 +49,6 @@ from evidenceforge.generation.actions import (
     IdsAlertRequest,
     ScheduledScanOverlapActionBundle,
     ScheduledScanOverlapRequest,
-    dhcp_renewal_interval_seconds,
 )
 from evidenceforge.generation.activity.auth_noise import (
     scheduled_stale_credentials_config,
@@ -90,7 +90,10 @@ from evidenceforge.generation.activity.ids_signatures import (
 )
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
-from evidenceforge.generation.activity.network_params import external_scanner_port_for_source
+from evidenceforge.generation.activity.network_params import (
+    activity_dns_resolver_ips,
+    external_scanner_port_for_source,
+)
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
     pick_granted_access,
@@ -108,19 +111,19 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
+from evidenceforge.generation.activity.windows_auth_realism import group_policy_refresh_config
 from evidenceforge.generation.world_model import (
     host_services_support_database_service,
     normalize_database_service,
 )
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
-from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
 
 _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
 _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
-_LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
 _BASELINE_GUARDED_SUCCESS_PORTS = {445, 3389}
 _BASELINE_RDP_SERVICE_ALIASES = {"rdp", "termservice", "terminal-services", "xrdp"}
 _BASELINE_SMB_SERVICE_ALIASES = {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}
@@ -412,16 +415,74 @@ def _ntp_sync_seconds_for_hour_from_state(
     return observed_seconds
 
 
+def _gpo_refresh_interval_seconds(hostname: str, sequence: int) -> float:
+    """Return a stable host/sequence-specific Group Policy refresh interval."""
+
+    config = group_policy_refresh_config()
+    minimum = max(30, int(config.get("interval_minutes_min", 60))) * 60
+    maximum = max(minimum, int(config.get("interval_minutes_max", 120)) * 60)
+    rng = random.Random(_stable_seed(f"gpo_refresh_interval:{hostname}:{sequence}"))
+    return rng.uniform(minimum, maximum)
+
+
+def _gpo_refresh_occurrences_for_hour(
+    hostname: str,
+    hour_start_sec: float,
+    state: dict[str, float | int],
+) -> list[tuple[float, int]]:
+    """Return scheduled GPO refreshes for one hour using durable host state."""
+
+    hour_end_sec = hour_start_sec + 3600
+    scheduled_second = float(state["scheduled_second"])
+    sequence = int(state["sequence"])
+    while scheduled_second < hour_start_sec:
+        scheduled_second += _gpo_refresh_interval_seconds(hostname, sequence)
+        sequence += 1
+
+    occurrences: list[tuple[float, int]] = []
+    while scheduled_second < hour_end_sec:
+        occurrences.append((scheduled_second, sequence))
+        scheduled_second += _gpo_refresh_interval_seconds(hostname, sequence)
+        sequence += 1
+
+    state["scheduled_second"] = scheduled_second
+    state["sequence"] = sequence
+    return occurrences
+
+
+def _gpo_refresh_command_line(hostname: str, sequence: int) -> str:
+    """Return a data-driven, stable command morphology for one visible refresh."""
+
+    raw_profiles = group_policy_refresh_config().get("command_profiles", [])
+    profiles = [
+        profile
+        for profile in raw_profiles
+        if isinstance(profile, dict)
+        and isinstance(profile.get("command_line"), str)
+        and profile["command_line"]
+        and isinstance(profile.get("weight"), int)
+        and profile["weight"] > 0
+    ]
+    if not profiles:
+        return "gpupdate.exe"
+    rng = random.Random(_stable_seed(f"gpo_refresh_command:{hostname}:{sequence}"))
+    return rng.choices(
+        [str(profile["command_line"]) for profile in profiles],
+        weights=[int(profile["weight"]) for profile in profiles],
+        k=1,
+    )[0]
+
+
 def _dhcp_renewal_epochs_for_hour(
     *,
     last_renewal: float,
-    lease_time: float,
+    renewal_interval: float,
     current_hour: datetime,
-    rng: random.Random,
     next_renewal: float | None = None,
 ) -> tuple[list[tuple[float, float]], float, float | None]:
-    """Return DHCP renewal epochs and advertised next-renewal intervals due in this hour."""
-    base_renewal = max(60.0, lease_time / 2)
+    """Return renewals due in an hour from one lease-scoped T1 interval."""
+
+    renewal_interval = max(60.0, renewal_interval)
     hour_start_epoch = current_hour.timestamp()
     hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
     due: list[tuple[float, float]] = []
@@ -431,14 +492,11 @@ def _dhcp_renewal_epochs_for_hour(
 
     max_iterations = max(
         8,
-        int((hour_end_epoch - last_renewal) / max(60.0, base_renewal * 0.8)) + 4,
+        int((hour_end_epoch - last_renewal) / renewal_interval) + 4,
     )
     for _ in range(max_iterations):
         if next_renewal is None:
-            candidate_renewal = schedule_anchor + dhcp_renewal_interval_seconds(
-                lease_time,
-                rng,
-            )
+            candidate_renewal = schedule_anchor + renewal_interval
         else:
             candidate_renewal = next_renewal
             next_renewal = None
@@ -456,7 +514,7 @@ def _dhcp_renewal_epochs_for_hour(
             if candidate_renewal >= hour_end_epoch:
                 pending_next_renewal = candidate_renewal
                 break
-            due.append((candidate_renewal, base_renewal))
+            due.append((candidate_renewal, renewal_interval))
             previous_visible_index = len(due) - 1
         schedule_anchor = candidate_renewal
         if candidate_renewal >= hour_end_epoch:
@@ -639,13 +697,14 @@ def _extra_syslog_effective_limit(
 ) -> int:
     """Return a stable host-conditioned admission limit for ambient syslog.
 
-    Most program limits are literal safety caps. Ambient sudo is different: if
-    every busy host saturates the same cap, the cap becomes a fleet-wide count
-    fingerprint. Sample a zero-capable, right-skewed host/day target beneath the
-    configured ceiling while leaving all other program limits unchanged.
+    Most program limits are literal safety caps. Ambient sudo, rsyslog health,
+    and unattended upgrades are different: if every busy host saturates the
+    same cap, the cap becomes a fleet-wide count fingerprint. Sample stable
+    host/day targets beneath their configured ceilings.
     """
     configured_limit = int(entry.get("max_per_host_window", 0) or 0)
-    if configured_limit <= 0 or entry.get("app") != "sudo":
+    app = entry.get("app")
+    if configured_limit <= 0 or app not in {"sudo", "rsyslogd", "unattended-upgr"}:
         return configured_limit
 
     normalized_start = ensure_utc(window_start)
@@ -653,15 +712,22 @@ def _extra_syslog_effective_limit(
     roles = ",".join(sorted(str(role).lower() for role in (system.roles or [])))
     target_rng = random.Random(
         _stable_seed(
-            "extra_syslog_sudo_target:"
+            f"extra_syslog_{app}_target:"
             f"{system.hostname}:{system_type}:{roles}:{normalized_start.date().isoformat()}"
         )
     )
-    zero_probability = 0.04 if system_type == "server" else 0.14
+    if app == "unattended-upgr":
+        zero_probability = 0.12 if system_type == "server" else 0.45
+        median_fraction = 0.38 if system_type == "server" else 0.20
+    elif app == "rsyslogd":
+        zero_probability = 0.02 if system_type == "server" else 0.08
+        median_fraction = 0.72 if system_type == "server" else 0.48
+    else:
+        zero_probability = 0.04 if system_type == "server" else 0.14
+        median_fraction = 0.52 if system_type == "server" else 0.30
     if target_rng.random() < zero_probability:
         return 0
 
-    median_fraction = 0.52 if system_type == "server" else 0.30
     role_factor = min(1.22, 1.0 + (0.035 * len(system.roles or [])))
     sampled_fraction = target_rng.lognormvariate(math.log(median_fraction), 0.48)
     target = round(configured_limit * sampled_fraction * role_factor)
@@ -1133,63 +1199,6 @@ def _hawkes_params_from_persona(persona: Persona | None) -> dict:
     return _HAWKES_RISK_PARAMS.get(risk, _HAWKES_RISK_PARAMS["medium"])
 
 
-def _signature_for_loaded_module(path: str) -> str:
-    """Infer a plausible signer for a generic baseline DLL path."""
-    lower = path.lower()
-    if "google\\chrome" in lower:
-        return "Google LLC"
-    if "mozilla firefox" in lower:
-        return "Mozilla Corporation"
-    if "adobe" in lower:
-        return "Adobe Inc."
-    if "vmware" in lower:
-        return "VMware, Inc."
-    if "dell" in lower:
-        return "Dell Inc."
-    if "cisco" in lower:
-        return "Cisco Systems, Inc."
-    if "git\\" in lower:
-        return "Git for Windows"
-    if "videolan" in lower:
-        return "VideoLAN"
-    if "notepad++" in lower:
-        return "Notepad++"
-    if "7-zip" in lower:
-        return "-"
-    return "Microsoft Corporation"
-
-
-def _module_matches_process(exe_name: str, module_path: str) -> bool:
-    """Return whether a generic DLL path plausibly belongs to a process."""
-    exe = exe_name.lower()
-    path = module_path.lower()
-    if "google\\chrome" in path:
-        return exe == "chrome.exe"
-    if "microsoft\\edge" in path:
-        return exe == "msedge.exe"
-    if "mozilla firefox" in path:
-        return exe == "firefox.exe"
-    if "microsoft onedrive" in path:
-        return exe in {"onedrive.exe", "explorer.exe"}
-    if "microsoft office" in path or "clicktorun" in path:
-        return exe in {"outlook.exe", "winword.exe", "excel.exe", "powerpnt.exe", "onedrive.exe"}
-    if "7-zip" in path or "notepad++" in path:
-        return exe == "explorer.exe"
-    if "windows defender" in path:
-        return exe in {"msmpeng.exe", "svchost.exe", "taskhostw.exe"}
-    if "vmware tools" in path or "dell\\supportassist" in path:
-        return exe in {"services.exe", "svchost.exe", "taskhostw.exe"}
-    if "cisco\\cisco anyconnect" in path:
-        return exe in {"vpnui.exe", "vpnagent.exe", "svchost.exe"}
-    if "git\\mingw64" in path:
-        return exe in {"git.exe", "code.exe", "powershell.exe", "cmd.exe"}
-    if "videolan" in path:
-        return exe == "vlc.exe"
-    if "microsoft vs code" in path:
-        return exe == "code.exe"
-    return "windows\\system32" in path
-
-
 def _registry_writer_candidates(
     key: str,
     sys_pids: dict[str, int],
@@ -1208,10 +1217,23 @@ def _registry_writer_candidates(
     if key.startswith("HKCU\\"):
         if desktop_user is None:
             return []
-        candidates = [
-            _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
-            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", desktop_user),
-        ]
+        if "\\microsoft\\office\\" in key_lower:
+            # Office applications are foreground processes, not durable seeded
+            # system processes. Their own process-side-effect path owns these writes.
+            candidates = []
+        elif "\\explorer\\" in key_lower or "\\windows\\shell\\" in key_lower:
+            candidates = [
+                _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+            ]
+        else:
+            candidates = [
+                _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+                _candidate(
+                    "runtime_broker",
+                    r"C:\Windows\System32\RuntimeBroker.exe",
+                    desktop_user,
+                ),
+            ]
     elif "windows defender" in key_lower:
         candidates = [
             _candidate(
@@ -1221,13 +1243,14 @@ def _registry_writer_candidates(
                 "mpcmdrun",
                 r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe",
             ),
-            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
         ]
-    elif "windowsupdate" in key_lower or "component based servicing" in key_lower:
+    elif "component based servicing" in key_lower:
+        # CBS state is emitted only with a concrete TiWorker/TrustedInstaller
+        # occurrence. Never fabricate that ownership through generic services.
+        candidates = []
+    elif "windowsupdate" in key_lower:
         candidates = [
             _candidate("svchost_wusvcs", r"C:\Windows\System32\svchost.exe"),
-            _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
-            _candidate("services", r"C:\Windows\System32\services.exe"),
         ]
     elif "wbem" in key_lower or "cimom" in key_lower:
         candidates = [
@@ -1242,7 +1265,6 @@ def _registry_writer_candidates(
     elif "installer" in key_lower or "uninstall" in key_lower or "app paths" in key_lower:
         candidates = [
             _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
-            _candidate("services", r"C:\Windows\System32\services.exe"),
         ]
     elif "tcpip" in key_lower or "w32time" in key_lower or "netlogon" in key_lower:
         candidates = [
@@ -1673,6 +1695,7 @@ class BaselineMixin:
         self,
         svc_name: str,
         rng: random.Random,
+        system: System | None = None,
     ) -> dict[str, Any]:
         """Return a role-specific caller process for service-account 4648 noise."""
         fallback = {
@@ -1713,6 +1736,46 @@ class BaselineMixin:
         processes = [
             process for process in profile.get("processes", []) if isinstance(process, dict)
         ]
+        if system is not None:
+            system_type = (
+                str(getattr(system, "type", "workstation") or "workstation")
+                .lower()
+                .replace("-", "_")
+            )
+            processes = [
+                process
+                for process in processes
+                if not process.get("system_types")
+                or system_type
+                in {
+                    str(value).lower().replace("-", "_")
+                    for value in process.get("system_types", [])
+                }
+            ]
+        grouped_options: dict[str, set[str]] = {}
+        for process in processes:
+            group = str(process.get("compatibility_group") or "")
+            option = str(process.get("compatibility_option") or "")
+            if group and option:
+                grouped_options.setdefault(group, set()).add(option)
+        scenario = getattr(self, "scenario", None)
+        deployment_key = str(
+            getattr(getattr(scenario, "environment", None), "domain", None)
+            or getattr(scenario, "name", "default")
+        )
+        selected_options = {
+            group: random.Random(
+                _stable_seed(f"software_deployment:{deployment_key}:{group}")
+            ).choice(sorted(options))
+            for group, options in grouped_options.items()
+        }
+        processes = [
+            process
+            for process in processes
+            if not process.get("compatibility_group")
+            or selected_options.get(str(process["compatibility_group"]))
+            == str(process.get("compatibility_option") or "")
+        ]
         if not processes:
             return fallback
         choice = rng.choices(
@@ -1741,7 +1804,7 @@ class BaselineMixin:
         rng: random.Random,
     ) -> tuple[str, int]:
         """Return a live caller process for benign service-account delegation."""
-        choice = self._pick_service_account_delegation_process(svc_name, rng)
+        choice = self._pick_service_account_delegation_process(svc_name, rng, system)
         image = choice["image"]
         normalized_image = image.replace("/", "\\").lower()
         candidates = []
@@ -1788,6 +1851,51 @@ class BaselineMixin:
                 current = 4 + rng.randint(0, 8)
         fd_state[hostname] = current
         return current
+
+    def _render_rsyslog_health_message(
+        self,
+        entry: dict[str, Any],
+        hostname: str,
+        rng: random.Random,
+    ) -> str:
+        """Render ambient rsyslog health from durable per-host queue state.
+
+        State-changing reload, socket, worker, and retry messages are excluded
+        from this ambient path; their evidence belongs to the corresponding
+        service or configuration mutation.
+        """
+
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        states = getattr(self, "_linux_rsyslog_health", None)
+        if states is None:
+            states = {}
+            self._linux_rsyslog_health = states
+        state = states.get(hostname)
+        if state is None:
+            seed = _stable_seed(f"rsyslog_health:{hostname}")
+            state = {
+                "checkpoint": 10_000 + (seed % 90_000),
+                "pending": 2 + ((seed >> 12) % 35),
+                "workers": 1 + ((seed >> 20) % 3),
+            }
+            states[hostname] = state
+
+        processed = rng.randint(20, 850)
+        arrivals = rng.randint(10, 900)
+        state["checkpoint"] += min(processed, state["pending"] + arrivals)
+        state["pending"] = max(0, min(4096, state["pending"] + arrivals - processed))
+        return render_extra_syslog_message(
+            entry,
+            rng,
+            positional_value=state["checkpoint"],
+            system_services=[],
+            values={
+                "checkpoint": state["checkpoint"],
+                "pending": state["pending"],
+                "worker_count": state["workers"],
+            },
+        )
 
     def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
         """Return a plausible monotonic system bus name suffix for one host."""
@@ -2044,6 +2152,36 @@ class BaselineMixin:
             return str(action), str(process)
         return rng.choice(profiles)
 
+    def _polkit_action_profile_for_system(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        system: Any,
+    ) -> tuple[str, str]:
+        """Choose an action that respects durable host configuration state."""
+        action_id, process_path = self._polkit_action_profile(entry, rng)
+        if action_id != "org.freedesktop.timedate1.set-timezone":
+            return action_id, process_path
+
+        mutated_hosts = getattr(self, "_linux_timezone_mutation_hosts", set())
+        if system.type == "workstation" and system.hostname not in mutated_hosts:
+            return action_id, process_path
+
+        params = entry.get("params") or {}
+        alternatives = [
+            (candidate_action, candidate_process)
+            for candidate_action, processes in self._polkit_action_process_paths().items()
+            if candidate_action != "org.freedesktop.timedate1.set-timezone"
+            and (
+                not params.get("action_id")
+                or candidate_action in {str(item) for item in params["action_id"]}
+            )
+            for candidate_process in processes
+        ]
+        if alternatives:
+            return rng.choice(alternatives)
+        return "org.freedesktop.systemd1.manage-units", "/usr/bin/systemctl"
+
     def _polkit_process_start_ticks(
         self,
         hostname: str,
@@ -2081,19 +2219,37 @@ class BaselineMixin:
         start_ticks = int((uptime_seconds - age_seconds) * 100) + rng.randint(0, 99)
         return str(max(100, start_ticks))
 
-    @staticmethod
-    def _polkit_action_command_line(action_id: str, process_path: str, rng: random.Random) -> str:
+    def _polkit_action_command_line(
+        self,
+        action_id: str,
+        process_path: str,
+        rng: random.Random,
+        system: Any,
+    ) -> str:
         """Return a plausible command line for a polkit-authorized process."""
         executable = process_path.rsplit("/", 1)[-1]
         if executable == "timedatectl":
-            timezone = rng.choice(
-                [
-                    "America/New_York",
-                    "America/Chicago",
-                    "UTC",
-                    "Etc/UTC",
-                ]
+            timezone_state = getattr(self, "_linux_effective_timezones", None)
+            if timezone_state is None:
+                timezone_state = {}
+                self._linux_effective_timezones = timezone_state
+            current_timezone = timezone_state.get(system.hostname)
+            if current_timezone is None:
+                scenario_timezone = getattr(getattr(self, "_scenario_tz", None), "key", "UTC")
+                current_timezone = str(scenario_timezone)
+            candidates = ["America/New_York", "America/Chicago", "UTC"]
+            normalized_current = (
+                "UTC" if current_timezone in {"UTC", "Etc/UTC"} else current_timezone
             )
+            timezone = rng.choice(
+                [candidate for candidate in candidates if candidate != normalized_current]
+            )
+            timezone_state[system.hostname] = timezone
+            mutated_hosts = getattr(self, "_linux_timezone_mutation_hosts", None)
+            if mutated_hosts is None:
+                mutated_hosts = set()
+                self._linux_timezone_mutation_hosts = mutated_hosts
+            mutated_hosts.add(system.hostname)
             return f"{process_path} set-timezone {timezone}"
         if executable == "systemctl":
             if action_id == "org.freedesktop.login1.reboot":
@@ -2163,7 +2319,12 @@ class BaselineMixin:
         parent_pid = 1
         if sys_pids:
             parent_pid = sys_pids.get("systemd", sys_pids.get("dbus", 1))
-        command_line = self._polkit_action_command_line(action_id, process_path, rng)
+        command_line = self._polkit_action_command_line(
+            action_id,
+            process_path,
+            rng,
+            system,
+        )
         username = subject_user if subject_user else "root"
         if _get_os_category(system.os) == "linux" and self._polkit_action_process_is_user_cli(
             process_path
@@ -2247,7 +2408,11 @@ class BaselineMixin:
             if template.startswith("Registered"):
                 host_agents.append(agent)
 
-        action_id, action_process_path = self._polkit_action_profile(entry, rng)
+        action_id, action_process_path = self._polkit_action_profile_for_system(
+            entry,
+            rng,
+            system,
+        )
         subject_user = rng.choice(
             (entry.get("params") or {}).get("subject_user") or ["root", "admin", "deploy"]
         )
@@ -2562,10 +2727,10 @@ class BaselineMixin:
         dhcp_state: dict[str, Any] | None,
     ) -> None:
         """Emit DHCP interface registry writes coupled to a lease/renewal event."""
-        if _get_os_category(system.os) != "windows" or "windows_event_sysmon" not in self.emitters:
+        if _get_os_category(system.os) != "windows":
             return
 
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import AuthContext, ProcessContext, RegistryContext
         from evidenceforge.generation.activity.edr_pools import (
             get_registry_keys_hklm,
@@ -2591,7 +2756,9 @@ class BaselineMixin:
             return
 
         _host_ctx = self.activity_generator._build_host_context(system)
-        dns_server_ip = str((dhcp_state or {}).get("server_addr") or "10.0.0.1")
+        if not dhcp_state or not dhcp_state.get("server_addr"):
+            return
+        dns_server_ip = str(dhcp_state["server_addr"])
         count = min(len(dhcp_entries), rng.randint(1, min(2, len(dhcp_entries))))
         for key_tmpl, value_tmpl, details_tmpl in rng.sample(dhcp_entries, count):
             reg_ts = time + timedelta(milliseconds=rng.randint(45, 900))
@@ -2621,8 +2788,16 @@ class BaselineMixin:
                 if reg_proc.start_time and reg_ts <= reg_proc.start_time:
                     reg_ts = reg_proc.start_time + timedelta(milliseconds=1)
             target = f"{key}\\{value_name}"
-            self.activity_generator.dispatcher.dispatch(
-                SecurityEvent(
+            value = _materialize_registry_value_for_time(target, details, reg_ts, rng)
+            if not BaselineMixin._ambient_registry_write_changes_state(
+                self,
+                system.hostname,
+                target,
+                value,
+            ):
+                continue
+            self.activity_generator.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
                     timestamp=reg_ts,
                     event_type="registry_modify",
                     src_host=_host_ctx,
@@ -2642,7 +2817,7 @@ class BaselineMixin:
                     ),
                     registry=RegistryContext(
                         key=target,
-                        value=_materialize_registry_value_for_time(target, details, reg_ts, rng),
+                        value=value,
                         action="modify",
                         pid=reg_pid,
                     ),
@@ -2667,6 +2842,8 @@ class BaselineMixin:
         """
 
         schedules = _load_systemd_schedules()
+
+        pending_occurrences: list[tuple[datetime, str, dict[str, Any]]] = []
 
         for sched in schedules:
             # Filter by distro
@@ -2735,13 +2912,21 @@ class BaselineMixin:
                         minutes=fm,
                         seconds=0.0 if jitter_seconds == 0.0 else rng.uniform(0, jitter_seconds),
                     )
-                    self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
+                    pending_occurrences.append((ts, service, sched))
             else:
                 ts = current_hour + timedelta(
                     minutes=fire_minute,
                     seconds=0.0 if sched_type == "cron" else rng.uniform(0, 59),
                 )
-                self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
+                pending_occurrences.append((ts, service, sched))
+
+        # Configuration order is not execution order. Materializing a later
+        # timer before an earlier cron process can reserve a future Linux PID;
+        # a cron parent/child pair then has no adjacent room below that PID and
+        # produces visibly reversing process IDs. Execute the planned task
+        # anchors chronologically so lifecycle state follows occurrence time.
+        for ts, _service, sched in sorted(pending_occurrences, key=lambda item: item[:2]):
+            self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
 
     def _emit_scheduled_event(
         self,
@@ -2973,6 +3158,7 @@ class BaselineMixin:
         # so no dependent activity is timestamped after a visible 4634 for the
         # same session.
         planned_logoffs = self._plan_logoffs_for_hour(enabled_users, current_hour)
+        self._publish_planned_session_end_plans(current_hour, planned_logoffs)
         proxy_auth_deadlines: dict[tuple[str, str], datetime] = {}
         for (system_hostname, logon_id), offset in planned_logoffs.items():
             session = self.state_manager.get_session(logon_id)
@@ -4442,8 +4628,8 @@ class BaselineMixin:
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
 
-                    dns_server_ips = getattr(
-                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                    dns_server_ips = activity_dns_resolver_ips(
+                        self.activity_generator, result["system"].ip
                     )
                     dns_server_ip = rng.choice(dns_server_ips)
                     dns_ctx = DnsContext(
@@ -4693,6 +4879,16 @@ class BaselineMixin:
                     continue
 
                 is_short_lived = any(p in image_lower for p in short_lived)
+                planned_end_fn = getattr(
+                    self.activity_generator,
+                    "foreground_process_termination_time",
+                    None,
+                )
+                planned_end = (
+                    planned_end_fn(system.hostname, proc.pid) if callable(planned_end_fn) else None
+                )
+                if not isinstance(planned_end, datetime):
+                    planned_end = None
                 lifetime_rng = random.Random(
                     _stable_seed(
                         "windows_stale_process_lifetime:"
@@ -4704,7 +4900,7 @@ class BaselineMixin:
                     proc.command_line,
                     lifetime_rng,
                 )
-                target_end = proc.start_time + timedelta(seconds=target_lifetime)
+                target_end = planned_end or (proc.start_time + timedelta(seconds=target_lifetime))
                 if current_hour < target_end:
                     continue
 
@@ -4718,7 +4914,10 @@ class BaselineMixin:
                         )
                     ),
                 )
-                termination_probability = 0.95 if bounded_lifetime is not None else 0.72
+                if planned_end is not None:
+                    termination_probability = 1.0
+                else:
+                    termination_probability = 0.95 if bounded_lifetime is not None else 0.72
                 if rng.random() < termination_probability:
                     actor = self._find_actor(proc.username)
                     if not actor:
@@ -4737,7 +4936,11 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    term_time = target_end + timedelta(seconds=rng.uniform(0.2, 75.0))
+                    term_time = (
+                        target_end
+                        if planned_end is not None
+                        else target_end + timedelta(seconds=rng.uniform(0.2, 75.0))
+                    )
                     if is_short_lived and term_time > current_hour + timedelta(hours=1):
                         continue
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
@@ -5198,6 +5401,28 @@ class BaselineMixin:
                     logoff_offset = rng.uniform(0, 3599)
                     planned[(session.system, session.logon_id)] = logoff_offset
         return planned
+
+    def _publish_planned_session_end_plans(
+        self,
+        current_hour: datetime,
+        planned_logoffs: dict[tuple[str, str], float],
+    ) -> None:
+        """Make baseline logoff decisions visible to every session consumer."""
+
+        for (_system_hostname, logon_id), offset in planned_logoffs.items():
+            session = self.state_manager.get_session(logon_id)
+            if session is None:
+                continue
+            existing = session.end_plan
+            if existing is not None and existing.is_authoritative:
+                continue
+            self.state_manager.plan_session_end(
+                logon_id,
+                SessionEndPlan(
+                    canonical_end=current_hour + timedelta(seconds=offset),
+                    authority="generated",
+                ),
+            )
 
     def _generate_logoffs_for_hour(
         self,
@@ -6451,10 +6676,8 @@ class BaselineMixin:
         rng: Any,
     ) -> None:
         """Emit eCAR file operations that make SMB sessions look like file work."""
-        import uuid
-
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import AuthContext, EdrContext, FileContext
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import AuthContext, FileContext
 
         host_ctx = self.activity_generator._build_host_context(file_server)
         username = getattr(user, "username", "unknown")
@@ -6499,8 +6722,8 @@ class BaselineMixin:
             stem = rng.choice(stems)
             ext = rng.choice(extensions)
             file_path = rf"\\{file_server.hostname}\{share}\{client_name}\{stem}-{rng.randint(1, 99):02d}.{ext}"
-            self.activity_generator.dispatcher.dispatch(
-                SecurityEvent(
+            self.activity_generator.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
                     timestamp=time + timedelta(milliseconds=idx * rng.randint(200, 1500)),
                     event_type=event_type,
                     src_host=host_ctx,
@@ -6510,7 +6733,6 @@ class BaselineMixin:
                         action=event_type.removeprefix("file_"),
                         pid=4,
                     ),
-                    edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
                 )
             )
 
@@ -6523,14 +6745,10 @@ class BaselineMixin:
         sys_pids: dict[str, int],
     ) -> None:
         """Emit ordinary endpoint FILE telemetry from running baseline processes."""
-        if "ecar" not in self.emitters:
-            return
-
         from evidenceforge.config.schemas import MAX_ECAR_FILE_CHURN_EVENTS_PER_HOST_HOUR
-        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.base import OccurrenceBuilder
         from evidenceforge.events.contexts import (
             AuthContext,
-            EdrContext,
             FileContext,
             ProcessContext,
         )
@@ -6581,8 +6799,26 @@ class BaselineMixin:
         assigned_user = getattr(system, "assigned_user", None) or ""
         hour_end = current_hour + timedelta(hours=1)
 
-        for idx in range(count):
-            process = rng.choice(processes)
+        for _idx in range(count):
+            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            eligible_processes = [
+                process
+                for process in processes
+                if process.start_time <= ts
+                and not self.activity_generator._foreground_process_expired_for_attribution(
+                    system,
+                    process,
+                    ts,
+                )
+                and not self.activity_generator._process_termination_recorded(
+                    system.hostname,
+                    process.pid,
+                    process.start_time,
+                )
+            ]
+            if not eligible_processes:
+                continue
+            process = rng.choice(eligible_processes)
             process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
             if is_service_account(os_cat, process_username):
                 username = process_username
@@ -6612,24 +6848,14 @@ class BaselineMixin:
                 continue
             file_action, file_path = file_effect
 
-            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
             if process.start_time and ts <= process.start_time:
                 ts = process.start_time + timedelta(milliseconds=rng.randint(5, 750))
             if ts >= hour_end:
                 continue
 
             event_type = f"file_{file_action}"
-            object_id = stable_uuid(
-                "baseline.ecar.file",
-                system.hostname,
-                process.pid,
-                file_path,
-                file_action,
-                current_hour.isoformat(),
-                idx,
-            )
-            self.activity_generator.dispatcher.dispatch(
-                SecurityEvent(
+            self.activity_generator.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
                     timestamp=ts,
                     event_type=event_type,
                     src_host=host_ctx,
@@ -6649,7 +6875,6 @@ class BaselineMixin:
                         start_time=process.start_time,
                     ),
                     file=FileContext(path=file_path, action=file_action, pid=process.pid),
-                    edr=EdrContext(object_id=object_id, actor_id=process.ecar_object_id),
                 )
             )
 
@@ -6732,6 +6957,8 @@ class BaselineMixin:
                     continue
                 offset = _burst_offset()
                 ts = current_hour + timedelta(seconds=offset)
+                if not self._package_maintenance_connection_allowed(system, hostname, ts):
+                    continue
                 self.state_manager.set_current_time(ts)
                 # Resolve initiating PID from the system process that handles this service
                 _SERVICE_TO_PID_KEY = {
@@ -7220,6 +7447,8 @@ class BaselineMixin:
                 ts = paced_ts
                 if not _session_active_at(session, ts, current_hour, planned_logoffs):
                     continue
+                if not self._package_maintenance_connection_allowed(system, hostname, ts):
+                    continue
 
                 persona_pid = -1
                 # Thread effective persona so _server_admin sessions don't
@@ -7383,7 +7612,7 @@ class BaselineMixin:
         else:
             local_dt = current_hour
 
-        dns_ips = self._infra_ips.get("dns", ["10.0.0.1"])
+        dns_ips = self._infra_ips.get("dns", [])
         if isinstance(dns_ips, str):
             dns_ips = [dns_ips]
         ntp_ips = self._infra_ips.get("ntp", ["129.6.15.28"])
@@ -7410,7 +7639,8 @@ class BaselineMixin:
             hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
 
             # DNS lookups: truly periodic with small jitter, using global schedule
-            if "dns-client" in services:
+            system_dns_ips = activity_dns_resolver_ips(self.activity_generator, system.ip)
+            if "dns-client" in services and system_dns_ips:
                 _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
                 _dns_lo, _dns_hi = self._scaled_interval_range(
                     system, "dns_interval", _dns_lo, _dns_hi
@@ -7434,7 +7664,7 @@ class BaselineMixin:
                     )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(dns_ips),
+                        dst_ip=rng.choice(system_dns_ips),
                         time=ts,
                         dst_port=53,
                         proto="udp",
@@ -7504,7 +7734,7 @@ class BaselineMixin:
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
-            if dhcp_state and "zeek_dhcp" in self.emitters:
+            if dhcp_state:
                 storyline_dhcp_time = self._storyline_dhcp_lease_time_in_hour(
                     system.hostname,
                     current_hour,
@@ -7519,9 +7749,8 @@ class BaselineMixin:
                     pending_next_renewal,
                 ) = _dhcp_renewal_epochs_for_hour(
                     last_renewal=dhcp_state["last_renewal"],
-                    lease_time=lease_time,
+                    renewal_interval=dhcp_state["renewal_interval"],
                     current_hour=current_hour,
-                    rng=rng,
                     next_renewal=dhcp_state.get("next_renewal"),
                 )
                 if renewal_epochs:
@@ -7536,7 +7765,7 @@ class BaselineMixin:
                         system=dhcp_state["system"],
                         time=renewal_ts,
                         mac=dhcp_state["mac"],
-                        server_addr=dhcp_state.get("server_addr", "10.0.0.1"),
+                        server_addr=dhcp_state["server_addr"],
                         lease_time=lease_time,
                         uid=generate_zeek_uid("C"),
                         msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
@@ -7556,7 +7785,7 @@ class BaselineMixin:
                     dhcp_state["next_renewal"] = pending_next_renewal
 
             # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
-            dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
+            dc_ips = self._infra_ips.get("dc", [])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_hostnames = self._infra_ips.get("dc_hostnames", [])
@@ -7784,6 +8013,7 @@ class BaselineMixin:
                         rng,
                         sys_type_str,
                         system,
+                        str(self.scenario.environment.domain),
                     )
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
@@ -7818,8 +8048,8 @@ class BaselineMixin:
             # Baseline registry activity from running services. Real Sysmon
             # generates hundreds-thousands of Event 12/13 per hour. We emit
             # 15-40 per host per hour to provide realistic background volume.
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
-                from evidenceforge.events.base import SecurityEvent
+            if os_cat == "windows":
+                from evidenceforge.events.base import OccurrenceBuilder
                 from evidenceforge.events.contexts import (
                     AuthContext,
                     ProcessContext,
@@ -7828,7 +8058,6 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.edr_pools import (
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
-                    materialize_edr_template,
                     materialize_edr_template_group,
                 )
                 from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
@@ -7895,7 +8124,10 @@ class BaselineMixin:
                         rng,
                         _template_user,
                         host_ip=system.ip,
-                        dns_server_ip=str((_dhcp_state or {}).get("server_addr") or "10.0.0.1"),
+                        dns_server_ip=str(
+                            (_dhcp_state or {}).get("server_addr")
+                            or activity_dns_resolver_ips(self.activity_generator, system.ip)[0]
+                        ),
                         host_key=system.hostname,
                         host_os=system.os,
                     )
@@ -7907,9 +8139,10 @@ class BaselineMixin:
                     if writer_candidates:
                         _reg_pid, _reg_image, _reg_user = rng.choice(writer_candidates)
                     else:
-                        _reg_pid = _svc_pid
-                        _reg_image = r"C:\Windows\System32\svchost.exe"
-                        _reg_user = "SYSTEM"
+                        # An unavailable native owner means the ambient write did
+                        # not occur in this window. Do not substitute a generic
+                        # service process and manufacture false causality.
+                        continue
                     _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
                     if _reg_proc is not None:
                         _reg_image = _reg_proc.image
@@ -7922,11 +8155,18 @@ class BaselineMixin:
                         _reg_ts,
                         rng,
                     )
+                    if not BaselineMixin._ambient_registry_write_changes_state(
+                        self,
+                        system.hostname,
+                        _target,
+                        _details,
+                    ):
+                        continue
                     # Sysmon value writes are Event 13. Event 12 is reserved for key-only
                     # create/delete contexts, not the value-name pools used here.
                     _reg_action = "modify"
-                    self.activity_generator.dispatcher.dispatch(
-                        SecurityEvent(
+                    self.activity_generator.dispatcher.dispatch_builder(
+                        OccurrenceBuilder(
                             timestamp=_reg_ts,
                             event_type="registry_modify",
                             src_host=_host_ctx,
@@ -8039,22 +8279,51 @@ class BaselineMixin:
                                 process_pid=caller_pid,
                             )
 
-            # GPO application: periodic SYSTEM credential usage to DC
+            # Group Policy client refresh: host-scoped 90-minute-style schedule.
+            # Automatic refreshes usually stay inside gpsvc; only a minority
+            # materialize an observable gpupdate.exe invocation.
             if os_cat == "windows" and system.type == "workstation":
-                gpo_phase = _stable_seed(f"gpo_phase_{system.hostname}") % 4
-                if (current_hour.hour + gpo_phase) % 3 == 0:
-                    dcs = [
-                        s
-                        for s in self.scenario.environment.systems
-                        if s.type == "domain_controller"
-                    ]
-                    if dcs:
-                        gpo_ts = current_hour + timedelta(seconds=rng.uniform(60, 300))
+                dc_targets = [ip for ip in self._infra_ips.get("dc", []) if ip != system.ip]
+                if dc_targets:
+                    if not hasattr(self, "_gpo_refresh_schedule_state"):
+                        self._gpo_refresh_schedule_state = {}
+                    schedule_state = self._gpo_refresh_schedule_state.get(system.hostname)
+                    if schedule_state is None:
+                        phase_rng = random.Random(
+                            _stable_seed(f"gpo_refresh_phase:{system.hostname}")
+                        )
+                        first_interval = _gpo_refresh_interval_seconds(system.hostname, 0)
+                        schedule_state = {
+                            "scheduled_second": phase_rng.uniform(0, first_interval),
+                            "sequence": 0,
+                        }
+                        self._gpo_refresh_schedule_state[system.hostname] = schedule_state
+                    for scheduled_second, sequence in _gpo_refresh_occurrences_for_hour(
+                        system.hostname,
+                        hour_start_sec,
+                        schedule_state,
+                    ):
+                        occurrence_rng = random.Random(
+                            _stable_seed(
+                                f"gpo_refresh_occurrence:{system.hostname}:{sequence}:"
+                                f"{scheduled_second:.6f}"
+                            )
+                        )
+                        emission_probability = float(
+                            group_policy_refresh_config().get(
+                                "process_emission_probability",
+                                0.18,
+                            )
+                        )
+                        if occurrence_rng.random() >= emission_probability:
+                            continue
+                        gpo_ts = self._generation_epoch + timedelta(seconds=scheduled_second)
                         self.state_manager.set_current_time(gpo_ts)
-                        # Group Policy refresh runs as SYSTEM but does not normally
-                        # create a 4648 explicit-credential audit for SYSTEM->SYSTEM.
                         gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
-                        gpupdate_command = r"gpupdate.exe /target:computer /force"
+                        gpupdate_command = _gpo_refresh_command_line(
+                            system.hostname,
+                            sequence,
+                        )
                         parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                         gpupdate_pid = self.activity_generator.generate_system_process(
                             system=system,
@@ -8066,7 +8335,7 @@ class BaselineMixin:
                         )
                         lifetime = _windows_foreground_lifetime(gpupdate_image, gpupdate_command)
                         if lifetime is not None:
-                            end_ts = gpo_ts + timedelta(seconds=rng.uniform(*lifetime))
+                            end_ts = gpo_ts + timedelta(seconds=occurrence_rng.uniform(*lifetime))
                             self.state_manager.set_current_time(end_ts)
                             self.activity_generator.generate_system_process_termination(
                                 system=system,
@@ -8078,7 +8347,7 @@ class BaselineMixin:
                             )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 valid_crt = [
                     p
                     for p in load_create_remote_thread_patterns()
@@ -8114,7 +8383,7 @@ class BaselineMixin:
                         )
 
             # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 valid_pa = [
                     p
                     for p in load_process_access_patterns()
@@ -8148,18 +8417,13 @@ class BaselineMixin:
             # Uses data-driven DLL profiles from system_processes.yaml and
             # application_catalog.yaml. Picks from processes actually running
             # on this system (from StateManager) so PIDs are always valid.
-            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+            if os_cat == "windows":
                 from evidenceforge.generation.activity.dll_load_profiles import (
-                    get_dlls_for_process,
-                )
-                from evidenceforge.generation.activity.edr_pools import (
-                    get_dll_pool,
-                    materialize_edr_template,
+                    get_runtime_dlls_for_process,
                 )
 
                 running = self.state_manager.get_processes_on_system(system.hostname)
                 if running:
-                    generic_dll_pool = get_dll_pool()
                     num_dll = self._scaled_randint(rng, system, "windows_module_load", 20, 45)
                     for _ in range(num_dll):
                         offset = rng.uniform(0, 3599)
@@ -8172,28 +8436,7 @@ class BaselineMixin:
                             continue
                         proc_pid, proc_image = rng.choice(win_procs)
                         exe_name = proc_image.rsplit("\\", 1)[-1]
-                        profiled_dlls = get_dlls_for_process(exe_name)
-                        dll_pool = list(profiled_dlls)
-                        for path in generic_dll_pool:
-                            if not _module_matches_process(exe_name, path):
-                                continue
-                            path_lower = path.lower()
-                            dll_pool.append(
-                                {
-                                    "path": materialize_edr_template(
-                                        path,
-                                        rng,
-                                        system.assigned_user or "SYSTEM",
-                                        host_key=system.hostname,
-                                    ),
-                                    "signed": not any(
-                                        vendor in path_lower
-                                        for vendor in ["7-zip", "videolan", "notepad++"]
-                                    ),
-                                    "signature": _signature_for_loaded_module(path),
-                                    "signature_status": "Valid",
-                                }
-                            )
+                        dll_pool = get_runtime_dlls_for_process(exe_name)
                         if not dll_pool:
                             continue
                         dll = rng.choice(dll_pool)
@@ -8208,6 +8451,7 @@ class BaselineMixin:
                             signed=dll["signed"],
                             signature=dll["signature"],
                             signature_status=dll["signature_status"],
+                            load_phase="runtime",
                         )
 
             # ICMP monitoring pings are now handled by role_traffic profiles
@@ -8440,7 +8684,7 @@ class BaselineMixin:
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
             os_cat_svc = _get_os_category(system.os)
-            if os_cat_svc != "windows" or "windows_event_security" not in self.emitters:
+            if os_cat_svc != "windows":
                 continue
 
             sys_type_svc = (system.type or "workstation").lower()
@@ -8623,7 +8867,7 @@ class BaselineMixin:
         # Linux syslog diversity
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
-            if os_cat != "linux" or "syslog" not in self.emitters:
+            if os_cat != "linux":
                 continue
 
             sys_pids = self._system_pids.get(system.hostname, {})
@@ -8706,7 +8950,7 @@ class BaselineMixin:
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
                         )
                         # UFW block: connection (→ Zeek conn S0) + syslog (→ kernel UFW)
-                        # Both on the same SecurityEvent for cross-source correlation
+                        # Both on the same OccurrenceBuilder for cross-source correlation
 
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
@@ -8816,52 +9060,6 @@ class BaselineMixin:
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                             facility=10,
                         )
-                elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
-                    ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
-                    if ssh_identity is None:
-                        continue
-                    ssh_user_model, src_sys_obj = ssh_identity
-                    ip = src_sys_obj.ip
-                    # Resolve source system for WFP 5156 emission and OS-aware port
-                    from evidenceforge.generation.activity.generator import _ephemeral_port
-
-                    _src_os = _get_os_category(src_sys_obj.os) if src_sys_obj else "linux"
-                    port = self.activity_generator.reserve_ssh_source_port(
-                        ip,
-                        system.ip,
-                        _ephemeral_port(rng, _src_os),
-                        rng,
-                        _src_os,
-                        time=ts,
-                    )
-                    ssh_duration = rng.uniform(30.0, 1800.0)
-                    ssh_user = ssh_user_model.username
-                    _key_rng = random.Random(
-                        _stable_seed(f"ssh_client_key:{ip}:{system.hostname}:{ssh_user}")
-                    )
-                    key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-                    key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
-                    auth_method = "publickey" if rng.random() < 0.7 else "password"
-                    disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
-                    # Baseline remote-admin SSH is a modeled session, not loose
-                    # syslog churn. The bundle owns transport, auth/PAM/logind,
-                    # endpoint session evidence, and optional close ordering.
-                    self.activity_generator.generate_ssh_session(
-                        user=ssh_user_model,
-                        target_system=system,
-                        time=ts,
-                        source_ip=ip,
-                        source_system=src_sys_obj,
-                        source_port=port,
-                        duration=ssh_duration,
-                        orig_bytes=rng.randint(2000, 50000),
-                        resp_bytes=rng.randint(5000, 200000),
-                        auth_method=auth_method,
-                        public_key_type=key_type if auth_method == "publickey" else "",
-                        public_key_hash=key_hash if auth_method == "publickey" else "",
-                        emit_session_close=disconnect_time < self.end_time,
-                        source="baseline_ssh_noise",
-                    )
                 elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
@@ -9029,7 +9227,7 @@ class BaselineMixin:
                             values={"interface": primary_interface},
                         )
                     elif app == "systemd-resolved":
-                        dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
+                        dns_server = rng.choice(system_dns_ips)
                         scope = "global" if rng.random() < 0.35 else primary_interface
                         msg = render_extra_syslog_message(
                             entry,
@@ -9054,12 +9252,10 @@ class BaselineMixin:
                             sys_pids=sys_pids,
                         )
                     elif app == "rsyslogd":
-                        msg = render_extra_syslog_message(
+                        msg = self._render_rsyslog_health_message(
                             entry,
+                            system.hostname,
                             rng,
-                            positional_value=rng.randint(1000, 99999),
-                            system_services=system.services,
-                            values={"fd": self._next_rsyslog_fd(system.hostname, rng)},
                         )
                     elif app == "sudo":
                         values = {"interface": primary_interface}
@@ -9190,7 +9386,7 @@ class BaselineMixin:
                 )
 
         # IDS false-positive alerts
-        if "snort_alert" in self.emitters and self.scenario.environment.network:
+        if self.scenario.environment.network:
             _all_sigs = load_ids_signatures().get("signatures", [])
             _FP_SIGS_BY_PROTO: dict[str, list[dict]] = {"tcp": [], "udp": [], "icmp": []}
             for sig in _all_sigs:
@@ -9296,14 +9492,6 @@ class BaselineMixin:
                             ),
                         )
                     ]
-                    _filtered = [
-                        s
-                        for s in _filtered
-                        if not (
-                            s.get("direction") == "in"
-                            and "response" in str(s.get("message", "")).lower()
-                        )
-                    ]
                     if not _filtered:
                         continue
                     sig = rng.choice(_filtered)
@@ -9312,10 +9500,9 @@ class BaselineMixin:
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         if alert_proto in {"udp", "tcp"} and alert_dst_port == 53:
-                            dns_ips = getattr(
+                            dns_ips = activity_dns_resolver_ips(
                                 self.activity_generator,
-                                "_dns_server_ips",
-                                ["10.0.0.1"],
+                                local_sys.ip,
                             )
                             dst_ip = rng.choice(dns_ips)
                         else:
@@ -9426,14 +9613,13 @@ class BaselineMixin:
                         conn_state=ids_conn_state,
                         source_system=source_system,
                         dns=ids_result.dns,
-                        ids=ids_result.ids,
+                        ids_alerts=[ids_result.alert],
                         firewall=firewall,
                     )
 
         # Web access logs
-        if "web_access" in self.emitters:
-            for sys_obj in systems:
-                self._emit_web_server_access(sys_obj, systems, rng, current_hour)
+        for sys_obj in systems:
+            self._emit_web_server_access(sys_obj, systems, rng, current_hour)
 
     def _emit_web_server_access(
         self,
@@ -9495,14 +9681,16 @@ class BaselineMixin:
         public_hosts = getattr(sys_obj, "public_hostnames", None) or []
         ip_map = getattr(self.activity_generator, "_ip_to_system", {})
 
-        def _choose_client_ip() -> str:
+        def _choose_client_ip() -> str | None:
             if exposure == "external":
                 return rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
             if exposure == "both" and rng.random() < ext_ratio:
                 return rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
             if internal_ips:
                 return rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
-            return "10.0.0.1"
+            if exposure == "both":
+                return rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
+            return None
 
         def _profile_restricted_internal_pool(
             profile_name: str,
@@ -9588,6 +9776,8 @@ class BaselineMixin:
         while top_level_emitted < top_level_budget and attempts < top_level_budget * 4:
             attempts += 1
             client_ip = _choose_client_ip()
+            if client_ip is None:
+                break
             is_external_client = not _is_private_ip(client_ip)
             profile_name, profile = self._web_visitor_profile_for_client(
                 client_ip,
@@ -10028,3 +10218,53 @@ class BaselineMixin:
         if assigned:
             return assigned[0]
         return rng.choice(workstations) if workstations else None
+
+    def _package_maintenance_connection_allowed(
+        self,
+        system: System,
+        hostname: str | None,
+        timestamp: datetime,
+    ) -> bool:
+        """Admit package-repository traffic only inside one stateful refresh window."""
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            is_package_manager_destination,
+        )
+
+        if not is_package_manager_destination(system, hostname):
+            return True
+
+        state = getattr(self, "_package_maintenance_windows", None)
+        if state is None:
+            state = {}
+            self._package_maintenance_windows = state
+        current = ensure_utc(timestamp)
+        active = state.get(system.hostname)
+        if active is None:
+            state[system.hostname] = (current, current + timedelta(minutes=4))
+            return True
+
+        window_start, window_end = active
+        if window_start - timedelta(minutes=4) <= current <= window_end:
+            state[system.hostname] = (min(window_start, current), max(window_end, current))
+            return True
+        if current >= window_start + timedelta(hours=12):
+            state[system.hostname] = (current, current + timedelta(minutes=4))
+            return True
+        return False
+
+    def _ambient_registry_write_changes_state(
+        self,
+        system_hostname: str,
+        target: str,
+        value: str,
+    ) -> bool:
+        """Record an ambient registry value only when the modeled state changes."""
+        state = getattr(self, "_ambient_registry_state", None)
+        if state is None:
+            state = {}
+            self._ambient_registry_state = state
+        key = (system_hostname, target.lower())
+        if state.get(key) == value:
+            return False
+        state[key] = value
+        return True

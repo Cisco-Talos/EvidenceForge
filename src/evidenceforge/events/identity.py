@@ -26,7 +26,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TypeAlias
+from typing import Literal, TypeAlias
+
+EntityIdentityKind: TypeAlias = Literal[
+    "authentication_attempt",
+    "file",
+    "module",
+    "network_flow",
+    "registry",
+    "service",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class EntityIdentity:
+    """Immutable identity for a non-process canonical evidence object."""
+
+    object_id: str
+    kind: EntityIdentityKind
+    hostname: str = ""
+    semantic_key: str = ""
+
+    def __post_init__(self) -> None:
+        """Reject identity-free entities at the canonical boundary."""
+
+        if not self.object_id:
+            raise ValueError("Entity identity requires a non-empty object_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +126,7 @@ class SessionIdentity:
     session_kind: str
     started_at: datetime
     lifecycle_group_id: str
+    logon_guid: str = ""
     parent_lifecycle_group_id: str = ""
 
     def __post_init__(self) -> None:
@@ -114,7 +140,7 @@ class SessionIdentity:
             raise ValueError("Session ID must be a non-negative host-local identifier")
 
 
-IdentityObject: TypeAlias = ProcessIdentity | ThreadIdentity | SessionIdentity
+IdentityObject: TypeAlias = ProcessIdentity | ThreadIdentity | SessionIdentity | EntityIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,13 +160,13 @@ class EventIdentityPlan:
 
     @property
     def object_id(self) -> str:
-        """Return the compatibility object identifier for the subject role."""
+        """Return the canonical object identifier for the subject role."""
 
         return self.subject.object_id if self.subject is not None else ""
 
     @property
     def actor_id(self) -> str:
-        """Return the compatibility actor identifier for the actor role."""
+        """Return the canonical object identifier for the actor role."""
 
         return self.actor.object_id if self.actor is not None else ""
 

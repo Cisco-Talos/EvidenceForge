@@ -25,7 +25,7 @@ pillars:
       format_constraints:
         minimum: 90
         aspirational: 98
-        hard_gate: false
+        hard_gate: true
         # Constraint violations are authoring errors; more forgiving floor.
 
   # Pillar 2 — Plausibility
@@ -52,7 +52,7 @@ pillars:
       field_agreement:
         minimum: 85
         aspirational: 97
-        hard_gate: false
+        hard_gate: true
         # Conservative floor for the new pivot-key join implementation.
       user_diversity:
         minimum: 60
@@ -86,22 +86,27 @@ pillars:
         aspirational: 95
         hard_gate: true
         # Lowered from 90 to accommodate visibility-gap scenarios.
+      intent_reconciliation:
+        minimum: 100
+        aspirational: 100
+        hard_gate: true
+        # Every authored typed event must remain accounted for independently of generation.
       indicator_accuracy:
         minimum: 85
         aspirational: 95
-        hard_gate: false
+        hard_gate: true
       pivot_linkability:
         minimum: 80
         aspirational: 95
-        hard_gate: false
+        hard_gate: true
       temporal_integrity:
         minimum: 85
         aspirational: 95
-        hard_gate: false
+        hard_gate: true
       storyline_trace_coverage:
         minimum: 80
         aspirational: 95
-        hard_gate: false
+        hard_gate: true
 
   # Pillar 4 — Timing
   # Goal: both per-actor inter-event cadence and macro time-of-day / day-of-week

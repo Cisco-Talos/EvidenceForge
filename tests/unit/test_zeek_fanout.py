@@ -20,20 +20,19 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for SecurityEvent fan-out across multiple Zeek emitters."""
+"""Tests for OccurrenceBuilder fan-out across multiple Zeek emitters."""
 
 import json
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     DhcpContext,
     DnsContext,
     FileTransferContext,
     HttpContext,
-    NetworkContext,
     SslContext,
 )
 from evidenceforge.formats import load_format
@@ -42,6 +41,7 @@ from evidenceforge.generation.emitters.zeek_dhcp import ZeekDhcpEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
+from tests.network_factories import network_plan
 
 
 class TestSslFanOut:
@@ -54,10 +54,10 @@ class TestSslFanOut:
             conn_emitter = ZeekEmitter(load_format("zeek_conn"), base, sensor_hostnames=["s1"])
             ssl_emitter = ZeekSslEmitter(load_format("zeek_ssl"), base, sensor_hostnames=["s1"])
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -129,10 +129,10 @@ class TestDhcpFanOut:
             dhcp_emitter = ZeekDhcpEmitter(
                 load_format("zeek_dhcp"), base, sensor_hostnames=["core-tap"]
             )
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="dhcp_lease",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=68,
                     dst_ip="10.0.0.1",
@@ -196,10 +196,10 @@ class TestHttpFilesFanOut:
                 load_format("zeek_files"), base, sensor_hostnames=["s1"]
             )
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.10.50",
                     src_port=54321,
                     dst_ip="93.184.216.34",
@@ -284,16 +284,16 @@ class TestNoFanOutWithoutContext:
     """Only conn.log emitted when no SSL/HTTP/files context present."""
 
     def test_network_only_no_ssl_http_files(self):
-        """Event with only NetworkContext → only conn emitter handles it."""
+        """Event with only NetworkTransactionPlan → only conn emitter handles it."""
         conn_emitter = ZeekEmitter(load_format("zeek_conn"), Path("/tmp/test.json"))
         ssl_emitter = ZeekSslEmitter(load_format("zeek_ssl"), Path("/tmp/test.json"))
         http_emitter = ZeekHttpEmitter(load_format("zeek_http"), Path("/tmp/test.json"))
         files_emitter = ZeekFilesEmitter(load_format("zeek_files"), Path("/tmp/test.json"))
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -318,10 +318,10 @@ class TestMultiSensorFanOut:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(load_format("zeek_conn"), base / "conn.json")
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="198.51.100.10",
@@ -335,7 +335,7 @@ class TestMultiSensorFanOut:
                     orig_pkts=1,
                     resp_pkts=0,
                     orig_ip_bytes=40,
-                    resp_ip_bytes=40,
+                    resp_ip_bytes=0,
                     ip_proto=6,
                 ),
             )
@@ -358,10 +358,10 @@ class TestMultiSensorFanOut:
                 load_format("zeek_ssl"), base, sensor_hostnames=["fw01", "fw02"]
             )
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="8.8.8.8",
@@ -414,10 +414,10 @@ class TestMultiSensorFanOut:
                 load_format("zeek_conn"), base, sensor_hostnames=["core", "dmz"]
             )
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="198.51.100.10",
@@ -466,10 +466,10 @@ class TestMultiSensorFanOut:
                 load_format("zeek_conn"), base, sensor_hostnames=["core", "dmz"]
             )
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.53",

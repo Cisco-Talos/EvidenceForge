@@ -25,8 +25,11 @@
 from datetime import timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.generation.emitters.zeek_base import (
+    SensorMultiplexEmitter,
+    planned_zeek_connection_interval,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _SOURCE_TIMING = SourceTimingPlanner()
@@ -38,7 +41,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
     Generates Zeek DNS query/response logs. Each record represents a DNS
     transaction with query name, type, response code, and answers.
 
-    Handles SecurityEvents with DnsContext (fan-out from connection events)
+    Handles canonical occurrences with DnsContext (fan-out from connection events)
     and also retains emit_raw() for backward compatibility.
     """
 
@@ -46,7 +49,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_dns.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle connection events that carry a DnsContext."""
         return (
             event.event_type in self._supported_types
@@ -54,13 +57,15 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             and event.dns is not None
         )
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Render DnsContext + NetworkContext to Zeek dns.log NDJSON."""
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Render DnsContext + NetworkTransactionPlan to Zeek dns.log NDJSON."""
         net = event.network
         dns = event.dns
-        if event.network_observations_planned and net.transaction is not None:
-            conn_ts = net.transaction.started_at
+        planned_interval = planned_zeek_connection_interval(event)
+        if planned_interval is not None:
+            conn_ts, planned_close = planned_interval
         else:
+            planned_close = None
             conn_ts = _SOURCE_TIMING.source_time(
                 event,
                 "source.zeek_conn_start",
@@ -74,7 +79,13 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
                 ),
                 not_before=event.timestamp,
             )
-        conn_lifetime = net.duration if net.duration is not None else dns.rtt
+        conn_lifetime = (
+            (planned_close - conn_ts).total_seconds()
+            if planned_close is not None
+            else net.duration
+            if net.duration is not None
+            else dns.rtt
+        )
         within = None
         if conn_lifetime is not None and conn_lifetime > 0:
             rtt = dns.rtt or 0.0

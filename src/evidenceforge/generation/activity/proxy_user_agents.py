@@ -103,6 +103,23 @@ def _pick_package_manager_agent(
     return None
 
 
+def is_package_manager_destination(
+    source_system: "System | None",
+    hostname: str | None,
+) -> bool:
+    """Return whether the destination belongs to this host's package manager."""
+    if source_system is None:
+        return False
+    data = load_proxy_user_agents()
+    probe_rng = random.Random(
+        _stable_seed(
+            "package_manager_destination:"
+            f"{source_system.hostname}:{source_system.os}:{hostname or ''}"
+        )
+    )
+    return _pick_package_manager_agent(probe_rng, source_system, hostname, data) is not None
+
+
 def _package_manager_keys_matching_os(data: dict[str, Any], os_name: str) -> set[str]:
     """Return package-manager config keys compatible with the source OS."""
     compatible: set[str] = set()

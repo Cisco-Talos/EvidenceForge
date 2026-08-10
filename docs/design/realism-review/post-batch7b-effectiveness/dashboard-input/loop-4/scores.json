@@ -1,0 +1,12 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 4,
+  "automated_eval": {"score": 96.0},
+  "blind_initial": {
+    "threat_hunter": {"synthetic_confidence": 96},
+    "detection_engineer": {"synthetic_confidence": 85},
+    "network_forensics": {"synthetic_confidence": 96},
+    "host_forensics": {"synthetic_confidence": 86},
+    "average_synthetic_confidence": 90.75
+  }
+}

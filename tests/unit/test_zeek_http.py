@@ -24,14 +24,16 @@
 
 import json
 import tempfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import FileTransferContext, HttpContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
+from tests.network_factories import network_plan
 
 
 class TestHttpFormatAccuracy:
@@ -196,10 +198,10 @@ class TestHttpFormatAccuracy:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "http.json"
             emitter = ZeekHttpEmitter(fmt, output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="10.0.0.10",
@@ -233,10 +235,10 @@ class TestHttpFormatAccuracy:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "http.json"
             emitter = ZeekHttpEmitter(fmt, output)
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="93.184.216.34",
@@ -256,6 +258,13 @@ class TestHttpFormatAccuracy:
                     resp_fuids=["FHttpFileAbsent1"],
                     resp_mime_types=["text/html"],
                 ),
+                file_transfer=FileTransferContext(
+                    fuid="FHttpFileAbsent1",
+                    source="HTTP",
+                    mime_type="text/html",
+                    seen_bytes=2048,
+                    total_bytes=2048,
+                ),
                 _observed_formats={"zeek_conn", "zeek_http"},
             )
 
@@ -274,10 +283,10 @@ class TestHttpCanHandle:
     def test_accepts_connection_with_http(self):
         fmt = load_format("zeek_http")
         emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
             http=HttpContext(method="GET", host="example.com", uri="/"),
@@ -287,10 +296,10 @@ class TestHttpCanHandle:
     def test_rejects_without_http_context(self):
         fmt = load_format("zeek_http")
         emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
         )
@@ -299,10 +308,10 @@ class TestHttpCanHandle:
     def test_accepts_application_layer_transactions(self):
         fmt = load_format("zeek_http")
         emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -318,10 +327,10 @@ class TestHttpCanHandle:
     def test_conn_emitter_rejects_application_layer_transactions(self):
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(fmt, Path("/tmp/test.json"))
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -343,10 +352,10 @@ class TestHttpRenderTiming:
         output = tmp_path / "http.json"
         emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=base_ts,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=50000,
                 dst_ip="93.184.216.34",
@@ -384,11 +393,11 @@ class TestHttpRenderTiming:
             fake_source_time,
         )
 
-        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
-            return SecurityEvent(
+        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> OccurrenceBuilder:
+            return OccurrenceBuilder(
                 timestamp=timestamp,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="93.184.216.34",
@@ -413,6 +422,61 @@ class TestHttpRenderTiming:
         assert [row["trans_depth"] for row in rows] == [1, 2]
         assert rows[1]["ts"] > rows[0]["ts"]
 
+    def test_canonical_request_times_survive_out_of_order_emitter_calls(self, tmp_path):
+        """Canonical packet order wins when concurrent dispatch calls arrive out of order."""
+        fmt = load_format("zeek_http")
+        output = tmp_path / "http.json"
+        emitter = ZeekHttpEmitter(fmt, output, buffer_size=10)
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        def make_event(trans_depth: int, offset_ms: int) -> OccurrenceBuilder:
+            request_time = base_ts + timedelta(milliseconds=offset_ms)
+            network = network_plan(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="93.184.216.34",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="ChttpCanonicalOrder",
+                duration=1.0,
+                source_visible_start_time=base_ts,
+                source_visible_close_time=base_ts + timedelta(seconds=1),
+                orig_bytes=500,
+                resp_bytes=1500,
+                conn_state="SF",
+                history="ShADadfF",
+            )
+            network = replace(
+                network,
+                stable_id="network:http-canonical-order",
+                hostname="example.com",
+                phase_times=(
+                    ("transport_start", base_ts),
+                    ("transport_close", base_ts + timedelta(seconds=1)),
+                ),
+            )
+            return OccurrenceBuilder(
+                timestamp=request_time,
+                event_type="connection",
+                network=network,
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=f"/asset-{trans_depth}",
+                    trans_depth=trans_depth,
+                    canonical_request_time=request_time,
+                ),
+            )
+
+        emitter.emit(make_event(2, 20))
+        emitter.emit(make_event(1, 10))
+        emitter.close()
+
+        rows = [json.loads(line) for line in output.read_text().splitlines()]
+        assert [row["trans_depth"] for row in rows] == [1, 2]
+        assert rows[0]["ts"] < rows[1]["ts"]
+
     def test_application_layer_transaction_stays_inside_first_parent_lifetime(
         self, tmp_path, monkeypatch
     ):
@@ -432,11 +496,11 @@ class TestHttpRenderTiming:
             fake_source_time,
         )
 
-        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
-            return SecurityEvent(
+        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> OccurrenceBuilder:
+            return OccurrenceBuilder(
                 timestamp=timestamp,
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="93.184.216.34",

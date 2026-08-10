@@ -9,13 +9,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     FirewallContext,
     HostContext,
     HttpContext,
-    IdsContext,
-    NetworkContext,
+    IdsAlertPlan,
     ProxyContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
@@ -32,6 +31,7 @@ from evidenceforge.models.scenario import (
     System,
     User,
 )
+from tests.network_factories import network_plan
 
 
 def test_proxy_user_agent_selection_is_role_aware_for_servers():
@@ -443,7 +443,8 @@ def test_build_proxy_context_binds_server_proxy_user_agent_to_service_process():
     assert hint is not None
     image, command_line = hint
     assert image.endswith("service-healthcheck.exe")
-    assert "api.westbridge-services.net" in command_line
+    assert command_line.endswith("--service")
+    assert "api.westbridge-services.net" not in command_line
 
 
 def test_server_proxy_package_user_agents_are_destination_aware():
@@ -634,18 +635,20 @@ def test_server_ids_http_traffic_keeps_server_proxy_user_agent():
         source_system=web_server,
         hostname="example.com",
         conn_state="SF",
-        ids=IdsContext(
-            sid=2013028,
-            message="ET POLICY Suspicious HTTP Activity",
-            classification="policy-violation",
-            priority=2,
-        ),
+        ids_alerts=[
+            IdsAlertPlan(
+                sid=2013028,
+                message="ET POLICY Suspicious HTTP Activity",
+                classification="policy-violation",
+                priority=2,
+            )
+        ],
     )
 
     proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-    assert proxy_event.proxy.client_ip == web_server.ip
-    assert "Mozilla/" not in proxy_event.proxy.user_agent
-    assert proxy_event.proxy.user_agent
+    assert proxy_event.protocol.proxy.client_ip == web_server.ip
+    assert "Mozilla/" not in proxy_event.protocol.proxy.user_agent
+    assert proxy_event.protocol.proxy.user_agent
 
 
 def test_generated_proxy_time_taken_does_not_mirror_conn_duration_floor():
@@ -678,9 +681,9 @@ def test_generated_proxy_time_taken_does_not_mirror_conn_duration_floor():
 
     proxy_event = emitters["proxy_access"].emit.call_args.args[0]
 
-    assert proxy_event.proxy.method == "CONNECT"
-    assert proxy_event.proxy.time_taken != 1200
-    assert proxy_event.proxy.time_taken > 0
+    assert proxy_event.protocol.proxy.method == "CONNECT"
+    assert proxy_event.protocol.proxy.time_taken != 1200
+    assert proxy_event.protocol.proxy.time_taken > 0
 
 
 def _system(
@@ -713,10 +716,10 @@ def _emitters() -> dict[str, Mock]:
         event.network is not None and not event.network.application_layer_only
     )
     emitters["zeek_dns"].can_handle.side_effect = lambda event: event.dns is not None
-    emitters["zeek_http"].can_handle.side_effect = lambda event: event.http is not None
-    emitters["zeek_ssl"].can_handle.side_effect = lambda event: event.ssl is not None
-    emitters["proxy_access"].can_handle.side_effect = lambda event: event.proxy is not None
-    emitters["snort_alert"].can_handle.side_effect = lambda event: bool(event.all_ids_alerts())
+    emitters["zeek_http"].can_handle.side_effect = lambda event: event.protocol.http is not None
+    emitters["zeek_ssl"].can_handle.side_effect = lambda event: event.protocol.ssl is not None
+    emitters["proxy_access"].can_handle.side_effect = lambda event: event.protocol.proxy is not None
+    emitters["snort_alert"].can_handle.side_effect = lambda event: bool(event.ids_alerts)
     emitters["cisco_asa"].can_handle.side_effect = lambda event: (
         event.network is not None and not event.network.application_layer_only
     )
@@ -909,23 +912,23 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
         assert ("10.0.3.10", "93.184.216.34", 443) not in pairs
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.method == "CONNECT"
-        assert proxy_event.proxy.host == "example.com"
-        assert proxy_event.proxy.cs_bytes > 0
-        assert proxy_event.proxy.sc_bytes > 0
+        assert proxy_event.protocol.proxy.method == "CONNECT"
+        assert proxy_event.protocol.proxy.host == "example.com"
+        assert proxy_event.protocol.proxy.cs_bytes > 0
+        assert proxy_event.protocol.proxy.sc_bytes > 0
         http_event = emitters["zeek_http"].emit.call_args.args[0]
-        assert http_event.http.method == "CONNECT"
-        assert http_event.http.request_body_len == 0
-        assert http_event.http.response_body_len == 0
+        assert http_event.protocol.http.method == "CONNECT"
+        assert http_event.protocol.http.request_body_len == 0
+        assert http_event.protocol.http.response_body_len == 0
         conn_event = next(
             call.args[0]
             for call in emitters["zeek_conn"].emit.call_args_list
             if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 8080
         )
-        assert conn_event.network.orig_bytes >= proxy_event.proxy.cs_bytes
-        assert conn_event.network.resp_bytes >= proxy_event.proxy.sc_bytes
-        assert conn_event.network.orig_bytes >= proxy_event.proxy.cs_bytes + 500
-        assert conn_event.network.resp_bytes >= proxy_event.proxy.sc_bytes + 5000
+        assert conn_event.network.orig_bytes >= proxy_event.protocol.proxy.cs_bytes
+        assert conn_event.network.resp_bytes >= proxy_event.protocol.proxy.sc_bytes
+        assert conn_event.network.orig_bytes >= proxy_event.protocol.proxy.cs_bytes + 500
+        assert conn_event.network.resp_bytes >= proxy_event.protocol.proxy.sc_bytes + 5000
         assert conn_event.network.resp_pkts > 0
         assert not emitters["zeek_ssl"].emit.called
 
@@ -1149,14 +1152,12 @@ class TestExplicitProxyVisibility:
         ]
         upstream_event = upstream_candidates[0]
 
-        phase_plan = client_event.proxy.transaction
-        assert client_event.network.transaction.started_at == phase_plan.client_connect_at
-        assert client_event.network.transaction.started_at <= phase_plan.request_at
-        assert upstream_event.network.transaction.started_at == phase_plan.origin_connect_at
-        assert upstream_event.network.transaction.started_at > phase_plan.request_at
-        assert upstream_event.network.transaction.started_at < (
-            phase_plan.request_at + timedelta(seconds=1)
-        )
+        phase_plan = client_event.protocol.proxy.transaction
+        assert client_event.network.started_at == phase_plan.client_connect_at
+        assert client_event.network.started_at <= phase_plan.request_at
+        assert upstream_event.network.started_at == phase_plan.origin_connect_at
+        assert upstream_event.network.started_at > phase_plan.request_at
+        assert upstream_event.network.started_at < (phase_plan.request_at + timedelta(seconds=1))
 
     def test_browser_http_client_process_hint_handles_malformed_absolute_uri(self):
         generator = ActivityGenerator(StateManager(), {})
@@ -1400,7 +1401,7 @@ class TestExplicitProxyVisibility:
             logon_id=user_session.logon_id,
         )
         event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="connection",
             src_host=HostContext(
@@ -1410,7 +1411,7 @@ class TestExplicitProxyVisibility:
                 os_category="windows",
                 system_type=workstation.type,
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip=workstation.ip,
                 src_port=53077,
                 dst_ip="10.0.3.10",
@@ -1896,7 +1897,14 @@ class TestExplicitProxyVisibility:
         assert proc.parent_pid != shell_pid
         parent = generator.state_manager.get_process(linux_system.hostname, proc.parent_pid)
         assert parent is not None
-        assert parent.image == "/usr/lib/systemd/systemd"
+        assert parent.image == "/usr/bin/apt-get"
+        assert parent.start_time < proc.start_time
+        grandparent = generator.state_manager.get_process(
+            linux_system.hostname,
+            parent.parent_pid,
+        )
+        assert grandparent is not None
+        assert grandparent.image == "/usr/lib/systemd/systemd"
 
     def test_linux_background_helper_process_drops_ended_user_session_parent(self):
         generator, _emitters = _generator(
@@ -2486,6 +2494,91 @@ class TestExplicitProxyVisibility:
 
                 assert hint is None
 
+    def test_linux_server_proxy_client_hint_preserves_cli_client_family_and_target(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+        server = System(
+            hostname="MAIL-CLIN-01",
+            ip="10.0.2.26",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["mail_server"],
+        )
+
+        expected_images = {
+            "curl/8.4.0": "/usr/bin/curl",
+            "Wget/1.21.4": "/usr/bin/wget",
+            "python-requests/2.31.0": "/usr/bin/python3",
+        }
+        for user_agent, expected_image in expected_images.items():
+            hint = generator._explicit_proxy_client_process_hint(
+                user_agent=user_agent,
+                hostname="downloads.cloud.com",
+                dst_port=443,
+                proxy_sys=proxy,
+                source_system=server,
+            )
+
+            assert hint is not None
+            image, command_line = hint
+            assert image == expected_image
+            assert "downloads.cloud.com" in command_line
+            system_owner = generator._linux_proxy_helper_system_owner_spec(
+                source_system=server,
+                image=image,
+                command_line=command_line,
+            )
+            assert system_owner is not None
+            assert system_owner[1:] == (image, command_line, "root")
+
+    def test_service_connection_owner_uses_http_host_when_hostname_is_absent(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        server = System(
+            hostname="DB-PROD-01",
+            ip="10.0.4.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database"],
+        )
+
+        spec = generator._service_connection_owner_spec(
+            source_system=server,
+            service="http",
+            dst_port=8080,
+            os_category="linux",
+            hostname=None,
+            http=HttpContext(
+                method="CONNECT",
+                host="packages.microsoft.com",
+                uri="packages.microsoft.com:443",
+                user_agent="Wget/1.21.4",
+            ),
+        )
+
+        assert spec is not None
+        assert spec[1] == "/usr/bin/wget"
+        assert "packages.microsoft.com" in spec[2]
+
     def test_server_like_proxy_client_hint_keeps_service_style_owners(self):
         generator, _emitters = _generator(
             [
@@ -2518,7 +2611,8 @@ class TestExplicitProxyVisibility:
         assert hint is not None
         image, command_line = hint
         assert image.endswith("service-healthcheck.exe")
-        assert "status.example.com" in command_line
+        assert command_line.endswith("--service")
+        assert "status.example.com" not in command_line
 
     def test_windows_server_proxy_helper_uses_system_owner_despite_user_session(self):
         generator, _emitters = _generator(
@@ -2601,6 +2695,7 @@ class TestExplicitProxyVisibility:
         assert proc.logon_id == "0x3e7"
         assert proc.parent_pid == services_pid
         assert proc.parent_pid != explorer_pid
+        assert proc.command_line.endswith("--service")
 
     def test_one_shot_proxy_client_process_terminates_after_request(self):
         generator, _emitters = _generator(
@@ -2699,8 +2794,8 @@ class TestExplicitProxyVisibility:
         assert ("10.0.3.10", origin_ip, 80) in pairs
         assert ("10.0.1.10", "203.0.113.45", 80) not in pairs
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.host == "dynsync-update.net"
-        assert proxy_event.proxy.method == "GET"
+        assert proxy_event.protocol.proxy.host == "dynsync-update.net"
+        assert proxy_event.protocol.proxy.method == "GET"
 
     def test_raw_ip_with_suppressed_hostname_preserves_proxy_egress_ioc(self):
         generator, emitters = _generator(
@@ -2744,7 +2839,7 @@ class TestExplicitProxyVisibility:
         assert all(hashed_ip not in event.dns.answers for event in raw_ip_dns_events)
 
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.host == raw_ip
+        assert proxy_event.protocol.proxy.host == raw_ip
 
     def test_auto_generated_proxy_get_has_no_zeek_request_body(self):
         generator, emitters = _generator(
@@ -2775,8 +2870,8 @@ class TestExplicitProxyVisibility:
         )
 
         http_event = emitters["zeek_http"].emit.call_args.args[0]
-        assert http_event.http.method == "GET"
-        assert http_event.http.request_body_len == 0
+        assert http_event.protocol.http.method == "GET"
+        assert http_event.protocol.http.request_body_len == 0
         assert http_event.network.orig_bytes > 0
 
     def test_https_service_alias_uses_explicit_proxy(self):
@@ -2811,8 +2906,8 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.method == "CONNECT"
-        assert proxy_event.proxy.host == "example.com"
+        assert proxy_event.protocol.proxy.method == "CONNECT"
+        assert proxy_event.protocol.proxy.host == "example.com"
 
     def test_plaintext_public_domain_redirects_instead_of_success(self):
         generator, emitters = _generator(
@@ -2843,17 +2938,17 @@ class TestExplicitProxyVisibility:
         )
 
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.host == "aws.amazon.com"
-        assert proxy_event.proxy.status_code in {301, 302}
+        assert proxy_event.protocol.proxy.host == "aws.amazon.com"
+        assert proxy_event.protocol.proxy.status_code in {301, 302}
 
         http_events = [
             call.args[0]
             for call in emitters["zeek_http"].emit.call_args_list
-            if call.args[0].http.host == "aws.amazon.com"
+            if call.args[0].protocol.http.host == "aws.amazon.com"
         ]
         assert http_events
-        assert {event.http.status_code for event in http_events}.issubset({301, 302})
-        assert all(event.http.response_body_len < 1000 for event in http_events)
+        assert {event.protocol.http.status_code for event in http_events}.issubset({301, 302})
+        assert all(event.protocol.http.response_body_len < 1000 for event in http_events)
 
     def test_egress_sensor_sees_proxy_to_origin_only(self):
         generator, emitters = _generator(
@@ -2889,8 +2984,8 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
         assert emitters["zeek_ssl"].emit.called
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy is not None
-        transaction = proxy_event.proxy.transaction
+        assert proxy_event.protocol.proxy is not None
+        transaction = proxy_event.protocol.proxy.transaction
         assert transaction is not None
         dns_visible = any(pair[0] == "10.0.3.10" and pair[2] == 53 for pair in pairs)
         if transaction.resolver_mode == "resolver_cache_hit":
@@ -3008,10 +3103,7 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         ]
         assert client_events
-        assert (
-            egress_events[0].network.transaction.started_at
-            > client_events[0].network.transaction.started_at
-        )
+        assert egress_events[0].network.started_at > client_events[0].network.started_at
         client_close = client_events[0].timestamp + timedelta(
             seconds=client_events[0].network.duration
         )
@@ -3024,9 +3116,9 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 443
         ]
         assert egress_http_events
-        assert egress_http_events[0].http.host == "example.com"
-        assert egress_http_events[0].http.uri == "/jquery.js"
-        assert egress_http_events[0].http.user_agent == "Mozilla/5.0"
+        assert egress_http_events[0].protocol.http.host == "example.com"
+        assert egress_http_events[0].protocol.http.uri == "/jquery.js"
+        assert egress_http_events[0].protocol.http.user_agent == "Mozilla/5.0"
 
     def test_inspected_https_upload_client_leg_does_not_double_count_request_body(self):
         generator, emitters = _generator(
@@ -3094,14 +3186,14 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         )
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        transaction = proxy_event.proxy.transaction
+        transaction = proxy_event.protocol.proxy.transaction
         assert transaction is not None
-        assert client_event.network.orig_bytes > proxy_event.proxy.cs_bytes
+        assert client_event.network.orig_bytes > proxy_event.protocol.proxy.cs_bytes
         assert client_event.network.orig_bytes >= (
-            proxy_event.proxy.cs_bytes + transaction.tunnel_setup_cs_bytes
+            proxy_event.protocol.proxy.cs_bytes + transaction.tunnel_setup_cs_bytes
         )
         assert client_event.network.resp_bytes >= (
-            proxy_event.proxy.sc_bytes + transaction.tunnel_setup_sc_bytes
+            proxy_event.protocol.proxy.sc_bytes + transaction.tunnel_setup_sc_bytes
         )
         assert client_event.network.orig_bytes < request_bytes * 2
 
@@ -3170,8 +3262,8 @@ class TestExplicitProxyVisibility:
         ]
         assert egress_events
         assert egress_events[0].network.conn_state == "SF"
-        assert egress_events[0].ssl is not None
-        assert egress_events[0].ssl.established is True
+        assert egress_events[0].protocol.ssl is not None
+        assert egress_events[0].protocol.ssl.established is True
 
     def test_https_subresources_reuse_active_connect_tunnel(self):
         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -3252,7 +3344,7 @@ class TestExplicitProxyVisibility:
         reused_proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert reused_proxy_event.network.application_layer_only is True
         assert reused_proxy_event.network.zeek_uid == first_uid
-        assert reused_proxy_event.proxy.url == "https://example.com/app.js"
+        assert reused_proxy_event.protocol.proxy.url == "https://example.com/app.js"
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
 
     def test_tight_successful_https_requests_each_emit_proxy_request_on_reused_tunnel(self):
@@ -3311,7 +3403,7 @@ class TestExplicitProxyVisibility:
             if call.args[0].network.application_layer_only
         ]
         assert len(app_layer_proxy_events) == 11
-        assert {event.proxy.url for event in app_layer_proxy_events} == {
+        assert {event.protocol.proxy.url for event in app_layer_proxy_events} == {
             f"https://example.com/api/export/qlattice?page={idx}" for idx in range(2, 13)
         }
 
@@ -3472,10 +3564,11 @@ class TestExplicitProxyVisibility:
                 )
             ]
         )
-        ids = IdsContext(
+        ids = IdsAlertPlan(
             sid=2028401,
             message="ET JA3 test",
             classification="potentially-bad-traffic",
+            origin="authored_attachment",
         )
 
         generator.generate_connection(
@@ -3509,7 +3602,7 @@ class TestExplicitProxyVisibility:
         }
         assert ("10.0.1.10", "10.0.3.10", 8080) in tuples
         assert any(src == "10.0.3.10" and port == 443 for src, _dst, port in tuples)
-        assert all(event.ids_alerts == [ids] for event in alerts)
+        assert all(event.ids_alerts == (ids,) for event in alerts)
 
         generator.generate_connection(
             src_ip="10.0.1.10",
@@ -3608,11 +3701,13 @@ class TestExplicitProxyVisibility:
                 status_code=200,
                 status_msg="OK",
             ),
-            ids=IdsContext(
-                sid=2013028,
-                message="ET POLICY Suspicious HTTP Activity",
-                classification="policy-violation",
-                priority=2,
+            ids_alerts=(
+                IdsAlertPlan(
+                    sid=2013028,
+                    message="ET POLICY Suspicious HTTP Activity",
+                    classification="policy-violation",
+                    priority=2,
+                ),
             ),
             firewall=FirewallContext(
                 action="permit",
@@ -3627,15 +3722,18 @@ class TestExplicitProxyVisibility:
         assert pairs
         assert all(pair == ("10.0.1.10", "10.0.3.10", 8080) for pair in pairs)
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.status_code == 403
-        assert proxy_event.proxy.cache_result == "DENIED"
+        assert proxy_event.protocol.proxy.status_code == 403
+        assert proxy_event.protocol.proxy.cache_result == "DENIED"
         assert emitters["zeek_http"].emit.called
         http_event = emitters["zeek_http"].emit.call_args.args[0]
-        assert http_event.http.status_code == 403
-        assert http_event.http.status_msg == "Forbidden"
-        assert http_event.http.response_body_len == proxy_event.proxy.response_body_bytes
-        assert http_event.http.response_body_len < proxy_event.proxy.sc_bytes
-        assert http_event.http.resp_mime_types == ["text/html"]
+        assert http_event.protocol.http.status_code == 403
+        assert http_event.protocol.http.status_msg == "Forbidden"
+        assert (
+            http_event.protocol.http.response_body_len
+            == proxy_event.protocol.proxy.response_body_bytes
+        )
+        assert http_event.protocol.http.response_body_len < proxy_event.protocol.proxy.sc_bytes
+        assert http_event.protocol.http.resp_mime_types == ("text/html",)
         assert all(
             call.args[0].network.dst_ip == "10.0.3.10"
             for call in emitters["zeek_http"].emit.call_args_list
@@ -3699,12 +3797,12 @@ class TestExplicitProxyVisibility:
         )
 
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.status_code == 403
-        assert proxy_event.proxy.tunnel_status_code == 200
+        assert proxy_event.protocol.proxy.status_code == 403
+        assert proxy_event.protocol.proxy.tunnel_status_code == 200
         http_event = emitters["zeek_http"].emit.call_args.args[0]
-        assert http_event.http.method == "CONNECT"
-        assert http_event.http.status_code == 200
-        assert http_event.http.status_msg == "Connection Established"
+        assert http_event.protocol.http.method == "CONNECT"
+        assert http_event.protocol.http.status_code == 200
+        assert http_event.protocol.http.status_msg == "Connection Established"
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_denied_connect_uses_proxy_error_accounting(self):
@@ -3754,16 +3852,19 @@ class TestExplicitProxyVisibility:
         )
 
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.status_code == 403
-        assert proxy_event.proxy.tunnel_status_code == 403
-        assert proxy_event.proxy.cs_bytes < 1000
-        assert proxy_event.proxy.sc_bytes < 2500
-        assert proxy_event.proxy.time_taken < 2000
+        assert proxy_event.protocol.proxy.status_code == 403
+        assert proxy_event.protocol.proxy.tunnel_status_code == 403
+        assert proxy_event.protocol.proxy.cs_bytes < 1000
+        assert proxy_event.protocol.proxy.sc_bytes < 2500
+        assert proxy_event.protocol.proxy.time_taken < 2000
         http_event = emitters["zeek_http"].emit.call_args.args[0]
-        assert http_event.http.method == "CONNECT"
-        assert http_event.http.status_code == 403
-        assert http_event.http.response_body_len == proxy_event.proxy.response_body_bytes
-        assert http_event.http.response_body_len < proxy_event.proxy.sc_bytes
+        assert http_event.protocol.http.method == "CONNECT"
+        assert http_event.protocol.http.status_code == 403
+        assert (
+            http_event.protocol.http.response_body_len
+            == proxy_event.protocol.proxy.response_body_bytes
+        )
+        assert http_event.protocol.http.response_body_len < proxy_event.protocol.proxy.sc_bytes
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_cache_hit_request_stops_before_origin_side_sources(self):
@@ -3832,8 +3933,8 @@ class TestExplicitProxyVisibility:
         assert pairs
         assert all(pair == ("10.0.1.10", "10.0.3.10", 8080) for pair in pairs)
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.cache_result == "HIT"
-        assert proxy_event.proxy.status_code == 200
+        assert proxy_event.protocol.proxy.cache_result == "HIT"
+        assert proxy_event.protocol.proxy.status_code == 200
         assert emitters["zeek_http"].emit.called
         assert all(
             call.args[0].network.dst_ip == "10.0.3.10"
@@ -4044,20 +4145,20 @@ class TestExplicitProxyVisibility:
 
         origin_ip = resolve_domain_ip("cdn.example.com", src_host="PROXY-01")
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.status_code == 304
-        assert proxy_event.proxy.cache_result == "REVALIDATED"
-        assert proxy_event.proxy.content_type == "application/javascript"
+        assert proxy_event.protocol.proxy.status_code == 304
+        assert proxy_event.protocol.proxy.cache_result == "REVALIDATED"
+        assert proxy_event.protocol.proxy.content_type == "application/javascript"
         assert ("10.0.3.10", origin_ip, 443) in _conn_pairs(emitters)
 
         http_events = [
             call.args[0]
             for call in emitters["zeek_http"].emit.call_args_list
-            if call.args[0].http.uri == "/assets/app.bundle.js"
+            if call.args[0].protocol.http.uri == "/assets/app.bundle.js"
         ]
         assert len(http_events) == 1
-        assert all(event.http.status_code == 304 for event in http_events)
-        assert all(event.http.response_body_len == 0 for event in http_events)
-        assert all(event.http.resp_mime_types == [] for event in http_events)
+        assert all(event.protocol.http.status_code == 304 for event in http_events)
+        assert all(event.protocol.http.response_body_len == 0 for event in http_events)
+        assert all(event.protocol.http.resp_mime_types == () for event in http_events)
 
     def test_supplied_http_user_agent_survives_domain_override(self, monkeypatch):
         """Proxy context must preserve caller-owned request metadata for correlated egress."""
@@ -4157,13 +4258,16 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
         assert ("10.0.3.10", "93.184.216.34", 443) not in pairs
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.status_code == 407
+        assert proxy_event.protocol.proxy.status_code == 407
         http_event = emitters["zeek_http"].emit.call_args.args[0]
-        assert http_event.http.method == "CONNECT"
-        assert http_event.http.status_code == 407
-        assert http_event.http.request_body_len == 0
-        assert http_event.http.response_body_len == proxy_event.proxy.response_body_bytes
-        assert http_event.http.response_body_len < proxy_event.proxy.sc_bytes
+        assert http_event.protocol.http.method == "CONNECT"
+        assert http_event.protocol.http.status_code == 407
+        assert http_event.protocol.http.request_body_len == 0
+        assert (
+            http_event.protocol.http.response_body_len
+            == proxy_event.protocol.proxy.response_body_bytes
+        )
+        assert http_event.protocol.http.response_body_len < proxy_event.protocol.proxy.sc_bytes
         assert not emitters["zeek_ssl"].emit.called
 
     def test_supplied_denied_proxy_context_stops_before_origin_side_sources(self):
@@ -4213,7 +4317,7 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
         assert ("10.0.3.10", "93.184.216.34", 443) not in pairs
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.status_code == 403
+        assert proxy_event.protocol.proxy.status_code == 403
         assert not emitters["zeek_ssl"].emit.called
 
     def test_failed_connect_status_messages_are_status_specific(self):
@@ -4266,11 +4370,14 @@ class TestExplicitProxyVisibility:
 
             http_event = emitters["zeek_http"].emit.call_args.args[0]
             proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-            assert http_event.http.status_code == status_code
-            assert http_event.http.status_msg in configured_messages[status_code]
-            assert http_event.http.status_msg != "Proxy Error"
-            assert http_event.http.response_body_len == proxy_event.proxy.response_body_bytes
-            assert http_event.http.response_body_len < proxy_event.proxy.sc_bytes
+            assert http_event.protocol.http.status_code == status_code
+            assert http_event.protocol.http.status_msg in configured_messages[status_code]
+            assert http_event.protocol.http.status_msg != "Proxy Error"
+            assert (
+                http_event.protocol.http.response_body_len
+                == proxy_event.protocol.proxy.response_body_bytes
+            )
+            assert http_event.protocol.http.response_body_len < proxy_event.protocol.proxy.sc_bytes
             assert not emitters["zeek_ssl"].emit.called
 
     def test_gateway_failure_emits_only_attempted_origin_transport(self):
@@ -4323,11 +4430,11 @@ class TestExplicitProxyVisibility:
         ]
         assert len(origin_events) == 1
         assert origin_events[0].network.conn_state == "S0"
-        assert origin_events[0].http is None
-        assert origin_events[0].ssl is None
+        assert origin_events[0].protocol.http is None
+        assert origin_events[0].protocol.ssl is None
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert proxy_event.proxy.transaction.terminal_outcome == "gateway_failure"
-        assert proxy_event.proxy.transaction.origin_response_at is None
+        assert proxy_event.protocol.proxy.transaction.terminal_outcome == "gateway_failure"
+        assert proxy_event.protocol.proxy.transaction.origin_response_at is None
 
     def test_proxy_network_children_share_the_proxy_action_parent(self):
         generator, emitters = _generator(
@@ -4383,7 +4490,7 @@ class TestExplicitProxyVisibility:
         ]
         assert len(transport_events) == 2
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        parent_group = proxy_event.proxy.transaction.stable_id
+        parent_group = proxy_event.protocol.proxy.transaction.stable_id
         assert all(event.lifecycle.parent_group_id == parent_group for event in transport_events)
 
     def test_proxy_lookup_uses_phase_planned_dns_rtt_and_origin_anchor(self):
@@ -4433,7 +4540,7 @@ class TestExplicitProxyVisibility:
                 ),
             )
             proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-            plan = proxy_event.proxy.transaction
+            plan = proxy_event.protocol.proxy.transaction
             if plan.resolver_mode != "ordinary_lookup":
                 continue
             selected_plan = plan
@@ -4449,9 +4556,9 @@ class TestExplicitProxyVisibility:
         assert selected_plan is not None
         assert dns_event is not None
         assert origin_event is not None
-        assert dns_event.network.transaction.started_at == selected_plan.dns_query_at
+        assert dns_event.network.started_at == selected_plan.dns_query_at
         assert dns_event.dns.rtt == pytest.approx(selected_plan.dns_rtt_seconds)
-        assert origin_event.network.transaction.started_at == selected_plan.origin_connect_at
+        assert origin_event.network.started_at == selected_plan.origin_connect_at
         assert (
             2
             <= (selected_plan.origin_connect_at - selected_plan.dns_response_at).total_seconds()
@@ -4504,7 +4611,7 @@ class TestExplicitProxyVisibility:
         assert all(pair[0] != "10.0.1.10" or pair[1] == "10.0.3.10" for pair in pairs)
         dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        transaction = proxy_event.proxy.transaction
+        transaction = proxy_event.protocol.proxy.transaction
         assert transaction is not None
         if transaction.resolver_mode == "resolver_cache_hit":
             assert not dns_events
@@ -4575,7 +4682,7 @@ class TestExplicitProxyVisibility:
             if call.args[0].dns and call.args[0].dns.query == "mail-fin.example.com"
         ]
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        transaction = proxy_event.proxy.transaction
+        transaction = proxy_event.protocol.proxy.transaction
         assert transaction is not None
         if transaction.resolver_mode == "resolver_cache_hit":
             assert not dns_events
@@ -4645,7 +4752,7 @@ class TestExplicitProxyVisibility:
             if call.args[0].dns and call.args[0].dns.query == "mail-fin.example.com"
         ]
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        transaction = proxy_event.proxy.transaction
+        transaction = proxy_event.protocol.proxy.transaction
         assert transaction is not None
         if transaction.resolver_mode == "resolver_cache_hit":
             assert not dns_events
@@ -4733,8 +4840,10 @@ class TestExplicitProxyVisibility:
         assert conn_event.network.resp_bytes > 0
         assert conn_event.network.orig_pkts > 0
         assert conn_event.network.resp_pkts > 0
-        assert conn_event.ssl is not None
-        assert conn_event.ssl.established is True
-        assert conn_event.x509 is not None
-        assert conn_event.x509_chain[0] is conn_event.x509
-        assert conn_event.ssl.cert_chain_fuids == [cert.fuid for cert in conn_event.x509_chain]
+        assert conn_event.protocol.ssl is not None
+        assert conn_event.protocol.ssl.established is True
+        assert conn_event.protocol.leaf_certificate is not None
+        assert conn_event.protocol.x509_chain[0] is conn_event.protocol.leaf_certificate
+        assert conn_event.protocol.ssl.cert_chain_fuids == tuple(
+            cert.fuid for cert in conn_event.protocol.x509_chain
+        )

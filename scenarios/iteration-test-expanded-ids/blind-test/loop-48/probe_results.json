@@ -1,0 +1,19 @@
+{
+  "family": "durable SSH client credential identity and tuple authentication policy",
+  "successful_auth_records": 109,
+  "auth_method_counts": {
+    "publickey": 86,
+    "password": 23
+  },
+  "user_source_target_tuples": 20,
+  "tuples_with_mixed_methods": 0,
+  "mixed_method_examples": [],
+  "modeled_admin_client_user_groups": 3,
+  "admin_groups_with_multiple_public_keys": 0,
+  "admin_key_counts": {
+    "10.10.1.21|lina.nguyen": 1,
+    "10.10.1.31|marcus.chen": 1,
+    "10.10.1.35|aisha.johnson": 1
+  },
+  "passed": true
+}

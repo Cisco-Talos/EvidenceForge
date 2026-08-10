@@ -1,0 +1,32 @@
+{
+  "max_observed_rss_growth_bytes_per_record": 2958.62,
+  "measurements": [
+    {
+      "baseline_rss_bytes": 84115456,
+      "corpus_bytes": 7275000,
+      "peak_rss_bytes": 157974528,
+      "records": 25000,
+      "rss_growth_bytes": 73859072
+    },
+    {
+      "baseline_rss_bytes": 83984384,
+      "corpus_bytes": 14550000,
+      "peak_rss_bytes": 231538688,
+      "records": 50000,
+      "rss_growth_bytes": 147554304
+    },
+    {
+      "baseline_rss_bytes": 83296256,
+      "corpus_bytes": 29100000,
+      "peak_rss_bytes": 379158528,
+      "records": 100000,
+      "rss_growth_bytes": 295862272
+    }
+  ],
+  "note": "Projection is deliberately conservative and covers retained parse objects only; full scorer working sets require additional headroom.",
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "projected_growth_at_2m_records_bytes": 5917245440,
+  "projected_growth_at_500k_records_bytes": 1479311360,
+  "python": "3.12.12",
+  "schema_version": 1
+}

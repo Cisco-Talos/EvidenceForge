@@ -24,6 +24,7 @@
 
 import logging
 from abc import ABC, abstractmethod
+from contextvars import copy_context
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
@@ -31,7 +32,7 @@ from typing import Any
 
 from jinja2.sandbox import SandboxedEnvironment
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.output_targets import OutputTarget, normalize_output_target
 
@@ -104,7 +105,13 @@ class LogEmitter(ABC):
         if self.threaded:
             self._event_queue = Queue(maxsize=50000)  # Bounded queue for backpressure
             self._stop_event = Event()
-            self._thread = Thread(target=self._run, daemon=True, name=f"Emitter-{format_def.name}")
+            worker_context = copy_context()
+            self._thread = Thread(
+                target=worker_context.run,
+                args=(self._run,),
+                daemon=True,
+                name=f"Emitter-{format_def.name}",
+            )
             self._thread.start()
             logger.debug(f"Started emitter thread for {format_def.name}")
 
@@ -123,7 +130,7 @@ class LogEmitter(ABC):
         """
         pass
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Return True if this emitter can render this event type.
 
         Default: returns False. Subclasses override with _supported_types check.
@@ -132,8 +139,8 @@ class LogEmitter(ABC):
         """
         return False
 
-    def emit(self, event: SecurityEvent) -> None:
-        """Render a SecurityEvent to this emitter's format.
+    def emit(self, event: CanonicalOccurrence) -> None:
+        """Render a CanonicalOccurrence to this emitter's format.
 
         Default: raises NotImplementedError. Subclasses implement per-type
         render methods during Phase 7.2 migration.
@@ -143,7 +150,7 @@ class LogEmitter(ABC):
         )
 
     def emit_raw(self, event_data: dict[str, Any]) -> None:
-        """Emit from raw dict -- escape hatch for RawLogEntry.
+        """Emit from raw dict -- escape hatch for RawProjectionRequest.
 
         Delegates to existing emit_event() pipeline.
         """

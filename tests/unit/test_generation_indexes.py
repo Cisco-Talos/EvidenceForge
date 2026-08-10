@@ -5,6 +5,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -71,6 +73,34 @@ def test_expiring_index_ignores_stale_deadlines_after_update() -> None:
     assert index.expire_before(20.0, inclusive=True) == []
     assert index.get("key") == "new"
     assert index.expire_before(30.0, inclusive=True) == [("key", "new")]
+
+
+def test_expiring_index_trims_earliest_deadlines_without_sorting_live_values() -> None:
+    """Capacity eviction should retain the longest-lived entries in deadline order."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("late", "late-value", 40.0)
+    index.set("early", "early-value", 10.0)
+    index.set("updated", "stale-value", 5.0)
+    index.set("updated", "updated-value", 30.0)
+
+    assert index.trim_earliest(2) == [("early", "early-value")]
+    assert list(index.items()) == [
+        ("late", "late-value"),
+        ("updated", "updated-value"),
+    ]
+
+
+def test_expiring_index_rejects_negative_capacity() -> None:
+    """A nonsensical capacity must fail before changing retained state."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("one", "value", 1.0)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        index.trim_earliest(-1)
+
+    assert index.get("one") == "value"
 
 
 def test_grouped_temporal_index_filters_history_and_preserves_insertion_order() -> None:

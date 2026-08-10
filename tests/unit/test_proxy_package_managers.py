@@ -9,7 +9,10 @@ from evidenceforge.generation.activity.generator import (
     ActivityGenerator,
     _linux_foreground_lifetime,
 )
-from evidenceforge.generation.activity.proxy_user_agents import normalize_proxy_user_agent_for_os
+from evidenceforge.generation.activity.proxy_user_agents import (
+    is_package_manager_destination,
+    normalize_proxy_user_agent_for_os,
+)
 from evidenceforge.models.scenario import System
 
 
@@ -42,6 +45,17 @@ def test_normalize_proxy_user_agent_replaces_libdnf_on_ubuntu_package_host() -> 
 
     assert "apt-http" in user_agent.lower()
     assert "libdnf" not in user_agent.lower()
+
+
+def test_package_manager_destination_is_os_specific() -> None:
+    """Maintenance cadence gates only repositories owned by the host package family."""
+    ubuntu = _system("APP-INT-01", "Ubuntu 22.04")
+    centos = _system("DB-PROD-01", "CentOS 8")
+
+    assert is_package_manager_destination(ubuntu, "security.ubuntu.com")
+    assert not is_package_manager_destination(centos, "security.ubuntu.com")
+    assert is_package_manager_destination(centos, "download.fedoraproject.org")
+    assert not is_package_manager_destination(ubuntu, "api.github.com")
 
 
 def test_normalize_proxy_user_agent_replaces_apt_on_centos_package_host() -> None:
@@ -94,8 +108,8 @@ def test_explicit_proxy_rejects_apt_hint_on_rpm_host() -> None:
 
 
 def test_apt_method_helper_has_package_update_lifetime() -> None:
-    """Apt method helper ownership should live long enough to cover repo fan-out."""
+    """APT transport helpers stay bounded inside their longer frontend transaction."""
     assert _linux_foreground_lifetime(
         "/usr/lib/apt/methods/https",
         "/usr/lib/apt/methods/https",
-    ) == (20.0, 180.0)
+    ) == (5.0, 60.0)

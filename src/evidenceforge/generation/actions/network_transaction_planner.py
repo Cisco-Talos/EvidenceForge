@@ -24,7 +24,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
@@ -34,7 +34,7 @@ from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
-    from evidenceforge.events.base import SecurityEvent
+    from evidenceforge.events.base import OccurrenceBuilder
     from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
     from evidenceforge.generation.activity.generator import ActivityGenerator
 
@@ -45,7 +45,7 @@ class _NetworkOccurrenceDraft:
 
     Protocol and source metadata sometimes need to repair the initial transport
     estimates. Keeping those mutations on an action-owned draft prevents an
-    incompletely planned ``SecurityEvent`` from escaping into state or renderers.
+    incompletely planned ``OccurrenceBuilder`` from escaping into state or renderers.
     """
 
     timestamp: datetime
@@ -54,11 +54,9 @@ class _NetworkOccurrenceDraft:
     local_only: bool = False
     process: Any = None
     network: Any = None
-    edr: Any = None
     dns: Any = None
     email: Any = None
     smtp: Any = None
-    ids: Any = None
     ids_alerts: list[Any] = field(default_factory=list)
     ssl: Any = None
     http: Any = None
@@ -75,7 +73,7 @@ class _NetworkOccurrenceDraft:
     firewall: Any = None
     parent_action_group_id: str | None = None
 
-    def build_event(self, generator_module: ModuleType) -> SecurityEvent:
+    def build_event(self, generator_module: ModuleType) -> OccurrenceBuilder:
         """Construct the canonical event only after the transaction is frozen."""
 
         if self.network is None or self.network.transaction is None:
@@ -83,20 +81,18 @@ class _NetworkOccurrenceDraft:
         from evidenceforge.events.lifecycle import ActionLifecycleContext
 
         transaction = self.network.transaction
-        return generator_module.SecurityEvent(
+        return generator_module.OccurrenceBuilder(
             timestamp=self.timestamp,
             event_type="connection",
             src_host=self.src_host,
             dst_host=self.dst_host,
             local_only=self.local_only,
             process=self.process,
-            network=self.network,
-            edr=self.edr,
+            network=transaction,
             dns=self.dns,
             email=self.email,
             smtp=self.smtp,
-            ids=self.ids,
-            ids_alerts=self.ids_alerts,
+            ids_alerts=tuple(self.ids_alerts),
             ssl=self.ssl,
             http=self.http,
             file_transfer=self.file_transfer,
@@ -176,6 +172,88 @@ class NetworkTransactionPlanner:
             latest_duration = max(0.001, (deadline - canonical_start).total_seconds() / 2)
         return latest_duration if duration is None else min(duration, latest_duration)
 
+    def _reconcile_application_payload(
+        self,
+        event: _NetworkOccurrenceDraft,
+        generator_module: ModuleType,
+    ) -> bool:
+        """Fit canonical application objects and framing inside transport payload."""
+
+        network = event.network
+        if network is None or network.protocol != "tcp" or network.conn_state != "SF":
+            return False
+
+        orig_floor = 0
+        resp_floor = 0
+        if event.http is not None:
+            http_orig, http_resp = generator_module._http_flow_payload_bytes(event.http)
+            orig_floor = max(orig_floor, http_orig)
+            resp_floor = max(resp_floor, http_resp)
+
+        grouped: dict[bool, list[Any]] = {True: [], False: []}
+        for transfer in (event.file_transfer, *event.file_transfers):
+            if transfer is not None and transfer not in grouped[transfer.is_orig]:
+                grouped[transfer.is_orig].append(transfer)
+        for is_orig, transfers in grouped.items():
+            if not transfers:
+                continue
+            accounted_bytes = [
+                transfer.total_bytes
+                if transfer.total_bytes is not None
+                else transfer.seen_bytes + transfer.missing_bytes
+                for transfer in transfers
+            ]
+            total_bytes = sum(accounted_bytes)
+            framing_bytes = sum(
+                max(128, 96 * max(1, (max(1, size) + 65_535) // 65_536))
+                if transfer.source.upper() == "SMB"
+                else 192
+                for transfer, size in zip(transfers, accounted_bytes, strict=True)
+            )
+            file_floor = total_bytes + framing_bytes
+            if is_orig:
+                orig_floor = max(orig_floor, file_floor)
+            else:
+                resp_floor = max(resp_floor, file_floor)
+
+        previous = (network.orig_bytes or 0, network.resp_bytes or 0)
+        network.orig_bytes = max(previous[0], orig_floor)
+        network.resp_bytes = max(previous[1], resp_floor)
+        if (network.orig_bytes, network.resp_bytes) == previous:
+            return False
+
+        accounting_rng = generator_module.random.Random(
+            _stable_seed(
+                "network_application_payload_accounting:"
+                f"{network.src_ip}:{network.src_port}:{network.dst_ip}:{network.dst_port}:"
+                f"{network.protocol}:{network.zeek_uid}"
+            )
+        )
+        network.orig_pkts, network.resp_pkts = (
+            generator_module._tcp_packet_counts_from_payload_and_history(
+                network.orig_bytes,
+                network.resp_bytes,
+                network.history,
+                accounting_rng,
+            )
+        )
+        network.orig_ip_bytes = generator_module._tcp_ip_byte_count(
+            network.orig_bytes,
+            network.orig_pkts,
+            accounting_rng,
+        )
+        network.resp_ip_bytes = generator_module._tcp_ip_byte_count(
+            network.resp_bytes,
+            network.resp_pkts,
+            accounting_rng,
+        )
+        self._executor.state_manager.update_connection_bytes(
+            network.conn_id,
+            network.orig_bytes,
+            network.resp_bytes,
+        )
+        return True
+
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one network connection request into canonical evidence."""
         from evidenceforge.generation.actions.file_transfer import (
@@ -210,7 +288,6 @@ class NetworkTransactionPlanner:
         smtp = request.smtp
         x509 = request.x509
         x509_chain = request.x509_chain
-        ids = request.ids
         ids_alerts = list(request.ids_alerts)
         http = request.http
         caller_supplied_http = http is not None
@@ -236,7 +313,7 @@ class NetworkTransactionPlanner:
         preserve_start_time = request.preserve_start_time
         caller_supplied_pid = pid > 0
 
-        from evidenceforge.events.contexts import NetworkContext
+        from evidenceforge.events.contexts import NetworkTransactionDraft
 
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
@@ -519,7 +596,6 @@ class NetworkTransactionPlanner:
                 source_system=source_system,
                 conn_state=conn_state,
                 dns=dns,
-                ids=ids,
                 ids_alerts=ids_alerts,
                 http=http,
                 file_transfer=file_transfer,
@@ -604,7 +680,13 @@ class NetworkTransactionPlanner:
                     reuse_deadline = (
                         cached.close_deadline - generator_module._HTTP_PERSISTENT_REUSE_GUARD
                     )
-                    elapsed = (time - reuse_deadline).total_seconds()
+                    requested_time = http.canonical_request_time or time
+                    ordered_request_time = max(
+                        requested_time,
+                        cached.last_request_time
+                        + generator_module._HTTP_PERSISTENT_TRANSACTION_GAP,
+                    )
+                    elapsed = (ordered_request_time - reuse_deadline).total_seconds()
                     request_body = http.request_body_len or 0
                     response_body = http.response_body_len or 0
                     fits_parent_flow = (
@@ -612,14 +694,20 @@ class NetworkTransactionPlanner:
                         and cached.used_resp + response_body <= cached.resp_budget
                     )
                     if elapsed <= 0 and fits_parent_flow:
+                        time = ordered_request_time
                         src_port = cached.src_port
                         reused_http_uid = cached.uid
                         reused_http_conn_id = cached.conn_id
                         http_application_layer_only = True
-                        http = generator_module.replace(http, trans_depth=cached.next_trans_depth)
+                        http = generator_module.replace(
+                            http,
+                            trans_depth=cached.next_trans_depth,
+                            canonical_request_time=ordered_request_time,
+                        )
                         cached.next_trans_depth += 1
                         cached.used_orig += request_body
                         cached.used_resp += response_body
+                        cached.last_request_time = ordered_request_time
                     else:
                         executor._http_persistent_connections.pop(http_persistent_key, None)
                 if not http_application_layer_only:
@@ -721,29 +809,28 @@ class NetworkTransactionPlanner:
                 resolved_process = None
                 drop_explicit_pid_without_inference = caller_supplied_pid
             elif (
-                not caller_supplied_pid
-                and (
-                    inferred_end_plan := executor.state_manager.process_session_end_plan(
-                        resolved_source_system.hostname,
-                        pid,
+                (
+                    owning_end_plan := executor.state_manager.process_session_end_plan(
+                        resolved_source_system.hostname, pid
                     )
                 )
                 is not None
-                and inferred_end_plan.is_authoritative
-                and ensure_utc(time) >= ensure_utc(inferred_end_plan.canonical_end)
+                and owning_end_plan.is_authoritative
+                and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
             ):
                 generator_module.logger.debug(
-                    "Dropping inferred connection PID after its owning session ended: "
+                    "Dropping connection PID after its owning session ended: "
                     "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
                     resolved_source_system.hostname,
                     pid,
-                    inferred_end_plan.canonical_end,
+                    owning_end_plan.canonical_end,
                     time,
                     dst_ip,
                     dst_port,
                 )
                 pid = -1
                 resolved_process = None
+                drop_explicit_pid_without_inference = caller_supplied_pid
             elif (
                 resolved_process
                 and resolved_process.start_time
@@ -1020,8 +1107,8 @@ class NetworkTransactionPlanner:
                         "S2": "ShADadF",
                         "S3": "ShADadf",
                         "RSTO": "ShADaR",
-                        "RSTR": "ShADadR",
-                        "S1": "ShR",
+                        "RSTR": "ShADadr",
+                        "S1": "Sh",
                     }.get(conn_state, generator_module._tcp_success_history(rng))
             if conn_state in ("S0", "REJ"):
                 duration = None
@@ -1330,10 +1417,15 @@ class NetworkTransactionPlanner:
 
         ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
 
-        # Probabilistic missed_bytes for long TCP connections (~3% chance, more for bulk transfers)
+        # Capture loss is source-observation truth, not a canonical connection property.
         missed_bytes = 0
-        if proto == "tcp" and duration and duration > 10.0 and rng.random() < 0.03:
-            missed_bytes = rng.randint(500, 50000)
+        if proto == "tcp" and duration and duration > 10.0:
+            # Preserve this planner's RNG scope while source observation takes
+            # ownership of the resulting loss; unrelated protocol choices must
+            # not change merely because the fact moved to its canonical owner.
+            capture_loss_shape_roll = rng.random()
+            if capture_loss_shape_roll < 0.03:
+                rng.randint(500, 50000)
 
         if not preserve_start_time:
             time = generator_module._zeek_conn_observation_time(
@@ -1354,6 +1446,29 @@ class NetworkTransactionPlanner:
                 time,
             )
         else:
+            if pid > 0 and resolved_source_system is not None:
+                final_end_plan = executor.state_manager.process_session_end_plan(
+                    resolved_source_system.hostname,
+                    pid,
+                )
+                if (
+                    final_end_plan is not None
+                    and final_end_plan.is_authoritative
+                    and ensure_utc(time) >= ensure_utc(final_end_plan.canonical_end)
+                ):
+                    generator_module.logger.debug(
+                        "Dropping connection PID after source timing crossed its session end: "
+                        "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
+                        resolved_source_system.hostname,
+                        pid,
+                        final_end_plan.canonical_end,
+                        time,
+                        dst_ip,
+                        dst_port,
+                    )
+                    pid = -1
+                    resolved_process = None
+                    process_image = None
             duration = self._cap_to_owning_session(
                 start=time,
                 duration=duration,
@@ -1449,7 +1564,7 @@ class NetworkTransactionPlanner:
             service = ""
 
         # Phase 2: Resolve event-side ownership into an action-owned draft. The
-        # canonical SecurityEvent is constructed only after the transaction is
+        # canonical OccurrenceBuilder is constructed only after the transaction is
         # finalized below.
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
         src_host_ctx = None
@@ -1465,13 +1580,9 @@ class NetworkTransactionPlanner:
             if real_dst_ip and real_dst_ip in executor._ip_to_system:
                 dst_host_ctx = executor._build_host_context(executor._ip_to_system[real_dst_ip])
 
-        # Resolve eCAR actor_id from initiating process (if pid is known)
-        conn_actor_id = ""
+        # Resolve the canonical initiating process when its PID is known.
         process_ctx = None
         if pid > 0 and resolved_source_system:
-            conn_actor_id = executor.state_manager.get_process_object_id(
-                resolved_source_system.hostname, pid
-            )
             running = resolved_process or executor.state_manager.get_process(
                 resolved_source_system.hostname, pid
             )
@@ -1545,7 +1656,7 @@ class NetworkTransactionPlanner:
             dst_host=dst_host_ctx,
             local_only=local_only,
             process=process_ctx,
-            network=NetworkContext(
+            network=NetworkTransactionDraft(
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
@@ -1571,23 +1682,9 @@ class NetworkTransactionPlanner:
                 responding_pid=responding_pid,
                 application_layer_only=http_application_layer_only,
             ),
-            edr=generator_module.EdrContext(
-                object_id=generator_module.stable_uuid(
-                    "connection-edr",
-                    src_ip,
-                    src_port,
-                    dst_ip,
-                    dst_port,
-                    proto,
-                    time.isoformat(),
-                ),
-                actor_id=conn_actor_id,
-            ),
         )
 
         # Caller-provided context overrides
-        if ids is not None:
-            event.ids = ids
         if ids_alerts:
             event.ids_alerts = list(ids_alerts)
         if email is not None:
@@ -1612,7 +1709,10 @@ class NetworkTransactionPlanner:
             )
             event.x509 = event.x509_chain[0]
             if event.ssl is not None:
-                event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
+                event.ssl = replace(
+                    event.ssl,
+                    cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
+                )
         if http is not None:
             event.http = http
         if file_transfer is not None:
@@ -2384,6 +2484,8 @@ class NetworkTransactionPlanner:
                     close_time=close_time,
                 )
 
+        self._reconcile_application_payload(event, generator_module)
+
         executor._repair_explicit_proxy_listener_process_attribution(
             event,
             source_system=resolved_source_system,
@@ -2419,7 +2521,7 @@ class NetworkTransactionPlanner:
         # Finalize the canonical source-visible interval only after every protocol,
         # payload, and process-visibility adjustment has settled. Dispatch creates
         # source-local event copies with collection delay, so the immutable interval
-        # must live on NetworkContext rather than be re-derived from those copies.
+        # must live on the finalized transaction rather than be re-derived from those copies.
         event.network.duration = self._cap_to_owning_session(
             start=event.timestamp,
             duration=event.network.duration,
@@ -2438,6 +2540,16 @@ class NetworkTransactionPlanner:
             event.network.source_visible_start_time,
             event.network.source_visible_close_time,
         )
+        if (
+            event.network.service
+            and event.network.protocol != "icmp"
+            and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) == 0
+        ):
+            # Zeek's conn.log service field records a protocol analyzer that
+            # confirmed payload parsing, not a well-known-port guess. Retain
+            # the requested service while planning children, then clear it at
+            # the canonical boundary when no application bytes were observed.
+            event.network.service = ""
         canonical_start = event.network.source_visible_start_time
         canonical_close = event.network.source_visible_close_time
         phase_times: list[tuple[str, datetime]] = [("transport_start", canonical_start)]
@@ -2465,6 +2577,37 @@ class NetworkTransactionPlanner:
             hostname=hostname or event.network.dst_ip,
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),
+        )
+        if event.http is not None and event.http.canonical_request_time is None:
+            event.http = replace(event.http, canonical_request_time=event.timestamp)
+        from evidenceforge.generation.actions.ids_alert import (
+            ids_alert_matches_transaction,
+            normalize_ids_alerts,
+        )
+
+        transaction = event.network.transaction
+        if transaction is None:
+            raise ValueError("Network transaction disappeared after finalization")
+        attached_files = tuple(
+            candidate
+            for candidate in (event.file_transfer, *event.file_transfers)
+            if candidate is not None
+        )
+        event.ids_alerts = list(
+            normalize_ids_alerts(
+                [
+                    alert
+                    for alert in event.ids_alerts
+                    if ids_alert_matches_transaction(
+                        alert,
+                        transaction,
+                        http=event.http,
+                        dns=event.dns,
+                        ssl=event.ssl,
+                        file_transfers=attached_files,
+                    )
+                ]
+            )
         )
         event = event.build_event(generator_module)
 
@@ -2499,6 +2642,7 @@ class NetworkTransactionPlanner:
                     ),
                     used_orig=event.http.request_body_len or 0,
                     used_resp=event.http.response_body_len or 0,
+                    last_request_time=event.http.canonical_request_time or event.timestamp,
                 )
             )
 
@@ -2512,8 +2656,8 @@ class NetworkTransactionPlanner:
                 event.network.protocol,
             )
             executor._last_connection_effective_time = event.timestamp
-            executor._last_connection_effective_transaction_id = event.network.transaction.stable_id
-        network_identifiers_by_format = executor.dispatcher.dispatch(event) or {}
+            executor._last_connection_effective_transaction_id = event.network.stable_id
+        network_identifiers_by_format = executor.dispatcher.dispatch_builder(event) or {}
         executor._maybe_emit_ocsp_transaction(event)
         if generic_ssh_preauth_pid is not None and target_system is not None:
             executor._emit_generic_ssh_preauth_failure_syslog(
@@ -2544,14 +2688,9 @@ class NetworkTransactionPlanner:
             executor.generate_wfp_connection(
                 system=wfp_system,
                 time=time,
-                src_ip=src_ip,
-                src_port=src_port,
-                dst_ip=dst_ip,
-                dst_port=dst_port,
-                protocol=proto,
+                network=event.network,
                 pid=pid,
                 application=wfp_application,
-                transport_transaction_id=request.stable_id,
                 parent_action_group_id=parent_action_group_id,
             )
 
@@ -2571,14 +2710,9 @@ class NetworkTransactionPlanner:
             executor.generate_wfp_connection(
                 system=target_system,
                 time=time,
-                src_ip=src_ip,
-                src_port=src_port,
-                dst_ip=target_system.ip,
-                dst_port=dst_port,
-                protocol=proto,
+                network=event.network,
                 pid=inbound_pid,
                 application=inbound_application,
-                transport_transaction_id=request.stable_id,
                 parent_action_group_id=parent_action_group_id,
             )
 

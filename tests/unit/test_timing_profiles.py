@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import (
@@ -17,6 +17,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     network_sensor_observation_timing,
     reset_timing_profiles_cache,
     sample_timing_delta,
+    startup_module_observation_timing,
     windows_collision_spacing_config,
 )
 from evidenceforge.generation.causal.engine import ExpandedEvent
@@ -93,9 +94,9 @@ def test_timing_profiles_load_default_relationship():
         default_max_ms=0,
         default_position="after",
     )
-    assert security_process_window.max_ms <= 1000
+    assert security_process_window.max_ms <= 25
     assert 0 < security_terminate_window.min_ms < security_terminate_window.max_ms
-    assert sysmon_process_window.max_ms <= 1200
+    assert sysmon_process_window.max_ms <= 25
     assert 0 < sysmon_terminate_window.min_ms < sysmon_terminate_window.max_ms
     assert ecar_process_window.max_ms >= 900
     assert 0 < ecar_after_sysmon_window.min_ms < ecar_after_sysmon_window.max_ms
@@ -204,7 +205,8 @@ def test_timing_profiles_load_default_relationship():
     assert sensor_timing.path_delay_min_us == 500
     assert sensor_timing.path_delay_max_us == 25000
     assert sensor_timing.clock_drift_min_ppm == -1
-    assert sensor_timing.event_jitter_max_us == 90000
+    assert sensor_timing.event_jitter_min_us == -1500
+    assert sensor_timing.event_jitter_max_us == 1500
     assert sensor_timing.capture_loss_probability == 0.12
 
     endpoint_timing = endpoint_clock_timing("enterprise_standard", "windows")
@@ -309,6 +311,15 @@ def test_sample_timing_delta_is_deterministic_and_bounded():
     assert timedelta(milliseconds=20) <= first <= timedelta(milliseconds=1500)
 
 
+def test_startup_module_observation_timing_is_bounded_and_heavy_tailed():
+    timing = startup_module_observation_timing()
+
+    assert 0 < timing.initial_delay_min_us < timing.initial_delay_max_us
+    assert timing.inter_load_gap_min_us < timing.inter_load_gap_median_us
+    assert timing.inter_load_gap_median_us < timing.inter_load_gap_max_us
+    assert 0.05 <= timing.inter_load_gap_sigma <= 3.0
+
+
 def test_windows_process_source_timing_respects_visible_parent_create():
     """Child process source-create times should not sort before visible parent create."""
     generator = object.__new__(ActivityGenerator)
@@ -316,7 +327,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
     parent_visible_time = datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC)
     generator._process_source_create_times = {("WS-01", 1000): parent_visible_time}
     event_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=event_time,
         event_type="process_create",
         src_host=HostContext(
@@ -403,7 +414,7 @@ def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
     generator._process_source_terminate_times = {}
     start_time = datetime(2024, 3, 18, 17, 15, 41, tzinfo=UTC)
     terminate_time = start_time + timedelta(seconds=8)
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=terminate_time,
         event_type="process_terminate",
         src_host=HostContext(
@@ -440,7 +451,7 @@ def test_process_source_terminate_time_uses_stored_visible_create_anchor():
     visible_create_time = start_time + timedelta(milliseconds=350)
     generator._process_source_create_times = {("WS-01", 5396): visible_create_time}
     generator._process_source_terminate_times = {}
-    event = SecurityEvent(
+    event = OccurrenceBuilder(
         timestamp=terminate_time,
         event_type="process_terminate",
         src_host=HostContext(

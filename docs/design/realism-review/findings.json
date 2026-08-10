@@ -1,0 +1,977 @@
+{
+  "schema_version": "evidenceforge-realism-review-findings/v1",
+  "baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "reviewed_at": "2026-08-05",
+  "priority_scale": {
+    "P0": "release-blocking data corruption or architecture failure",
+    "P1": "high-impact realism/correctness defect",
+    "P2": "material defect or security medium",
+    "P3": "bounded defect, security low, or important hardening",
+    "P4": "future enhancement"
+  },
+  "findings": [
+    {
+      "id": "ARCH-001",
+      "category": "architectural_risk",
+      "root_cause_family": "missing_internal_contract_registry",
+      "priority": "P1",
+      "title": "Canonical event contracts are neither centralized nor enforced",
+      "confidence": "high",
+      "violated_invariant": "Every internal event kind has one declared producer contract, legal context combination, host-direction meaning, state effect, lifecycle role, and consumer set.",
+      "owning_layer": "canonical event model and dispatcher boundary",
+      "affected_paths": {
+        "entry_paths": ["authored", "baseline", "red_herring", "startup", "causal_expansion", "internal"],
+        "source_families": ["all"],
+        "code": ["src/evidenceforge/events/base.py:39", "src/evidenceforge/events/dispatcher.py:228"]
+      },
+      "exact_evidence": {
+        "static": "SecurityEvent requires only timestamp and a free-form event_type across 55 fields; event legality is distributed through constructors and emitter can_handle methods.",
+        "dynamic": "A context-free SecurityEvent(event_type='connection') dispatches successfully, receives an event ID, and renders no evidence. Reproduction is recorded in architecture-object-model.md."
+      },
+      "recurrence": "Systemic: 66 discovered internal names, 68 constructors, 38 mutable contexts, and 23 emitter registrations require reverse-engineered joins.",
+      "reproduction": "Run the missing-canonical-event-contract probe in architecture-object-model.md.",
+      "sibling_risk": "Silent drops, illegal host direction, unsupported context combinations, unreviewed future event strings, and incompatible alternate constructors.",
+      "proposed_remediation": "Approve and introduce EventKindContract plus a sealed occurrence builder; make dispatch reject incomplete or unknown canonical events.",
+      "required_tests": ["table-driven contract test for every event kind", "negative tests for every missing/forbidden context", "inventory test proving producer and consumer closure"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "A closed registry, table-driven required/forbidden context checks, identity requirements, and dispatch-time rejection now prevent unknown or incomplete canonical occurrences from reaching state or emitters. Construction remains a mutable compatibility carrier and producer/host-direction permissions are not yet a sealed builder contract.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
+    },
+    {
+      "id": "ARCH-002",
+      "category": "architectural_risk",
+      "root_cause_family": "time_domain_boundary_violation",
+      "priority": "P1",
+      "title": "Source-observation time mutates canonical lifecycle state",
+      "confidence": "high",
+      "violated_invariant": "Canonical state changes only at canonical occurrence time; observation delay and host clock projection never feed back into world state.",
+      "owning_layer": "dispatcher, observation, source timing, and StateManager",
+      "affected_paths": {
+        "entry_paths": ["all process-owning paths"],
+        "source_families": ["ecar", "windows_event_sysmon"],
+        "code": ["src/evidenceforge/events/dispatcher.py:228", "src/evidenceforge/generation/state_manager.py:1"]
+      },
+      "exact_evidence": {
+        "static": "Dispatcher commits canonical state, derives per-source timestamps, then calls update_process_activity_time with a delayed per-emitter event copy.",
+        "test_contract": "tests/unit/test_dispatcher.py::TestObservationProfiles::test_delayed_process_source_observation_extends_process_activity explicitly expects a 900,000 ms source delay to extend RunningProcess.last_activity_time."
+      },
+      "recurrence": "Systemic for process evidence admitted to delayed endpoint sources.",
+      "reproduction": "Run the named dispatcher unit test and inspect the state timestamp after dispatch.",
+      "sibling_risk": "Artificial lifetime extension, PID reuse suppression, action attribution after canonical termination, and format-dependent state.",
+      "proposed_remediation": "Adopt explicit CanonicalTime and ObservedTime types and prohibit observation code from issuing state commands.",
+      "required_tests": ["state equality across observation profiles", "process reuse invariance under source delay", "no observed-time StateManager calls"],
+      "remediation": {
+        "status": "resolved_in_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "Dispatcher source-delay copies no longer update canonical process activity; StateManager consumes the canonical event once before observation and source-local delay remains projection-only.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
+    },
+    {
+      "id": "ARCH-003",
+      "category": "architectural_risk",
+      "root_cause_family": "mutable_parallel_truth",
+      "priority": "P1",
+      "title": "Mutable compatibility contexts coexist with immutable canonical plans",
+      "confidence": "high",
+      "violated_invariant": "A shared fact has one authoritative immutable owner after finalization.",
+      "owning_layer": "SecurityEvent/context builders and projection boundary",
+      "affected_paths": {
+        "entry_paths": ["network", "identity", "TLS", "proxy", "authentication", "file transfer"],
+        "source_families": ["all correlated outputs"],
+        "code": ["src/evidenceforge/events/base.py:39", "src/evidenceforge/events/contexts.py:1", "src/evidenceforge/generation/emitters/sysmon.py:1"]
+      },
+      "exact_evidence": {
+        "static": "All 38 occurrence contexts are mutable; duplicate representations include ids/ids_alerts, file_transfer/file_transfers, x509/x509_chain, mutable NetworkContext plus NetworkTransactionPlan, and EdrContext plus EventIdentityPlan. Sysmon recomputes destination hostname and constructs a synthetic process_create event for timing.",
+        "coverage": "The census classifies windows_event_sysmon as an incompatible projection bypass."
+      },
+      "recurrence": "Cross-cutting; only NetworkContext and EdrContext provide partial plan-versus-compatibility validation.",
+      "reproduction": "Inspect the duplicate fields in event-context-paths.json and Sysmon projection paths in event-context-path-census.md.",
+      "sibling_risk": "Per-source hostname, identity, accounting, timing, or certificate drift after shallow event copies.",
+      "proposed_remediation": "Use private mutable builders followed by one freeze/seal step; remove renderer access to mutable compatibility truth after sealing.",
+      "required_tests": ["mutation-after-seal rejection", "plan/context projection equality", "cross-format shared-fact equality"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "Identity, network, protocol, proxy, TLS, OCSP, ground-truth, and observation slices gained immutable plans across earlier batches; Batch 7 removed the duplicate mutable per-sensor NAT map. Public mutable context views remain migration debt while live consumers exist.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
+    },
+    {
+      "id": "ARCH-004",
+      "category": "architectural_risk",
+      "root_cause_family": "split_action_ownership",
+      "priority": "P1",
+      "title": "Action bundles route calls but often do not own lifecycle construction",
+      "confidence": "high",
+      "violated_invariant": "Each real-world action family has one bundle owner shared by storyline, baseline, red-herring, startup, and causal callers.",
+      "owning_layer": "action orchestration",
+      "affected_paths": {
+        "entry_paths": ["all"],
+        "source_families": ["all"],
+        "code": ["src/evidenceforge/generation/actions/base.py:1", "src/evidenceforge/generation/activity/generator.py:1", "src/evidenceforge/generation/engine/baseline.py:1", "src/evidenceforge/generation/engine/storyline.py:1"]
+      },
+      "exact_evidence": {
+        "static": "Thirty-three anchored bundles immediately delegate to legacy _execute_* methods. ActivityGenerator is 22,407 lines; BaselineMixin is 8,409; StorylineMixin is 5,456; _execute_typed_event is 2,846.",
+        "census": "Process termination retains separate user and system owners; process/file/image paths also have direct alternate constructors."
+      },
+      "recurrence": "Systemic across process, auth, DNS, DHCP, Kerberos, Windows audit, scanner, and email families.",
+      "reproduction": "Use generator_methods and action_bundles rows in event-context-paths.json.",
+      "sibling_risk": "New entry paths bypass lifecycle, timing, identity, or observation rules while appearing architecturally compliant.",
+      "proposed_remediation": "Extract vertical slices in dependency order and make legacy generator methods private adapters into bundle-owned planners.",
+      "required_tests": ["entry-path equivalence by action family", "bundle owns every emitted occurrence role", "no direct stateful constructor outside owner"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_6",
+        "evidence": "Session/authentication, network/protocol/IDS, world-capability, projection, and input-boundary vertical slices now use canonical owners, but legacy _execute adapters and direct constructors remain in unextracted families.",
+        "results": "docs/design/realism-review/final-report.md"
+      }
+    },
+    {
+      "id": "ARCH-005",
+      "category": "architectural_risk",
+      "root_cause_family": "distributed_timing_constraints",
+      "priority": "P1",
+      "title": "Timing constraints are distributed and order-sensitive",
+      "confidence": "high",
+      "violated_invariant": "One action graph resolves canonical occurrence constraints before observation and source-native timing projection.",
+      "owning_layer": "action planners and source timing",
+      "affected_paths": {
+        "entry_paths": ["SSH", "RDP", "network", "process", "file", "proxy", "TLS"],
+        "source_families": ["ecar", "syslog", "Zeek", "Windows"],
+        "code": ["src/evidenceforge/generation/timing.py:1", "src/evidenceforge/generation/source_timing.py:1", "src/evidenceforge/events/dispatcher.py:228"]
+      },
+      "exact_evidence": {
+        "static": "Timing is split among bundle constraint graphs, generator clamps, state registries, dispatcher special cases, source timing, and renderer-local calculations.",
+        "rendered": "Integrated output has two source-side RDP FLOW records after target authentication and 21 Zeek file intervals ending 1-2 ms beyond the parent connection."
+      },
+      "recurrence": "Multiple independent families in one integrated run.",
+      "reproduction": "Run realism_review_probe.py against branch-enterprise and inspect ecar_rdp_transport_before_auth and zeek_file_interval.",
+      "sibling_risk": "Transport/auth inversion, orphaned lifecycle evidence, closure outside collection windows, and source-specific impossible sequences.",
+      "proposed_remediation": "Approve an ActionTimeline contract with typed nodes/edges, then derive every source time from its frozen solution.",
+      "required_tests": ["constraint property tests", "cross-source interval containment", "all source times derived from sealed timeline"],
+      "remediation": {
+        "status": "partially_resolved_through_batch_3",
+        "evidence": "SSH, RDP, process/session, network, protocol, file, and IDS timing contradictions were repaired with bundle graphs and authoritative intervals. A single universal sealed ActionTimeline has not replaced all distributed clamps.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
+    },
+    {
+      "id": "ARCH-006",
+      "category": "architectural_risk",
+      "root_cause_family": "fail_open_string_dispatch",
+      "priority": "P1",
+      "title": "Causal expansion uses string callbacks and fails open",
+      "confidence": "high",
+      "violated_invariant": "Required causal evidence is typed, validated, and either produced or generation fails explicitly.",
+      "owning_layer": "causal expansion engine",
+      "affected_paths": {
+        "entry_paths": ["causal_expansion"],
+        "source_families": ["DNS", "Kerberos", "Windows audit", "process access"],
+        "code": ["src/evidenceforge/generation/causal/engine.py:1", "src/evidenceforge/generation/causal/rules.py:1"]
+      },
+      "exact_evidence": {
+        "static": "Rules resolve executor method names as strings and catch expansion exceptions.",
+        "dynamic": "A matching rule whose expand raises RuntimeError logs a traceback and returns [], allowing the triggering path to continue."
+      },
+      "recurrence": "All automatic causal rules share the engine behavior.",
+      "reproduction": "Run the fail-open causal-expansion probe in architecture-object-model.md.",
+      "sibling_risk": "Silent missing prerequisites, partial narratives, non-reproducible evaluator failures, and renaming drift.",
+      "proposed_remediation": "Replace method-name callbacks with typed bundle requests and classify causal rules as required or best-effort with explicit result status.",
+      "required_tests": ["required-rule failure aborts", "best-effort rule records omission", "static type closure for every rule request"]
+    },
+    {
+      "id": "ARCH-007",
+      "category": "architectural_risk",
+      "root_cause_family": "unstable_occurrence_identity_and_parallel_truth",
+      "priority": "P2",
+      "title": "Occurrence identity and ground truth are parallel, sequence-sensitive models",
+      "confidence": "high",
+      "violated_invariant": "Evidence occurrence IDs derive from stable action identity and role, and ground truth is projected from the same action graph.",
+      "owning_layer": "dispatcher identity and ground-truth construction",
+      "affected_paths": {
+        "entry_paths": ["all"],
+        "source_families": ["ground truth", "all event IDs"],
+        "code": ["src/evidenceforge/events/dispatcher.py:228", "src/evidenceforge/generation/ground_truth.py:1", "src/evidenceforge/events/ground_truth.py:1"]
+      },
+      "exact_evidence": {
+        "dynamic": "Inserting one unrelated earlier event changes the target event ID at the same type and timestamp.",
+        "static": "Storyline/red-herring dictionaries, observation registry, and emitter summaries are reconciled imperatively into ground truth rather than projected from action occurrences."
+      },
+      "recurrence": "Global event sequence affects every occurrence ID; ground-truth assembly spans all storyline families.",
+      "reproduction": "Run the sequence-sensitive event identity probe in architecture-object-model.md.",
+      "sibling_risk": "Unrelated feature changes invalidate joins, golden fixtures, truth references, and evaluation baselines.",
+      "proposed_remediation": "Adopt ActionId plus OccurrenceRole-derived IDs and make truth/observation ledgers projections of the sealed action graph.",
+      "required_tests": ["prefix-insertion ID stability", "truth-to-occurrence referential integrity", "repeat and format-filter truth equivalence"],
+      "remediation": {
+        "status": "partially_resolved_in_batch_5",
+        "branch": "codex/batch5-projection-evaluation",
+        "evidence": "Authored intent, execution occurrences, and source observations now reconcile into ground truth with non-vacuous evaluation. Legacy event IDs remain sequence-sensitive where no semantic occurrence key exists.",
+        "results": "docs/design/realism-review/batch5-results.json"
+      }
+    },
+    {
+      "id": "ARCH-008",
+      "category": "documentation_drift",
+      "root_cause_family": "declared_contract_exceeds_implemented_contract",
+      "priority": "P2",
+      "title": "Architecture documentation and registered surfaces overstate reachability and ownership",
+      "confidence": "high",
+      "violated_invariant": "Documented event, format, and bundle contracts are generated and tested through production paths.",
+      "owning_layer": "architecture/reference documentation and registrations",
+      "affected_paths": {
+        "entry_paths": ["internal", "formats"],
+        "source_families": ["windows_event_security", "windows_event_sysmon", "zeek_weird", "email"],
+        "code": ["docs/ARCHITECTURE.md:1", "src/evidenceforge/generation/emitters/zeek_weird.py:1"]
+      },
+      "exact_evidence": {
+        "census": "module_load and special_privileges are emitter-supported without production producers; WeirdContext has no production constructor; EmailContext has no emitter/evaluator consumer; three bundles lack ActionAnchor and three lack direct tests.",
+        "coverage": "coverage-summary.json lists every unresolved inventory item explicitly."
+      },
+      "recurrence": "Six context/format/bundle gaps plus stale architecture completion language.",
+      "reproduction": "Run realism_review_inventory.py and inspect unresolved_static_inventory.",
+      "sibling_risk": "Users enable formats that never emit, reviewers assume owners that are adapters, and new code copies stale patterns.",
+      "proposed_remediation": "After contracts are approved, remove dead registrations or add real producers and update architecture status to measured conformance.",
+      "required_tests": ["production reachability test per format", "bundle protocol conformance", "docs inventory generated from registry"],
+      "remediation": {
+        "status": "partially_resolved_in_batch_7",
+        "branch": "codex/batch7-compatibility-docs",
+        "evidence": "The unreachable module_load and special_privileges registrations were removed and architecture/scenario/evaluation/security status was reconciled. Weird/email reachability and remaining bundle protocol gaps stay explicit in the static inventory.",
+        "results": "docs/design/realism-review/batch7-results.json"
+      }
+    },
+    {
+      "id": "REAL-001",
+      "category": "current_defect",
+      "root_cause_family": "process_reuse_ignores_session_owner",
+      "priority": "P1",
+      "title": "Connection-owner processes are reused across ended or different logon sessions",
+      "confidence": "high",
+      "violated_invariant": "A process belongs to exactly one live session, and one-shot SSH client processes do not own overlapping independent sessions.",
+      "owning_layer": "process/session lifecycle owner",
+      "affected_paths": {
+        "entry_paths": ["baseline SSH", "storyline SSH", "connection attribution", "explicit proxy/browser"],
+        "source_families": ["ecar", "windows_event_sysmon"],
+        "code": ["src/evidenceforge/generation/activity/generator.py:6293", "src/evidenceforge/generation/activity/generator.py:7458"]
+      },
+      "exact_evidence": {
+        "static": "Both reuse filters match username/image/command/time but never require proc.logon_id == selected session.logon_id.",
+        "rendered": "The integrated probe finds five ssh.exe actors owning overlapping TCP/22 intervals and three processes producing or terminating after their owning LogonID logged out."
+      },
+      "recurrence": "All four blind reviewers emphasized lifecycle realism; historical session-closure reports show the same family.",
+      "reproduction": "Run realism_review_probe.py and inspect ecar_ssh_actor_overlapping_connections and ecar_process_after_session_logout.",
+      "sibling_risk": "Browser/proxy reuse, scp/sftp clients, remote admin tools, stale parentage, and PID retention across interactive logons.",
+      "proposed_remediation": "Make ProcessIdentity carry immutable SessionIdentity and require session match for reuse; create one-shot SSH clients per transport unless multiplexing is explicit.",
+      "required_tests": ["no actor use after logout", "no session-crossing reuse", "SSH overlap only with explicit multiplexing", "proxy/browser sibling tests"],
+      "remediation": {
+        "status": "resolved_in_batch_2_and_gate_repairs",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Session-scoped process reuse, SSH client ownership, owner-end containment, and source-observation lifecycle checks were centralized and survived the bounded post-Batch-2 blind gate.",
+        "results": "docs/design/realism-review/post-gate-loop5-blind/summary.md"
+      }
+    },
+    {
+      "id": "REAL-002",
+      "category": "current_defect",
+      "root_cause_family": "session_identity_mutates_after_publication",
+      "priority": "P1",
+      "title": "One LogonID can change from zero to nonzero LogonGuid",
+      "confidence": "high",
+      "violated_invariant": "LogonID-to-LogonGuid identity is immutable for a session.",
+      "owning_layer": "session identity planning",
+      "affected_paths": {
+        "entry_paths": ["Windows logon", "process creation"],
+        "source_families": ["windows_event_sysmon", "ecar"],
+        "code": ["src/evidenceforge/generation/activity/generator.py:9050", "src/evidenceforge/generation/state_manager.py:1", "src/evidenceforge/generation/emitters/sysmon.py:1"]
+      },
+      "exact_evidence": {
+        "static": "get_or_create_session_logon_guid may return zero when nonzero is not required; a later auth package can persist a nonzero GUID for the same session.",
+        "rendered": "Two LogonIDs in WS-NKAPOOR Sysmon rows each have both all-zero and nonzero GUID values."
+      },
+      "recurrence": "Two current sessions; blind Detection and Host/EDR reviews independently found it.",
+      "reproduction": "Run the probe and inspect sysmon_logon_guid_immutable.",
+      "sibling_risk": "Token, session, ProcessGuid, and ground-truth joins can split one session into multiple identities.",
+      "proposed_remediation": "Allocate final SessionIdentity, including GUID nullability, before the first dependent occurrence and prohibit later metadata replacement.",
+      "required_tests": ["GUID immutability for every auth-package order", "zero/nonzero policy tests", "Sysmon/eCAR/Windows agreement"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Session identity owns final LogonGuid nullability before dependent evidence and cross-source tests reject mutation for one LogonID.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
+    },
+    {
+      "id": "REAL-003",
+      "category": "current_defect",
+      "root_cause_family": "attempt_identity_lacks_ordinal",
+      "priority": "P1",
+      "title": "Distinct failed login attempts can share one eCAR objectID",
+      "confidence": "high",
+      "violated_invariant": "Each authentication attempt is a distinct occurrence even when principal, source, port, host, and timestamp coincide.",
+      "owning_layer": "authentication attempt identity",
+      "affected_paths": {
+        "entry_paths": ["credential spray", "failed logon", "baseline auth failure"],
+        "source_families": ["ecar"],
+        "code": ["src/evidenceforge/events/identity.py:1", "src/evidenceforge/generation/identity_lifecycle.py:1"]
+      },
+      "exact_evidence": {
+        "static": "Failed-session object identity derives from host, user, exact time, source IP, and port without an attempt ordinal/action role.",
+        "empirical": "The expanded ten-run matrix finds duplicate failed-attempt identities in nine of ten runs; branch-enterprise has one duplicate group."
+      },
+      "recurrence": "Current multi-run recurrence and historical session-closure recurrence.",
+      "reproduction": "Run the probe on the ten branch-24h outputs and inspect ecar_failed_attempt_identity_unique.",
+      "sibling_risk": "Same-millisecond process/file/network events and retry loops may collapse if identity inputs omit occurrence role/ordinal.",
+      "proposed_remediation": "Derive occurrence identity from ActionId, explicit attempt ordinal, and occurrence role.",
+      "required_tests": ["same-timestamp retry uniqueness", "repeat determinism", "ground-truth attempt joins"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Authentication-attempt identity now includes deterministic attempt scope so coincident retries retain distinct object identities.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
+    },
+    {
+      "id": "REAL-004",
+      "category": "current_defect",
+      "root_cause_family": "linux_bootstrap_tree_reversed",
+      "priority": "P1",
+      "title": "Linux local-session process ancestry reverses login and user-manager roles",
+      "confidence": "high",
+      "violated_invariant": "System login/session machinery precedes per-user systemd and the interactive shell in a source-native process tree.",
+      "owning_layer": "Linux session bootstrap bundle",
+      "affected_paths": {
+        "entry_paths": ["Linux local logon", "baseline Linux shell"],
+        "source_families": ["ecar", "syslog", "bash_history"],
+        "code": ["src/evidenceforge/generation/activity/generator.py:17350"]
+      },
+      "exact_evidence": {
+        "static": "_ensure_linux_local_session_shell_parent creates systemd --user under PID 1, then creates /bin/login as its child.",
+        "rendered": "The probe finds /bin/login parented by /usr/lib/systemd/systemd in the proxy host stream."
+      },
+      "recurrence": "Validated by Host/EDR blind review and current probe.",
+      "reproduction": "Inspect ecar_linux_login_parentage in probe-branch-enterprise.json.",
+      "sibling_risk": "Gnome terminal, sshd/PAM, sudo, su, tmux/screen, and shell-history ownership.",
+      "proposed_remediation": "Make LinuxLocalSessionActionBundle own an OS-specific bootstrap graph with explicit parent roles.",
+      "required_tests": ["server console tree", "desktop terminal tree", "SSH tree", "process timestamps and principals"],
+      "remediation": {
+        "status": "resolved_in_batch_2_and_gate_repairs",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Linux local, desktop, and SSH session bootstrap paths use typed parent ownership; host-scoped PID and responder ordering siblings were closed before the blind gate passed.",
+        "results": "docs/design/realism-review/post-gate-loop5-blind/summary.md"
+      }
+    },
+    {
+      "id": "REAL-005",
+      "category": "current_defect",
+      "root_cause_family": "ids_signature_detached_from_transport_semantics",
+      "priority": "P1",
+      "title": "IDS signature claims can contradict their parent connection and HTTP evidence",
+      "confidence": "high",
+      "violated_invariant": "An attached IDS signature is semantically possible for the canonical payload direction, response state, protocol, and inspection visibility.",
+      "owning_layer": "IDS attachment policy on the network action",
+      "affected_paths": {
+        "entry_paths": ["baseline IDS false positive", "typed IDS attachment"],
+        "source_families": ["snort_alert", "zeek_conn", "zeek_http", "cisco_asa"],
+        "code": ["src/evidenceforge/generation/engine/baseline.py:9193", "src/evidenceforge/generation/engine/baseline.py:9343", "src/evidenceforge/generation/engine/baseline.py:9416"]
+      },
+      "exact_evidence": {
+        "static": "The signature is selected and IdsContext is built before the inbound connection profile independently selects state/accounting. Filtering only looks for the word 'response', so 'GPL WEB_SERVER 403 Forbidden' survives.",
+        "rendered": "SID 2101411 claims 403 Forbidden for 185.199.110.42:53211 -> 10.44.30.10:80; joined Zeek is S0 with one SYN and zero response packets/bytes, and ASA tears down with SYN Timeout and zero bytes."
+      },
+      "recurrence": "Three blind reviewers found this family; one decisive current tuple is fully cross-source proven.",
+      "reproduction": "Run the probe and inspect ids_transport_semantics; join the recorded tuple across snort_alert.log, conn.json, and cisco_asa.log.",
+      "sibling_risk": "Status-code, exploit-success, server-response, TLS-decryption, DNS-answer, and file-content signatures.",
+      "proposed_remediation": "Represent signature preconditions as structured direction/phase/payload/inspection predicates evaluated after the network outcome is planned.",
+      "required_tests": ["signature matrix over S0/REJ/SF", "response signatures require response bytes", "HTTP semantic agreement", "encrypted visibility tests"],
+      "remediation": {
+        "status": "resolved_in_batch_3",
+        "branch": "codex/batch3-network-protocol-ids",
+        "evidence": "IDS eligibility is evaluated against the finalized transport/protocol outcome and signature-specific predicates after accounting is frozen.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
+    },
+    {
+      "id": "REAL-006",
+      "category": "current_defect",
+      "root_cause_family": "rdp_source_observation_not_bound_to_auth",
+      "priority": "P1",
+      "title": "Source-side RDP FLOW can render after successful target authentication",
+      "confidence": "high",
+      "violated_invariant": "Source-visible transport precedes successful remote authentication for the same tuple.",
+      "owning_layer": "RDP action timeline and endpoint source timing",
+      "affected_paths": {
+        "entry_paths": ["typed RDP", "compatible Type 10 logon", "baseline RDP"],
+        "source_families": ["ecar", "windows_event_security", "zeek_conn"],
+        "code": ["src/evidenceforge/generation/actions/rdp_session.py:250", "src/evidenceforge/generation/source_timing.py:1"]
+      },
+      "exact_evidence": {
+        "static": "The bundle derives logon_time from request/canonical transport intent, but source eCAR FLOW timing is admitted later without a constraint to actual rendered endpoint transport time.",
+        "rendered": "The probe finds two outbound RDP FLOW records 1.2-1.7 seconds after the matching target USER_SESSION LOGIN."
+      },
+      "recurrence": "Two integrated RDP sessions; independently identified by Detection and Host/EDR reviewers.",
+      "reproduction": "Inspect ecar_rdp_transport_before_auth in probe-branch-enterprise.json.",
+      "sibling_risk": "SSH, remote service, explicit credentials, Kerberos preauth, and source-process visibility ordering.",
+      "proposed_remediation": "Bind auth readiness to the final admitted endpoint-flow time or omit actor identity when process visibility cannot fit before auth.",
+      "required_tests": ["source FLOW < target auth across profiles", "short-transport actor omission", "RDP process lifetime through close"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "The RDP bundle anchors authentication to the source-visible transport interval and omits late endpoint actor attribution instead of moving FLOW after authentication.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
+    },
+    {
+      "id": "REAL-007",
+      "category": "current_defect",
+      "root_cause_family": "independent_file_and_connection_observation_clocks",
+      "priority": "P2",
+      "title": "Zeek file observations can end outside their parent connection interval",
+      "confidence": "high",
+      "violated_invariant": "A file observation joined by conn_uid is contained in that sensor's visible connection interval.",
+      "owning_layer": "network/file transaction source-timing contract",
+      "affected_paths": {
+        "entry_paths": ["HTTP file", "TLS certificate", "OCSP", "SMB transfer"],
+        "source_families": ["zeek_files", "zeek_conn", "zeek_http", "zeek_ssl"],
+        "code": ["src/evidenceforge/generation/emitters/zeek_files.py:422", "src/evidenceforge/generation/emitters/zeek.py:1"]
+      },
+      "exact_evidence": {
+        "static": "File projection independently derives a Zeek connection start/anchor rather than consuming one frozen sensor interval.",
+        "rendered": "Twenty-one integrated files end 1-2 ms after the joined conn end."
+      },
+      "recurrence": "21 rows across multiple transfer/protocol families.",
+      "reproduction": "Run the probe and inspect zeek_file_interval.",
+      "sibling_risk": "X.509/OCSP/PE child records, SMTP attachments, HTTP request/response timing, and collection-window tails.",
+      "proposed_remediation": "Put the final source-visible sensor interval in NetworkSensorObservation and require child analyzers to consume it.",
+      "required_tests": ["file interval contained for every source", "multi-file connections", "observation jitter/profile variants"],
+      "remediation": {
+        "status": "resolved_in_batch_3",
+        "branch": "codex/batch3-network-protocol-ids",
+        "evidence": "Network transactions now own protocol/file child timing and constrain every source-visible file interval to its admitted parent connection.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
+    },
+    {
+      "id": "REAL-008",
+      "category": "current_defect",
+      "root_cause_family": "world_role_fallback_collapse",
+      "priority": "P1",
+      "title": "Small worlds can collapse DHCP client, server, and assigned-IP roles",
+      "confidence": "high",
+      "violated_invariant": "Infrastructure roles and endpoint leases are distinct unless an explicit topology models otherwise.",
+      "owning_layer": "WorldModel infrastructure resolution and DHCP lease bundle",
+      "affected_paths": {
+        "entry_paths": ["baseline DHCP"],
+        "source_families": ["zeek_dhcp", "zeek_conn", "syslog"],
+        "code": ["src/evidenceforge/generation/world_model.py:1", "src/evidenceforge/generation/actions/dhcp_lease.py:1"]
+      },
+      "exact_evidence": {
+        "static": "Infrastructure fallbacks can choose 10.0.0.1 for DNS/DC/DHCP semantics even when that is the only modeled endpoint address.",
+        "rendered": "The minimal probe finds two DHCP role errors and two self-connections; the 30-day run repeats each defect 1,442 times."
+      },
+      "recurrence": "Deterministic on the minimal fixture and scales linearly over 30 days.",
+      "reproduction": "Run the probe on minimal and minimal-30d outputs.",
+      "sibling_risk": "DNS, NTP, DC, gateway, NAT, and hostile-scanner pool role collisions.",
+      "proposed_remediation": "Compile required infrastructure capabilities explicitly and fail validation or synthesize distinct reserved infrastructure identities before baseline generation.",
+      "required_tests": ["one-host topology", "distinct DHCP roles", "infrastructure role collision property test"],
+      "remediation": {
+        "status": "resolved_in_batch_4",
+        "branch": "codex/batch4-world-capability-distribution-state",
+        "evidence": "Typed world capabilities and distinct-role validation prevent DHCP client/server/lease collapse while preserving explicitly supported small-world synthesis.",
+        "results": "docs/design/realism-review/batch4-results.json"
+      }
+    },
+    {
+      "id": "REAL-009",
+      "category": "current_defect",
+      "root_cause_family": "projection_selection_changes_world_generation",
+      "priority": "P1",
+      "title": "Format filtering changes canonical generation rather than only projection",
+      "confidence": "high",
+      "violated_invariant": "Identical scenario intent produces the same canonical world/action graph regardless of selected output projections.",
+      "owning_layer": "CLI, emitter setup, baseline scheduling, dispatcher/state",
+      "affected_paths": {
+        "entry_paths": ["CLI generate --format/log selection"],
+        "source_families": ["all; proven on all nine Zeek files"],
+        "code": ["src/evidenceforge/cli/commands.py:1", "src/evidenceforge/generation/engine/emitter_setup.py:1", "src/evidenceforge/generation/engine/baseline.py:1", "src/evidenceforge/events/dispatcher.py:228"]
+      },
+      "exact_evidence": {
+        "static": "CLI mutates scenario.output.logs; emitter setup consumes it; baseline gates generation families on enabled emitters; dispatcher state updates occur per admitted emitter.",
+        "empirical": "Every one of nine Zeek files differs between full-output and Zeek-only generation of the same 24-hour scenario."
+      },
+      "recurrence": "All compared Zeek projections differ materially.",
+      "reproduction": "Use format_filter_equivalence commands and hashes in empirical-results.json.",
+      "sibling_risk": "Ground truth, RNG consumption, state lifetimes, evaluator scores, and parallel-output equivalence.",
+      "proposed_remediation": "Plan canonical actions independently of emitters; apply output selection only after observation/source projection.",
+      "required_tests": ["full-versus-filtered canonical ledger hash", "per-format byte equality", "parallel emitter equality", "ground-truth equality"],
+      "remediation": {
+        "status": "resolved_in_batch_3",
+        "branch": "codex/batch3-network-protocol-ids",
+        "evidence": "Format selection is projection-only for the migrated network slice; full, filtered, and parallel runs preserve canonical ledgers and common-format bytes.",
+        "results": "docs/design/realism-review/batch3-results.json"
+      }
+    },
+    {
+      "id": "REAL-010",
+      "category": "evaluator_gap",
+      "root_cause_family": "acceptance_scores_mask_missing_or_inconsistent_evidence",
+      "priority": "P1",
+      "title": "Automated evaluation accepts datasets with material scenario and correlation failures",
+      "confidence": "high",
+      "violated_invariant": "Acceptance requires all declared indicators, causal pivots, temporal contracts, and high-impact cross-source invariants.",
+      "owning_layer": "evaluation scoring and acceptance gates",
+      "affected_paths": {
+        "entry_paths": ["eforge eval"],
+        "source_families": ["all evaluated sources"],
+        "code": ["src/evidenceforge/evaluation/engine.py:1", "src/evidenceforge/evaluation/pillars/causality.py:1", "src/evidenceforge/evaluation/pillars/plausibility.py:1"]
+      },
+      "exact_evidence": {
+        "empirical": "The adapted APT dataset scores 93.4466 and passes despite 20 indicator mismatches, 31/36 pivots, 24/26 temporal checks, and 26/32 storyline traces. Branch enterprise scores 96.1891 and passes despite nine indicator mismatches, 2/5 pivots, and 46 expanded-probe findings.",
+        "analysis": "Several dimensions award vacuous 100 scores when evidence is absent and only selected hard gates affect acceptance."
+      },
+      "recurrence": "Both large integrated scenarios pass while expert review rejects the data as synthetic.",
+      "reproduction": "Run the evaluation commands in empirical-results.json, then compare with probe and blind-summary.md.",
+      "sibling_risk": "Regression loops optimize to an insensitive score and declare family completion while expert-rejection defects persist.",
+      "proposed_remediation": "Add invariant-based hard gates, non-vacuous coverage denominators, scenario completeness thresholds, and independent bad fixtures.",
+      "required_tests": ["known-bad fixture must fail", "indicator/pivot minimums", "probe findings mapped to gates", "anti-circular distribution fixtures"],
+      "remediation": {
+        "status": "resolved_in_batch_5",
+        "branch": "codex/batch5-projection-evaluation",
+        "evidence": "Required measures are non-vacuous, high-impact mismatches are hard gates, concern-oriented categories are reported, and durable named bad cases plus generated retail/branch controls fail on their actual missing evidence.",
+        "results": "docs/design/realism-review/batch5-results.json"
+      }
+    },
+    {
+      "id": "REAL-011",
+      "category": "current_defect",
+      "root_cause_family": "source_native_schema_drift",
+      "priority": "P2",
+      "title": "Windows Security Event 4648 uses non-native network field names",
+      "confidence": "high",
+      "violated_invariant": "Source-native projection uses the provider's declared field names and nullability.",
+      "owning_layer": "Windows Security format definition and emitter",
+      "affected_paths": {
+        "entry_paths": ["explicit credentials", "remote administration", "baseline GPO"],
+        "source_families": ["windows_event_security"],
+        "code": ["src/evidenceforge/config/formats/windows_event_security.yaml:1", "src/evidenceforge/generation/emitters/windows.py:1"]
+      },
+      "exact_evidence": {
+        "reference": "Microsoft Event 4648 documentation uses IpAddress and IpPort.",
+        "rendered": "All seven Windows host files containing 4648 use NetworkAddress and NetworkPort; the probe reports the per-host counts."
+      },
+      "recurrence": "Every current 4648 record; every blind reviewer with Windows focus noted source fidelity concerns.",
+      "reproduction": "Run the probe and inspect windows_4648_native_fields; compare source-references.json.",
+      "sibling_risk": "Other hand-maintained Windows event schemas, provider version metadata, and downstream parser mappings.",
+      "proposed_remediation": "Correct the format/emitter together and add official-manifest field snapshots for every supported Windows Event ID.",
+      "required_tests": ["4648 official field set", "parser round trip", "all Windows event schemas against reference ledger"],
+      "remediation": {
+        "status": "resolved_and_preserved_in_batch_5",
+        "implementation_commit": "739dbea2",
+        "evidence": "The provider-native IpAddress/IpPort correction predates Batch 5 and is now protected by exact field-order, rendered, parser, and realism-probe tests.",
+        "results": "docs/design/realism-review/batch5-results.json"
+      }
+    },
+    {
+      "id": "REAL-012",
+      "category": "current_defect",
+      "root_cause_family": "hardcoded_uniform_source_distributions",
+      "priority": "P2",
+      "title": "Several source-visible distributions expose fixed or independently sampled fingerprints",
+      "confidence": "high",
+      "violated_invariant": "Durations, retry schedules, device identity, and normal workload cadence are stateful and entity-scoped rather than fixed or independently uniform.",
+      "owning_layer": "data configuration and lifecycle planners",
+      "affected_paths": {
+        "entry_paths": ["OCSP", "DHCP renewal", "Linux syslog", "Windows baseline"],
+        "source_families": ["zeek_files", "zeek_dhcp", "syslog", "windows_event_security", "ecar"],
+        "code": ["src/evidenceforge/generation/actions/ocsp_transaction.py:229", "src/evidenceforge/generation/actions/dhcp_lease.py:1", "src/evidenceforge/config/activity/extra_syslog_messages.yaml:1", "src/evidenceforge/generation/engine/baseline.py:8042"]
+      },
+      "exact_evidence": {
+        "rendered": "All 36 OCSP response files last exactly 0.02 seconds; all AAAA queries in the integrated sensor succeed; IRQ and device placeholders are sampled independently; GPO refresh repeatedly forces /target:computer /force; DHCP T1 is independently resampled at every renewal.",
+        "blind": "The four reviewers independently identified multiple members of this texture family."
+      },
+      "recurrence": "Dataset-wide or schedule-wide, not isolated rows.",
+      "reproduction": "Inspect zeek_ocsp_duration_distribution and zeek_aaaa_success_distribution plus the cited config/baseline paths.",
+      "sibling_risk": "TLS optionality, public-client personas, service churn, cron schedules, and exact-hour activity.",
+      "proposed_remediation": "Move each enumerable to validated data and each recurring behavior to durable per-entity state with coherent jitter and failure probability.",
+      "required_tests": ["minimum entropy/distribution tests", "state-coherent IRQ/device pairing", "stable DHCP lease schedule", "negative AAAA outcomes"],
+      "remediation": {
+        "status": "resolved_in_batch_4",
+        "branch": "codex/batch4-world-capability-distribution-state",
+        "evidence": "Lifecycle-scoped distribution state replaced the reviewed fixed and independently sampled fingerprints, including coherent journald tuples, DHCP schedules, AAAA outcomes, and OCSP durations.",
+        "results": "docs/design/realism-review/batch4-results.json"
+      }
+    },
+    {
+      "id": "REAL-013",
+      "category": "current_defect",
+      "root_cause_family": "input_contract_and_fixture_drift",
+      "priority": "P2",
+      "title": "Scenario loading silently accepts duplicate YAML keys and a flagship coverage fixture is invalid",
+      "confidence": "high",
+      "violated_invariant": "Authored intent is unambiguous and all shipped fixtures validate at the frozen baseline.",
+      "owning_layer": "YAML loader, validation, and fixture maintenance",
+      "affected_paths": {
+        "entry_paths": ["all scenario YAML"],
+        "source_families": ["authored intent"],
+        "code": ["src/evidenceforge/utils/files.py:50", "tests/fixtures/scenarios/full-coverage-apt.yaml:1"]
+      },
+      "exact_evidence": {
+        "static": "yaml.safe_load uses last-key-wins behavior and does not reject mapping duplicates.",
+        "empirical": "full-coverage-apt.yaml has duplicate command_line and fails validation because all three network segments lack required exposure. The empirical campaign required a temporary exposure-only adaptation."
+      },
+      "recurrence": "One shipped full-coverage fixture plus any authored duplicate key.",
+      "reproduction": "Run eforge validate on tests/fixtures/scenarios/full-coverage-apt.yaml and inspect the duplicate command_line mapping.",
+      "sibling_risk": "Security-relevant intent, output filters, identity fields, and overlay keys can silently change.",
+      "proposed_remediation": "Use a duplicate-rejecting safe YAML loader at every scenario/config boundary and validate all shipped fixtures in CI.",
+      "required_tests": ["duplicate mapping rejection", "all fixture validation", "include/overlay duplicate behavior"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "All production YAML boundaries use a duplicate-rejecting SafeLoader, include expansion is node-bounded, the three shadowed shipped site-map entries were reconciled, and all nine shipped scenario fixtures pass semantic validation after built-in persona composition.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "REAL-014",
+      "category": "current_defect",
+      "root_cause_family": "rng_configuration_not_public_or_fully_scoped",
+      "priority": "P2",
+      "title": "The requested seed matrix cannot be expressed through the public generation contract",
+      "confidence": "high",
+      "violated_invariant": "A documented generation seed controls every stochastic substream while preserving deterministic replay.",
+      "owning_layer": "CLI/scenario configuration and RNG scoping",
+      "affected_paths": {
+        "entry_paths": ["all generation"],
+        "source_families": ["all"],
+        "code": ["src/evidenceforge/generation/engine/core.py:1", "src/evidenceforge/cli/commands.py:1"]
+      },
+      "exact_evidence": {
+        "static": "GenerationEngine resets its thread-local RNG to 42; no coherent public seed is exposed by scenario or CLI.",
+        "empirical": "The ten-run matrix had to vary scenario names, affecting only stable scenario-keyed substreams while the global stream remained fixed. Identical input repeat was byte-identical."
+      },
+      "recurrence": "Global generation property.",
+      "reproduction": "Review integrated_24h_matrix and repeat hashes in empirical-results.json.",
+      "sibling_risk": "Misleading benchmarks, limited variance testing, global-stream coupling, and accidental sequence shifts.",
+      "proposed_remediation": "Approve a GenerationSeed contract with named hierarchical RNG scopes and record it in manifests.",
+      "required_tests": ["same seed byte identity", "different seed distribution variance", "unrelated family insertion does not perturb other scopes"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Scenario and CLI generation expose a uint64 seed, the run scope propagates through emitter worker contexts, seed 42 preserves legacy derivations, and collection metadata records the effective seed. Repeat and alternate-seed integration controls pass.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "REAL-015",
+      "category": "current_defect",
+      "root_cause_family": "source_process_parentage_without_role_contract",
+      "priority": "P2",
+      "title": "Interactive Windows Explorer can be directly parented by services.exe",
+      "confidence": "high",
+      "violated_invariant": "Interactive shell ancestry reflects a user logon bootstrap rather than the service control manager.",
+      "owning_layer": "Windows process/session bootstrap",
+      "affected_paths": {
+        "entry_paths": ["baseline interactive session"],
+        "source_families": ["ecar", "windows_event_sysmon"],
+        "code": ["src/evidenceforge/generation/activity/generator.py:1"]
+      },
+      "exact_evidence": {
+        "rendered": "The integrated probe finds explorer.exe directly parented by services.exe; the blind Host/EDR review independently identifies the same ancestry defect.",
+        "static": "Parent repair/fallback logic can choose available system roots without a typed process-role constraint."
+      },
+      "recurrence": "One integrated host occurrence; sibling fallback paths are broad.",
+      "reproduction": "Inspect ecar_explorer_parentage in probe-branch-enterprise.json.",
+      "sibling_risk": "Userinit/winlogon, service-launched UI, scheduled tasks, and parent-chain repair.",
+      "proposed_remediation": "Add typed process roles and allowed parent-role edges to the process execution contract.",
+      "required_tests": ["Windows interactive bootstrap tree", "service process tree", "no repair across incompatible roles"],
+      "remediation": {
+        "status": "resolved_in_batch_2",
+        "branch": "codex/session-auth-lifecycle",
+        "evidence": "Interactive Explorer bootstrap and parent repair are session-scoped and constrained to the logon chain; service ownership remains a separate parent family.",
+        "results": "docs/worklog/2026-08-05-session-auth-lifecycle.md"
+      }
+    },
+    {
+      "id": "SEC-001",
+      "category": "security",
+      "root_cause_family": "unconfined_email_artifact_path",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Email artifact IDs escape the output tree for arbitrary .eml writes",
+      "confidence": "high",
+      "violated_invariant": "Scenario-controlled artifact names cannot escape the selected output root.",
+      "owning_layer": "email artifact writer",
+      "affected_paths": {"entry_paths": ["email_message"], "source_families": ["email artifacts"], "code": ["src/evidenceforge/models/scenario.py:1597", "src/evidenceforge/generation/activity/generator.py:16654"]},
+      "exact_evidence": {"dynamic": "A probe wrote /private/tmp/eforge-review-artifact-escape-20260805.eml before relative_to raised.", "control": "The .eml suffix and OS permissions constrain impact; containment is checked only after the write."},
+      "recurrence": "Every materialized attacker-controlled artifact_id.",
+      "reproduction": "Use an artifact_id with parent traversal or an absolute path and enable storyline artifacts.",
+      "sibling_risk": "Other artifact IDs, manifest paths, and target transformation outputs.",
+      "proposed_remediation": "Validate opaque IDs and open only beneath a resolved symlink-safe artifact root.",
+      "required_tests": ["parent traversal", "absolute path", "symlink parent", "existing .eml overwrite rejection"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Artifact names are validated as one relative filename and created exclusively through a no-follow descriptor beneath the artifact root; traversal, absolute paths, symlinks, and overwrite attempts are rejected before data escapes the boundary.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-002",
+      "category": "security",
+      "root_cause_family": "unbounded_generation_workload",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Scenario duration and periodic cardinality permit compact resource-exhaustion inputs",
+      "confidence": "high",
+      "violated_invariant": "Validation bounds projected generation work before execution.",
+      "owning_layer": "scenario validation and generation preflight",
+      "affected_paths": {"entry_paths": ["time_window", "periodic events"], "source_families": ["all"], "code": ["src/evidenceforge/models/scenario.py:73", "src/evidenceforge/models/scenario.py:1045", "src/evidenceforge/generation/engine/storyline.py:537"]},
+      "exact_evidence": {"dynamic": "Models accept duration=999999999999d, interval=1ms, and count=10^12.", "static": "Loops expand these values without a global projected-event/byte budget."},
+      "recurrence": "All duration/rate/count-driven families.",
+      "reproduction": "Construct the extreme values in the corresponding Pydantic models; do not execute the full workload.",
+      "sibling_risk": "Baseline windows, beacons, DNS tunnels, sprays, scans, output disk growth, and datetime overflow.",
+      "proposed_remediation": "Add preflight workload budgets with an explicit operator override.",
+      "required_tests": ["projected event cap", "byte cap", "duration overflow", "explicit force override"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Generation and validation share an allocation-free conservative workload estimate covering durations, baseline and explicit occurrences, periodic fan-out, rendered records, and email expansion. The named trusted override is explicit and recorded in collection metadata.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-003",
+      "category": "security",
+      "root_cause_family": "unbounded_email_attachment",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Email attachment size drives eager allocation and MIME amplification",
+      "confidence": "high",
+      "violated_invariant": "Small authored input cannot request unbounded memory, CPU, or disk allocation.",
+      "owning_layer": "email model and artifact renderer",
+      "affected_paths": {"entry_paths": ["email_message attachments"], "source_families": ["email artifacts"], "code": ["src/evidenceforge/models/scenario.py:1584", "src/evidenceforge/generation/activity/generator.py:16217", "src/evidenceforge/generation/activity/generator.py:16340", "src/evidenceforge/generation/activity/generator.py:16687"]},
+      "exact_evidence": {"dynamic": "The model accepts 10^12 bytes; bounded probes allocate exact 1, 4, and 16 MiB payloads.", "static": "OOXML generation repeatedly sums chunks and MIME base64 creates additional copies."},
+      "recurrence": "Each materialized attachment and cumulative message set.",
+      "reproduction": "Call _email_attachment_payload_bytes with bounded sizes; model-validate an extreme size without allocating it.",
+      "sibling_risk": "Literal content, corpus bodies, artifact manifest size, and multiple attachments.",
+      "proposed_remediation": "Enforce per-attachment/per-message/run budgets and stream encoding.",
+      "required_tests": ["per-item maximum", "cumulative maximum", "OOXML linear memory", "streamed base64"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "The workload contract bounds per-attachment, per-message, and expanded run payloads before allocation; deterministic byte generation is linear and MIME artifacts are streamed to exclusive bounded files.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-004",
+      "category": "security",
+      "root_cause_family": "port_scan_eager_address_expansion",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Port-scan target resolution materializes every host before applying target_count",
+      "confidence": "high",
+      "violated_invariant": "Work is O(requested targets), not O(address-space size).",
+      "owning_layer": "storyline port-scan planner",
+      "affected_paths": {"entry_paths": ["port_scan"], "source_families": ["network", "firewall", "IDS"], "code": ["src/evidenceforge/models/scenario.py:1887", "src/evidenceforge/generation/engine/storyline.py:5923"]},
+      "exact_evidence": {"static": "[str(h) for h in net.hosts()] runs before min(target_count, len(all_hosts)).", "dynamic": "Pydantic accepts an IPv6 /64 with target_count=1; catastrophic enumeration was not executed."},
+      "recurrence": "Any unmodeled large segment.",
+      "reproduction": "Model-validate an IPv6 /64 target; inspect the eager list comprehension.",
+      "sibling_risk": "Other CIDR enumeration, asset expansion, and evaluator address sets.",
+      "proposed_remediation": "Sample integer host offsets without full enumeration and bound supported prefix sizes.",
+      "required_tests": ["IPv6 /64 with one target", "large IPv4 prefix", "sampling uniqueness"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Port-scan planning samples integer host offsets without enumerating the CIDR, preserves ipaddress host semantics for IPv4 and IPv6, and performs work proportional to requested targets.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-005",
+      "category": "security",
+      "root_cause_family": "unbounded_include_expansion",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Acyclic scenario include graphs have no depth, file, byte, or node budget",
+      "confidence": "high",
+      "violated_invariant": "Include expansion is cycle-safe and resource-bounded before schema validation.",
+      "owning_layer": "scenario YAML loader",
+      "affected_paths": {"entry_paths": ["scenario_include", "include"], "source_families": ["authored intent"], "code": ["src/evidenceforge/utils/files.py:88", "src/evidenceforge/utils/files.py:106", "src/evidenceforge/utils/files.py:189"]},
+      "exact_evidence": {"static": "Active-stack cycle detection exists, but unique paths recurse, parse, and deepcopy without aggregate limits."},
+      "recurrence": "Any deep or wide multi-file scenario package.",
+      "reproduction": "Construct a bounded acyclic include chain/fan-out and observe recursive work; avoid host-impacting sizes.",
+      "sibling_risk": "Corpus/config recursive loading and large YAML node graphs.",
+      "proposed_remediation": "Track and enforce depth, file count, aggregate source bytes, and expanded node count.",
+      "required_tests": ["depth limit", "fan-out limit", "aggregate byte limit", "cycle remains rejected"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Scenario include loading enforces depth, distinct-file, aggregate-source-byte, and expanded-node budgets while preserving cycle rejection and explicit caller-supplied trusted limits.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-006",
+      "category": "security",
+      "root_cause_family": "snare_parser_quadratic_regex",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Snare expanded-field parsing is quadratic on delimiter-free input",
+      "confidence": "high",
+      "violated_invariant": "Evaluator parsing is linear and record-size bounded for hostile logs.",
+      "owning_layer": "Windows/Snare evaluation parser",
+      "affected_paths": {"entry_paths": ["eforge eval"], "source_families": ["windows snare"], "code": ["src/evidenceforge/evaluation/parsers/windows.py:51", "src/evidenceforge/evaluation/parsers/windows.py:320"]},
+      "exact_evidence": {"dynamic": "10K/20K/40K/80K crafted tails take about 0.171/0.713/2.852/11.396 seconds.", "static": "A non-greedy wildcard plus repeated lookahead is applied with finditer and no line cap."},
+      "recurrence": "Per crafted record; multiple rows multiply impact.",
+      "reproduction": "Benchmark EXPANDED_FIELD_PATTERN.finditer over delimiter-free field-like tails.",
+      "sibling_risk": "Other regex parsers and unlimited record lengths.",
+      "proposed_remediation": "Use a linear delimiter parser and reject/clip oversized records with explicit diagnostics.",
+      "required_tests": ["linear scaling benchmark", "record byte limit", "native valid Snare fixtures"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Snare expanded fields use a single-pass delimiter parser and every text parser shares a 16 MiB hard record cap; native controls and a 10,000-field adversarial record pass within the bounded contract.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-007",
+      "category": "security",
+      "root_cause_family": "unconfined_email_corpus_read",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Email corpus paths read YAML outside the documented scenario root",
+      "confidence": "high",
+      "violated_invariant": "Scenario-referenced corpus reads remain inside an explicit project root.",
+      "owning_layer": "email configuration validation/runtime loader",
+      "affected_paths": {"entry_paths": ["environment.email.corpus"], "source_families": ["email"], "code": ["src/evidenceforge/models/scenario.py:2267", "src/evidenceforge/validation/schema.py:1138", "src/evidenceforge/generation/activity/generator.py:13461"]},
+      "exact_evidence": {"dynamic": "An absolute YAML path outside the scenario directory was read and returned 12 corpus IDs with zero validation issues.", "constraint": "The file must be readable and corpus-shaped; arbitrary bytes are not exposed verbatim."},
+      "recurrence": "Validation and runtime both follow the path.",
+      "reproduction": "Set corpus to an absolute out-of-root valid corpus YAML and validate.",
+      "sibling_risk": "Other referenced scenario files, corpora, templates, and symlink targets.",
+      "proposed_remediation": "Resolve against a declared scenario-package root, reject escapes/symlinks/nonregular files, and enforce size/schema budgets.",
+      "required_tests": ["absolute path", "parent traversal", "symlink escape", "valid in-root corpus"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Validation and runtime share one corpus loader that opens a size-bounded regular file through a no-follow descriptor beneath the scenario root and rejects absolute, traversal, symlink, and duplicate-key inputs.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-008",
+      "category": "security",
+      "root_cause_family": "splunk_log_symlink_follow",
+      "priority": "P2",
+      "security_severity": "medium",
+      "title": "Splunk log staging follows supported-name symlinks outside source_root",
+      "confidence": "high",
+      "violated_invariant": "External parser staging reads only regular files resolved beneath its selected data root.",
+      "owning_layer": "Splunk external parser harness",
+      "affected_paths": {"entry_paths": ["Splunk validation data directory"], "source_families": ["supported Splunk sources"], "code": ["src/evidenceforge/external_parsers/splunk.py:424"]},
+      "exact_evidence": {"dynamic": "A supported-name symlink staged bytes from /private/tmp/eforge-review-splunk-secret.json outside source_root.", "static": "relative_to checks the symlink pathname, then shutil.copyfile dereferences it."},
+      "recurrence": "Every supported filename discovered via rglob.",
+      "reproduction": "Place a supported-name symlink below source_root and call stage_splunk_logs.",
+      "sibling_risk": "Special files such as /dev/zero, unsupported record counting, and race swaps.",
+      "proposed_remediation": "lstat and reject symlinks/nonregular files; verify every resolved path remains under source_root.",
+      "required_tests": ["symlink file", "symlink directory", "special file", "TOCTOU-resistant open"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Splunk log staging rejects symlinked paths and special files and copies supported logs from no-follow regular-file descriptors into exclusive staging files.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-009",
+      "category": "security",
+      "root_cause_family": "splunk_archive_unbounded_expansion",
+      "priority": "P3",
+      "security_severity": "low",
+      "title": "Splunk app archives have traversal checks but no extraction quotas",
+      "confidence": "high",
+      "violated_invariant": "Third-party archive extraction is path-safe and resource-bounded.",
+      "owning_layer": "Splunk external parser harness",
+      "affected_paths": {"entry_paths": ["--splunk-app archive"], "source_families": ["Splunk apps"], "code": ["src/evidenceforge/external_parsers/splunk.py:1205", "src/evidenceforge/external_parsers/splunk.py:1230", "src/evidenceforge/external_parsers/splunk.py:1239"]},
+      "exact_evidence": {"static": "ZIP checks paths then calls extractall; TAR streams all regular members. Neither enforces member count, expanded bytes, per-member size, nesting, or ratio."},
+      "recurrence": "Every supplied ZIP/TAR app.",
+      "reproduction": "Inspect archive metadata for a bounded compressed fixture; no destructive bomb extraction is required.",
+      "sibling_risk": "Disk fill, inode exhaustion, long extraction, and retained temp trees on interruption.",
+      "proposed_remediation": "Preflight and stream-count member/byte/ratio budgets with cleanup on every failure.",
+      "required_tests": ["member cap", "expanded byte cap", "ratio cap", "cleanup after rejection"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "ZIP and TAR app packages are preflighted for path, type, duplicate member, member count, member size, total expanded size, and compression ratio, then streamed through counters with partial-tree cleanup.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-010",
+      "category": "security",
+      "root_cause_family": "splunk_app_directory_symlink_follow",
+      "priority": "P3",
+      "security_severity": "low",
+      "title": "Splunk app-directory staging dereferences embedded symlinks",
+      "confidence": "high",
+      "violated_invariant": "Supplied app staging remains within the selected app directory tree.",
+      "owning_layer": "Splunk external parser harness",
+      "affected_paths": {"entry_paths": ["--splunk-app directory"], "source_families": ["Splunk apps"], "code": ["src/evidenceforge/external_parsers/splunk.py:561"]},
+      "exact_evidence": {"static": "shutil.copytree(source, destination, symlinks=False) dereferences descendant symlinks; no prewalk containment check exists."},
+      "recurrence": "Every descendant symlink in a supplied app directory.",
+      "reproduction": "Supply a bounded app tree containing a symlink to a benign out-of-root canary.",
+      "sibling_risk": "Local file inclusion into runtime, special-file reads, and mounted container exposure.",
+      "proposed_remediation": "Reject descendant symlinks and verify resolved regular-file containment before copying.",
+      "required_tests": ["embedded symlink", "nested directory symlink", "regular in-root app"],
+      "remediation": {
+        "status": "resolved_in_batch_6",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "Supplied application directories are walked without following links; root and descendant symlinks and nonregular nodes are rejected, and regular files are copied from no-follow descriptors.",
+        "results": "docs/design/realism-review/batch6-results.json"
+      }
+    },
+    {
+      "id": "SEC-DEFER-001",
+      "category": "security",
+      "root_cause_family": "unbounded_evaluator_retention",
+      "priority": "P3",
+      "security_severity": "deferred",
+      "title": "Evaluator retains a full unbounded parsed corpus without a measured capacity envelope",
+      "confidence": "medium",
+      "violated_invariant": "Hostile evaluation inputs are processed within documented byte/record/memory limits.",
+      "owning_layer": "evaluation engine and pillars",
+      "affected_paths": {"entry_paths": ["eforge eval"], "source_families": ["all parsers"], "code": ["src/evidenceforge/evaluation/engine.py:391", "src/evidenceforge/evaluation/parsers/__init__.py:120", "src/evidenceforge/evaluation/pillars/causality.py:76"]},
+      "exact_evidence": {"static": "ParsedRecord lists are accumulated and sorted per format, then passed to pillars that build more indexes.", "proof_gap": "No controlled records/bytes-to-peak-RSS curve or documented supported limit was completed."},
+      "recurrence": "Global evaluation behavior.",
+      "reproduction": "Pending a bounded RSS benchmark across realistic and adversarial corpora.",
+      "sibling_risk": "Long lines, many small files, duplicate raw text, causality indexes, and report samples.",
+      "proposed_remediation": "Benchmark first; then document capacity and add streaming/spill/budget behavior where the curve requires it.",
+      "required_tests": ["peak RSS benchmark", "record and byte limits", "many-file input", "graceful budget error"],
+      "remediation": {
+        "status": "closed_in_batch_6_as_bounded_capacity_contract",
+        "branch": "codex/batch6-input-safety-budgets",
+        "evidence": "25k, 50k, and 100k retained-eCAR probes measured a worst 2,958.62 bytes of RSS growth per record. Evaluation now rejects more than 512 MiB, 10,000 files, or 500,000 parsed records by default, with an explicit trusted override.",
+        "results": "docs/design/realism-review/evaluator-capacity-results.json"
+      }
+    }
+  ],
+  "security_candidates_not_in_final_findings": [
+    {
+      "candidate": "scenario include out-of-root read",
+      "disposition": "suppressed",
+      "reason": "Cross-directory and absolute include composition is intentional at this baseline; no implemented scenario-package confinement boundary exists. Revisit if a sandboxed package mode is adopted."
+    },
+    {
+      "candidate": "secret-family overlay regex ReDoS",
+      "disposition": "ignored after attack-path analysis",
+      "reason": "The only established writer is the same operator's personal .eforge overlay; no lower-privileged attacker path is evidenced. Keep safe-regex validation as defense in depth."
+    },
+    {
+      "candidate": "email MIME content_type CRLF",
+      "disposition": "suppressed",
+      "reason": "The result is deliberately synthetic message evidence and no trusted first-party consumer or privilege boundary was demonstrated."
+    }
+  ]
+}

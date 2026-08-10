@@ -1,0 +1,1231 @@
+{
+  "scenario_name": "iteration-test-expanded-ids",
+  "generated_at": "2024-03-18T12:00:00Z",
+  "evaluated_at": "2026-08-10T12:53:14.704578Z",
+  "total_records": 80525,
+  "source_counts": {
+    "bash_history": 198,
+    "cisco_asa": 11725,
+    "ecar": 24370,
+    "email_artifacts": 35,
+    "proxy_access": 1611,
+    "snort_alert": 161,
+    "syslog": 4109,
+    "web_access": 864,
+    "windows_event_security": 13589,
+    "windows_event_sysmon": 4063,
+    "zeek_conn": 11385,
+    "zeek_dhcp": 69,
+    "zeek_dns": 2945,
+    "zeek_files": 899,
+    "zeek_http": 2097,
+    "zeek_ocsp": 41,
+    "zeek_smtp": 66,
+    "zeek_ssl": 1768,
+    "zeek_x509": 530
+  },
+  "overall_score": 96.09963396291859,
+  "pillars": [
+    {
+      "number": 1,
+      "name": "Parseability",
+      "weight": 0.3,
+      "score": 100.0,
+      "sub_scores": [
+        {
+          "name": "Spec Conformance",
+          "key": "spec_conformance",
+          "weight": 0.55,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "80525/80525 records pass strict spec validation",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Format Constraints",
+          "key": "format_constraints",
+          "weight": 0.45,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "80525/80525 records pass format constraint checks",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 2,
+      "name": "Plausibility",
+      "weight": 0.25,
+      "score": 96.62765839320207,
+      "sub_scores": [
+        {
+          "name": "Value & OS Plausibility",
+          "key": "value_plausibility",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "17896/17896 records pass OS/value plausibility checks",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Co-occurrence Rules",
+          "key": "co_occurrence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "26658/26658 co-occurrence checks pass",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Distribution Fit",
+          "key": "distribution_fit",
+          "weight": 0.15,
+          "score": 81.55090332345078,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "ecar.object: 78; ecar.action: 69; web_access.method: 90; windows_event_security.EventID: 59; zeek_conn.proto: 97; zeek_conn.conn_state: 85; zeek_dns.qtype_name: 92; zeek_dns.rcode_name: 98; zeek_http.method: 50; zeek_http.status_code: 89; zeek_ssl.version: 81; zeek_ssl.established: 91",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Cross-Source Field Agreement",
+          "key": "field_agreement",
+          "weight": 0.15,
+          "score": 99.96681929789635,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "15064/15069 matched pivot pairs agree",
+          "sample_failures": [
+            "OCSP HTTP request does not match its ocsp.log response identity",
+            "OCSP HTTP request does not match its ocsp.log response identity",
+            "OCSP HTTP request does not match its ocsp.log response identity",
+            "OCSP HTTP request does not match its ocsp.log response identity",
+            "OCSP HTTP request does not match its ocsp.log response identity"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "User Behavioral Diversity",
+          "key": "user_diversity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Avg pairwise similarity: 0.13 across 65 users",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Anomaly Rate",
+          "key": "anomaly_rate",
+          "weight": 0.1,
+          "score": 94.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "47/5000 events anomalous (0.9%), target 1-5%",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "IDS Correlation Integrity",
+          "key": "ids_integrity",
+          "weight": 0.0,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "177/177 IDS integrity checks pass",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 3,
+      "name": "Causality",
+      "weight": 0.25,
+      "score": 91.04817438658448,
+      "sub_scores": [
+        {
+          "name": "Causal Ordering",
+          "key": "causal_ordering",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "12437/12437 causal pairs correctly ordered",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Event Presence",
+          "key": "event_presence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "46/46 expected-visible storyline events have traces in logs",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Indicator Accuracy",
+          "key": "indicator_accuracy",
+          "weight": 0.15,
+          "score": 98.08714133900106,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "923/941 indicator checks correct",
+          "sample_failures": [
+            "Event 18: source_ip mismatch in ecar",
+            "Event 18: source_ip mismatch in windows_event_security",
+            "Event 18: source_ip mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 21: username mismatch in windows_event_security",
+            "Event 22: username mismatch in windows_event_security",
+            "Event 25: username mismatch in windows_event_security",
+            "Event 25: username mismatch in windows_event_security"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Pivot Linkability",
+          "key": "pivot_linkability",
+          "weight": 0.15,
+          "score": 51.61290322580645,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "32/62 inferred expected-visible narrative edges retain a shared rendered pivot; 1 isolated events, 0 observation-exempt",
+          "sample_failures": [
+            "Events 0→1: expected pivot not present in both rendered traces (diego.ramirez@WS-DRAMIREZ-01 → diego.ramirez@WS-DRAMIREZ-01)",
+            "Events 1→2: expected pivot not present in both rendered traces (diego.ramirez@WS-DRAMIREZ-01 → diego.ramirez@WS-DRAMIREZ-01)",
+            "Events 2→20: expected pivot not present in both rendered traces (diego.ramirez@WS-DRAMIREZ-01 → aisha.johnson@WS-AJOHNSON-01)",
+            "Events 4→10: expected pivot not present in both rendered traces (root@WEB-EXT-01 → root@WEB-EXT-01)",
+            "Events 5→16: expected pivot not present in both rendered traces (root@LT-MRIVERA-02 → marcus.chen@WS-MCHEN-01)",
+            "Events 5→17: expected pivot not present in both rendered traces (root@LT-MRIVERA-02 → root@LT-MRIVERA-02)",
+            "Events 6→7: expected pivot not present in both rendered traces (lina.nguyen@WS-LNGUYEN-01 → omar.haddad@WS-OHADDAD-01)",
+            "Events 13→14: expected pivot not present in both rendered traces (root@WEB-EXT-01 → root@APP-INT-01)",
+            "Events 13→31: expected pivot not present in both rendered traces (root@WEB-EXT-01 → root@WEB-EXT-01)",
+            "Events 15→29: expected pivot not present in both rendered traces (root@APP-INT-01 → root@APP-INT-01)"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Temporal Integrity",
+          "key": "temporal_integrity",
+          "weight": 0.15,
+          "score": 93.47826086956522,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "43/46 expected-visible events correctly timed and ordered",
+          "sample_failures": [
+            "Event 0: trace at -129s from expected (tolerance ±120s)",
+            "Event 11: trace at -186s from expected (tolerance ±120s)",
+            "Event 24: trace at -153s from expected (tolerance ±120s)"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Storyline Trace Coverage",
+          "key": "storyline_trace_coverage",
+          "weight": 0.1,
+          "score": 95.71428571428571,
+          "raw_score": 94.36619718309859,
+          "adjusted": true,
+          "details": "67/70 expected-visible format-traces found; raw 67/71 (94.4/100), 1 excluded by observation profile",
+          "sample_failures": [
+            "Event 1: no trace in mailbox group for diego.ramirez@WS-DRAMIREZ-01",
+            "Event 7: no trace in mailbox group for omar.haddad@WS-OHADDAD-01",
+            "Event 20: no trace in mailbox group for aisha.johnson@WS-AJOHNSON-01"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Intent Reconciliation",
+          "key": "intent_reconciliation",
+          "weight": 0.0,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "96/96 authored/planner reconciliation assertions pass; 94 intents dispatched canonical events and 95 had visible or delayed source evidence",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {
+        "host_log_profile": {
+          "app-int-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 26,
+              "ecar": 748,
+              "syslog": 281
+            }
+          },
+          "db-prod-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 34,
+              "ecar": 671,
+              "syslog": 347
+            }
+          },
+          "dc-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 6158,
+              "windows_event_security": 7514
+            }
+          },
+          "file-srv-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1926,
+              "windows_event_security": 1731
+            }
+          },
+          "lt-mrivera-02": {
+            "expected_formats": [
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 221,
+              "syslog": 278
+            }
+          },
+          "mail-clin-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 22,
+              "ecar": 460,
+              "syslog": 363
+            }
+          },
+          "mail-edge-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 2,
+              "ecar": 514,
+              "syslog": 509
+            }
+          },
+          "mail-fin-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 956,
+              "windows_event_security": 762
+            }
+          },
+          "proxy-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "proxy_access",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 21,
+              "ecar": 2670,
+              "proxy_access": 1611,
+              "syslog": 263
+            }
+          },
+          "web-ext-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog",
+              "web_access"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog",
+              "web_access"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 51,
+              "ecar": 2974,
+              "syslog": 1627,
+              "web_access": 864
+            }
+          },
+          "ws-ajohnson-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1391,
+              "windows_event_security": 784
+            }
+          },
+          "ws-dramirez-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 793,
+              "windows_event_security": 479
+            }
+          },
+          "ws-ebrooks-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 859,
+              "windows_event_security": 510
+            }
+          },
+          "ws-lnguyen-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 34,
+              "ecar": 427,
+              "syslog": 226
+            }
+          },
+          "ws-mchen-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1316,
+              "windows_event_security": 652
+            }
+          },
+          "ws-ohaddad-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 8,
+              "ecar": 354,
+              "syslog": 215
+            }
+          },
+          "ws-ppatel-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 884,
+              "windows_event_security": 542
+            }
+          },
+          "ws-smartinez-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1048,
+              "windows_event_security": 615
+            }
+          }
+        }
+      }
+    },
+    {
+      "number": 4,
+      "name": "Timing",
+      "weight": 0.2,
+      "score": 95.90337883985977,
+      "sub_scores": [
+        {
+          "name": "Attack Chain Timing",
+          "key": "attack_chain_timing",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "45/45 storyline transitions within bounds",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Human Burstiness",
+          "key": "burstiness",
+          "weight": 0.2,
+          "score": 98.6745601333456,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "CV scores for 25 users (target CV 1.0-3.0)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "System Process Regularity",
+          "key": "system_regularity",
+          "weight": 0.15,
+          "score": 79.91860696812465,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Interval CV: 1.201 (9 service groups, 2069 events)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Diurnal Pattern",
+          "key": "diurnal_pattern",
+          "weight": 0.2,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Scenario spans 6.0h across 1 weekday(s) — too short to measure diurnal pattern (needs ≥24h and ≥2 weekdays)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "name": "Volume Adequacy",
+          "key": "volume_adequacy",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Noise:signal 1750:1 (target 200:1 for low)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Rate Plausibility",
+          "key": "rate_plausibility",
+          "weight": 0.1,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "12294/12294 timing checks plausible",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    }
+  ],
+  "categories": [
+    {
+      "key": "source_schema",
+      "name": "Parseability & Source Schema",
+      "score": 100.0,
+      "sub_score_keys": [
+        "spec_conformance",
+        "format_constraints"
+      ],
+      "details": "2/2 configured measures scored"
+    },
+    {
+      "key": "canonical_invariants",
+      "name": "Canonical Cross-Source Invariants",
+      "score": 99.99446988298273,
+      "sub_score_keys": [
+        "value_plausibility",
+        "co_occurrence",
+        "field_agreement",
+        "ids_integrity",
+        "causal_ordering",
+        "rate_plausibility"
+      ],
+      "details": "6/6 configured measures scored"
+    },
+    {
+      "key": "scenario_completeness",
+      "name": "Declared Scenario Completeness",
+      "score": 89.81543185810973,
+      "sub_score_keys": [
+        "intent_reconciliation",
+        "event_presence",
+        "indicator_accuracy",
+        "pivot_linkability",
+        "temporal_integrity",
+        "storyline_trace_coverage"
+      ],
+      "details": "6/6 configured measures scored"
+    },
+    {
+      "key": "distribution_realism",
+      "name": "Distribution & Realism Diagnostics",
+      "score": 93.44915291784585,
+      "sub_score_keys": [
+        "distribution_fit",
+        "user_diversity",
+        "anomaly_rate",
+        "attack_chain_timing",
+        "burstiness",
+        "system_regularity",
+        "volume_adequacy"
+      ],
+      "details": "7/8 configured measures scored"
+    },
+    {
+      "key": "expert_comparison",
+      "name": "Optional Expert Comparison",
+      "score": null,
+      "sub_score_keys": [],
+      "details": "No expert assessment was supplied to this deterministic evaluation run"
+    }
+  ],
+  "acceptance_passed": false,
+  "acceptance_criteria": [
+    {
+      "name": "parseability.spec_conformance",
+      "pillar": "parseability",
+      "sub_score_key": "spec_conformance",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "parseability.format_constraints",
+      "pillar": "parseability",
+      "sub_score_key": "format_constraints",
+      "threshold": 90.0,
+      "aspirational": 98.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.value_plausibility",
+      "pillar": "plausibility",
+      "sub_score_key": "value_plausibility",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.field_agreement",
+      "pillar": "plausibility",
+      "sub_score_key": "field_agreement",
+      "threshold": 85.0,
+      "aspirational": 97.0,
+      "actual": 99.96681929789635,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.ids_integrity",
+      "pillar": "plausibility",
+      "sub_score_key": "ids_integrity",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.causal_ordering",
+      "pillar": "causality",
+      "sub_score_key": "causal_ordering",
+      "threshold": 90.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.event_presence",
+      "pillar": "causality",
+      "sub_score_key": "event_presence",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.intent_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "intent_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.indicator_accuracy",
+      "pillar": "causality",
+      "sub_score_key": "indicator_accuracy",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 98.08714133900106,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 51.61290322580645,
+      "passed": false,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.temporal_integrity",
+      "pillar": "causality",
+      "sub_score_key": "temporal_integrity",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 93.47826086956522,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": false,
+      "level": "hard"
+    },
+    {
+      "name": "causality.storyline_trace_coverage",
+      "pillar": "causality",
+      "sub_score_key": "storyline_trace_coverage",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 95.71428571428571,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    }
+  ],
+  "aspirational_met": 16,
+  "aspirational_total": 21,
+  "flags": [
+    "[HARD] causality.pivot_linkability: 51.6 < 80.0 threshold"
+  ],
+  "supplementary": {
+    "output_target": "default",
+    "evaluation_capacity": {
+      "files": 87,
+      "corpus_bytes": 47502765,
+      "parsed_records": 80525,
+      "limits_overridden": false
+    },
+    "host_log_profile": {
+      "app-int-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 26,
+          "ecar": 748,
+          "syslog": 281
+        }
+      },
+      "db-prod-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 34,
+          "ecar": 671,
+          "syslog": 347
+        }
+      },
+      "dc-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 6158,
+          "windows_event_security": 7514
+        }
+      },
+      "file-srv-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1926,
+          "windows_event_security": 1731
+        }
+      },
+      "lt-mrivera-02": {
+        "expected_formats": [
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 221,
+          "syslog": 278
+        }
+      },
+      "mail-clin-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 22,
+          "ecar": 460,
+          "syslog": 363
+        }
+      },
+      "mail-edge-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 2,
+          "ecar": 514,
+          "syslog": 509
+        }
+      },
+      "mail-fin-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 956,
+          "windows_event_security": 762
+        }
+      },
+      "proxy-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "proxy_access",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 21,
+          "ecar": 2670,
+          "proxy_access": 1611,
+          "syslog": 263
+        }
+      },
+      "web-ext-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog",
+          "web_access"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog",
+          "web_access"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 51,
+          "ecar": 2974,
+          "syslog": 1627,
+          "web_access": 864
+        }
+      },
+      "ws-ajohnson-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1391,
+          "windows_event_security": 784
+        }
+      },
+      "ws-dramirez-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 793,
+          "windows_event_security": 479
+        }
+      },
+      "ws-ebrooks-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 859,
+          "windows_event_security": 510
+        }
+      },
+      "ws-lnguyen-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 34,
+          "ecar": 427,
+          "syslog": 226
+        }
+      },
+      "ws-mchen-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1316,
+          "windows_event_security": 652
+        }
+      },
+      "ws-ohaddad-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 8,
+          "ecar": 354,
+          "syslog": 215
+        }
+      },
+      "ws-ppatel-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 884,
+          "windows_event_security": 542
+        }
+      },
+      "ws-smartinez-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1048,
+          "windows_event_security": 615
+        }
+      }
+    },
+    "observation_profile": {
+      "profile": "enterprise_standard",
+      "manifest_present": true,
+      "source_summary": {
+        "ids": {
+          "delayed": 159,
+          "visible": 2,
+          "filtered": 446,
+          "dropped": 5
+        },
+        "asa": {
+          "delayed": 638,
+          "visible": 6,
+          "dropped": 2,
+          "filtered": 344,
+          "out_of_window": 1
+        },
+        "ecar": {
+          "delayed": 1460,
+          "dropped": 8,
+          "out_of_window": 1
+        },
+        "web": {
+          "delayed": 340
+        },
+        "zeek": {
+          "delayed": 1458,
+          "filtered": 12,
+          "visible": 482,
+          "dropped": 3,
+          "out_of_window": 2
+        },
+        "syslog": {
+          "delayed": 111,
+          "visible": 3
+        },
+        "bash_history": {
+          "visible": 25
+        },
+        "sysmon": {
+          "delayed": 446,
+          "out_of_window": 1
+        },
+        "windows_security": {
+          "delayed": 657,
+          "visible": 9
+        },
+        "proxy": {
+          "delayed": 26,
+          "out_of_window": 1
+        },
+        "all": {
+          "out_of_window": 14
+        }
+      }
+    }
+  },
+  "llm_spot_checks": null
+}

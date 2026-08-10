@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "review_baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "parent_commit": "91247365",
+  "recorded_at": "2026-08-07",
+  "branch": "codex/batch5-projection-evaluation",
+  "remediation_batch": 5,
+  "scope": {
+    "finding_ids": ["REAL-010", "REAL-011"],
+    "blind_panel_gate": "not repeated; the approved Batch 5 contract uses deterministic static and empirical evidence",
+    "contracts": [
+      "independent authored-intent reconciliation",
+      "intent-scoped occurrence and source-observation evidence",
+      "non-vacuous required evaluation measures",
+      "concern-oriented evaluation categories",
+      "provider-native Windows Event 4648 projection"
+    ]
+  },
+  "commands": {
+    "generate": "uv run eforge generate SCENARIO -o OUTPUT",
+    "evaluate": "uv run eforge eval OUTPUT -s SCENARIO --format text",
+    "probe": "uv run python scripts/realism_review_probe.py OUTPUT",
+    "parent_worktree": "git worktree add --detach /private/tmp/eforge-parent-912 91247365",
+    "parent_generate": "PYTHONPATH=/private/tmp/eforge-parent-912/src CURRENT_VENV/bin/eforge generate scenarios/branch-office-example/scenario.yaml -o /private/tmp/eforge-parent-912-output",
+    "parent_compare": "diff -qr /private/tmp/eforge-parent-912-output/data /private/tmp/eforge-batch5-branch-complete-v2/data",
+    "data_manifest_hash": "find . -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256",
+    "config": "uv run eforge validate-config",
+    "tests_non_slow": "uv run pytest --no-cov -q",
+    "tests_parallel_slow": "uv run pytest --no-cov --include-slow -q tests/integration/test_parallel_generation.py",
+    "lint": "uv run ruff check .",
+    "format_check": "uv run ruff format --check ."
+  },
+  "projection_equivalence": {
+    "scenario": "scenarios/branch-office-example/scenario.yaml",
+    "parent_output": "/private/tmp/eforge-parent-912-output",
+    "batch5_output": "/private/tmp/eforge-batch5-branch-complete-v2",
+    "data_files": 39,
+    "parent_data_manifest_sha256": "b413ba25bd1dba51aff5ddcd65ceb829417692616c7a0947e140a3b24f058f29",
+    "batch5_data_manifest_sha256": "b413ba25bd1dba51aff5ddcd65ceb829417692616c7a0947e140a3b24f058f29",
+    "result": "byte-identical rendered data tree; Batch 5 changes additive ground-truth and evaluation projections"
+  },
+  "datasets": [
+    {
+      "name": "branch-office-complete",
+      "scenario": "scenarios/branch-office-example/scenario.yaml",
+      "profile": "complete",
+      "duration": "6h",
+      "output": "/private/tmp/eforge-batch5-branch-complete-v2",
+      "records": 48719,
+      "probe_findings": 0,
+      "overall_score": 94.79904389312456,
+      "acceptance_passed": false,
+      "categories": {
+        "source_schema": 100.0,
+        "canonical_invariants": 99.99459225611075,
+        "scenario_completeness": 85.90455840455841,
+        "distribution_realism": 91.15833949781141,
+        "expert_comparison": null
+      },
+      "failed_hard_gates": {
+        "indicator_accuracy": 83.76068376068376,
+        "pivot_linkability": 40.0
+      },
+      "intent_reconciliation": {
+        "complete": true,
+        "expected": 11,
+        "planned": 11,
+        "occurred": 11,
+        "observed": 11,
+        "action_linked": 1,
+        "occurrence_linked": 1,
+        "event_linked": 11,
+        "source_status": {
+          "visible": 378,
+          "delayed": 0,
+          "dropped": 0,
+          "filtered": 1,
+          "out_of_window": 0
+        }
+      }
+    },
+    {
+      "name": "branch-office-enterprise-standard",
+      "scenario": "/private/tmp/eforge-batch5-branch-enterprise.yaml",
+      "profile": "enterprise_standard",
+      "duration": "6h",
+      "output": "/private/tmp/eforge-batch5-branch-enterprise",
+      "records": 49430,
+      "overall_score": 94.79670304984803,
+      "acceptance_passed": false,
+      "categories": {
+        "source_schema": 100.0,
+        "canonical_invariants": 99.99451664199155,
+        "scenario_completeness": 87.19887955182072,
+        "distribution_realism": 89.73118297322421,
+        "expert_comparison": null
+      },
+      "failed_hard_gates": {
+        "indicator_accuracy": 83.19327731092437,
+        "pivot_linkability": 40.0
+      },
+      "intent_reconciliation": {
+        "complete": true,
+        "expected": 11,
+        "planned": 11,
+        "occurred": 11,
+        "observed": 11,
+        "action_linked": 1,
+        "occurrence_linked": 1,
+        "event_linked": 11,
+        "source_status": {
+          "visible": 39,
+          "delayed": 343,
+          "dropped": 0,
+          "filtered": 2,
+          "out_of_window": 0
+        }
+      },
+      "observation_control": "trace coverage remains 100 because delayed/filtered outcomes are proven by the matching manifest",
+      "probe_findings": 1
+    },
+    {
+      "name": "retail-known-bad-control",
+      "scenario": "tests/fixtures/scenarios/retail-store-ftp-attack.yaml",
+      "profile": "complete",
+      "duration": "24h",
+      "output": "/private/tmp/eforge-batch5-retail-ledger",
+      "records": 453560,
+      "overall_score": 78,
+      "acceptance_passed": false,
+      "intent_reconciliation": {
+        "complete": true,
+        "expected": 22,
+        "planned": 22,
+        "occurred": 22,
+        "observed": 3
+      },
+      "failed_hard_gates": {
+        "event_presence": 4.545454545454546,
+        "pivot_linkability": 0.0,
+        "temporal_integrity": 4.545454545454546,
+        "storyline_trace_coverage": 0.0
+      },
+      "proof": "Only 1/22 expected-visible events is found; 0/24 narrative edges retain a pivot; 1/22 events is correctly timed; 22 authored events have no enabled expected source group."
+    }
+  ],
+  "known_bad_contracts": {
+    "fixture": "tests/fixtures/eval/known_bad/acceptance_cases.json",
+    "cases": [
+      "invalid_source_schema",
+      "cross_source_disagreement",
+      "causal_inversion",
+      "missing_declared_evidence",
+      "missing_authored_intent",
+      "incorrect_indicators",
+      "broken_pivots",
+      "temporal_inversion",
+      "missing_storyline_source",
+      "empty_output"
+    ],
+    "result": "every named high-impact mismatch independently fails acceptance"
+  },
+  "windows_event_4648": {
+    "implementation_commit": "739dbea2",
+    "provider_fields": [
+      "SubjectUserSid",
+      "SubjectUserName",
+      "SubjectDomainName",
+      "SubjectLogonId",
+      "LogonGuid",
+      "TargetUserName",
+      "TargetDomainName",
+      "TargetLogonGuid",
+      "TargetServerName",
+      "TargetInfo",
+      "ProcessId",
+      "ProcessName",
+      "IpAddress",
+      "IpPort"
+    ],
+    "tests": [
+      "tests/unit/test_eval_record_fidelity.py::TestFormatDefinitions::test_event_4648_provider_field_snapshot",
+      "tests/unit/test_emitters.py explicit-credentials rendered and nullability tests",
+      "scripts/realism_review_probe.py windows_4648_native_fields"
+    ],
+    "result": "provider-native names/order preserved; no NetworkAddress or NetworkPort output"
+  },
+  "quality_gates": [
+    {
+      "name": "configuration_validation",
+      "status": "passed",
+      "result": "0 errors, 0 warnings, 0 info items across 87 files"
+    },
+    {
+      "name": "focused_contract_tests",
+      "status": "passed",
+      "result": "555-test campaign plus final targeted contract suites passed"
+    },
+    {
+      "name": "parallel_slow_tests",
+      "status": "passed",
+      "result": "5 passed"
+    },
+    {
+      "name": "non_slow_tests",
+      "status": "passed",
+      "result": "5195 passed, 41 skipped in 244.47 seconds on the final unrestricted run"
+    },
+    {
+      "name": "ruff_and_format",
+      "status": "passed",
+      "result": "All checks passed; 454 files already formatted"
+    }
+  ],
+  "verified_out_of_scope_findings": [
+    {
+      "check": "ecar_linux_pid_chronology",
+      "dataset": "branch-office-enterprise-standard",
+      "path": "data/PROXY-BO-01.northstar-branch.local/ecar.json",
+      "evidence": "PID 1283787 follows PID 1283890 at 1715706063358 ms without a modeled wrap",
+      "disposition": "recorded for later lifecycle work; Batch 5 does not alter generation behavior"
+    }
+  ],
+  "limitations": [
+    "Most current storyline event families still use legacy occurrence paths, so rows retain dispatched event IDs but do not invent action or semantic occurrence IDs.",
+    "The branch scenario retains its documented undeclared portal-hostname warning.",
+    "The enterprise probe found one existing Linux PID chronology sibling outside Batch 5 scope.",
+    "Generated datasets and the detached parent worktree remain temporary and untracked."
+  ]
+}

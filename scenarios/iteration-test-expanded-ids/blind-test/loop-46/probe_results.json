@@ -1,0 +1,14 @@
+{
+  "endpoint_proxy_flows": 1684,
+  "exact_http_tuple_matches": 1678,
+  "user_agent_process_family_mismatches": 0,
+  "target_bearing_command_host_mismatches": 0,
+  "postfix_http_client_owners": 0,
+  "process_lifecycle_violations": 0,
+  "examples": {
+    "family_mismatches": [],
+    "target_mismatches": [],
+    "postfix_owners": [],
+    "lifecycle_violations": []
+  }
+}

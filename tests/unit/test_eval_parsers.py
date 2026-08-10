@@ -26,7 +26,34 @@ import json
 from datetime import UTC
 from pathlib import Path
 
+import pytest
+
+from evidenceforge.evaluation.parsers import iter_bounded_text_lines
+from evidenceforge.models.exceptions import EvaluationLimitError
+
 GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
+
+
+def test_bounded_text_reader_rejects_oversized_record(tmp_path: Path) -> None:
+    """One attacker-controlled line cannot bypass the per-record parser budget."""
+    path = tmp_path / "ecar.json"
+    path.write_bytes(b"x" * 17 + b"\n")
+
+    with pytest.raises(EvaluationLimitError, match="exceeds 16 bytes"):
+        list(iter_bounded_text_lines(path, max_record_bytes=16))
+
+
+def test_snare_expanded_field_parser_scales_across_many_fields() -> None:
+    """Expanded Snare payloads are parsed with one linear tokenization pass."""
+    from evidenceforge.evaluation.parsers.windows import _parse_expanded_snare_fields
+
+    payload = "Message:  " + "  ".join(f"Field{index}: value{index}" for index in range(10_000))
+
+    fields = _parse_expanded_snare_fields(payload)
+
+    assert len(fields) == 10_000
+    assert fields["Field0"] == "value0"
+    assert fields["Field9999"] == "value9999"
 
 
 class TestWindowsEventParser:

@@ -251,12 +251,19 @@ domains:
     cdn_domains: ["github.githubassets.com", "avatars.githubusercontent.com"]
     pages:
       - path: "/"
-        nav_targets: ["/pulls", "/issues", "/notifications", "/explore"]
+        nav_targets: ["/dashboard", "/explore", "/notifications", "/pulls", "/issues"]
         subresources:
           - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
-          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.css", type: "text/css"}
           - {host: "github.githubassets.com", path: "/assets/vendors-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/github-{hex16}.css", type: "text/css"}
           - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=40", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/dashboard"
+        nav_targets: ["/", "/notifications", "/pulls", "/issues"]
+        subresources:
+          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/dashboard-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/github-{hex16}.css", type: "text/css"}
           - {path: "/favicon.ico", type: "image/x-icon"}
       - path: "/pulls"
         nav_targets: ["/", "/issues", "/notifications"]
@@ -300,15 +307,18 @@ domains:
     cdn_domains: ["cdn.sstatic.net"]
     pages:
       - path: "/"
-        nav_targets: ["/questions", "/questions/tagged/python", "/questions/tagged/javascript"]
+        nav_targets: ["/questions", "/tags", "/users", "/questions/tagged/python", "/questions/tagged/javascript"]
         subresources:
-          - {host: "cdn.sstatic.net", path: "/Js/full.en.js?v={hex8}", type: "application/javascript"}
-          - {host: "cdn.sstatic.net", path: "/Shared/stacks.css?v={hex8}", type: "text/css"}
+          - {host: "cdn.sstatic.net", path: "/Js/full.{hex8}.js", type: "application/javascript"}
+          - {host: "cdn.sstatic.net", path: "/Shared/stacks.{hex8}.css", type: "text/css"}
           - {host: "cdn.sstatic.net", path: "/Sites/stackoverflow/Img/favicon.ico", type: "image/x-icon"}
       - path: "/questions"
-        nav_targets: ["/", "/questions/tagged/python", "/questions/{n}"]
+        nav_targets: ["/", "/questions/tagged/{slug}", "/questions/tagged/python", "/questions/{n}"]
         subresources:
-          - {host: "cdn.sstatic.net", path: "/Js/stub.en.js?v={hex8}", type: "application/javascript"}
+          - {host: "cdn.sstatic.net", path: "/Js/full.{hex8}.js", type: "application/javascript"}
+          - {host: "cdn.sstatic.net", path: "/Shared/stacks.{hex8}.css", type: "text/css"}
+          - {host: "cdn.sstatic.net", path: "/Js/editor.{hex8}.js", type: "application/javascript"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
 
   www.bing.com:
     cdn_domains: ["r.bing.com", "th.bing.com"]
@@ -330,11 +340,11 @@ domains:
     cdn_domains: ["www.redditstatic.com", "preview.redd.it"]
     pages:
       - path: "/"
-        nav_targets: ["/r/popular", "/r/all", "/r/technology", "/r/netsec"]
+        nav_targets: ["/r/popular/", "/r/all/", "/r/{slug}/", "/r/technology", "/r/netsec"]
         subresources:
-          - {host: "www.redditstatic.com", path: "/desktop2x/js/vendors~Reddit.{hex16}.js", type: "application/javascript"}
-          - {host: "www.redditstatic.com", path: "/desktop2x/css/Reddit.{hex16}.css", type: "text/css"}
-          - {host: "preview.redd.it", path: "/{hex16}.jpg?width=640&auto=webp&s={hex16}", type: "image/jpeg"}
+          - {host: "www.redditstatic.com", path: "/shreddit/en-US/reddit-client-{hex16}.js", type: "application/javascript"}
+          - {host: "www.redditstatic.com", path: "/shreddit/reddit-style-{hex8}.css", type: "text/css"}
+          - {host: "preview.redd.it", path: "/{hex16}.jpg?width=640&format=pjpg", type: "image/jpeg"}
           - {path: "/favicon.ico", type: "image/x-icon"}
       - path: "/r/technology"
         nav_targets: ["/", "/r/technology/comments/{hex8}", "/r/netsec"]
@@ -484,42 +494,6 @@ domains:
           - {host: "st1.zoom.us", path: "/static/{hex8}/css/webclient.css", type: "text/css"}
           - {path: "/favicon.ico", type: "image/x-icon"}
 
-  github.com:
-    cdn_domains: ["github.githubassets.com", "avatars.githubusercontent.com"]
-    pages:
-      - path: "/"
-        nav_targets: ["/dashboard", "/explore", "/notifications", "/pulls"]
-        subresources:
-          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
-          - {host: "github.githubassets.com", path: "/assets/vendors-{hex16}.js", type: "application/javascript"}
-          - {host: "github.githubassets.com", path: "/assets/github-{hex16}.css", type: "text/css"}
-          - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=40", type: "image/png"}
-          - {path: "/favicon.ico", type: "image/x-icon"}
-      - path: "/dashboard"
-        nav_targets: ["/", "/notifications", "/pulls", "/issues"]
-        subresources:
-          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
-          - {host: "github.githubassets.com", path: "/assets/dashboard-{hex16}.js", type: "application/javascript"}
-          - {host: "github.githubassets.com", path: "/assets/github-{hex16}.css", type: "text/css"}
-          - {path: "/favicon.ico", type: "image/x-icon"}
-
-  stackoverflow.com:
-    cdn_domains: ["cdn.sstatic.net"]
-    pages:
-      - path: "/"
-        nav_targets: ["/questions", "/tags", "/users"]
-        subresources:
-          - {host: "cdn.sstatic.net", path: "/Js/full.{hex8}.js", type: "application/javascript"}
-          - {host: "cdn.sstatic.net", path: "/Shared/stacks.{hex8}.css", type: "text/css"}
-          - {host: "cdn.sstatic.net", path: "/Sites/stackoverflow/Img/favicon.ico", type: "image/x-icon"}
-      - path: "/questions"
-        nav_targets: ["/", "/questions/tagged/{slug}", "/questions/{n}"]
-        subresources:
-          - {host: "cdn.sstatic.net", path: "/Js/full.{hex8}.js", type: "application/javascript"}
-          - {host: "cdn.sstatic.net", path: "/Shared/stacks.{hex8}.css", type: "text/css"}
-          - {host: "cdn.sstatic.net", path: "/Js/editor.{hex8}.js", type: "application/javascript"}
-          - {path: "/favicon.ico", type: "image/x-icon"}
-
   www.linkedin.com:
     cdn_domains: ["static.licdn.com", "media.licdn.com"]
     pages:
@@ -535,17 +509,6 @@ domains:
         subresources:
           - {host: "static.licdn.com", path: "/aero-v1/sc/h/{hex16}/messaging-{hex8}.js", type: "application/javascript"}
           - {host: "static.licdn.com", path: "/aero-v1/sc/h/{hex16}/voyager-web.css", type: "text/css"}
-          - {path: "/favicon.ico", type: "image/x-icon"}
-
-  www.reddit.com:
-    cdn_domains: ["www.redditstatic.com", "preview.redd.it"]
-    pages:
-      - path: "/"
-        nav_targets: ["/r/popular/", "/r/all/", "/r/{slug}/"]
-        subresources:
-          - {host: "www.redditstatic.com", path: "/shreddit/en-US/reddit-client-{hex16}.js", type: "application/javascript"}
-          - {host: "www.redditstatic.com", path: "/shreddit/reddit-style-{hex8}.css", type: "text/css"}
-          - {host: "preview.redd.it", path: "/{hex16}.jpg?width=640&format=pjpg", type: "image/jpeg"}
           - {path: "/favicon.ico", type: "image/x-icon"}
 
   en.wikipedia.org:

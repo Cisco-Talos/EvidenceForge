@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""EventDispatcher routes SecurityEvents to StateManager and emitters.
+"""EventDispatcher routes sealed occurrences to StateManager and emitters.
 
 Two-layer filtering for emitter selection:
 1. Format eligibility: emitter.can_handle(event)
@@ -30,11 +30,17 @@ Two-layer filtering for emitter selection:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.base import (
+    CanonicalOccurrence,
+    OccurrenceBuilder,
+    RawProjectionRequest,
+)
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey, shadow_seal
 from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.events.observation import (
     ObservationDecision,
@@ -43,10 +49,12 @@ from evidenceforge.events.observation import (
     ObservationSummary,
     source_family_for_format,
 )
+from evidenceforge.models.exceptions import EventContractError
 from evidenceforge.utils.rng import stable_uuid
 
 if TYPE_CHECKING:
     from evidenceforge.generation.emitters.base import LogEmitter
+    from evidenceforge.generation.intent_ledger import IntentExecutionLedger
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.generation.state_manager import StateManager
 
@@ -94,7 +102,7 @@ def expand_formats(formats: list[str] | set[str]) -> set[str]:
     return expanded
 
 
-def _is_successful_remote_interactive_transport(event: SecurityEvent) -> bool:
+def _is_successful_remote_interactive_transport(event: CanonicalOccurrence) -> bool:
     """Return whether a network event is an established SSH/RDP session transport."""
 
     network = event.network
@@ -114,7 +122,7 @@ def _is_successful_remote_interactive_transport(event: SecurityEvent) -> bool:
 
 
 class EventDispatcher:
-    """Routes SecurityEvents to StateManager and matching emitters."""
+    """Routes sealed canonical occurrences to state and matching emitters."""
 
     def __init__(
         self,
@@ -124,6 +132,7 @@ class EventDispatcher:
         output_start_time: datetime | None = None,
         output_end_time: datetime | None = None,
         observation_policy: ObservationPolicy | None = None,
+        intent_execution_ledger: IntentExecutionLedger | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.emitters = emitters
@@ -134,8 +143,11 @@ class EventDispatcher:
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
-        self._event_sequence = 0
+        self._contract_violation_counts: Counter[str] = Counter()
+        self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
         self.storyline_cluster_id: str | None = None
+        self.authored_intent_id: str | None = None
+        self.intent_execution_ledger = intent_execution_ledger
         from evidenceforge.generation.source_timing import SourceTimingPlanner
 
         self.source_timing_planner = SourceTimingPlanner(
@@ -143,7 +155,10 @@ class EventDispatcher:
         )
         from evidenceforge.generation.network_observation import NetworkObservationPlanner
 
-        self.network_observation_planner = NetworkObservationPlanner(visibility_engine)
+        self.network_observation_planner = NetworkObservationPlanner(
+            visibility_engine,
+            output_end_time=output_end_time,
+        )
         from evidenceforge.generation.identity_lifecycle import IdentityLifecyclePlanner
 
         self.identity_lifecycle_planner = IdentityLifecyclePlanner(state_manager)
@@ -159,6 +174,21 @@ class EventDispatcher:
             }
             for cluster_id, source_summaries in sorted(self._source_evidence_status.items())
         }
+
+    @property
+    def contract_violation_counts(self) -> dict[str, int]:
+        """Return shadow contract discrepancies without enabling enforcement."""
+
+        return dict(sorted(self._contract_violation_counts.items()))
+
+    @property
+    def contract_violations_by_event(self) -> dict[str, dict[str, int]]:
+        """Return shadow discrepancies grouped by event kind and stable violation code."""
+
+        result: dict[str, dict[str, int]] = {}
+        for (event_type, code), count in sorted(self._contract_violations_by_event.items()):
+            result.setdefault(event_type, {})[code] = count
+        return result
 
     def network_identifier_for_format(
         self,
@@ -185,7 +215,7 @@ class EventDispatcher:
         """Record that a storyline network event was filtered before emitter dispatch.
 
         Some caller paths skip unobservable network connections before building a
-        full SecurityEvent. The manifest still needs a source-status entry so
+        full OccurrenceBuilder. The manifest still needs a source-status entry so
         eval can distinguish expected sensor-placement loss from missing evidence.
         """
         for format_name in self.emitters:
@@ -205,33 +235,49 @@ class EventDispatcher:
             gate = gate.replace(tzinfo=None)
         return ts < gate
 
-    def dispatch(self, event: SecurityEvent) -> dict[str, str]:
-        """Route a structured event to StateManager + matching emitters.
+    def dispatch_builder(self, event: OccurrenceBuilder) -> dict[str, str]:
+        """Finalize private construction state, seal it, and publish one occurrence."""
+
+        if self.storyline_cluster_id and event.storyline_cluster_id is None:
+            event.storyline_cluster_id = self.storyline_cluster_id
+        self._finalize_network_routing(event)
+        self.identity_lifecycle_planner.plan(event)
+        if event.occurrence_key is None:
+            event.occurrence_key = self._derive_occurrence_key(event)
+        event.contract_seal = shadow_seal(event)
+        for violation in event.contract_seal.violations:
+            self._contract_violation_counts[violation.code.value] += 1
+            self._contract_violations_by_event[(event.event_type, violation.code.value)] += 1
+        if event.contract_seal.violations:
+            details = "; ".join(violation.message for violation in event.contract_seal.violations)
+            raise EventContractError(f"Cannot dispatch invalid canonical event: {details}")
+        return self.dispatch(event.seal())
+
+    def dispatch(self, event: CanonicalOccurrence) -> dict[str, str]:
+        """Route one sealed occurrence to canonical state and source projections.
 
         State is always updated (even during warm-up). Emission to log files
         is suppressed for events before output_start_time. Network events return
         their admitted sensor-local identifiers for immediate caller correlation.
         """
+        if not isinstance(event, CanonicalOccurrence):
+            raise TypeError("EventDispatcher.dispatch() accepts only sealed CanonicalOccurrence")
         network_identifiers_by_format: dict[str, str] = {}
-        if self.storyline_cluster_id and event.storyline_cluster_id is None:
-            event.storyline_cluster_id = self.storyline_cluster_id
-        if event.network is not None:
-            event.network.validate_finalized_transaction()
-        self.identity_lifecycle_planner.plan(event)
-        if not event.event_id:
-            event.event_id = stable_uuid(
-                "security-event",
-                self._event_sequence,
-                event.event_type,
-                event.timestamp.isoformat(),
-                event.storyline_cluster_id or "",
+        if self.authored_intent_id and self.intent_execution_ledger is not None:
+            occurrence_key = (
+                event.contract_seal.occurrence.occurrence_key
+                if event.contract_seal.occurrence is not None
+                else None
             )
-            self._event_sequence += 1
+            self.intent_execution_ledger.record_occurrence(
+                self.authored_intent_id,
+                occurrence_key,
+            )
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             self._record_observation(event, "all", "out_of_window")
             return network_identifiers_by_format
-        self.source_timing_planner.initialize_event(event)
+        event = self.source_timing_planner.initialize_event(event)
         matching_emitters = self._get_matching_emitters(event)
         decisions = {
             format_name: self.observation_policy.decide(format_name, event)
@@ -243,15 +289,21 @@ class EventDispatcher:
             for format_name, decision in decisions.items()
             if decision.status != "dropped"
         }
-        event._observed_formats = observed_formats
+        event = replace(event, _observed_formats=frozenset(observed_formats))
         if event.network is not None:
             planned_observations = self.network_observation_planner.plan(
                 event,
                 observed_formats,
             )
-            event.network_observations = planned_observations
-            event.network_observations_planned = bool(planned_observations)
-            event.network_observations = self._admit_network_sensor_observations(event)
+            event = replace(
+                event,
+                network_observations=planned_observations,
+                network_observations_planned=bool(planned_observations),
+            )
+            event = replace(
+                event,
+                network_observations=self._admit_network_sensor_observations(event),
+            )
             self._initialize_network_identifiers(
                 event,
                 matching_emitters,
@@ -267,7 +319,6 @@ class EventDispatcher:
             if decision.delay.total_seconds() > 0:
                 event_to_emit = replace(event, timestamp=event.timestamp + decision.delay)
                 status = "delayed"
-            event_to_emit._observed_formats = observed_formats
             event_to_emit = self.source_timing_planner.plan_event(
                 event_to_emit,
                 format_name=format_name,
@@ -284,27 +335,80 @@ class EventDispatcher:
                 format_name,
                 network_identifiers_by_format,
             )
-            if (
-                event_to_emit.event_type != "process_terminate"
-                and event_to_emit.process is not None
-                and event_to_emit.src_host is not None
-            ):
-                self.state_manager.update_process_activity_time(
-                    event_to_emit.src_host.hostname,
-                    event_to_emit.process.pid,
-                    event_to_emit.timestamp,
-                )
             self._record_observation(event, format_name, status)
-            event_to_emit._source_observation_status = status
-            if event.raw is not None:
-                emitter.emit_raw(event_to_emit.raw.fields)
-            else:
-                emitter.emit(event_to_emit)
+            event_to_emit = replace(event_to_emit, _source_observation_status=status)
+            emitter.emit(event_to_emit)
         return network_identifiers_by_format
+
+    def _derive_occurrence_key(self, event: OccurrenceBuilder) -> SemanticOccurrenceKey:
+        """Derive stable action-relative identity without dispatch-order state."""
+
+        identity = event.identity_plan
+        network = event.network
+        lifecycle = event.lifecycle
+        auth = event.auth
+        process = event.process
+        file_context = event.file
+        registry = event.registry
+        syslog = event.syslog
+        owner_key = (
+            lifecycle.group_id
+            if lifecycle is not None
+            else network.stable_id
+            if network is not None
+            else identity.object_id
+            if identity is not None and identity.object_id
+            else identity.actor_id
+            if identity is not None and identity.actor_id
+            else event.storyline_cluster_id
+            or self.authored_intent_id
+            or stable_uuid(
+                "canonical-action-owner",
+                event.event_type,
+                getattr(event.src_host, "hostname", ""),
+                getattr(event.dst_host, "hostname", ""),
+                event.timestamp.isoformat(),
+            )
+        )
+        action_id = stable_uuid("canonical-action", owner_key)
+        phase = lifecycle.phase if lifecycle is not None else ""
+        role = {
+            "start": OccurrenceRole.PRIMARY,
+            "dependent": OccurrenceRole.DEPENDENT,
+            "closure": OccurrenceRole.CLOSURE,
+        }.get(phase, OccurrenceRole.PRIMARY)
+        instance_key = stable_uuid(
+            "canonical-occurrence-instance",
+            event.event_type,
+            event.timestamp.isoformat(),
+            getattr(event.src_host, "hostname", ""),
+            getattr(event.dst_host, "hostname", ""),
+            network.stable_id if network is not None else "",
+            identity.object_id if identity is not None else "",
+            identity.actor_id if identity is not None else "",
+            getattr(auth, "logon_id", ""),
+            getattr(auth, "username", ""),
+            getattr(auth, "source_ip", ""),
+            getattr(auth, "source_port", ""),
+            getattr(process, "pid", ""),
+            getattr(process, "start_time", ""),
+            getattr(file_context, "path", ""),
+            getattr(file_context, "action", ""),
+            getattr(registry, "key", ""),
+            getattr(registry, "value", ""),
+            getattr(syslog, "app_name", ""),
+            getattr(syslog, "pid", ""),
+            getattr(syslog, "message", ""),
+        )
+        return SemanticOccurrenceKey(
+            action_id=action_id,
+            role=role,
+            instance_key=instance_key,
+        )
 
     def _initialize_network_identifiers(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         matching_emitters: list[tuple[str, LogEmitter]],
         identifiers_by_format: dict[str, str],
     ) -> None:
@@ -320,7 +424,7 @@ class EventDispatcher:
 
     def _record_admitted_network_identifier(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         format_name: str,
         identifiers_by_format: dict[str, str],
     ) -> None:
@@ -342,7 +446,7 @@ class EventDispatcher:
 
     def _admit_network_sensor_observations(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
     ) -> tuple[NetworkSensorObservation, ...]:
         """Apply half-open end admission independently to sensor observations."""
 
@@ -356,7 +460,7 @@ class EventDispatcher:
             if self._is_before(observation.observed_start_time, self.output_end_time)
         )
 
-    def _admit_source_event(self, event: SecurityEvent, format_name: str) -> bool:
+    def _admit_source_event(self, event: CanonicalOccurrence, format_name: str) -> bool:
         """Return whether final source-visible timing admits this rendered event."""
 
         if (
@@ -385,8 +489,6 @@ class EventDispatcher:
             self.output_end_time,
         ):
             return False
-        if lifecycle.phase == "closure":
-            return True
         if self.output_start_time is not None and self._is_before(
             visible_time,
             self.output_start_time,
@@ -423,19 +525,40 @@ class EventDispatcher:
 
     def _enforce_source_observation_contracts(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         decisions: dict[str, ObservationDecision],
     ) -> None:
         """Preserve source-local parent rows when child observations survive."""
         self._promote_zeek_parent(decisions, "zeek_conn", _ZEEK_CONN_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_files", _ZEEK_FILES_DEPENDENTS)
         self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
+        self._preserve_zeek_ocsp_transaction_companions(event, decisions)
         self._preserve_zeek_tls_certificate_companions(event, decisions)
         self._preserve_remote_interactive_transport_companions(event, decisions)
 
     @staticmethod
+    def _preserve_zeek_ocsp_transaction_companions(
+        event: CanonicalOccurrence,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Apply one Zeek observation decision to an OCSP HTTP/file/response group."""
+        if (
+            event.protocol.ocsp is None
+            or event.protocol.http is None
+            or event.protocol.primary_file_transfer is None
+        ):
+            return
+        formats = ("zeek_http", "zeek_files", "zeek_ocsp")
+        anchor = next((decisions[name] for name in formats if name in decisions), None)
+        if anchor is None:
+            return
+        for format_name in formats:
+            if format_name in decisions:
+                decisions[format_name] = anchor
+
+    @staticmethod
     def _preserve_remote_interactive_transport_companions(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         decisions: dict[str, ObservationDecision],
     ) -> None:
         """Keep successful SSH/RDP network rows when endpoint transport telemetry survives."""
@@ -452,11 +575,13 @@ class EventDispatcher:
 
     @staticmethod
     def _preserve_zeek_tls_certificate_companions(
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         decisions: dict[str, ObservationDecision],
     ) -> None:
         """Keep TLS certificate files/x509/ssl rows source-local coherent."""
-        if event.ssl is None or (event.x509 is None and not event.x509_chain):
+        if event.protocol.ssl is None or (
+            event.protocol.leaf_certificate is None and not event.protocol.x509_chain
+        ):
             return
         certificate_formats = ("zeek_files", "zeek_x509")
         anchor = next(
@@ -496,127 +621,104 @@ class EventDispatcher:
             )
             return
 
-    def dispatch_raw(self, entry: RawLogEntry) -> None:
-        """Route a raw log entry directly to a specific emitter (escape hatch).
+    def dispatch_raw(self, request: RawProjectionRequest) -> None:
+        """Route a source-local request without creating a canonical occurrence.
 
-        target_emitter must match a key in self.emitters dict.
+        ``target_format`` must match a key in the configured emitters.
         """
-        if self._is_suppressed(entry.timestamp):
+        if self._is_suppressed(request.timestamp):
+            self._record_raw_observation(request, "out_of_window")
             return
         if self.output_end_time is not None and not self._is_before(
-            entry.timestamp,
+            request.timestamp,
             self.output_end_time,
         ):
+            self._record_raw_observation(request, "out_of_window")
             return
-        emitter = self.emitters.get(entry.target_emitter)
+        emitter = self.emitters.get(request.target_format)
         if emitter is None:
-            raise KeyError(f"Unknown emitter: {entry.target_emitter!r}")
-        decision = self.observation_policy.decide_raw(entry)
-        if decision.status == "dropped":
+            raise KeyError(f"Unknown emitter: {request.target_format!r}")
+        if request.local_only and request.target_format in _NETWORK_FORMATS:
+            self._record_raw_observation(request, "filtered")
             return
-        emitter.emit_raw(entry.data)
+        decision = self.observation_policy.decide_raw(request)
+        if decision.status == "dropped":
+            self._record_raw_observation(request, "dropped")
+            return
+        emitter.emit_raw(request.data)
+        self._record_raw_observation(request, decision.status)
 
-    def _get_matching_emitters(self, event: SecurityEvent) -> list[tuple[str, LogEmitter]]:
-        """Two-layer filtering: format eligibility + network visibility."""
-        # Raw event routing: target a single specific emitter
-        if event.raw is not None:
-            emitter = self.emitters.get(event.raw.target_format)
-            if emitter is None:
-                logger.warning(f"Raw event targets unknown emitter: {event.raw.target_format!r}")
-                return []
-            if event.local_only and event.raw.target_format in _NETWORK_FORMATS:
-                self._record_observation(event, event.raw.target_format, "filtered")
-                return []
-            return [(event.raw.target_format, emitter)]
+    def _record_raw_observation(
+        self,
+        request: RawProjectionRequest,
+        status: ObservationStatus,
+    ) -> None:
+        """Record raw visibility without claiming a canonical occurrence."""
 
-        # For network events, determine which formats can see this traffic
-        # and annotate the event with observing sensor hostnames
-        visible_formats: set[str] | None = None
-        if event.network and self.visibility_engine:
-            is_link_local = event.network.link_local
-            if is_link_local:
-                visible_formats = self.visibility_engine.get_log_formats_for_link_local(
-                    event.network.src_ip
-                )
-                sensors = self.visibility_engine.get_link_local_sensors(event.network.src_ip)
-            else:
-                # Denied connections only visible from the source side (packets
-                # never reach the destination — firewall blocks them)
-                is_fw_deny = event.firewall is not None and event.firewall.action == "deny"
-            if not is_link_local and is_fw_deny:
-                visible_formats = self.visibility_engine.get_log_formats_for_source_only(
-                    event.network.src_ip, event.network.dst_ip
-                )
-                sensors = self.visibility_engine.get_source_side_sensors(
-                    event.network.src_ip, event.network.dst_ip
-                )
-            elif not is_link_local:
-                visible_formats = self.visibility_engine.get_log_formats_for_connection(
-                    event.network.src_ip, event.network.dst_ip
-                )
-                sensors = self.visibility_engine.get_observing_sensors(
-                    event.network.src_ip, event.network.dst_ip
-                )
-            format_to_sensors: dict[str, list[str]] = {}
-            for sensor in sensors:
-                hostname = sensor.hostname or sensor.name
-                # Expand group names to individual emitter names
-                for fmt in expand_formats(sensor.log_formats):
-                    format_to_sensors.setdefault(fmt, []).append(hostname)
-            event._sensor_hostnames_by_format = format_to_sensors
+        if request.storyline_cluster_id:
+            self._record_cluster_observation(
+                request.target_format,
+                status,
+                cluster_id=request.storyline_cluster_id,
+            )
 
-            # NAT computation: translate addresses for permitted connections
-            if not is_link_local and not is_fw_deny and event.nat is None:
-                nat_ctx = self.visibility_engine.compute_nat(
+    def _finalize_network_routing(self, event: OccurrenceBuilder) -> None:
+        """Resolve sensor routing and NAT while the private builder is still mutable."""
+
+        if event.network is None or self.visibility_engine is None:
+            return
+        is_link_local = event.network.link_local
+        is_fw_deny = event.firewall is not None and event.firewall.action == "deny"
+        if is_link_local:
+            event._visible_network_formats = set(
+                self.visibility_engine.get_log_formats_for_link_local(event.network.src_ip)
+            )
+            sensors = self.visibility_engine.get_link_local_sensors(event.network.src_ip)
+        elif is_fw_deny:
+            event._visible_network_formats = set(
+                self.visibility_engine.get_log_formats_for_source_only(
                     event.network.src_ip,
                     event.network.dst_ip,
-                    event.network.src_port,
-                    event.network.dst_port,
                 )
-                if nat_ctx:
-                    event.nat = nat_ctx
-                    src_segments = self.visibility_engine._resolve_ip_segments(event.network.src_ip)
-                    # Detect NAT direction: inbound static NAT translates
-                    # dst from VIP to real_ip; outbound PAT translates src.
-                    is_inbound_nat = (
-                        nat_ctx.nat_type == "static"
-                        and nat_ctx.mapped_dst_ip
-                        and nat_ctx.mapped_dst_ip != event.network.dst_ip
-                    )
-                    nat_swaps: dict[str, dict[str, str | int]] = {}
-                    for sensor in sensors:
-                        if sensor.type == "firewall":
-                            continue  # ASA handles NAT via NatContext directly
-                        sensor_segs = set(sensor.monitoring_segments)
-                        hostname = sensor.hostname or sensor.name
-                        swaps: dict[str, str | int] = {}
+            )
+            sensors = self.visibility_engine.get_source_side_sensors(
+                event.network.src_ip,
+                event.network.dst_ip,
+            )
+        else:
+            event._visible_network_formats = set(
+                self.visibility_engine.get_log_formats_for_connection(
+                    event.network.src_ip,
+                    event.network.dst_ip,
+                )
+            )
+            sensors = self.visibility_engine.get_observing_sensors(
+                event.network.src_ip,
+                event.network.dst_ip,
+            )
+        format_to_sensors: dict[str, list[str]] = {}
+        for sensor in sensors:
+            hostname = sensor.hostname or sensor.name
+            for format_name in expand_formats(sensor.log_formats):
+                format_to_sensors.setdefault(format_name, []).append(hostname)
+        event._sensor_hostnames_by_format = format_to_sensors
 
-                        if is_inbound_nat:
-                            # Inbound NAT: inside sensors (monitoring the
-                            # real_ip's segment) see the translated real_ip;
-                            # outside sensors keep the VIP (no swap).
-                            real_ip_segs = self.visibility_engine._resolve_ip_segments(
-                                nat_ctx.mapped_dst_ip
-                            )
-                            if sensor_segs & real_ip_segs:
-                                swaps["dst_ip"] = nat_ctx.mapped_dst_ip
-                                swaps["dst_port"] = nat_ctx.mapped_dst_port
-                                swaps["local_resp"] = True
-                        else:
-                            # Outbound NAT: outside sensors (NOT on source
-                            # segment) see post-NAT translated IPs.
-                            if not (sensor_segs & src_segments):
-                                if nat_ctx.mapped_src_ip != event.network.src_ip:
-                                    swaps["src_ip"] = nat_ctx.mapped_src_ip
-                                    swaps["src_port"] = nat_ctx.mapped_src_port
-                                if nat_ctx.mapped_dst_ip != event.network.dst_ip:
-                                    swaps["dst_ip"] = nat_ctx.mapped_dst_ip
-                                    swaps["dst_port"] = nat_ctx.mapped_dst_port
+        if not is_link_local and not is_fw_deny and event.nat is None:
+            event.nat = self.visibility_engine.compute_nat(
+                event.network.src_ip,
+                event.network.dst_ip,
+                event.network.src_port,
+                event.network.dst_port,
+            )
 
-                        if swaps:
-                            nat_swaps[hostname] = swaps
-                    if nat_swaps:
-                        event._nat_swaps_by_sensor = nat_swaps
+    def _get_matching_emitters(
+        self,
+        event: CanonicalOccurrence,
+    ) -> list[tuple[str, LogEmitter]]:
+        """Two-layer filtering: format eligibility + network visibility."""
+        visible_formats: set[str] | None = None
+        if event.network is not None and self.visibility_engine is not None:
+            visible_formats = set(event._visible_network_formats)
 
         matched = []
         for format_name, emitter in self.emitters.items():
@@ -636,7 +738,7 @@ class EventDispatcher:
 
     def _record_observation(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         format_name: str,
         status: ObservationStatus,
     ) -> None:
@@ -661,6 +763,12 @@ class EventDispatcher:
         cluster = self._source_evidence_status.setdefault(cluster_id, {})
         source_counts = cluster.setdefault(source, ObservationSummary())
         source_counts.record(status)
+        if self.authored_intent_id and self.intent_execution_ledger is not None:
+            self.intent_execution_ledger.record_observation(
+                self.authored_intent_id,
+                source,
+                status,
+            )
 
     def reconcile_ids_policy_filtering(
         self,

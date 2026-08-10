@@ -13,8 +13,27 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
+
+
+def test_long_lived_desktop_spawn_rules_do_not_recursively_bootstrap() -> None:
+    """Singleton desktop parents must not spawn another copy of themselves."""
+    rules = load_spawn_rules()["windows"]
+    singleton_parents = {
+        "teams.exe",
+        "onedrive.exe",
+        "slack.exe",
+        "zoom.exe",
+        "webex.exe",
+        "dropbox.exe",
+        "googledrivefs.exe",
+    }
+
+    for parent in singleton_parents:
+        children = {str(child).lower() for child in rules[parent].get("children", [])}
+        assert parent not in children
 
 
 @pytest.fixture
@@ -846,7 +865,9 @@ class TestWindowsProcessTreeRealism:
 
         created_proc = state_manager.get_process(win_system.hostname, created_pid)
         assert created_proc is not None
-        parent_proc = state_manager.get_process(win_system.hostname, created_proc.parent_pid)
+        parent_proc = state_manager.get_process_identity(
+            win_system.hostname, created_proc.parent_pid
+        )
         assert parent_proc is not None
         parent_exe = parent_proc.image.rsplit("\\", 1)[-1].lower()
         assert parent_exe in {"userinit.exe", "winlogon.exe", "services.exe"}, (
@@ -906,7 +927,7 @@ class TestWindowsProcessTreeRealism:
         # Capture dispatched events
         dispatched = []
         ag.dispatcher = Mock()
-        ag.dispatcher.dispatch = lambda event: dispatched.append(event)
+        ag.dispatcher.dispatch_builder = lambda event: dispatched.append(event)
 
         ag.generate_process(
             user,

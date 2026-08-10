@@ -25,7 +25,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.emitters.zeek_files import (
     _bounded_file_transfer_observation,
@@ -45,11 +45,11 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_ocsp.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
-        return event.event_type in self._supported_types and event.ocsp is not None
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
+        return event.event_type in self._supported_types and event.protocol.ocsp is not None
 
-    def emit(self, event: SecurityEvent) -> None:
-        ocsp = event.ocsp
+    def emit(self, event: CanonicalOccurrence) -> None:
+        ocsp = event.protocol.ocsp
         event_data: dict[str, Any] = {
             "ts": _ocsp_analyzer_timestamp(event),
             "id": ocsp.id,
@@ -65,6 +65,7 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
             **self._sensor_metadata(
                 event,
                 self.format_def.name if self.format_def else "zeek_ocsp",
+                analyzer_file_id=ocsp.id,
             ),
         }
         if event.network is not None and event.network.zeek_uid:
@@ -78,12 +79,12 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
         return self._render_zeek_json(render_data)
 
 
-def _ocsp_analyzer_timestamp(event: SecurityEvent) -> datetime | float:
+def _ocsp_analyzer_timestamp(event: CanonicalOccurrence) -> datetime | float:
     """Return an OCSP analyzer time inside the owning HTTP response file window."""
-    ocsp = event.ocsp
+    ocsp = event.protocol.ocsp
     if ocsp is None:
         return event.timestamp
-    if event.network is not None and event.file_transfer is not None:
+    if event.network is not None and event.protocol.primary_file_transfer is not None:
         file_ts, file_duration = _bounded_file_transfer_observation(
             event,
             min_start=_related_http_analyzer_timestamp(event),

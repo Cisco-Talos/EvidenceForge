@@ -46,6 +46,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.network import SignaturePredicate
 from evidenceforge.generation.actions import (
     IdsAlertActionBundle,
     IdsAlertRequest,
@@ -71,6 +72,8 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.activity.network_params import activity_dns_resolver_ips
+from evidenceforge.generation.intent_ledger import IntentSection
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
@@ -85,6 +88,7 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
+
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
 _STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
@@ -153,6 +157,7 @@ def _build_ids_alert_contexts(
                     source=source,
                     direction=str(signature.get("direction", "")),
                     policy=attachment.policy,
+                    origin="authored_attachment",
                 )
             ).execute()
         )
@@ -948,6 +953,37 @@ def _iter_shuffled_port_scan_pairs(
         probe_index = (offset + sequence_index * step) % total_pairs
         target_index, port_index = divmod(probe_index, port_count)
         yield targets[target_index], ports[port_index]
+
+
+def _sample_network_hosts(
+    network: Any,
+    count: int,
+    rng: random.Random,
+) -> list[str]:
+    """Sample host addresses in O(requested targets) for IPv4 or enormous IPv6 networks."""
+
+    import ipaddress
+    import sys
+
+    if network.version == 4:
+        edge_reserve = 2 if network.prefixlen < 31 else 0
+        first_address = int(network.network_address) + (1 if edge_reserve else 0)
+    else:
+        edge_reserve = 1 if network.prefixlen < 127 else 0
+        first_address = int(network.network_address) + edge_reserve
+    population_size = max(0, int(network.num_addresses) - edge_reserve)
+    sample_size = min(max(0, count), population_size)
+    if population_size <= sys.maxsize:
+        offsets = rng.sample(range(population_size), sample_size)
+    else:
+        offsets = []
+        seen_offsets: set[int] = set()
+        while len(offsets) < sample_size:
+            offset = rng.randrange(population_size)
+            if offset not in seen_offsets:
+                seen_offsets.add(offset)
+                offsets.append(offset)
+    return [str(ipaddress.ip_address(first_address + offset)) for offset in offsets]
 
 
 def _port_scan_connection_profile(
@@ -2841,17 +2877,25 @@ class StorylineMixin:
             self.dispatcher.storyline_cluster_id = storyline_event.id
             try:
                 for i, spec in enumerate(storyline_event.events):
-                    previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
-                    self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
-                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                    event_t = self._apply_storyline_shell_availability(
-                        actor=actor,
-                        system=system,
-                        time=event_t,
-                        rng=rng,
+                    intent = self.authored_intent_ledger.intent_at(
+                        IntentSection.STORYLINE,
+                        storyline_event.id,
+                        i,
                     )
-                    self.state_manager.set_current_time(event_t)
+                    previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
+                    previous_intent_id = self.dispatcher.authored_intent_id
+                    self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
+                    self.dispatcher.authored_intent_id = intent.intent_id
+                    self.intent_execution_ledger.mark_planned(intent.intent_id)
                     try:
+                        event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                        event_t = self._apply_storyline_shell_availability(
+                            actor=actor,
+                            system=system,
+                            time=event_t,
+                            rng=rng,
+                        )
+                        self.state_manager.set_current_time(event_t)
                         malicious_event = self._execute_typed_event(
                             spec=spec,
                             actor=actor,
@@ -2862,9 +2906,11 @@ class StorylineMixin:
                             future_specs=itertools.islice(storyline_event.events, i + 1, None),
                         )
                         if malicious_event:
+                            malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
                     finally:
                         self._current_storyline_spec_id = previous_spec_id
+                        self.dispatcher.authored_intent_id = previous_intent_id
                 self._flush_story_process_terminations()
             finally:
                 self.dispatcher.storyline_cluster_id = previous_cluster
@@ -2913,17 +2959,25 @@ class StorylineMixin:
         self.dispatcher.storyline_cluster_id = storyline_event.id
         try:
             for i, spec in enumerate(storyline_event.events):
-                previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
-                self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
-                event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                event_t = self._apply_storyline_shell_availability(
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    rng=rng,
+                intent = self.authored_intent_ledger.intent_at(
+                    IntentSection.STORYLINE,
+                    storyline_event.id,
+                    i,
                 )
-                self.state_manager.set_current_time(event_t)
+                previous_spec_id = getattr(self, "_current_storyline_spec_id", "")
+                previous_intent_id = self.dispatcher.authored_intent_id
+                self._current_storyline_spec_id = f"{storyline_event.id}:{i}"
+                self.dispatcher.authored_intent_id = intent.intent_id
+                self.intent_execution_ledger.mark_planned(intent.intent_id)
                 try:
+                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = self._apply_storyline_shell_availability(
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        rng=rng,
+                    )
+                    self.state_manager.set_current_time(event_t)
                     malicious_event = self._execute_typed_event(
                         spec=spec,
                         actor=actor,
@@ -2934,9 +2988,11 @@ class StorylineMixin:
                         future_specs=itertools.islice(storyline_event.events, i + 1, None),
                     )
                     if malicious_event:
+                        malicious_event["intent_id"] = intent.intent_id
                         self.malicious_events.append(malicious_event)
                 finally:
                     self._current_storyline_spec_id = previous_spec_id
+                    self.dispatcher.authored_intent_id = previous_intent_id
             self._flush_story_process_terminations()
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
@@ -2981,27 +3037,39 @@ class StorylineMixin:
         self.dispatcher.storyline_cluster_id = f"red_herring:{rh_event.id}"
         try:
             for i, spec in enumerate(rh_event.events):
-                event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                event_t = self._apply_storyline_shell_availability(
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    rng=rng,
+                intent = self.authored_intent_ledger.intent_at(
+                    IntentSection.RED_HERRING,
+                    rh_event.id,
+                    i,
                 )
-                self.state_manager.set_current_time(event_t)
-                result = self._execute_typed_event(
-                    spec=spec,
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    activity=rh_event.activity,
-                    explicit_types=explicit_types,
-                    future_specs=itertools.islice(rh_event.events, i + 1, None),
-                )
-                if result:
-                    # Track as red herring, not malicious
-                    result["explanation"] = rh_event.explanation
-                    self.red_herring_events.append(result)
+                previous_intent_id = self.dispatcher.authored_intent_id
+                self.dispatcher.authored_intent_id = intent.intent_id
+                self.intent_execution_ledger.mark_planned(intent.intent_id)
+                try:
+                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = self._apply_storyline_shell_availability(
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        rng=rng,
+                    )
+                    self.state_manager.set_current_time(event_t)
+                    result = self._execute_typed_event(
+                        spec=spec,
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        activity=rh_event.activity,
+                        explicit_types=explicit_types,
+                        future_specs=itertools.islice(rh_event.events, i + 1, None),
+                    )
+                    if result:
+                        # Track as red herring, not malicious
+                        result["intent_id"] = intent.intent_id
+                        result["explanation"] = rh_event.explanation
+                        self.red_herring_events.append(result)
+                finally:
+                    self.dispatcher.authored_intent_id = previous_intent_id
             self._flush_story_process_terminations()
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
@@ -3413,19 +3481,17 @@ class StorylineMixin:
                     )
                     output_file = f"{home}/{output_file[2:]}"
                 file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
-                from evidenceforge.events.base import SecurityEvent
+                from evidenceforge.events.base import OccurrenceBuilder
                 from evidenceforge.events.contexts import (
                     AuthContext,
-                    EdrContext,
                     FileContext,
                     ProcessContext,
                 )
 
                 host_ctx = self.activity_generator._build_host_context(system)
                 running_proc = self.state_manager.get_process(system.hostname, pid)
-                proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
-                self.dispatcher.dispatch(
-                    SecurityEvent(
+                self.dispatcher.dispatch_builder(
+                    OccurrenceBuilder(
                         timestamp=file_time,
                         event_type="file_create",
                         src_host=host_ctx,
@@ -3442,16 +3508,6 @@ class StorylineMixin:
                             else None,
                         ),
                         file=FileContext(path=output_file, action="create", pid=pid),
-                        edr=EdrContext(
-                            object_id=stable_uuid(
-                                "storyline-output-file-edr",
-                                system.hostname,
-                                pid,
-                                output_file,
-                                file_time.isoformat(),
-                            ),
-                            actor_id=proc_obj_id,
-                        ),
                         storyline_origin=True,
                     )
                 )
@@ -3673,6 +3729,7 @@ class StorylineMixin:
                             resp_bytes=resp_bytes,
                             auth_method="publickey",
                             emit_session_close=True,
+                            defer_session_close=True,
                             source="storyline_scp",
                         )
                         self._emit_scp_receiver_artifacts(
@@ -3959,7 +4016,7 @@ class StorylineMixin:
                         not (spec.user_agent or "").strip()
                         or (http_ctx.user_agent or "").strip().lower() == "mozilla/5.0"
                     ):
-                        http_ctx.user_agent = upload_user_agent
+                        http_ctx = replace(http_ctx, user_agent=upload_user_agent)
                 self._emit_storyline_archive_transfer_before_exfil(
                     actor=actor,
                     source_ip=source_ip,
@@ -4497,17 +4554,34 @@ class StorylineMixin:
                     f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
                     f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
                 )
+            from evidenceforge.generation.world_model import HostCapability
             from evidenceforge.utils.ids import generate_zeek_uid
 
-            # Use DC as DHCP server (common in AD environments)
-            dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
-            dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
+            dhcp_servers = self.world_model.systems_with_capability(
+                HostCapability.DHCP_SERVER,
+                distinct_from=system,
+            )
+            if not dhcp_servers:
+                raise StateError(
+                    f"DHCP lease for {system.hostname} requires a distinct modeled DHCP server"
+                )
+            dhcp_server = dhcp_servers[
+                _stable_seed(
+                    "storyline_dhcp_server:"
+                    f"{getattr(self, '_current_storyline_spec_id', '')}:{system.hostname}"
+                )
+                % len(dhcp_servers)
+            ].ip
             lease_time = (
                 float(existing_lease["lease_time"])
                 if existing_lease
                 else float(rng.choice([3600, 7200, 14400, 86400]))
             )
-            renewal_interval = dhcp_renewal_interval_seconds(lease_time, rng)
+            renewal_interval = (
+                float(existing_lease["renewal_interval"])
+                if existing_lease
+                else dhcp_renewal_interval_seconds(lease_time, rng)
+            )
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
             authored_ids_alerts = _build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
@@ -4536,6 +4610,7 @@ class StorylineMixin:
                     "lease_time": lease_time,
                     "last_renewal": time.timestamp(),
                     "next_renewal": time.timestamp() + renewal_interval,
+                    "renewal_interval": renewal_interval,
                     "server_addr": dhcp_server,
                     "system": system,
                 }
@@ -5066,9 +5141,12 @@ class StorylineMixin:
 
             # Resolve DNS server IP before choosing source-native DNS RTT so
             # local resolvers do not get impossible multi-second timings.
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
-            dns_server_ip = rng.choice(dns_server_ips)
             query_src_ip = spec.source_ip or system.ip
+            dns_server_ips = activity_dns_resolver_ips(
+                self.activity_generator,
+                query_src_ip,
+            )
+            dns_server_ip = rng.choice(dns_server_ips)
             from evidenceforge.generation.activity.generator import _dns_rtt
 
             dns_ctx = DnsContext(
@@ -5260,7 +5338,10 @@ class StorylineMixin:
             _QTYPE_MAP = {"A": 1, "AAAA": 28, "TXT": 16, "CNAME": 5}
 
             query_src_ip = spec.source_ip or system.ip
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ips = activity_dns_resolver_ips(
+                self.activity_generator,
+                query_src_ip,
+            )
 
             query_count = 0
             nxdomain_count = 0
@@ -5372,7 +5453,10 @@ class StorylineMixin:
                 duration_sec = (end_dt - start).total_seconds()
 
             query_src_ip = spec.source_ip or system.ip
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ips = activity_dns_resolver_ips(
+                self.activity_generator,
+                query_src_ip,
+            )
 
             # Generate or use payload
             if spec.payload:
@@ -5680,12 +5764,16 @@ class StorylineMixin:
                 default=None,
             )
             logon_id = session.logon_id if session else "0x0"
-            self.activity_generator.generate_workstation_lock(
+            result = self.activity_generator.generate_workstation_lock(
                 user=actor,
                 system=system,
                 time=time,
                 logon_id=logon_id,
             )
+            if not result.emitted:
+                malicious_event["skipped_reason"] = (
+                    result.skipped_reason or "workstation_lock_not_emitted"
+                )
 
         elif spec.type == "workstation_unlock":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
@@ -5921,9 +6009,9 @@ class StorylineMixin:
                             all_hosts.append(public_target)
                 else:
                     net = ipaddress.ip_network(seg.cidr, strict=False)
-                    all_hosts = [str(h) for h in net.hosts()]
+                    all_hosts = _sample_network_hosts(net, spec.target_count, rng)
                 count = min(spec.target_count, len(all_hosts))
-                resolved_targets = rng.sample(all_hosts, count)
+                resolved_targets = rng.sample(all_hosts, count) if is_external_scan else all_hosts
             else:
                 resolved_targets = []
         else:
@@ -6271,6 +6359,16 @@ class StorylineMixin:
                         rng=rng,
                         source="web_scan",
                         direction="in",
+                        predicate=SignaturePredicate(
+                            transport_protocol="tcp",
+                            destination_port=spec.dst_port,
+                            phase="application",
+                            payload_direction="orig",
+                            minimum_payload_bytes=1,
+                            application_protocol="http",
+                            inspection="payload_cleartext",
+                            semantic_claim="request_content",
+                        ),
                     )
                 ).execute()
                 ua_fired = True
@@ -6287,6 +6385,17 @@ class StorylineMixin:
                         rng=rng,
                         source="web_scan",
                         direction="in",
+                        predicate=SignaturePredicate(
+                            transport_protocol="tcp",
+                            destination_port=spec.dst_port,
+                            phase="application",
+                            payload_direction="orig",
+                            minimum_payload_bytes=1,
+                            application_protocol="http",
+                            inspection="payload_cleartext",
+                            http_methods=(method,),
+                            semantic_claim="request_content",
+                        ),
                     )
                 ).execute()
 
@@ -6343,8 +6452,10 @@ class StorylineMixin:
                 http=http_for_conn,
                 hostname=scan_host if spec.hostname else None,
                 pid=story_pid,
-                ids=ids_ctx,
-                ids_alerts=authored_ids_alerts,
+                ids_alerts=[
+                    *([ids_ctx] if ids_ctx is not None else []),
+                    *authored_ids_alerts,
+                ],
             )
             request_count += 1
 

@@ -1,0 +1,394 @@
+<30>1 2024-03-18T12:00:18.490810Z MAIL-CLIN-01 polkitd 27736 - - Operator of unix-process:3013753:146881730 successfully authenticated as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.packagekit.system-update for system-bus-name::1.130 [/usr/bin/pkcon] (owned by unix-user:deploy)
+<30>1 2024-03-18T12:00:29.781736Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 806355.
+<30>1 2024-03-18T12:02:33.335293Z MAIL-CLIN-01 polkitd 27736 - - Subject unix-process:3014016:146895227 is authorized for action org.freedesktop.systemd1.manage-units
+<86>1 2024-03-18T12:03:13.679605Z MAIL-CLIN-01 sshd 3014098 - - Connection from 10.10.1.31 port 61164 on 10.10.2.26 port 22
+<86>1 2024-03-18T12:03:15.924788Z MAIL-CLIN-01 sshd 3014098 - - Accepted publickey for marcus.chen from 10.10.1.31 port 61164 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T12:03:16.079034Z MAIL-CLIN-01 sshd 3014098 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T12:03:16.641206Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196077 of user marcus.chen.
+<30>1 2024-03-18T12:03:45.795960Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 245596.
+<78>1 2024-03-18T12:04:00.157000Z MAIL-CLIN-01 CRON 3014187 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:04:25.376346Z MAIL-CLIN-01 polkitd 27736 - - Subject unix-process:3014228:146906157 is authorized for action org.freedesktop.packagekit.system-update
+<86>1 2024-03-18T12:05:45.477217Z MAIL-CLIN-01 sshd 3014363 - - Connection from 10.10.1.35 port 53963 on 10.10.2.26 port 22
+<86>1 2024-03-18T12:05:47.663404Z MAIL-CLIN-01 sshd 3014363 - - Accepted password for aisha.johnson from 10.10.1.35 port 53963 ssh2
+<86>1 2024-03-18T12:05:47.797536Z MAIL-CLIN-01 sshd 3014363 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T12:05:48.338765Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196096 of user aisha.johnson.
+<30>1 2024-03-18T12:08:50.363838Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-LNGUYEN-01.meridianhcs.local[10.10.1.21]
+<30>1 2024-03-18T12:08:50.741290Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 004D0B59BE: client=WS-LNGUYEN-01.meridianhcs.local[10.10.1.21], sasl_method=LOGIN, sasl_username=lina.nguyen
+<30>1 2024-03-18T12:08:51.428728Z MAIL-CLIN-01 postfix/cleanup 3014723 - - 004D0B59BE: message-id=<1184587324.758022.419c3c06@meridianhcs.com>
+<30>1 2024-03-18T12:08:52.499139Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 004D0B59BE: from=<lina.nguyen@meridianhcs.com>, size=1239, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:08:52.934591Z MAIL-CLIN-01 postfix/local 3014724 - - 004D0B59BE: to=<omar.haddad@meridianhcs.com>, relay=local, delay=2.13, delays=0.52/0.19/0.50/0.91, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:08:53.216056Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 004D0B59BE: removed
+<30>1 2024-03-18T12:09:54.149247Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 154: banned by affinity mask 00000002 (virtio1-input)
+<30>1 2024-03-18T12:10:15.257664Z MAIL-CLIN-01 snapd 15838 - - daemon.go:460: gracefully waiting for hook core20.configure
+<85>1 2024-03-18T12:10:16.894048Z MAIL-CLIN-01 sudo 3014884 - - admin : TTY=pts/5 ; PWD=/etc ; USER=root ; COMMAND=/bin/systemctl status smtp
+<86>1 2024-03-18T12:10:17.040048Z MAIL-CLIN-01 sudo 3014884 - - pam_unix(sudo:session): session opened for user root(uid=0) by admin(uid=1001)
+<86>1 2024-03-18T12:10:22.260418Z MAIL-CLIN-01 sudo 3014884 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:10:24.703597Z MAIL-CLIN-01 sudo 3014900 - - svc_app : TTY=pts/5 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/find /var/log -type f -mtime -1
+<86>1 2024-03-18T12:10:24.892597Z MAIL-CLIN-01 sudo 3014900 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:10:33.607528Z MAIL-CLIN-01 sudo 3014900 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:11:20.575438Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T12:11:21.126568Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for core20
+<86>1 2024-03-18T12:12:24.014910Z MAIL-CLIN-01 sshd 3010756 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:12:24.525727Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 195844.
+<30>1 2024-03-18T12:13:36.200510Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T12:14:47.916113Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<86>1 2024-03-18T12:15:12.508385Z MAIL-CLIN-01 su 3015434 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T12:15:15.986385Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196174 of user admin.
+<30>1 2024-03-18T12:16:31.591772Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T12:16:32.363434Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 000EAF3334A: client=mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T12:16:33.138714Z MAIL-CLIN-01 postfix/cleanup 3015590 - - 000EAF3334A: message-id=<notifications-af95fc02-7931674@partnerrelay.io>
+<30>1 2024-03-18T12:16:34.592229Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 000EAF3334A: from=<notifications@partnerrelay.io>, size=1504, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:16:35.182891Z MAIL-CLIN-01 postfix/local 3015592 - - 000EAF3334A: to=<lina.nguyen@meridianhcs.com>, relay=local, delay=2.98, delays=0.37/0.45/0.98/1.18, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:16:35.735936Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 000EAF3334A: removed
+<30>1 2024-03-18T12:16:53.009964Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T12:21:35.763719Z MAIL-CLIN-01 snapd 15838 - - daemon.go:460: gracefully waiting for hook lxd.configure
+<30>1 2024-03-18T12:22:17.381927Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.133'
+<85>1 2024-03-18T12:24:11.439398Z MAIL-CLIN-01 sudo 3016509 - - admin : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/grep -i denied /var/log/dpkg.log
+<86>1 2024-03-18T12:24:11.717398Z MAIL-CLIN-01 sudo 3016509 - - pam_unix(sudo:session): session opened for user root(uid=0) by admin(uid=1001)
+<30>1 2024-03-18T12:24:12.031448Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for core20
+<86>1 2024-03-18T12:24:12.928292Z MAIL-CLIN-01 sudo 3016509 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:27:14.327439Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 987399.
+<30>1 2024-03-18T12:27:55.095000Z MAIL-CLIN-01 anacron 52511 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:27:55.710683Z MAIL-CLIN-01 anacron 52511 - - Will run job `logrotate' in 2 min.
+<30>1 2024-03-18T12:28:16.585973Z MAIL-CLIN-01 rsyslogd 15521 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 21484
+<30>1 2024-03-18T12:28:18.771098Z MAIL-CLIN-01 rsyslogd 15521 - - main Q: queue main has 1506 messages pending, worker threads 2
+<30>1 2024-03-18T12:29:20.195874Z MAIL-CLIN-01 systemd-resolved 15892 - - Transaction 625093 switched to UDP with advertised UDP packet size 512.
+<30>1 2024-03-18T12:29:59.517000Z MAIL-CLIN-01 anacron 52511 - - Job `logrotate' started
+<85>1 2024-03-18T12:30:03.725564Z MAIL-CLIN-01 sudo 3017158 - - svc_app : TTY=pts/1 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/free -m
+<86>1 2024-03-18T12:30:03.749564Z MAIL-CLIN-01 sudo 3017158 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:30:07.144529Z MAIL-CLIN-01 sudo 3017158 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:31:07.259929Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.134'
+<30>1 2024-03-18T12:32:19.495619Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 154: banned by affinity mask 00000008 (virtio1-input)
+<30>1 2024-03-18T12:32:22.669788Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for lxd
+<30>1 2024-03-18T12:32:52.142416Z MAIL-CLIN-01 anacron 52511 - - Job `logrotate' terminated
+<30>1 2024-03-18T12:32:52.766698Z MAIL-CLIN-01 anacron 52511 - - Normal exit (1 job run)
+<78>1 2024-03-18T12:34:00.186000Z MAIL-CLIN-01 CRON 3017597 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T12:34:13.722363Z MAIL-CLIN-01 sshd 3014363 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:34:14.585217Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196096.
+<86>1 2024-03-18T12:34:51.335469Z MAIL-CLIN-01 sshd 3017706 - - Connection from 10.10.2.30 port 36070 on 10.10.2.26 port 22
+<85>1 2024-03-18T12:34:51.417469Z MAIL-CLIN-01 sshd 3017706 - - Invalid user unknown from 10.10.2.30 port 36070
+<84>1 2024-03-18T12:34:51.694469Z MAIL-CLIN-01 sshd 3017706 - - Failed password for invalid user unknown from 10.10.2.30 port 36070 ssh2
+<86>1 2024-03-18T12:34:55.611469Z MAIL-CLIN-01 sshd 3017706 - - Connection closed by invalid user unknown 10.10.2.30 port 36070 [preauth]
+<86>1 2024-03-18T12:35:16.148799Z MAIL-CLIN-01 sshd 3017754 - - Connection from 10.10.1.31 port 60698 on 10.10.2.26 port 22
+<86>1 2024-03-18T12:35:18.369953Z MAIL-CLIN-01 sshd 3017754 - - Accepted publickey for marcus.chen from 10.10.1.31 port 60698 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T12:35:18.490147Z MAIL-CLIN-01 sshd 3017754 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T12:35:19.138356Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196334 of user marcus.chen.
+<30>1 2024-03-18T12:36:26.887755Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.136'
+<30>1 2024-03-18T12:37:54.871643Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<omar.haddad>, method=PLAIN, rip=10.10.1.22, lip=10.10.2.26, mpid=3018035, TLS, session=<AAAACIPV2n>
+<30>1 2024-03-18T12:38:12.250662Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2024-03-18T12:39:42.180813Z MAIL-CLIN-01 dovecot 3018035 - - imap(omar.haddad)<3018035><AAAACIPV2n>: Disconnected: Logged out in=8044 out=293921 deleted=0 expunged=0 trashed=0 hdr_count=6 hdr_bytes=6330 body_count=2 body_bytes=281538
+<30>1 2024-03-18T12:41:42.552554Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.137'
+<30>1 2024-03-18T12:43:40.610861Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.138'
+<30>1 2024-03-18T12:43:46.243096Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2024-03-18T12:44:00.941426Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed stale cache scope enp0s3 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T12:45:00.719594Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2024-03-18T12:45:02.531054Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2024-03-18T12:45:56.169917Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.141'
+<85>1 2024-03-18T12:47:00.223629Z MAIL-CLIN-01 sudo 3019144 - - deploy : TTY=pts/5 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/systemctl list-units --state=failed --no-pager
+<86>1 2024-03-18T12:47:00.324629Z MAIL-CLIN-01 sudo 3019144 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:47:02.235390Z MAIL-CLIN-01 sudo 3019144 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:47:11.494098Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 122: banned by affinity mask 00000002 (nvme0q2)
+<30>1 2024-03-18T12:47:18.332860Z MAIL-CLIN-01 systemd-resolved 15892 - - Transaction 218343 switched to UDP with advertised UDP packet size 1472.
+<30>1 2024-03-18T12:48:02.088918Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-LNGUYEN-01.meridianhcs.local[10.10.1.21]
+<30>1 2024-03-18T12:48:02.443482Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0093AAF368: client=WS-LNGUYEN-01.meridianhcs.local[10.10.1.21], sasl_method=LOGIN, sasl_username=lina.nguyen
+<30>1 2024-03-18T12:48:02.812778Z MAIL-CLIN-01 postfix/cleanup 3019246 - - 0093AAF368: message-id=<1746897100.499514.89c6aefa@meridianhcs.com>
+<30>1 2024-03-18T12:48:03.059539Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0093AAF368: from=<lina.nguyen@meridianhcs.com>, size=1617, nrcpt=3 (queue active)
+<30>1 2024-03-18T12:48:03.365519Z MAIL-CLIN-01 postfix/local 3019248 - - 0093AAF368: to=<clinical-ops@meridianhcs.com>, relay=local, delay=1.05, delays=0.22/0.18/0.18/0.47, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:48:03.446103Z MAIL-CLIN-01 postfix/local 3019248 - - 0093AAF368: to=<ehr-release@research.meridianhcs.com>, relay=local, delay=0.97, delays=0.13/0.16/0.13/0.55, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:48:09.657764Z MAIL-CLIN-01 postfix/smtp 3019254 - - 0093AAF368: to=<priya.patel@meridianhcs.com>, relay=mail.meridianhcs.com[10.10.2.25]:25, delay=7.37, delays=1.04/0.97/1.47/3.90, dsn=2.0.0, status=sent (250 2.0.0 06E369850 Message accepted for delivery)
+<30>1 2024-03-18T12:48:10.203828Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0093AAF368: removed
+<30>1 2024-03-18T12:49:11.032735Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 181: banned by affinity mask 00000004 (mlx5_comp2)
+<30>1 2024-03-18T12:50:00.209712Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<lina.nguyen>, method=PLAIN, rip=10.10.1.21, lip=10.10.2.26, mpid=3019475, TLS, session=<AAAADr8c/h>
+<30>1 2024-03-18T12:50:53.952339Z MAIL-CLIN-01 dovecot 3019475 - - imap(lina.nguyen)<3019475><AAAADr8c/h>: Disconnected: Logged out in=6382 out=369318 deleted=0 expunged=0 trashed=0 hdr_count=5 hdr_bytes=3420 body_count=1 body_bytes=362762
+<30>1 2024-03-18T12:52:58.203731Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<omar.haddad>, method=PLAIN, rip=10.10.1.22, lip=10.10.2.26, mpid=3019791, TLS, session=<AAAADiBME9>
+<30>1 2024-03-18T12:54:20.369170Z MAIL-CLIN-01 dovecot 3019791 - - imap(omar.haddad)<3019791><AAAADiBME9>: Disconnected: Logged out in=7047 out=247486 deleted=0 expunged=0 trashed=0 hdr_count=2 hdr_bytes=2170 body_count=1 body_bytes=240717
+<30>1 2024-03-18T12:57:06.385854Z MAIL-CLIN-01 systemd-journald 15475 - - Vacuuming done, freed 120.7M of archived journals.
+<30>1 2024-03-18T12:59:12.634588Z MAIL-CLIN-01 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:59:15.189109Z MAIL-CLIN-01 systemd 1 - - Finished motd-news.service - Message of the Day.
+<30>1 2024-03-18T13:00:28.311466Z MAIL-CLIN-01 snapd 15838 - - stateengine.go:150: state ensure starting change 7258
+<30>1 2024-03-18T13:00:28.353796Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<86>1 2024-03-18T13:00:30.725469Z MAIL-CLIN-01 sshd 3014098 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:00:31.736173Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196077.
+<30>1 2024-03-18T13:01:36.425626Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.143'
+<30>1 2024-03-18T13:02:51.038067Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<omar.haddad>, method=PLAIN, rip=10.10.1.22, lip=10.10.2.26, mpid=3020931, TLS, session=<AAAAC9u1Jj>
+<30>1 2024-03-18T13:03:13.941127Z MAIL-CLIN-01 dovecot 3020931 - - imap(omar.haddad)<3020931><AAAAC9u1Jj>: Disconnected: Logged out in=7111 out=87723 deleted=0 expunged=0 trashed=0 hdr_count=3 hdr_bytes=2403 body_count=0 body_bytes=81059
+<85>1 2024-03-18T13:03:53.447799Z MAIL-CLIN-01 sudo 3021064 - - svc_app : TTY=pts/1 ; PWD=/home/deploy ; USER=root ; COMMAND=/bin/systemctl status systemd-resolved --no-pager
+<86>1 2024-03-18T13:03:53.671799Z MAIL-CLIN-01 sudo 3021064 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T13:03:57.534396Z MAIL-CLIN-01 sudo 3021064 - - pam_unix(sudo:session): session closed for user root
+<78>1 2024-03-18T13:04:00.300000Z MAIL-CLIN-01 CRON 3021078 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T13:04:04.066156Z MAIL-CLIN-01 sshd 3017754 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:04:04.940984Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196334.
+<86>1 2024-03-18T13:04:39.961385Z MAIL-CLIN-01 su 3015434 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T13:04:44.036385Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196174.
+<30>1 2024-03-18T13:08:45.745852Z MAIL-CLIN-01 dbus-daemon 15594 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.144'
+<30>1 2024-03-18T13:09:21.511224Z MAIL-CLIN-01 snapd 15838 - - taskrunner.go:271: change 7255 task 9 done for core20
+<30>1 2024-03-18T13:12:05.668535Z MAIL-CLIN-01 snapd 15838 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<85>1 2024-03-18T13:12:37.448084Z MAIL-CLIN-01 sudo 3022061 - - ubuntu : TTY=pts/1 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/find /tmp -maxdepth 1 -mtime +1 -type f
+<86>1 2024-03-18T13:12:37.489084Z MAIL-CLIN-01 sudo 3022061 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2024-03-18T13:12:45.890740Z MAIL-CLIN-01 sudo 3022061 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:13:41.503262Z MAIL-CLIN-01 rsyslogd 15521 - - omfwd: target 10.10.2.30 using disk-assisted queue fwdRule1, checkpoint 22784
+<30>1 2024-03-18T13:13:49.119652Z MAIL-CLIN-01 snapd 15838 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2024-03-18T13:15:17.556436Z MAIL-CLIN-01 snapd 15838 - - daemon.go:460: gracefully waiting for hook core22.configure
+<86>1 2024-03-18T13:20:18.055343Z MAIL-CLIN-01 sshd 3022926 - - Connection from 10.10.1.31 port 64118 on 10.10.2.26 port 22
+<86>1 2024-03-18T13:20:20.281524Z MAIL-CLIN-01 sshd 3022926 - - Accepted publickey for marcus.chen from 10.10.1.31 port 64118 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T13:20:20.420691Z MAIL-CLIN-01 sshd 3022926 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T13:20:21.082891Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196695 of user marcus.chen.
+<30>1 2024-03-18T13:20:57.806653Z MAIL-CLIN-01 rsyslogd 15521 - - main Q: queue action-remote has 1440 messages pending, worker threads 2
+<30>1 2024-03-18T13:24:54.409532Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<86>1 2024-03-18T13:25:46.551590Z MAIL-CLIN-01 sshd 3023566 - - Connection from 10.10.1.35 port 53009 on 10.10.2.26 port 22
+<86>1 2024-03-18T13:25:49.951753Z MAIL-CLIN-01 sshd 3023566 - - Accepted password for aisha.johnson from 10.10.1.35 port 53009 ssh2
+<86>1 2024-03-18T13:25:50.037965Z MAIL-CLIN-01 sshd 3023566 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T13:25:50.786199Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196737 of user aisha.johnson.
+<30>1 2024-03-18T13:26:05.006217Z MAIL-CLIN-01 systemd-resolved 15892 - - Transaction 766040 switched to UDP with advertised UDP packet size 1472.
+<30>1 2024-03-18T13:27:52.290889Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 254211.
+<30>1 2024-03-18T13:28:16.577404Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T13:30:33.246509Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 731000.
+<30>1 2024-03-18T13:33:33.530723Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<78>1 2024-03-18T13:34:00.315000Z MAIL-CLIN-01 CRON 3024531 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:39:41.934883Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T13:39:52.029268Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-OHADDAD-01.meridianhcs.local[10.10.1.22]
+<30>1 2024-03-18T13:39:52.726628Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0CED2492D: client=WS-OHADDAD-01.meridianhcs.local[10.10.1.22], sasl_method=LOGIN, sasl_username=omar.haddad
+<30>1 2024-03-18T13:39:53.385376Z MAIL-CLIN-01 postfix/cleanup 3025198 - - 0CED2492D: message-id=<219627518.111857.f63bc3b1@meridianhcs.com>
+<30>1 2024-03-18T13:39:54.328902Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0CED2492D: from=<omar.haddad@meridianhcs.com>, size=1447, nrcpt=1 (queue active)
+<30>1 2024-03-18T13:39:59.868224Z MAIL-CLIN-01 postfix/smtp 3019254 - - 0CED2492D: to=<team@industrybriefs.net>, relay=mail.meridianhcs.com[10.10.2.25]:25, delay=7.19, delays=1.26/0.54/0.58/4.81, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 07D50F380)
+<30>1 2024-03-18T13:39:59.973846Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0CED2492D: removed
+<86>1 2024-03-18T13:42:24.864494Z MAIL-CLIN-01 sshd 3022926 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:42:25.116286Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196695.
+<86>1 2024-03-18T13:44:51.047397Z MAIL-CLIN-01 sshd 3025782 - - Connection from 10.10.1.35 port 63859 on 10.10.2.26 port 22
+<86>1 2024-03-18T13:44:53.264626Z MAIL-CLIN-01 sshd 3025782 - - Accepted password for aisha.johnson from 10.10.1.35 port 63859 ssh2
+<86>1 2024-03-18T13:44:53.385812Z MAIL-CLIN-01 sshd 3025782 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T13:44:53.943038Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196889 of user aisha.johnson.
+<30>1 2024-03-18T13:45:58.568434Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T13:47:48.181497Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2024-03-18T13:51:08.115175Z MAIL-CLIN-01 snapd 15838 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<86>1 2024-03-18T13:51:29.708775Z MAIL-CLIN-01 sshd 3026629 - - Connection from 10.10.1.35 port 61375 on 10.10.2.26 port 22
+<86>1 2024-03-18T13:51:31.966014Z MAIL-CLIN-01 sshd 3026629 - - Accepted password for aisha.johnson from 10.10.1.35 port 61375 ssh2
+<86>1 2024-03-18T13:51:32.036150Z MAIL-CLIN-01 sshd 3026629 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T13:51:32.736375Z MAIL-CLIN-01 systemd-logind 15624 - - New session 196943 of user aisha.johnson.
+<30>1 2024-03-18T13:51:33.105831Z MAIL-CLIN-01 snapd 15838 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<86>1 2024-03-18T13:53:45.279775Z MAIL-CLIN-01 sshd 3023566 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T13:53:46.001562Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196737.
+<30>1 2024-03-18T13:54:49.156322Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T13:55:17.394530Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T13:55:36.174035Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-LNGUYEN-01.meridianhcs.local[10.10.1.21]
+<30>1 2024-03-18T13:55:36.293381Z MAIL-CLIN-01 postfix/cleanup 3027096 - - 00026616B3C: message-id=<1486572785.976919.3e76dbd7@meridianhcs.com>
+<30>1 2024-03-18T13:55:36.601974Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 00026616B3C: from=<lina.nguyen@meridianhcs.com>, size=1695, nrcpt=2 (queue active)
+<30>1 2024-03-18T13:55:36.712974Z MAIL-CLIN-01 postfix/local 3027097 - - 00026616B3C: to=<omar.haddad@meridianhcs.com>, relay=local, delay=0.63, delays=0.07/0.07/0.17/0.32, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T13:55:46.425947Z MAIL-CLIN-01 postfix/smtp 3019254 - - 00026616B3C: to=<miles.avery@stonebridge-consultingllc.com>, relay=smtp1.greatplains-mail.net[173.194.24.115]:25, delay=10.22, delays=2.19/1.22/2.77/4.04, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 00862EBC51)
+<30>1 2024-03-18T13:55:47.025982Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 00026616B3C: removed
+<30>1 2024-03-18T13:57:55.017180Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2024-03-18T14:01:05.484049Z MAIL-CLIN-01 snapd 15838 - - taskrunner.go:271: change 7255 task 9 done for microk8s
+<86>1 2024-03-18T14:01:23.556952Z MAIL-CLIN-01 sshd 3025782 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:01:24.394810Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196889.
+<78>1 2024-03-18T14:04:00.208000Z MAIL-CLIN-01 CRON 3028099 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:05:39.908456Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 375933.
+<30>1 2024-03-18T14:05:43.182312Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<86>1 2024-03-18T14:06:35.136821Z MAIL-CLIN-01 sshd 3028369 - - Connection from 10.10.1.35 port 56457 on 10.10.2.26 port 22
+<86>1 2024-03-18T14:06:37.349066Z MAIL-CLIN-01 sshd 3028369 - - Accepted password for aisha.johnson from 10.10.1.35 port 56457 ssh2
+<86>1 2024-03-18T14:06:37.504231Z MAIL-CLIN-01 sshd 3028369 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:06:38.143469Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197063 of user aisha.johnson.
+<30>1 2024-03-18T14:07:28.122073Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 137: banned by affinity mask 00000001 (ens192)
+<30>1 2024-03-18T14:07:29.521211Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 755233.
+<30>1 2024-03-18T14:09:24.599721Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T14:09:33.866451Z MAIL-CLIN-01 sshd 3026629 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:09:34.317296Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 196943.
+<30>1 2024-03-18T14:11:57.609087Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2024-03-18T14:20:18.268830Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-LNGUYEN-01.meridianhcs.local[10.10.1.21]
+<30>1 2024-03-18T14:20:18.790342Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 00F0E19CCA: client=WS-LNGUYEN-01.meridianhcs.local[10.10.1.21], sasl_method=LOGIN, sasl_username=lina.nguyen
+<30>1 2024-03-18T14:20:19.063002Z MAIL-CLIN-01 postfix/cleanup 3029953 - - 00F0E19CCA: message-id=<2752324832.924779.b489b96b@meridianhcs.com>
+<30>1 2024-03-18T14:20:19.813954Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 00F0E19CCA: from=<lina.nguyen@meridianhcs.com>, size=1429, nrcpt=1 (queue active)
+<30>1 2024-03-18T14:20:27.061885Z MAIL-CLIN-01 postfix/smtp 3019254 - - 00F0E19CCA: to=<contact@customermailhub.com>, relay=smtp1.greatplains-mail.net[173.194.24.115]:25, delay=8.46, delays=1.48/1.14/0.98/4.86, dsn=2.0.0, status=sent (250 2.0.0 000067FD Message accepted for delivery)
+<30>1 2024-03-18T14:20:27.603599Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 00F0E19CCA: removed
+<30>1 2024-03-18T14:21:08.309664Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-OHADDAD-01.meridianhcs.local[10.10.1.22]
+<30>1 2024-03-18T14:21:08.692072Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0F3A4078A: client=WS-OHADDAD-01.meridianhcs.local[10.10.1.22], sasl_method=LOGIN, sasl_username=omar.haddad
+<30>1 2024-03-18T14:21:09.376169Z MAIL-CLIN-01 postfix/cleanup 3030041 - - 0F3A4078A: message-id=<2787529147.42640.303902d0@meridianhcs.com>
+<30>1 2024-03-18T14:21:10.482641Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0F3A4078A: from=<omar.haddad@meridianhcs.com>, size=1335, nrcpt=1 (queue active)
+<30>1 2024-03-18T14:21:18.807754Z MAIL-CLIN-01 postfix/smtp 3019254 - - 0F3A4078A: to=<diego.ramirez@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=10.03, delays=1.01/1.06/4.57/3.40, dsn=2.0.0, status=sent (250 2.1.5 00F1249292 queued for delivery)
+<30>1 2024-03-18T14:21:19.131898Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0F3A4078A: removed
+<30>1 2024-03-18T14:25:01.250110Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 24: banned by affinity mask 00000002 (ens160)
+<30>1 2024-03-18T14:26:33.044348Z MAIL-CLIN-01 snapd 15838 - - stateengine.go:150: state ensure starting change 7261
+<30>1 2024-03-18T14:31:24.078119Z MAIL-CLIN-01 systemd-resolved 15892 - - Transaction 236098 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T14:31:32.211323Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<omar.haddad>, method=PLAIN, rip=10.10.1.22, lip=10.10.2.26, mpid=3031181, TLS, session=<AAAACI0QJI>
+<30>1 2024-03-18T14:31:47.210975Z MAIL-CLIN-01 snapd 15838 - - daemon.go:460: gracefully waiting for hook lxd.configure
+<30>1 2024-03-18T14:33:36.256128Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2024-03-18T14:33:46.906104Z MAIL-CLIN-01 dovecot 3031181 - - imap(omar.haddad)<3031181><AAAACI0QJI>: Disconnected: Logged out in=3563 out=350181 deleted=0 expunged=0 trashed=0 hdr_count=6 hdr_bytes=9234 body_count=0 body_bytes=334891
+<78>1 2024-03-18T14:34:00.250000Z MAIL-CLIN-01 CRON 3031475 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T14:34:04.338798Z MAIL-CLIN-01 sshd 3031479 - - Connection from 10.10.1.31 port 58588 on 10.10.2.26 port 22
+<86>1 2024-03-18T14:34:06.548033Z MAIL-CLIN-01 sshd 3031479 - - Accepted publickey for marcus.chen from 10.10.1.31 port 58588 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T14:34:06.708218Z MAIL-CLIN-01 sshd 3031479 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T14:34:07.200439Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197285 of user marcus.chen.
+<86>1 2024-03-18T14:34:49.273058Z MAIL-CLIN-01 sshd 3031553 - - Connection from 10.10.1.31 port 51055 on 10.10.2.26 port 22
+<86>1 2024-03-18T14:34:51.559286Z MAIL-CLIN-01 sshd 3031553 - - Accepted publickey for marcus.chen from 10.10.1.31 port 51055 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T14:34:51.687467Z MAIL-CLIN-01 sshd 3031553 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T14:34:52.291669Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197290 of user marcus.chen.
+<86>1 2024-03-18T14:37:48.350511Z MAIL-CLIN-01 sshd 3031908 - - Connection from 10.10.1.35 port 59083 on 10.10.2.26 port 22
+<86>1 2024-03-18T14:37:50.823695Z MAIL-CLIN-01 sshd 3031908 - - Accepted password for aisha.johnson from 10.10.1.35 port 59083 ssh2
+<86>1 2024-03-18T14:37:50.926918Z MAIL-CLIN-01 sshd 3031908 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:37:51.588050Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197313 of user aisha.johnson.
+<30>1 2024-03-18T14:43:22.368238Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 588058.
+<30>1 2024-03-18T14:49:00.380172Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T14:49:27.750000Z MAIL-CLIN-01 login 3658 - - pam_unix(login:session): session opened for user marcus.chen(uid=4119) by LOGIN(uid=0)
+<86>1 2024-03-18T14:49:30.008000Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197406 of user marcus.chen.
+<30>1 2024-03-18T14:52:38.766171Z MAIL-CLIN-01 snapd 15838 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2024-03-18T14:53:08.617766Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for microk8s
+<86>1 2024-03-18T14:53:15.204534Z MAIL-CLIN-01 sshd 3031553 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T14:53:16.157306Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 197290.
+<86>1 2024-03-18T14:59:49.372663Z MAIL-CLIN-01 sshd 3031908 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:59:50.290530Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 197313.
+<86>1 2024-03-18T15:00:50.280740Z MAIL-CLIN-01 sshd 3028369 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T15:00:50.616561Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 197063.
+<30>1 2024-03-18T15:01:10.629361Z MAIL-CLIN-01 snapd 15838 - - stateengine.go:150: state ensure starting change 7260
+<30>1 2024-03-18T15:01:23.922774Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2024-03-18T15:03:06.053004Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<78>1 2024-03-18T15:04:00.072000Z MAIL-CLIN-01 CRON 3034763 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:05:05.746102Z MAIL-CLIN-01 snapd 15838 - - taskrunner.go:271: change 7255 task 1 done for lxd
+<86>1 2024-03-18T15:05:06.139212Z MAIL-CLIN-01 sshd 3034889 - - Connection from 10.10.1.35 port 56156 on 10.10.2.26 port 22
+<86>1 2024-03-18T15:05:08.969462Z MAIL-CLIN-01 sshd 3034889 - - Accepted password for aisha.johnson from 10.10.1.35 port 56156 ssh2
+<86>1 2024-03-18T15:05:09.121631Z MAIL-CLIN-01 sshd 3034889 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T15:05:09.799852Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197533 of user aisha.johnson.
+<30>1 2024-03-18T15:05:13.907416Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 16: banned by affinity mask 00000001 (ahci)
+<30>1 2024-03-18T15:06:24.954731Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T15:07:47.557311Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-LNGUYEN-01.meridianhcs.local[10.10.1.21]
+<30>1 2024-03-18T15:07:47.587297Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0001ACF1EAB: client=WS-LNGUYEN-01.meridianhcs.local[10.10.1.21], sasl_method=LOGIN, sasl_username=lina.nguyen
+<30>1 2024-03-18T15:07:47.798297Z MAIL-CLIN-01 postfix/cleanup 3035197 - - 0001ACF1EAB: message-id=<3692782526.42316.8ddc904c@meridianhcs.com>
+<30>1 2024-03-18T15:07:47.911297Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0001ACF1EAB: from=<lina.nguyen@meridianhcs.com>, size=1278, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:07:53.425644Z MAIL-CLIN-01 postfix/smtp 3019254 - - 0001ACF1EAB: to=<aisha.johnson@meridianhcs.com>, relay=mail.meridianhcs.com[10.10.2.25]:25, delay=5.83, delays=0.95/0.39/2.43/2.06, dsn=2.0.0, status=sent (250 2.0.0 00425B6AE0 Message accepted for delivery)
+<30>1 2024-03-18T15:07:53.633730Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0001ACF1EAB: removed
+<86>1 2024-03-18T15:11:31.736561Z MAIL-CLIN-01 sshd 3031479 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T15:11:32.543292Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 197285.
+<30>1 2024-03-18T15:11:41.008815Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 418414.
+<30>1 2024-03-18T15:15:45.983044Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<86>1 2024-03-18T15:21:10.840200Z MAIL-CLIN-01 sshd 3036747 - - Connection from 10.10.4.10 port 50296 on 10.10.2.26 port 22
+<84>1 2024-03-18T15:21:11.298200Z MAIL-CLIN-01 sshd 3036747 - - Failed password for svc_mgmt from 10.10.4.10 port 50296 ssh2
+<86>1 2024-03-18T15:21:11.880081Z MAIL-CLIN-01 sshd 3036747 - - Connection closed by authenticating user svc_mgmt 10.10.4.10 port 50296 [preauth]
+<30>1 2024-03-18T15:21:58.695024Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 890175.
+<30>1 2024-03-18T15:33:15.273011Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 985822.
+<78>1 2024-03-18T15:34:00.046000Z MAIL-CLIN-01 CRON 3038264 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T15:36:20.202091Z MAIL-CLIN-01 sshd 3038513 - - Connection from 10.10.1.35 port 57749 on 10.10.2.26 port 22
+<86>1 2024-03-18T15:36:22.448326Z MAIL-CLIN-01 sshd 3038513 - - Accepted password for aisha.johnson from 10.10.1.35 port 57749 ssh2
+<86>1 2024-03-18T15:36:22.546487Z MAIL-CLIN-01 sshd 3038513 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T15:36:23.102754Z MAIL-CLIN-01 systemd-logind 15624 - - New session 197783 of user aisha.johnson.
+<30>1 2024-03-18T15:37:02.737201Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 122: banned by affinity mask 00000008 (nvme0q2)
+<30>1 2024-03-18T15:41:34.231901Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T15:41:34.382446Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0CC67B84F: client=mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T15:41:34.842005Z MAIL-CLIN-01 postfix/cleanup 3039097 - - 0CC67B84F: message-id=<100000MKXN99.1001MALNEK@meridianhcs.com>
+<30>1 2024-03-18T15:41:35.260589Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0CC67B84F: from=<aisha.johnson@meridianhcs.com>, size=1173, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:41:35.486667Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0CC67B84F: removed
+<30>1 2024-03-18T15:41:35.488135Z MAIL-CLIN-01 postfix/local 3039098 - - 0CC67B84F: to=<omar.haddad@meridianhcs.com>, relay=local, delay=0.88, delays=0.22/0.09/0.10/0.47, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T15:44:15.480945Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 594570.
+<30>1 2024-03-18T15:45:06.990161Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T15:45:07.588294Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0004BC4494E: client=mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T15:45:08.003892Z MAIL-CLIN-01 postfix/cleanup 3039556 - - 0004BC4494E: message-id=<1001LRI3MQ.108CX6B.2669@priya-patel.meridianhcs.com>
+<30>1 2024-03-18T15:45:08.808423Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0004BC4494E: from=<priya.patel@meridianhcs.com>, size=1354, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:45:09.311555Z MAIL-CLIN-01 postfix/local 3039561 - - 0004BC4494E: to=<omar.haddad@meridianhcs.com>, relay=local, delay=1.7, delays=0.45/0.18/0.21/0.86, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T15:45:09.440221Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0004BC4494E: removed
+<30>1 2024-03-18T15:45:24.846586Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 137: banned by affinity mask 00000001 (ens192)
+<30>1 2024-03-18T15:46:00.298404Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T15:46:08.324646Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 154: banned by affinity mask 00000002 (virtio1-input)
+<30>1 2024-03-18T15:47:12.113916Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2024-03-18T15:52:13.645753Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T15:52:39.470415Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 765179.
+<30>1 2024-03-18T15:55:56.267552Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T15:56:26.565867Z MAIL-CLIN-01 snapd 15838 - - taskrunner.go:271: change 7255 task 3 done for core22
+<86>1 2024-03-18T16:00:42.001879Z MAIL-CLIN-01 sshd 3034889 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T16:00:42.420654Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 197533.
+<78>1 2024-03-18T16:04:00.131000Z MAIL-CLIN-01 CRON 3041765 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:04:27.979585Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 24: banned by affinity mask 00000001 (ens160)
+<86>1 2024-03-18T16:04:29.486735Z MAIL-CLIN-01 sshd 3038513 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<30>1 2024-03-18T16:04:29.797272Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<86>1 2024-03-18T16:04:30.037576Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 197783.
+<30>1 2024-03-18T16:07:53.341446Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2024-03-18T16:07:54.409293Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 134885.
+<30>1 2024-03-18T16:10:26.640431Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2024-03-18T16:18:58.179807Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 577946.
+<30>1 2024-03-18T16:21:08.529546Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T16:23:12.881682Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2024-03-18T16:28:16.503284Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<86>1 2024-03-18T16:28:19.176419Z MAIL-CLIN-01 sshd 3044136 - - Connection from 10.10.1.35 port 49680 on 10.10.2.26 port 22
+<86>1 2024-03-18T16:28:21.570543Z MAIL-CLIN-01 sshd 3044136 - - Accepted password for aisha.johnson from 10.10.1.35 port 49680 ssh2
+<86>1 2024-03-18T16:28:21.644738Z MAIL-CLIN-01 sshd 3044136 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:28:22.097946Z MAIL-CLIN-01 systemd-logind 15624 - - New session 198199 of user aisha.johnson.
+<30>1 2024-03-18T16:28:53.833370Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-OHADDAD-01.meridianhcs.local[10.10.1.22]
+<30>1 2024-03-18T16:28:53.945045Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 00042833795: client=WS-OHADDAD-01.meridianhcs.local[10.10.1.22], sasl_method=LOGIN, sasl_username=omar.haddad
+<30>1 2024-03-18T16:28:54.051055Z MAIL-CLIN-01 postfix/cleanup 3044187 - - 00042833795: message-id=<1022197504.151268.6d8ff664@meridianhcs.com>
+<30>1 2024-03-18T16:28:54.470737Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 00042833795: from=<omar.haddad@meridianhcs.com>, size=1401, nrcpt=1 (queue active)
+<30>1 2024-03-18T16:28:57.603403Z MAIL-CLIN-01 postfix/smtp 3019254 - - 00042833795: to=<team@partnerrelay.io>, relay=mail.meridianhcs.com[10.10.2.25]:25, delay=3.6, delays=0.74/0.41/0.96/1.48, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 00F41F7559)
+<30>1 2024-03-18T16:28:57.849795Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 00042833795: removed
+<86>1 2024-03-18T16:30:03.658843Z MAIL-CLIN-01 sshd 3044136 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T16:30:04.467668Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 198199.
+<30>1 2024-03-18T16:33:26.128220Z MAIL-CLIN-01 systemd-journald 15475 - - System Journal (/var/log/journal/e1deb6c9fb802c4e398f7d50b3ca6c9f) is 61.1M, max 256M, 194.9M free.
+<78>1 2024-03-18T16:34:00.265000Z MAIL-CLIN-01 CRON 3044664 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:36:28.068209Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T16:36:28.737304Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 000AF7C5C0A: client=mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T16:36:29.418998Z MAIL-CLIN-01 postfix/cleanup 3044922 - - 000AF7C5C0A: message-id=<alerts-cb7eab48-7608705@vendorpost.net>
+<30>1 2024-03-18T16:36:30.647889Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 000AF7C5C0A: from=<alerts@vendorpost.net>, size=1420, nrcpt=1 (queue active)
+<30>1 2024-03-18T16:36:31.291984Z MAIL-CLIN-01 postfix/local 3044923 - - 000AF7C5C0A: to=<lina.nguyen@meridianhcs.com>, relay=local, delay=2.68, delays=0.61/0.34/0.69/1.04, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T16:36:31.828480Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 000AF7C5C0A: removed
+<86>1 2024-03-18T16:37:27.899288Z MAIL-CLIN-01 su 3045030 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T16:37:33.849288Z MAIL-CLIN-01 systemd-logind 15624 - - New session 198271 of user admin.
+<30>1 2024-03-18T16:42:09.515644Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T16:48:44.147835Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<lina.nguyen>, method=PLAIN, rip=10.10.1.21, lip=10.10.2.26, mpid=3046146, TLS, session=<AAAADjuUgA>
+<30>1 2024-03-18T16:49:00.534872Z MAIL-CLIN-01 dovecot 3046146 - - imap(lina.nguyen)<3046146><AAAADjuUgA>: Disconnected: Logged out in=3400 out=123138 deleted=0 expunged=0 trashed=0 hdr_count=3 hdr_bytes=4872 body_count=2 body_bytes=115160
+<30>1 2024-03-18T16:50:09.882285Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T16:54:10.037893Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 122: banned by affinity mask 00000002 (nvme0q2)
+<30>1 2024-03-18T17:03:27.884912Z MAIL-CLIN-01 snapd 15838 - - daemon.go:460: gracefully waiting for hook core22.configure
+<78>1 2024-03-18T17:04:00.038000Z MAIL-CLIN-01 CRON 3047621 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T17:04:13.661147Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 86: banned by affinity mask 00000008 (mlx5_comp1)
+<30>1 2024-03-18T17:05:31.142986Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:05:31.187687Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from WS-LNGUYEN-01.meridianhcs.local[10.10.1.21]
+<30>1 2024-03-18T17:05:31.750803Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0CFE322C0: client=WS-LNGUYEN-01.meridianhcs.local[10.10.1.21], sasl_method=LOGIN, sasl_username=lina.nguyen
+<30>1 2024-03-18T17:05:32.512379Z MAIL-CLIN-01 postfix/cleanup 3047770 - - 0CFE322C0: message-id=<1168268083.658445.f001ee8d@meridianhcs.com>
+<30>1 2024-03-18T17:05:33.368879Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0CFE322C0: from=<lina.nguyen@meridianhcs.com>, size=1440, nrcpt=1 (queue active)
+<30>1 2024-03-18T17:05:38.802366Z MAIL-CLIN-01 postfix/smtp 3019254 - - 0CFE322C0: to=<orders@vendorpost.net>, relay=smtp2.greatplains-mail.net[66.102.1.14]:25, delay=7.01, delays=0.98/0.67/1.91/3.45, dsn=2.0.0, status=sent (250 OK id=25ZWUW-000049-00)
+<30>1 2024-03-18T17:05:39.105540Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0CFE322C0: removed
+<30>1 2024-03-18T17:06:05.509076Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 516527.
+<30>1 2024-03-18T17:07:36.067401Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed positive cache scope enp0s3 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:14:01.118718Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 616284.
+<86>1 2024-03-18T17:15:01.966632Z MAIL-CLIN-01 sshd 3048658 - - Connection from 10.10.1.31 port 57697 on 10.10.2.26 port 22
+<86>1 2024-03-18T17:15:04.151880Z MAIL-CLIN-01 sshd 3048658 - - Accepted publickey for marcus.chen from 10.10.1.31 port 57697 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:15:04.216021Z MAIL-CLIN-01 sshd 3048658 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:15:04.769270Z MAIL-CLIN-01 systemd-logind 15624 - - New session 198572 of user marcus.chen.
+<30>1 2024-03-18T17:17:45.804366Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 86 affinity hint keeps vector on CPU 2 (mlx5_comp1)
+<30>1 2024-03-18T17:19:04.008333Z MAIL-CLIN-01 irqbalance 38266 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:21:12.905524Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 245192.
+<86>1 2024-03-18T17:21:53.644096Z MAIL-CLIN-01 sshd 3049306 - - Connection from 10.10.1.31 port 49449 on 10.10.2.26 port 22
+<86>1 2024-03-18T17:21:55.895288Z MAIL-CLIN-01 sshd 3049306 - - Accepted publickey for marcus.chen from 10.10.1.31 port 49449 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:21:55.946473Z MAIL-CLIN-01 sshd 3049306 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:21:56.476722Z MAIL-CLIN-01 systemd-logind 15624 - - New session 198626 of user marcus.chen.
+<30>1 2024-03-18T17:25:21.649745Z MAIL-CLIN-01 systemd 1 - - Starting apt-daily.service - Daily apt download activities.
+<30>1 2024-03-18T17:25:25.057432Z MAIL-CLIN-01 systemd 1 - - apt-daily.service: Deactivated successfully.
+<86>1 2024-03-18T17:25:33.531329Z MAIL-CLIN-01 sshd 3049656 - - Connection from 10.10.1.31 port 49847 on 10.10.2.26 port 22
+<86>1 2024-03-18T17:25:35.776521Z MAIL-CLIN-01 sshd 3049656 - - Accepted publickey for marcus.chen from 10.10.1.31 port 49847 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:25:35.829748Z MAIL-CLIN-01 sshd 3049656 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:25:36.350942Z MAIL-CLIN-01 systemd-logind 15624 - - New session 198655 of user marcus.chen.
+<30>1 2024-03-18T17:26:43.483652Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed stale cache scope global after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T17:28:17.300541Z MAIL-CLIN-01 sshd 3048658 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T17:28:17.730264Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 198572.
+<30>1 2024-03-18T17:28:42.700958Z MAIL-CLIN-01 snapd 15838 - - stateengine.go:150: state ensure starting change 7256
+<86>1 2024-03-18T17:29:16.076574Z MAIL-CLIN-01 sshd 3049306 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T17:29:16.904283Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 198626.
+<30>1 2024-03-18T17:29:47.113271Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed negative cache scope enp0s3 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:30:10.276742Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 658532.
+<30>1 2024-03-18T17:30:55.540648Z MAIL-CLIN-01 systemd-resolved 15892 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 786420.
+<78>1 2024-03-18T17:34:00.145000Z MAIL-CLIN-01 CRON 3050440 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T17:35:15.976665Z MAIL-CLIN-01 sshd 3049656 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T17:35:16.382447Z MAIL-CLIN-01 systemd-logind 15624 - - Removed session 198655.
+<86>1 2024-03-18T17:36:41.762184Z MAIL-CLIN-01 sshd 3050702 - - Connection from 10.10.1.31 port 56414 on 10.10.2.26 port 22
+<86>1 2024-03-18T17:36:44.048359Z MAIL-CLIN-01 sshd 3050702 - - Accepted publickey for marcus.chen from 10.10.1.31 port 56414 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:36:44.182634Z MAIL-CLIN-01 sshd 3050702 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:36:44.928820Z MAIL-CLIN-01 systemd-logind 15624 - - New session 198745 of user marcus.chen.
+<30>1 2024-03-18T17:37:47.649284Z MAIL-CLIN-01 irqbalance 38266 - - Skipping IRQ 137: banned by affinity mask 00000001 (ens192)
+<30>1 2024-03-18T17:39:40.010737Z MAIL-CLIN-01 postfix/smtpd 3005054 - - connect from mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T17:39:40.523081Z MAIL-CLIN-01 postfix/smtpd 3005054 - - 0068C1336D: client=mail.meridianhcs.com[10.10.2.25]
+<30>1 2024-03-18T17:39:41.549095Z MAIL-CLIN-01 postfix/cleanup 3051011 - - 0068C1336D: message-id=<3002472831.549689.681a3bb9@partnerrelay.io>
+<30>1 2024-03-18T17:39:42.912449Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0068C1336D: from=<alerts@partnerrelay.io>, size=1474, nrcpt=1 (queue active)
+<30>1 2024-03-18T17:39:43.562793Z MAIL-CLIN-01 postfix/local 3051012 - - 0068C1336D: to=<omar.haddad@meridianhcs.com>, relay=local, delay=2.85, delays=0.81/0.20/0.45/1.39, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T17:39:43.959468Z MAIL-CLIN-01 postfix/qmgr 3014725 - - 0068C1336D: removed
+<30>1 2024-03-18T17:39:56.937611Z MAIL-CLIN-01 systemd-resolved 15892 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 543036.
+<30>1 2024-03-18T17:39:59.550264Z MAIL-CLIN-01 snapd 15838 - - taskrunner.go:271: change 7255 task 1 done for core20
+<30>1 2024-03-18T17:41:09.786822Z MAIL-CLIN-01 dovecot 3016471 - - imap-login: Login: user=<omar.haddad>, method=PLAIN, rip=10.10.1.22, lip=10.10.2.26, mpid=3051154, TLS, session=<AAAADrH/Tm>
+<30>1 2024-03-18T17:41:38.756289Z MAIL-CLIN-01 dovecot 3051154 - - imap(omar.haddad)<3051154><AAAADrH/Tm>: Disconnected: Logged out in=7766 out=311409 deleted=0 expunged=0 trashed=0 hdr_count=2 hdr_bytes=3820 body_count=2 body_bytes=305504
+<30>1 2024-03-18T17:45:42.779163Z MAIL-CLIN-01 irqbalance 38266 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T17:46:16.401005Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed positive cache scope enp0s3 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:48:14.148078Z MAIL-CLIN-01 systemd-resolved 15892 - - Flushed positive cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:48:48.865864Z MAIL-CLIN-01 snapd 15838 - - snapmgr.go:523: refresh candidates checked for microk8s

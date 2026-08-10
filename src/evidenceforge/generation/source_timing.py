@@ -1,33 +1,37 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Source-aware timestamp planning for canonical SecurityEvents.
+"""Source-aware timestamp planning for canonical canonical occurrences.
 
-``SecurityEvent.timestamp`` remains canonical world time. This module plans the
+``OccurrenceBuilder.timestamp`` remains canonical world time. This module plans the
 timestamps individual sources render from that event, using shared timing
 profiles and explicit constraints instead of independent emitter-local jitter.
 """
 
 from __future__ import annotations
 
+import math
+import random
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any, TypeAlias
 
+from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.generation.activity.timing_profiles import (
+    TimingWindow,
     endpoint_clock_timing,
     get_timing_window,
     network_sensor_observation_timing,
     sample_timing_delta,
+    startup_module_observation_timing,
 )
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
-if TYPE_CHECKING:
-    from evidenceforge.events.base import SecurityEvent
+TimingOccurrence: TypeAlias = OccurrenceBuilder | CanonicalOccurrence
 
 _SOURCE_EPSILON = timedelta(milliseconds=1)
 _OBSERVATION_NOISE_US = 997
@@ -99,11 +103,11 @@ class SourceTimingPlanner:
 
     def plan_event(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         format_name: str | None = None,
-    ) -> SecurityEvent:
+    ) -> TimingOccurrence:
         """Return ``event`` with an attached source timing plan."""
-        self._ensure_plan(event)
+        event = self.initialize_event(event)
         if format_name in {None, "ecar"}:
             self._plan_ecar_identity_times(event)
         if format_name == "ecar":
@@ -114,7 +118,7 @@ class SourceTimingPlanner:
             event = self._plan_session_lifecycle_time(event, format_name)
         return event
 
-    def initialize_event(self, event: SecurityEvent) -> None:
+    def initialize_event(self, event: TimingOccurrence) -> TimingOccurrence:
         """Retain canonical time before source observation delay is applied.
 
         Initialization deliberately does not plan identities or render timestamps;
@@ -122,11 +126,22 @@ class SourceTimingPlanner:
         dispatcher.
         """
 
-        self._ensure_plan(event)
+        if event.source_timing is None:
+            plan = SourceTimingPlan(
+                canonical_timestamp=event.timestamp,
+                clock_profile_name=self.clock_profile_name,
+            )
+            if isinstance(event, OccurrenceBuilder):
+                event.source_timing = plan
+                return event
+            return replace(event, source_timing=plan)
+        if not event.source_timing.clock_profile_name:
+            event.source_timing.clock_profile_name = self.clock_profile_name
+        return event
 
     def record_admitted_source_event(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         format_name: str,
     ) -> None:
         """Publish an admitted transport anchor for later authentication siblings."""
@@ -151,17 +166,13 @@ class SourceTimingPlanner:
             format_name == "ecar"
             and event.event_type == "connection"
             and network is not None
-            and network.transaction is not None
             and event.dst_host is not None
         ):
-            timestamp = self._finalized_time(
-                event,
-                ecar_flow_render_key("inbound", event.dst_host.hostname),
-            )
+            timestamp = self._latest_ecar_endpoint_flow_time(event)
             if timestamp is not None:
                 self._admitted_ecar_transport_transactions[
                     self._transaction_transport_key(
-                        network.transaction.stable_id,
+                        network.stable_id,
                         event.dst_host.hostname,
                         network.src_ip,
                         network.src_port,
@@ -222,13 +233,10 @@ class SourceTimingPlanner:
         target_hostname = getattr(target_host, "hostname", "")
         if not target_hostname:
             return
-        if event.event_type == "connection" and network.transaction is not None:
-            transaction_id = network.transaction.stable_id
+        if event.event_type == "connection":
+            transaction_id = network.stable_id
             if format_name == "ecar" and event.dst_host is not None:
-                timestamp = self._finalized_time(
-                    event,
-                    ecar_flow_render_key("inbound", event.dst_host.hostname),
-                )
+                timestamp = self._latest_ecar_endpoint_flow_time(event)
                 if timestamp is not None:
                     self._admitted_ecar_remote_transports[
                         self._remote_transport_key(
@@ -266,7 +274,7 @@ class SourceTimingPlanner:
                 )
             ] = timestamp
 
-    def _plan_ecar_render_times(self, event: SecurityEvent) -> None:
+    def _plan_ecar_render_times(self, event: TimingOccurrence) -> None:
         """Finalize eCAR FLOW and USER_SESSION times before emitter admission."""
 
         if event.event_type == "connection" and event.network is not None:
@@ -303,7 +311,7 @@ class SourceTimingPlanner:
             getattr(event.auth, "source_port", ""),
             getattr(event.auth, "logon_id", ""),
             getattr(event.auth, "logon_type", ""),
-            getattr(event.edr, "object_id", ""),
+            event.identity_plan.object_id if event.identity_plan is not None else "",
             canonical_timestamp,
         )
         timestamp = self.source_time(
@@ -345,7 +353,7 @@ class SourceTimingPlanner:
                 )
         plan.finalized_times[ecar_session_render_key(lifecycle)] = timestamp
 
-    def _plan_windows_remote_auth_time(self, event: SecurityEvent) -> SecurityEvent:
+    def _plan_windows_remote_auth_time(self, event: TimingOccurrence) -> TimingOccurrence:
         """Finalize source-local WFP-before-authentication ordering."""
 
         if event.event_type == "wfp_connection" and event.network is not None:
@@ -437,7 +445,7 @@ class SourceTimingPlanner:
 
     def _remote_auth_transport_anchor(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         registry: dict[_REMOTE_TRANSPORT_KEY, datetime],
         transaction_registry: dict[_TRANSACTION_TRANSPORT_KEY, datetime],
     ) -> datetime | None:
@@ -518,7 +526,7 @@ class SourceTimingPlanner:
             protocol.lower(),
         )
 
-    def _ssh_transport_anchor(self, event: SecurityEvent) -> datetime | None:
+    def _ssh_transport_anchor(self, event: TimingOccurrence) -> datetime | None:
         """Return the admitted exact-tuple SSH FLOW time for a session event."""
 
         auth = event.auth
@@ -557,11 +565,32 @@ class SourceTimingPlanner:
         )
 
     @staticmethod
-    def _finalized_time(event: SecurityEvent, key: str) -> datetime | None:
+    def _finalized_time(event: TimingOccurrence, key: str) -> datetime | None:
         plan = event.source_timing
         return plan.finalized_times.get(key) if plan is not None else None
 
-    def _plan_ecar_flow_times(self, event: SecurityEvent) -> None:
+    @classmethod
+    def _latest_ecar_endpoint_flow_time(cls, event: TimingOccurrence) -> datetime | None:
+        """Return the later admitted endpoint observation for one eCAR transport."""
+
+        timestamps = []
+        if event.src_host is not None:
+            timestamp = cls._finalized_time(
+                event,
+                ecar_flow_render_key("outbound", event.src_host.hostname),
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+        if event.dst_host is not None:
+            timestamp = cls._finalized_time(
+                event,
+                ecar_flow_render_key("inbound", event.dst_host.hostname),
+            )
+            if timestamp is not None:
+                timestamps.append(timestamp)
+        return max(timestamps) if timestamps else None
+
+    def _plan_ecar_flow_times(self, event: TimingOccurrence) -> None:
         """Finalize every host-local FLOW timestamp and attribution decision."""
 
         network = event.network
@@ -639,7 +668,7 @@ class SourceTimingPlanner:
 
     def _ecar_process_identity_not_before(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         identity: ProcessIdentity,
     ) -> datetime:
         """Return the earliest FLOW time that can safely claim a process."""
@@ -651,7 +680,7 @@ class SourceTimingPlanner:
 
     def _ecar_flow_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         *,
         seed_parts: tuple[Any, ...],
         not_before: datetime | None,
@@ -719,7 +748,7 @@ class SourceTimingPlanner:
 
     @staticmethod
     def _paired_ecar_flow_observation_time(
-        event: SecurityEvent,
+        event: TimingOccurrence,
         timestamp: datetime,
         *,
         seed_parts: tuple[Any, ...],
@@ -793,7 +822,7 @@ class SourceTimingPlanner:
 
     @staticmethod
     def _unbounded_paired_ecar_flow_time(
-        event: SecurityEvent,
+        event: TimingOccurrence,
         *,
         seed_parts: tuple[Any, ...],
         not_before: datetime | None,
@@ -837,7 +866,7 @@ class SourceTimingPlanner:
 
     @staticmethod
     def _ecar_flow_interval(
-        event: SecurityEvent,
+        event: TimingOccurrence,
         seed_parts: tuple[Any, ...],
     ) -> tuple[datetime, datetime | None]:
         """Return the finalized canonical interval for an endpoint FLOW."""
@@ -845,7 +874,7 @@ class SourceTimingPlanner:
         network = event.network
         if network is None:
             return event.timestamp, None
-        start_time = network.source_visible_start_time or event.timestamp
+        start_time = network.started_at
         if network.duration is None:
             if network.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
                 seed = _stable_seed(
@@ -854,7 +883,7 @@ class SourceTimingPlanner:
                 )
                 return start_time, start_time + timedelta(milliseconds=45 + (seed % 620))
             return start_time, None
-        close_time = network.source_visible_close_time or (
+        close_time = network.closed_at or (
             start_time + timedelta(seconds=max(0.0, network.duration))
         )
         if close_time <= start_time:
@@ -868,7 +897,7 @@ class SourceTimingPlanner:
 
     @staticmethod
     def _ecar_flow_min_endpoint_offset_ms(
-        event: SecurityEvent,
+        event: TimingOccurrence,
         seed_parts: tuple[Any, ...],
     ) -> int:
         """Return the minimum endpoint delay for very short FLOWs."""
@@ -891,9 +920,9 @@ class SourceTimingPlanner:
 
     def _plan_session_lifecycle_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         format_name: str,
-    ) -> SecurityEvent:
+    ) -> TimingOccurrence:
         """Order same-source process termination and session closure observations."""
 
         lifecycle = event.lifecycle
@@ -927,7 +956,7 @@ class SourceTimingPlanner:
 
     def _process_termination_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         format_name: str,
     ) -> datetime:
         """Return the timestamp a source will render for a process termination."""
@@ -971,7 +1000,7 @@ class SourceTimingPlanner:
 
     def session_closure_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         format_name: str,
     ) -> datetime:
         """Return the bounded source-native closure time for one session group."""
@@ -1021,7 +1050,7 @@ class SourceTimingPlanner:
 
     def record_session_closure_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         format_name: str,
         timestamp: datetime,
     ) -> None:
@@ -1042,7 +1071,7 @@ class SourceTimingPlanner:
         )
         plan.source_times[self._cache_key(source_key, seed_parts)] = ensure_utc(timestamp)
 
-    def _plan_ecar_identity_times(self, event: SecurityEvent) -> None:
+    def _plan_ecar_identity_times(self, event: TimingOccurrence) -> None:
         """Prime stable process-create anchors for eCAR lifecycle consumers.
 
         Process creation and dependent telemetry are separate canonical events.
@@ -1110,7 +1139,7 @@ class SourceTimingPlanner:
 
     def _prime_ecar_process_create_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         identity: ProcessIdentity,
         *,
         anchor_timestamp: datetime | None = None,
@@ -1124,10 +1153,12 @@ class SourceTimingPlanner:
                 cached = not_before
                 self._ecar_process_create_times[identity.object_id] = cached
             return cached
-        anchor = replace(
-            event,
-            timestamp=anchor_timestamp or identity.started_at,
-            source_timing=None,
+        anchor = self.initialize_event(
+            replace(
+                event,
+                timestamp=anchor_timestamp or identity.started_at,
+                source_timing=None,
+            )
         )
         create_time = self.source_time(
             anchor,
@@ -1140,7 +1171,7 @@ class SourceTimingPlanner:
         self._ecar_process_create_times[identity.object_id] = create_time
         return create_time
 
-    def admission_time(self, event: SecurityEvent, format_name: str) -> datetime:
+    def admission_time(self, event: TimingOccurrence, format_name: str) -> datetime:
         """Return the finalized source-visible timestamp used for window admission."""
 
         if event.source_timing is not None:
@@ -1158,12 +1189,12 @@ class SourceTimingPlanner:
                 ) or event.source_timing.finalized_times.get(_WINDOWS_WFP_RENDER_KEY)
                 if windows_time is not None:
                     return windows_time
-        if format_name == "proxy_access" and event.proxy is not None:
-            transaction = event.proxy.transaction
+        if format_name == "proxy_access" and event.protocol.proxy is not None:
+            transaction = event.protocol.proxy.transaction
             if transaction is not None:
                 return transaction.request_at
-        if format_name == "zeek_http" and event.http is not None:
-            request_time = event.http.canonical_request_time
+        if format_name == "zeek_http" and event.protocol.http is not None:
+            request_time = event.protocol.http.canonical_request_time
             if request_time is not None:
                 observation = next(
                     (
@@ -1188,7 +1219,7 @@ class SourceTimingPlanner:
 
     def source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...] = (),
         not_before: datetime | None = None,
@@ -1210,6 +1241,7 @@ class SourceTimingPlanner:
             preferred_time = self._sample_source_time(event, source_key, effective_seed)
         if not_before is not None and preferred_time < not_before:
             preferred_time = self._source_floor_repair_time(
+                event,
                 source_key,
                 effective_seed,
                 not_before,
@@ -1223,9 +1255,69 @@ class SourceTimingPlanner:
         plan.source_times[cache_key] = constrained_time
         return constrained_time
 
+    def process_module_source_time(
+        self,
+        event: TimingOccurrence,
+        format_name: str,
+        process_create_time: datetime,
+    ) -> datetime:
+        """Place a module observation after its source-visible process creation."""
+        process = event.process
+        image_load = event.image_load
+        if process is None or image_load is None:
+            return event.timestamp
+
+        seed_parts = (
+            format_name,
+            getattr(event.src_host, "hostname", ""),
+            process.pid,
+            process.start_time,
+            image_load.image_loaded,
+            image_load.load_phase,
+            image_load.load_order,
+        )
+        if image_load.load_phase == "startup":
+            order = max(1, image_load.load_order)
+            timing = startup_module_observation_timing()
+            spacing_seed = (
+                format_name,
+                getattr(event.src_host, "hostname", ""),
+                process.pid,
+                process.start_time,
+            )
+            rng = random.Random(_stable_seed(f"startup-module-source:{spacing_seed}"))
+            elapsed_us = rng.randint(
+                timing.initial_delay_min_us,
+                timing.initial_delay_max_us,
+            )
+            for _module_index in range(1, order):
+                sampled_gap = round(
+                    rng.lognormvariate(
+                        math.log(timing.inter_load_gap_median_us),
+                        timing.inter_load_gap_sigma,
+                    )
+                )
+                elapsed_us += max(
+                    timing.inter_load_gap_min_us,
+                    min(sampled_gap, timing.inter_load_gap_max_us),
+                )
+            return process_create_time + timedelta(microseconds=elapsed_us)
+
+        source_key = (
+            "source.ecar_dependent_after_process_create"
+            if format_name == "ecar"
+            else "source.sysmon_module_after_process_create"
+        )
+        return self.source_time(
+            event,
+            source_key,
+            seed_parts=seed_parts,
+            not_before=max(event.timestamp, process_create_time + _SOURCE_EPSILON),
+        )
+
     def lifecycle_child_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         *,
         host_key: str,
@@ -1249,11 +1341,7 @@ class SourceTimingPlanner:
             return None
 
         parent_group_id = lifecycle.parent_group_id
-        anchor = (
-            network.transaction.started_at
-            if network.transaction is not None
-            else network.source_visible_start_time or event.timestamp
-        )
+        anchor = network.started_at
         effective_seed = seed_parts or self._event_seed_parts(event)
         cache_seed = ("lifecycle-child", parent_group_id, host_key, *effective_seed)
         cache_key = self._cache_key(source_key, cache_seed)
@@ -1278,7 +1366,7 @@ class SourceTimingPlanner:
 
     def record_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         timestamp: datetime,
         seed_parts: tuple[Any, ...] = (),
@@ -1296,7 +1384,7 @@ class SourceTimingPlanner:
 
     def source_time_after_source(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         *,
         after_source_key: str,
@@ -1341,8 +1429,8 @@ class SourceTimingPlanner:
 
     def ordered_pair(
         self,
-        before_event: SecurityEvent,
-        after_event: SecurityEvent,
+        before_event: TimingOccurrence,
+        after_event: TimingOccurrence,
         source_key: str,
         min_gap_ms: int = 1,
     ) -> tuple[datetime, datetime]:
@@ -1375,7 +1463,7 @@ class SourceTimingPlanner:
 
     def sensor_observation_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         sensor: str,
         route_key: str,
         source_key: str,
@@ -1407,9 +1495,11 @@ class SourceTimingPlanner:
         )
         return source_time + timedelta(microseconds=skew + path_delay + noise)
 
-    def _ensure_plan(self, event: SecurityEvent) -> SourceTimingPlan:
+    def _ensure_plan(self, event: TimingOccurrence) -> SourceTimingPlan:
         """Attach and return a mutable source timing plan for ``event``."""
         if event.source_timing is None:
+            if not isinstance(event, OccurrenceBuilder):
+                raise RuntimeError("Sealed occurrences require source timing initialization")
             event.source_timing = SourceTimingPlan(
                 canonical_timestamp=event.timestamp,
                 clock_profile_name=self.clock_profile_name,
@@ -1420,7 +1510,7 @@ class SourceTimingPlanner:
 
     def _sample_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...],
     ) -> datetime:
@@ -1431,7 +1521,10 @@ class SourceTimingPlanner:
             default_max_ms=0,
             default_position="after",
         )
-        delta = sample_timing_delta(source_key, seed_parts=seed_parts)
+        if source_key == "source.ecar_process_create":
+            delta = self._coherent_ecar_process_create_latency(event, source_key, window)
+        else:
+            delta = sample_timing_delta(source_key, seed_parts=seed_parts)
         micro_noise = (
             self._source_micro_noise(source_key, seed_parts)
             if window.relationship_class == "same_observation"
@@ -1445,9 +1538,41 @@ class SourceTimingPlanner:
             source_time = canonical_time + delta + micro_noise
         return source_time + self._endpoint_clock_adjustment(event, source_key, seed_parts)
 
+    @staticmethod
+    def _coherent_ecar_process_create_latency(
+        event: TimingOccurrence,
+        source_key: str,
+        window: TimingWindow,
+    ) -> timedelta:
+        """Return slowly varying host-local eCAR process observation latency.
+
+        Independent per-process latency samples can visibly reorder successive
+        process creates even when their canonical starts and PIDs are ordered.
+        A real host collector's queue delay changes coherently, so model it as a
+        continuous triangular wave whose slope is far below wall-clock time.
+        """
+
+        host = event.src_host or event.dst_host
+        hostname = str(getattr(host, "hostname", "") or "unknown-host")
+        minimum_us = window.min_ms * 1_000
+        latency_span_us = max(0, (window.max_ms - window.min_ms) * 1_000)
+        if latency_span_us == 0:
+            return timedelta(microseconds=minimum_us)
+
+        seed = _stable_seed(f"coherent-source-latency:{source_key}:{hostname}")
+        period_seconds = 2_700 + (seed % 2_701)
+        period_us = period_seconds * 1_000_000
+        half_period_us = period_us // 2
+        phase_us = (seed >> 16) % period_us
+        canonical_us = round(ensure_utc(event.timestamp).timestamp() * 1_000_000)
+        position_us = (canonical_us + phase_us) % period_us
+        distance_us = min(position_us, period_us - position_us)
+        latency_us = minimum_us + (latency_span_us * distance_us) // half_period_us
+        return timedelta(microseconds=latency_us)
+
     def _preferred_source_time(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...],
     ) -> datetime:
@@ -1462,7 +1587,7 @@ class SourceTimingPlanner:
 
     def _endpoint_clock_adjustment(
         self,
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...],
     ) -> timedelta:
@@ -1512,7 +1637,7 @@ class SourceTimingPlanner:
 
     @staticmethod
     def _endpoint_clock_scope(
-        event: SecurityEvent,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...],
     ) -> tuple[str, str] | None:
@@ -1551,8 +1676,9 @@ class SourceTimingPlanner:
         )
         return timedelta(microseconds=37 + (seed % 961))
 
-    @staticmethod
     def _source_floor_repair_time(
+        self,
+        event: TimingOccurrence,
         source_key: str,
         seed_parts: tuple[Any, ...],
         lower_bound: datetime,
@@ -1560,10 +1686,19 @@ class SourceTimingPlanner:
         """Keep clamped process-create sources source-native after a shared floor."""
         if source_key not in _PROCESS_CREATE_SOURCE_KEYS:
             return lower_bound
-        delay = sample_timing_delta(
-            source_key,
-            seed_parts=("floor-repair", source_key, *seed_parts),
-        )
+        if source_key == "source.ecar_process_create":
+            window = get_timing_window(
+                source_key,
+                default_min_ms=0,
+                default_max_ms=0,
+                default_position="after",
+            )
+            delay = self._coherent_ecar_process_create_latency(event, source_key, window)
+        else:
+            delay = sample_timing_delta(
+                source_key,
+                seed_parts=("floor-repair", source_key, *seed_parts),
+            )
         return lower_bound + max(delay, _SOURCE_EPSILON)
 
     @staticmethod
@@ -1612,13 +1747,13 @@ class SourceTimingPlanner:
         return source_key + "|" + "|".join(str(part) for part in seed_parts)
 
     @staticmethod
-    def _event_seed_parts(event: SecurityEvent) -> tuple[Any, ...]:
-        """Return stable content-derived identity parts for a SecurityEvent."""
+    def _event_seed_parts(event: TimingOccurrence) -> tuple[Any, ...]:
+        """Return stable content-derived identity parts for a OccurrenceBuilder."""
         net = event.network
         proc = event.process
         auth = event.auth
         krb = event.kerberos
-        edr = event.edr
+        identity = event.identity_plan
         return (
             event.event_type,
             event.timestamp.isoformat(),
@@ -1635,6 +1770,6 @@ class SourceTimingPlanner:
             getattr(krb, "service_name", ""),
             getattr(krb, "source_ip", ""),
             getattr(krb, "source_port", ""),
-            getattr(edr, "object_id", ""),
+            identity.object_id if identity is not None else "",
             event.storyline_cluster_id or "",
         )

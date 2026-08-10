@@ -1,0 +1,12 @@
+{
+  "previous_loop_fix": "routine SSH scheduling consolidation",
+  "loop_57_successful_core_ssh_sessions": 133,
+  "loop_58_successful_core_ssh_sessions": 48,
+  "session_count_reduction_percent": 63.91,
+  "loop_57_top_three_client_session_hours": 46.2,
+  "loop_58_top_three_client_session_hours": 27.57,
+  "loop_57_top_three_client_peak_concurrency": [7, 7, 5],
+  "loop_58_top_three_client_peak_concurrency": [6, 4, 2],
+  "ambient_syslog_owned_ssh_path_present": false,
+  "selected_routine_ssh_scheduling_result": "PASS"
+}

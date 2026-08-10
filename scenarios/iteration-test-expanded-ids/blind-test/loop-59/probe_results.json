@@ -1,0 +1,8 @@
+{
+  "previous_loop_fix": "compatibility SSH responder lifecycle ownership",
+  "closed_ssh_sessions": 45,
+  "closed_sessions_with_visible_responder_create": 7,
+  "closed_sessions_with_visible_responder_termination": 7,
+  "closed_sessions_missing_visible_responder_termination": 0,
+  "selected_ssh_responder_lifecycle_result": "PASS"
+}

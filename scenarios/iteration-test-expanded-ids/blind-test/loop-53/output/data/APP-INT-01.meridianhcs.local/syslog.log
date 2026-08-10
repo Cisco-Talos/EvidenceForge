@@ -1,0 +1,289 @@
+<78>1 2024-03-18T12:00:00.236000Z APP-INT-01 CRON 946437 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:01:08.292940Z APP-INT-01 rsyslogd 36034 - - main Q: queue main has 0 messages pending, worker threads 2
+<86>1 2024-03-18T12:01:23.904279Z APP-INT-01 sshd 939330 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:01:24.313094Z APP-INT-01 systemd-logind 36162 - - Removed session 375594.
+<30>1 2024-03-18T12:03:31.001034Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3444
+<30>1 2024-03-18T12:03:36.721205Z APP-INT-01 rsyslogd 36034 - - main Q: queue main has 64 messages pending, worker threads 2
+<30>1 2024-03-18T12:04:23.674466Z APP-INT-01 rsyslogd 36034 - - omfwd: target 10.10.2.30 using disk-assisted queue fwdRule1, checkpoint 18915
+<30>1 2024-03-18T12:04:43.385043Z APP-INT-01 rsyslogd 36034 - - main Q: queue main has 264 messages pending, worker threads 2
+<30>1 2024-03-18T12:06:10.069091Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.79'
+<85>1 2024-03-18T12:06:25.303235Z APP-INT-01 sudo 946994 - - backup : TTY=pts/5 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/journalctl -u gunicorn -n 80
+<86>1 2024-03-18T12:06:25.490235Z APP-INT-01 sudo 946994 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T12:06:27.713045Z APP-INT-01 sudo 946994 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:09:20.409868Z APP-INT-01 sudo 947266 - - ubuntu : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/du -sh /var/log
+<86>1 2024-03-18T12:09:20.685868Z APP-INT-01 sudo 947266 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<30>1 2024-03-18T12:09:22.656845Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 373593.
+<86>1 2024-03-18T12:09:23.308601Z APP-INT-01 sudo 947266 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:09:30.144406Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 109348.
+<85>1 2024-03-18T12:10:32.027252Z APP-INT-01 sudo 947361 - - svc_app : TTY=pts/5 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/needrestart -b
+<86>1 2024-03-18T12:10:32.199252Z APP-INT-01 sudo 947361 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:10:50.039261Z APP-INT-01 sudo 947361 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:12:26.537284Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.80'
+<85>1 2024-03-18T12:15:41.930497Z APP-INT-01 sudo 947797 - - ops : TTY=pts/5 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/lsof -i -P -n
+<86>1 2024-03-18T12:15:41.967497Z APP-INT-01 sudo 947797 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T12:15:47.681619Z APP-INT-01 sudo 947797 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:16:06.278975Z APP-INT-01 unattended-upgr 34415 - - Checking for unattended upgrades from o=Ubuntu,a=jammy-updates
+<30>1 2024-03-18T12:18:43.184913Z APP-INT-01 polkitd 9910 - - Subject unix-process:948052:250672154 is authorized for action org.freedesktop.systemd1.manage-units
+<30>1 2024-03-18T12:19:23.605633Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 234077.
+<30>1 2024-03-18T12:24:09.009000Z APP-INT-01 anacron 24098 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:24:10.346434Z APP-INT-01 anacron 24098 - - Will run job `cron.daily' in 5 min.
+<30>1 2024-03-18T12:24:11.210381Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 619345.
+<30>1 2024-03-18T12:25:21.800752Z APP-INT-01 unattended-upgr 34415 - - Package python3-apt kept back for phased update percentage 70
+<30>1 2024-03-18T12:25:28.450068Z APP-INT-01 polkitd 9910 - - Operator of unix-process:948655:250712736 successfully authenticated as unix-user:admin to gain TEMPORARY authorization for action org.freedesktop.systemd1.manage-units for system-bus-name::1.84 [/usr/bin/loginctl] (owned by unix-user:admin)
+<30>1 2024-03-18T12:29:10.813758Z APP-INT-01 anacron 24098 - - Job `cron.daily' started
+<30>1 2024-03-18T12:29:36.822677Z APP-INT-01 anacron 24098 - - Job `cron.daily' terminated
+<30>1 2024-03-18T12:29:37.799310Z APP-INT-01 anacron 24098 - - Normal exit (1 job run)
+<78>1 2024-03-18T12:30:00.169000Z APP-INT-01 CRON 949041 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:31:02.723527Z APP-INT-01 systemd-journald 36002 - - Rotating system journal.
+<30>1 2024-03-18T12:32:24.750457Z APP-INT-01 rsyslogd 36034 - - main Q: queue fwdRule1 has 652 messages pending, worker threads 2
+<85>1 2024-03-18T12:36:59.975883Z APP-INT-01 sudo 949660 - - ubuntu : TTY=pts/2 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl is-active sshd
+<86>1 2024-03-18T12:37:00.244883Z APP-INT-01 sudo 949660 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2024-03-18T12:37:01.874668Z APP-INT-01 sudo 949660 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:38:52.295909Z APP-INT-01 systemd-resolved 36497 - - Transaction 939106 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T12:39:41.749820Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 313092.
+<30>1 2024-03-18T12:41:00.256767Z APP-INT-01 snapd 36403 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2024-03-18T12:43:22.286473Z APP-INT-01 irqbalance 39958 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2024-03-18T12:45:14.994887Z APP-INT-01 irqbalance 39958 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T12:46:37.611943Z APP-INT-01 rsyslogd 36034 - - main Q: queue action-remote has 1053 messages pending, worker threads 2
+<30>1 2024-03-18T12:50:11.171435Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.87'
+<30>1 2024-03-18T12:50:47.098382Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 6 done for core20
+<30>1 2024-03-18T12:50:47.451355Z APP-INT-01 rsyslogd 36034 - - main Q: queue fwdRule1 has 1335 messages pending, worker threads 2
+<30>1 2024-03-18T12:57:15.909430Z APP-INT-01 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:57:19.450207Z APP-INT-01 systemd 1 - - Finished motd-news.service - Message of the Day.
+<86>1 2024-03-18T12:59:36.153869Z APP-INT-01 sshd 951622 - - Connection from 10.10.4.10 port 50927 on 10.10.2.30 port 22
+<85>1 2024-03-18T12:59:36.279869Z APP-INT-01 sshd 951622 - - Invalid user unknown from 10.10.4.10 port 50927
+<84>1 2024-03-18T12:59:36.905869Z APP-INT-01 sshd 951622 - - Failed password for invalid user unknown from 10.10.4.10 port 50927 ssh2
+<86>1 2024-03-18T12:59:36.958869Z APP-INT-01 sshd 951622 - - Connection closed by invalid user unknown 10.10.4.10 port 50927 [preauth]
+<78>1 2024-03-18T13:00:00.199000Z APP-INT-01 CRON 951661 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:00:31.325275Z APP-INT-01 dbus-daemon 36093 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.88'
+<85>1 2024-03-18T13:01:23.226687Z APP-INT-01 sudo 951811 - - svc_app : TTY=pts/3 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/lsblk
+<86>1 2024-03-18T13:01:23.336687Z APP-INT-01 sudo 951811 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T13:01:26.508728Z APP-INT-01 sudo 951811 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T13:02:56.893921Z APP-INT-01 sudo 951996 - - ops : TTY=pts/1 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/find /srv/tmp -maxdepth 1 -mtime +7 -type f
+<86>1 2024-03-18T13:02:57.059921Z APP-INT-01 sudo 951996 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T13:03:02.892744Z APP-INT-01 sudo 951996 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:03:03.589477Z APP-INT-01 unattended-upgr 34415 - - Allowed origins are: o=Ubuntu,a=jammy-security
+<30>1 2024-03-18T13:05:28.427626Z APP-INT-01 rsyslogd 36034 - - omfwd: target siem-forwarder using disk-assisted queue main, checkpoint 20595
+<30>1 2024-03-18T13:08:12.074030Z APP-INT-01 systemd-resolved 36497 - - Transaction 220881 switched to UDP with advertised UDP packet size 1232.
+<30>1 2024-03-18T13:11:43.378223Z APP-INT-01 polkitd 9910 - - Subject unix-process:953072:250990067 is authorized for action org.freedesktop.packagekit.system-update
+<85>1 2024-03-18T13:12:55.379152Z APP-INT-01 sudo 953215 - - deploy : TTY=pts/5 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/journalctl -u systemd-resolved -n 80
+<86>1 2024-03-18T13:12:55.602152Z APP-INT-01 sudo 953215 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T13:13:04.145606Z APP-INT-01 sudo 953215 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:13:05.414545Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.92'
+<30>1 2024-03-18T13:17:59.177510Z APP-INT-01 systemd-resolved 36497 - - Transaction 693220 switched to TCP with advertised UDP packet size 1472.
+<85>1 2024-03-18T13:19:29.962253Z APP-INT-01 sudo 953976 - - deploy : TTY=pts/1 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/systemctl list-units --state=failed --no-pager
+<86>1 2024-03-18T13:19:30.093253Z APP-INT-01 sudo 953976 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T13:19:32.098889Z APP-INT-01 sudo 953976 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:19:36.909869Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 4 done for core20
+<30>1 2024-03-18T13:20:51.837494Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 357752.
+<86>1 2024-03-18T13:24:44.924323Z APP-INT-01 sshd 954661 - - Connection from 10.10.1.31 port 62839 on 10.10.2.30 port 22
+<86>1 2024-03-18T13:24:47.168543Z APP-INT-01 sshd 954661 - - Accepted publickey for marcus.chen from 10.10.1.31 port 62839 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T13:24:47.308698Z APP-INT-01 sshd 954661 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T13:24:48.007901Z APP-INT-01 systemd-logind 36162 - - New session 376827 of user marcus.chen.
+<85>1 2024-03-18T13:25:17.615999Z APP-INT-01 sudo 954734 - - backup : TTY=pts/2 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/df -h /tmp
+<86>1 2024-03-18T13:25:17.800999Z APP-INT-01 sudo 954734 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T13:25:18.850250Z APP-INT-01 sudo 954734 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T13:25:19.588349Z APP-INT-01 sshd 954729 - - Connection from 10.10.1.21 port 33249 on 10.10.2.30 port 22
+<86>1 2024-03-18T13:25:21.955487Z APP-INT-01 sshd 954729 - - Accepted password for lina.nguyen from 10.10.1.21 port 33249 ssh2
+<86>1 2024-03-18T13:25:22.115764Z APP-INT-01 sshd 954729 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T13:25:22.812958Z APP-INT-01 systemd-logind 36162 - - New session 376835 of user lina.nguyen.
+<86>1 2024-03-18T13:25:30.481970Z APP-INT-01 sshd 954661 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:25:31.375831Z APP-INT-01 systemd-logind 36162 - - Removed session 376827.
+<30>1 2024-03-18T13:28:02.628758Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.95'
+<30>1 2024-03-18T13:28:15.526783Z APP-INT-01 rsyslogd 36034 - - omfwd: target logrelay01 using disk-assisted queue main, checkpoint 20831
+<30>1 2024-03-18T13:28:16.122684Z APP-INT-01 irqbalance 39958 - - Skipping IRQ 16: banned by affinity mask 00000002 (ahci)
+<86>1 2024-03-18T13:28:24.253612Z APP-INT-01 sshd 954729 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T13:28:24.837345Z APP-INT-01 systemd-logind 36162 - - Removed session 376835.
+<30>1 2024-03-18T13:28:25.546060Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 808723.
+<30>1 2024-03-18T13:29:15.414735Z APP-INT-01 rsyslogd 36034 - - omfwd: target logrelay01 using disk-assisted queue main, checkpoint 21285
+<78>1 2024-03-18T13:30:00.055000Z APP-INT-01 CRON 955301 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:32:45.592789Z APP-INT-01 unattended-upgr 34415 - - Package python3-apt kept back for phased update percentage 70
+<30>1 2024-03-18T13:33:47.658444Z APP-INT-01 systemd-resolved 36497 - - Transaction 593486 switched to UDP+EDNS0 with advertised UDP packet size 1232.
+<30>1 2024-03-18T13:36:21.533758Z APP-INT-01 irqbalance 39958 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T13:37:31.919985Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.97'
+<85>1 2024-03-18T13:38:30.600125Z APP-INT-01 sudo 956306 - - backup : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/du -sh /srv/app
+<86>1 2024-03-18T13:38:30.616125Z APP-INT-01 sudo 956306 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T13:38:32.052139Z APP-INT-01 sudo 956306 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T13:39:50.842197Z APP-INT-01 sshd 956445 - - Connection from 10.10.1.21 port 50213 on 10.10.2.30 port 22
+<86>1 2024-03-18T13:39:53.061355Z APP-INT-01 sshd 956445 - - Accepted password for lina.nguyen from 10.10.1.21 port 50213 ssh2
+<86>1 2024-03-18T13:39:53.170626Z APP-INT-01 sshd 956445 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T13:39:53.694775Z APP-INT-01 systemd-logind 36162 - - New session 376964 of user lina.nguyen.
+<30>1 2024-03-18T13:41:46.890905Z APP-INT-01 dbus-daemon 36093 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.100'
+<86>1 2024-03-18T13:43:32.994905Z APP-INT-01 sshd 956859 - - Connection from 10.10.1.35 port 53377 on 10.10.2.30 port 22
+<86>1 2024-03-18T13:43:35.163099Z APP-INT-01 sshd 956859 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 53377 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T13:43:35.233343Z APP-INT-01 sshd 956859 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T13:43:35.719497Z APP-INT-01 systemd-logind 36162 - - New session 376998 of user aisha.johnson.
+<86>1 2024-03-18T13:47:58.660324Z APP-INT-01 sshd 957357 - - Connection from 10.10.3.10 port 36426 on 10.10.2.30 port 22
+<85>1 2024-03-18T13:47:58.792324Z APP-INT-01 sshd 957357 - - Invalid user unknown from 10.10.3.10 port 36426
+<84>1 2024-03-18T13:47:58.919324Z APP-INT-01 sshd 957357 - - Failed password for invalid user unknown from 10.10.3.10 port 36426 ssh2
+<86>1 2024-03-18T13:47:59.518324Z APP-INT-01 sshd 957357 - - Connection closed by invalid user unknown 10.10.3.10 port 36426 [preauth]
+<30>1 2024-03-18T13:48:30.231634Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 434527.
+<78>1 2024-03-18T14:00:00.121000Z APP-INT-01 CRON 958749 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:00:22.986529Z APP-INT-01 snapd 36403 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T14:00:35.384980Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 6 done for core22
+<86>1 2024-03-18T14:00:35.679393Z APP-INT-01 sshd 956859 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:00:36.875166Z APP-INT-01 systemd-logind 36162 - - Removed session 376998.
+<30>1 2024-03-18T14:02:27.861839Z APP-INT-01 snapd 36403 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T14:03:14.167443Z APP-INT-01 systemd-resolved 36497 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T14:05:51.810992Z APP-INT-01 sshd 956445 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T14:05:52.258726Z APP-INT-01 systemd-logind 36162 - - Removed session 376964.
+<30>1 2024-03-18T14:07:39.043002Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2024-03-18T14:09:10.931559Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3439
+<86>1 2024-03-18T14:10:31.149336Z APP-INT-01 su 959771 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T14:10:35.923336Z APP-INT-01 systemd-logind 36162 - - New session 377240 of user admin.
+<30>1 2024-03-18T14:15:08.665385Z APP-INT-01 systemd-resolved 36497 - - Transaction 352375 switched to TCP with advertised UDP packet size 1232.
+<86>1 2024-03-18T14:15:13.445199Z APP-INT-01 sshd 960272 - - Connection from 10.10.3.10 port 56563 on 10.10.2.30 port 22
+<86>1 2024-03-18T14:15:15.639457Z APP-INT-01 sshd 960272 - - Accepted password for root from 10.10.3.10 port 56563 ssh2
+<86>1 2024-03-18T14:15:15.781614Z APP-INT-01 sshd 960272 - - pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T14:15:16.346831Z APP-INT-01 systemd-logind 36162 - - New session 377283 of user root.
+<86>1 2024-03-18T14:19:23.148627Z APP-INT-01 su 960679 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T14:19:27.088627Z APP-INT-01 systemd-logind 36162 - - New session 377320 of user admin.
+<30>1 2024-03-18T14:19:27.877030Z APP-INT-01 irqbalance 39958 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T14:19:48.351794Z APP-INT-01 irqbalance 39958 - - IRQ 64 affinity hint keeps vector on CPU 3 (mlx5_comp0)
+<86>1 2024-03-18T14:20:03.240115Z APP-INT-01 sshd 960740 - - Connection from 10.10.1.35 port 62401 on 10.10.2.30 port 22
+<86>1 2024-03-18T14:20:05.447291Z APP-INT-01 sshd 960740 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 62401 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T14:20:05.580450Z APP-INT-01 sshd 960740 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:20:06.244707Z APP-INT-01 systemd-logind 36162 - - New session 377328 of user aisha.johnson.
+<30>1 2024-03-18T14:23:59.679643Z APP-INT-01 systemd-resolved 36497 - - Transaction 310669 switched to TCP with advertised UDP packet size 1472.
+<30>1 2024-03-18T14:24:00.487163Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 691709.
+<86>1 2024-03-18T14:24:49.432675Z APP-INT-01 sshd 960740 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:24:50.599541Z APP-INT-01 systemd-logind 36162 - - Removed session 377328.
+<30>1 2024-03-18T14:25:57.090192Z APP-INT-01 systemd-resolved 36497 - - Transaction 255603 switched to UDP+EDNS0 with advertised UDP packet size 512.
+<78>1 2024-03-18T14:30:00.209000Z APP-INT-01 CRON 961674 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:30:21.891321Z APP-INT-01 irqbalance 39958 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<86>1 2024-03-18T14:31:26.260959Z APP-INT-01 sshd 961796 - - Connection from 10.10.3.10 port 58698 on 10.10.2.30 port 22
+<84>1 2024-03-18T14:31:27.038959Z APP-INT-01 sshd 961796 - - Failed password for jennifer.walsh from 10.10.3.10 port 58698 ssh2
+<86>1 2024-03-18T14:31:29.018873Z APP-INT-01 sshd 961796 - - Connection closed by authenticating user jennifer.walsh 10.10.3.10 port 58698 [preauth]
+<30>1 2024-03-18T14:31:48.146964Z APP-INT-01 irqbalance 39958 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2024-03-18T14:33:04.394219Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 161854.
+<30>1 2024-03-18T14:34:46.069748Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 436213.
+<30>1 2024-03-18T14:34:48.431852Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2024-03-18T14:37:15.035172Z APP-INT-01 irqbalance 39958 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2024-03-18T14:38:02.318154Z APP-INT-01 irqbalance 39958 - - Skipping IRQ 64: banned by affinity mask 00000008 (mlx5_comp0)
+<30>1 2024-03-18T14:38:19.586620Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 1 done for snapd-desktop-integration
+<30>1 2024-03-18T14:38:39.521630Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 654100.
+<30>1 2024-03-18T14:39:00.489303Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3440
+<86>1 2024-03-18T14:39:33.431056Z APP-INT-01 sshd 962621 - - Connection from 10.10.1.21 port 58116 on 10.10.2.30 port 22
+<86>1 2024-03-18T14:39:36.686208Z APP-INT-01 sshd 962621 - - Accepted password for lina.nguyen from 10.10.1.21 port 58116 ssh2
+<86>1 2024-03-18T14:39:36.841419Z APP-INT-01 sshd 962621 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T14:39:37.303586Z APP-INT-01 systemd-logind 36162 - - New session 377502 of user lina.nguyen.
+<86>1 2024-03-18T14:40:58.916756Z APP-INT-01 sshd 962769 - - Connection from 10.10.1.21 port 40672 on 10.10.2.30 port 22
+<86>1 2024-03-18T14:41:02.152951Z APP-INT-01 sshd 962769 - - Accepted password for lina.nguyen from 10.10.1.21 port 40672 ssh2
+<86>1 2024-03-18T14:41:02.290169Z APP-INT-01 sshd 962769 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T14:41:02.748405Z APP-INT-01 systemd-logind 36162 - - New session 377517 of user lina.nguyen.
+<30>1 2024-03-18T14:44:27.485933Z APP-INT-01 snapd 36403 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<86>1 2024-03-18T14:46:10.701336Z APP-INT-01 su 959771 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T14:46:13.884336Z APP-INT-01 systemd-logind 36162 - - Removed session 377240.
+<30>1 2024-03-18T14:46:23.572154Z APP-INT-01 systemd-resolved 36497 - - Flushed negative cache scope ens192 after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T14:47:03.234888Z APP-INT-01 su 963340 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<30>1 2024-03-18T14:47:06.495515Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 9 done for snapd-desktop-integration
+<86>1 2024-03-18T14:47:08.038888Z APP-INT-01 systemd-logind 36162 - - New session 377571 of user admin.
+<30>1 2024-03-18T14:50:16.616762Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3442
+<30>1 2024-03-18T14:52:47.574480Z APP-INT-01 systemd-resolved 36497 - - Transaction 650321 switched to TCP with advertised UDP packet size 1472.
+<30>1 2024-03-18T14:53:47.089167Z APP-INT-01 snapd 36403 - - daemon.go:460: gracefully waiting for hook core20.configure
+<78>1 2024-03-18T15:00:00.200000Z APP-INT-01 CRON 964663 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:02:17.876809Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3444
+<30>1 2024-03-18T15:03:31.989234Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 900014.
+<30>1 2024-03-18T15:03:56.072995Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2024-03-18T15:04:38.696322Z APP-INT-01 systemd-resolved 36497 - - Flushed stale cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:04:40.653236Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 542046.
+<86>1 2024-03-18T15:04:48.395812Z APP-INT-01 sshd 962621 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T15:04:49.257654Z APP-INT-01 systemd-logind 36162 - - Removed session 377502.
+<30>1 2024-03-18T15:05:25.950554Z APP-INT-01 systemd-resolved 36497 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:10:54.194538Z APP-INT-01 systemd-resolved 36497 - - Transaction 919296 switched to UDP+EDNS0 with advertised UDP packet size 1472.
+<30>1 2024-03-18T15:11:28.629819Z APP-INT-01 snapd 36403 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T15:16:05.200240Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for lxd
+<30>1 2024-03-18T15:16:47.681488Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 983663.
+<86>1 2024-03-18T15:19:07.422924Z APP-INT-01 sshd 962769 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T15:19:07.812627Z APP-INT-01 systemd-logind 36162 - - Removed session 377517.
+<30>1 2024-03-18T15:19:16.746860Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 138756.
+<30>1 2024-03-18T15:19:38.755203Z APP-INT-01 snapd 36403 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T15:19:42.016179Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 3 done for core20
+<30>1 2024-03-18T15:23:13.854924Z APP-INT-01 systemd-resolved 36497 - - Transaction 149754 switched to TCP with advertised UDP packet size 512.
+<86>1 2024-03-18T15:27:56.083888Z APP-INT-01 su 963340 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T15:27:58.152888Z APP-INT-01 systemd-logind 36162 - - Removed session 377571.
+<30>1 2024-03-18T15:28:12.956476Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 202713.
+<30>1 2024-03-18T15:28:41.494858Z APP-INT-01 systemd-journald 36002 - - Vacuuming done, freed 203.2M of archived journals.
+<30>1 2024-03-18T15:28:51.355495Z APP-INT-01 systemd-resolved 36497 - - Transaction 714943 switched to UDP with advertised UDP packet size 1472.
+<78>1 2024-03-18T15:30:00.237000Z APP-INT-01 CRON 968071 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:30:53.466656Z APP-INT-01 systemd-resolved 36497 - - Transaction 935593 switched to UDP with advertised UDP packet size 512.
+<30>1 2024-03-18T15:30:54.936748Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2024-03-18T15:36:19.983413Z APP-INT-01 snapd 36403 - - taskrunner.go:271: change 3437 task 8 done for microk8s
+<30>1 2024-03-18T15:36:23.458091Z APP-INT-01 irqbalance 39958 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2024-03-18T15:37:41.375815Z APP-INT-01 irqbalance 39958 - - Skipping IRQ 137: banned by affinity mask 00000008 (ens192)
+<86>1 2024-03-18T15:38:52.554627Z APP-INT-01 su 960679 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T15:38:54.058627Z APP-INT-01 systemd-logind 36162 - - Removed session 377320.
+<86>1 2024-03-18T15:40:36.799066Z APP-INT-01 sshd 969290 - - Connection from 10.10.1.35 port 53801 on 10.10.2.30 port 22
+<86>1 2024-03-18T15:40:39.013285Z APP-INT-01 sshd 969290 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 53801 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T15:40:39.088483Z APP-INT-01 sshd 969290 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T15:40:39.834609Z APP-INT-01 systemd-logind 36162 - - New session 378051 of user aisha.johnson.
+<30>1 2024-03-18T15:47:22.479581Z APP-INT-01 snapd 36403 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T15:49:17.313805Z APP-INT-01 systemd-resolved 36497 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T15:54:31.695794Z APP-INT-01 sshd 969290 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T15:54:32.058649Z APP-INT-01 systemd-logind 36162 - - Removed session 378051.
+<78>1 2024-03-18T16:00:00.265000Z APP-INT-01 CRON 971616 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:00:23.662687Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 541879.
+<30>1 2024-03-18T16:03:52.419150Z APP-INT-01 irqbalance 39958 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T16:05:48.365182Z APP-INT-01 snapd 36403 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T16:07:39.753462Z APP-INT-01 systemd-resolved 36497 - - Transaction 332668 switched to TCP with advertised UDP packet size 512.
+<86>1 2024-03-18T16:07:48.002341Z APP-INT-01 su 972570 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<30>1 2024-03-18T16:07:52.590770Z APP-INT-01 irqbalance 39958 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<86>1 2024-03-18T16:07:52.889341Z APP-INT-01 systemd-logind 36162 - - New session 378296 of user admin.
+<86>1 2024-03-18T16:11:42.671312Z APP-INT-01 sshd 973013 - - Connection from 10.10.1.35 port 55905 on 10.10.2.30 port 22
+<86>1 2024-03-18T16:11:44.942547Z APP-INT-01 sshd 973013 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 55905 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T16:11:45.041733Z APP-INT-01 sshd 973013 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:11:45.505948Z APP-INT-01 systemd-logind 36162 - - New session 378330 of user aisha.johnson.
+<30>1 2024-03-18T16:12:01.575315Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 807701.
+<30>1 2024-03-18T16:14:14.521609Z APP-INT-01 irqbalance 39958 - - Skipping IRQ 32: banned by affinity mask 00000001 (nvme0q1)
+<30>1 2024-03-18T16:18:31.168421Z APP-INT-01 irqbalance 39958 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T16:22:22.902051Z APP-INT-01 systemd-resolved 36497 - - Flushed negative cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:22:25.243354Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 328195.
+<30>1 2024-03-18T16:25:13.507300Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3445
+<30>1 2024-03-18T16:25:22.116592Z APP-INT-01 irqbalance 39958 - - IRQ 86 affinity hint keeps vector on CPU 2 (mlx5_comp1)
+<30>1 2024-03-18T16:27:49.064159Z APP-INT-01 systemd-resolved 36497 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<78>1 2024-03-18T16:30:00.144000Z APP-INT-01 CRON 975165 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:40:06.515008Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 725778.
+<30>1 2024-03-18T16:43:17.703431Z APP-INT-01 irqbalance 39958 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2024-03-18T16:44:20.191783Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for lxd
+<78>1 2024-03-18T17:00:00.239000Z APP-INT-01 CRON 978627 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T17:00:05.646779Z APP-INT-01 irqbalance 39958 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<86>1 2024-03-18T17:02:53.158100Z APP-INT-01 sshd 973013 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:02:53.717859Z APP-INT-01 systemd-logind 36162 - - Removed session 378330.
+<30>1 2024-03-18T17:04:33.741897Z APP-INT-01 irqbalance 39958 - - Skipping IRQ 24: banned by affinity mask 00000001 (ens160)
+<30>1 2024-03-18T17:06:56.968235Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 561142.
+<86>1 2024-03-18T17:11:02.558443Z APP-INT-01 sshd 979832 - - Connection from 10.10.1.31 port 52638 on 10.10.2.30 port 22
+<86>1 2024-03-18T17:11:04.787659Z APP-INT-01 sshd 979832 - - Accepted publickey for marcus.chen from 10.10.1.31 port 52638 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:11:04.887839Z APP-INT-01 sshd 979832 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:11:05.418067Z APP-INT-01 systemd-logind 36162 - - New session 378866 of user marcus.chen.
+<30>1 2024-03-18T17:13:10.566292Z APP-INT-01 systemd-resolved 36497 - - Transaction 837468 switched to UDP with advertised UDP packet size 1232.
+<30>1 2024-03-18T17:13:17.785213Z APP-INT-01 systemd-resolved 36497 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 237318.
+<30>1 2024-03-18T17:14:34.996417Z APP-INT-01 irqbalance 39958 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<86>1 2024-03-18T17:15:57.865069Z APP-INT-01 su 980336 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T17:16:03.827069Z APP-INT-01 systemd-logind 36162 - - New session 378912 of user admin.
+<30>1 2024-03-18T17:22:47.553363Z APP-INT-01 snapd 36403 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<86>1 2024-03-18T17:24:08.199494Z APP-INT-01 sshd 981211 - - Connection from 10.10.4.10 port 45232 on 10.10.2.30 port 22
+<86>1 2024-03-18T17:24:10.434683Z APP-INT-01 sshd 981211 - - Accepted publickey for root from 10.10.4.10 port 45232 ssh2
+<86>1 2024-03-18T17:24:10.563878Z APP-INT-01 sshd 981211 - - pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T17:24:11.196132Z APP-INT-01 systemd-logind 36162 - - New session 378984 of user root.
+<86>1 2024-03-18T17:24:24.547236Z APP-INT-01 sshd 981211 - - pam_unix(sshd:session): session closed for user root
+<86>1 2024-03-18T17:24:25.531004Z APP-INT-01 systemd-logind 36162 - - Removed session 378984.
+<86>1 2024-03-18T17:24:49.791341Z APP-INT-01 su 972570 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T17:24:50.926341Z APP-INT-01 systemd-logind 36162 - - Removed session 378296.
+<30>1 2024-03-18T17:27:58.177641Z APP-INT-01 irqbalance 39958 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T17:30:49.532519Z APP-INT-01 snapd 36403 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2024-03-18T17:31:12.958871Z APP-INT-01 systemd-resolved 36497 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:31:26.740396Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3440
+<30>1 2024-03-18T17:31:32.739943Z APP-INT-01 snapd 36403 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2024-03-18T17:33:28.234502Z APP-INT-01 snapd 36403 - - stateengine.go:150: state ensure starting change 3438
+<30>1 2024-03-18T17:34:48.355705Z APP-INT-01 irqbalance 39958 - - Skipping IRQ 16: banned by affinity mask 00000004 (ahci)
+<86>1 2024-03-18T17:36:29.289949Z APP-INT-01 su 982395 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T17:36:32.606949Z APP-INT-01 systemd-logind 36162 - - New session 379094 of user admin.
+<30>1 2024-03-18T17:36:34.950380Z APP-INT-01 irqbalance 39958 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2024-03-18T17:39:56.694164Z APP-INT-01 systemd-resolved 36497 - - Flushed negative cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:40:26.978495Z APP-INT-01 irqbalance 39958 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2024-03-18T17:44:23.272075Z APP-INT-01 snapd 36403 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T17:50:13.010936Z APP-INT-01 irqbalance 39958 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:50:26.175841Z APP-INT-01 irqbalance 39958 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T17:50:28.000005Z APP-INT-01 systemd-resolved 36497 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 151280.
+<86>1 2024-03-18T17:57:02.001000Z APP-INT-01 sshd 960272 - - pam_unix(sshd:session): session closed for user root
+<86>1 2024-03-18T17:57:02.711840Z APP-INT-01 systemd-logind 36162 - - Removed session 377283.

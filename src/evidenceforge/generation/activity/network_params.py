@@ -93,6 +93,17 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         result["public_ntp_servers"] = extend_list(
             default.get("public_ntp_servers", []), overlay["public_ntp_servers"]
         )
+    if "public_dns_resolvers" in overlay:
+        result["public_dns_resolvers"] = merge_keyed_list(
+            default.get("public_dns_resolvers", []),
+            overlay["public_dns_resolvers"],
+            "name",
+        )
+    if "external_client_excluded_cidrs" in overlay:
+        result["external_client_excluded_cidrs"] = extend_list(
+            default.get("external_client_excluded_cidrs", []),
+            overlay["external_client_excluded_cidrs"],
+        )
     if isinstance(overlay.get("dns_tunnel_rtt"), dict):
         result["dns_tunnel_rtt"] = dict(overlay["dns_tunnel_rtt"])
     if "dns_tunnel_response_templates" in overlay:
@@ -152,6 +163,91 @@ def public_ntp_ips() -> list[str]:
         for server in public_ntp_servers()
         if isinstance(server.get("ip"), str) and server["ip"]
     ]
+
+
+def public_dns_resolvers() -> list[dict[str, Any]]:
+    """Return configured public recursive DNS resolver profiles."""
+
+    resolvers = load_network_params().get("public_dns_resolvers", [])
+    return [resolver for resolver in resolvers if isinstance(resolver, dict)]
+
+
+def external_client_excluded_cidrs() -> list[str]:
+    """Return globally assigned CIDRs unsuitable for ordinary external clients."""
+    values = load_network_params().get("external_client_excluded_cidrs", [])
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if isinstance(value, str) and value]
+
+
+def public_dns_resolver_ips(scope_key: str | None = None) -> list[str]:
+    """Return public resolver IPs, optionally pinned to one operator per client scope."""
+
+    resolvers = [
+        resolver
+        for resolver in public_dns_resolvers()
+        if isinstance(resolver.get("ip"), str) and resolver["ip"]
+    ]
+    if scope_key is None:
+        return [str(resolver["ip"]) for resolver in resolvers]
+
+    by_operator: dict[str, list[dict[str, Any]]] = {}
+    for resolver in resolvers:
+        operator = str(resolver.get("operator") or resolver.get("name") or resolver["ip"])
+        by_operator.setdefault(operator, []).append(resolver)
+    if not by_operator:
+        return []
+
+    def _weight(resolver: dict[str, Any]) -> float:
+        try:
+            value = float(resolver.get("weight", 1.0))
+        except (OverflowError, TypeError, ValueError):
+            return 1.0
+        return value if math.isfinite(value) and value > 0 else 1.0
+
+    operators = sorted(by_operator)
+    resolver_weights = [_weight(resolver) for resolver in resolvers]
+    max_weight = max(resolver_weights)
+    operator_weights = [
+        sum(_weight(resolver) / max_weight for resolver in by_operator[operator])
+        for operator in operators
+    ]
+
+    rng = random.Random(_stable_seed(f"public_dns_operator:{scope_key}"))
+    threshold = rng.random() * sum(operator_weights)
+    cumulative = 0.0
+    selected_operator = operators[-1]
+    for operator, weight in zip(operators, operator_weights, strict=True):
+        cumulative += weight
+        if threshold <= cumulative:
+            selected_operator = operator
+            break
+    selected = sorted(
+        by_operator[selected_operator],
+        key=lambda resolver: (
+            -_weight(resolver),
+            str(resolver.get("name", "")),
+        ),
+    )
+    return [str(resolver["ip"]) for resolver in selected]
+
+
+def activity_dns_resolver_ips(activity_generator: Any, source_ip: str) -> list[str]:
+    """Read resolver policy through the canonical generator or a thin compatibility adapter."""
+
+    resolver = getattr(activity_generator, "_dns_resolver_ips_for_source", None)
+    if callable(resolver):
+        resolved = resolver(source_ip)
+        if isinstance(resolved, list | tuple):
+            cleaned = [value for value in resolved if isinstance(value, str) and value]
+            if cleaned:
+                return cleaned
+    configured = getattr(activity_generator, "_dns_server_ips", None)
+    if isinstance(configured, list | tuple):
+        cleaned = [value for value in configured if isinstance(value, str) and value]
+        if cleaned:
+            return cleaned
+    return public_dns_resolver_ips(source_ip)
 
 
 def dns_tunnel_rtt_range() -> tuple[float, float]:

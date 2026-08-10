@@ -1,0 +1,14 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 55,
+  "automated_eval": {"score": 95.64024422787317, "status": "PASS", "records": 82076, "interpretation": "PASS / high quality", "pillars": {"parseability": 100.0, "plausibility": 97.23772258381749, "causality": 88.84355225062569, "timing": 95.59962759631185}},
+  "blind_initial": {
+    "threat_hunter": {"assessment": "Inconclusive", "verdict_confidence": 76, "synthetic_confidence": 48, "interpretation": "uncertain", "report_path": "blind-threat-hunter.md"},
+    "detection_engineer": {"assessment": "Synthetic", "verdict_confidence": 87, "synthetic_confidence": 68, "interpretation": "likely synthetic", "report_path": "blind-detection.md"},
+    "network_forensics": {"assessment": "Real", "verdict_confidence": 74, "synthetic_confidence": 32, "interpretation": "likely real", "report_path": "blind-network.md"},
+    "host_forensics": {"assessment": "Synthetic", "verdict_confidence": 84, "synthetic_confidence": 74, "interpretation": "likely synthetic", "report_path": "blind-host.md"},
+    "average_synthetic_confidence": 55.5,
+    "average_interpretation": "mixed/inconclusive"
+  },
+  "deliberation": {"triggered": true, "reason": "verdict disagreement and 42-point score spread", "average_synthetic_confidence": 65.75, "average_interpretation": "likely synthetic", "report_path": "deliberation.md", "reviewers": {"threat_hunter": {"assessment": "Inconclusive", "verdict_confidence": 80, "synthetic_confidence": 60}, "detection_engineer": {"assessment": "Synthetic", "verdict_confidence": 91, "synthetic_confidence": 76}, "network_forensics": {"assessment": "Inconclusive", "verdict_confidence": 70, "synthetic_confidence": 49}, "host_forensics": {"assessment": "Synthetic", "verdict_confidence": 88, "synthetic_confidence": 78}}}
+}

@@ -22,7 +22,15 @@
 
 """EvidenceForge utility functions."""
 
-from .files import ensure_directory, load_scenario_yaml, load_yaml, validate_output_path, write_yaml
+from .files import (
+    ScenarioIncludeBudget,
+    ensure_directory,
+    load_scenario_yaml,
+    load_yaml,
+    resolve_safe_child_path,
+    validate_output_path,
+    write_yaml,
+)
 from .ids import generate_zeek_uid
 from .logging import redact_secrets
 from .time import (
@@ -47,6 +55,8 @@ __all__ = [
     # File utilities
     "load_yaml",
     "load_scenario_yaml",
+    "ScenarioIncludeBudget",
+    "resolve_safe_child_path",
     "write_yaml",
     "ensure_directory",
     "validate_output_path",

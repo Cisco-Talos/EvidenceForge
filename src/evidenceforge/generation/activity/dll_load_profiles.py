@@ -14,17 +14,25 @@ Provides a single lookup: exe basename → list of DLL dicts with defaults appli
 from __future__ import annotations
 
 import logging
+import random
 from typing import Any
+
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
 _VALID_SIGNATURE_STATUSES = {"Valid", "Expired", "Revoked", "Unavailable"}
+_VALID_LOAD_PHASES = {"startup", "runtime"}
 
 _CACHED_PROFILES: dict[str, list[dict[str, Any]]] | None = None
 _CACHED_MODULE_PE: dict[str, tuple[str, str, str, str, str]] | None = None
 
 
-def _apply_defaults(entry: dict[str, Any]) -> dict[str, Any]:
+def _apply_defaults(
+    entry: dict[str, Any],
+    *,
+    default_load_phase: str = "runtime",
+) -> dict[str, Any]:
     """Apply default field values to a loaded_modules entry."""
     return {
         "path": entry["path"],
@@ -32,6 +40,8 @@ def _apply_defaults(entry: dict[str, Any]) -> dict[str, Any]:
         "signature": entry.get("signature", "Microsoft Windows"),
         "signature_status": entry.get("signature_status", "Valid"),
         "pe_metadata": entry.get("pe_metadata"),
+        "load_phase": entry.get("load_phase", default_load_phase),
+        "startup_probability": entry.get("startup_probability", 1.0),
     }
 
 
@@ -57,6 +67,30 @@ def _validate_entry(entry: dict[str, Any], source: str) -> bool:
             source,
             sig_status,
             _VALID_SIGNATURE_STATUSES,
+        )
+        return False
+    load_phase = entry.get("load_phase")
+    if load_phase is not None and load_phase not in _VALID_LOAD_PHASES:
+        logger.error(
+            "DLL profile path %r in %s has invalid load_phase %r (must be one of %s) — skipping",
+            path,
+            source,
+            load_phase,
+            _VALID_LOAD_PHASES,
+        )
+        return False
+    startup_probability = entry.get("startup_probability", 1.0)
+    if (
+        not isinstance(startup_probability, int | float)
+        or isinstance(startup_probability, bool)
+        or not 0.0 <= float(startup_probability) <= 1.0
+    ):
+        logger.error(
+            "DLL profile path %r in %s has invalid startup_probability %r "
+            "(must be between 0 and 1) — skipping",
+            path,
+            source,
+            startup_probability,
         )
         return False
     return True
@@ -107,7 +141,7 @@ def load_dll_profiles() -> dict[str, list[dict[str, Any]]]:
     common = []
     for entry in common_raw:
         if _validate_entry(entry, "common_loaded_modules"):
-            common.append(_apply_defaults(entry))
+            common.append(_apply_defaults(entry, default_load_phase="startup"))
     profiles["_common"] = common
 
     # process_loaded_modules section (keyed by exe basename)
@@ -116,7 +150,7 @@ def load_dll_profiles() -> dict[str, list[dict[str, Any]]]:
         validated = []
         for entry in modules or []:
             if _validate_entry(entry, f"process_loaded_modules.{exe_name}"):
-                validated.append(_apply_defaults(entry))
+                validated.append(_apply_defaults(entry, default_load_phase="runtime"))
         if validated:
             profiles[key] = validated
 
@@ -133,7 +167,7 @@ def load_dll_profiles() -> dict[str, list[dict[str, Any]]]:
             validated = []
             for entry in modules:
                 if _validate_entry(entry, f"system_services.{exe}"):
-                    validated.append(_apply_defaults(entry))
+                    validated.append(_apply_defaults(entry, default_load_phase="startup"))
             if validated:
                 # Merge with any existing profile (e.g., from process_loaded_modules)
                 existing = profiles.get(key, [])
@@ -160,7 +194,7 @@ def load_dll_profiles() -> dict[str, list[dict[str, Any]]]:
         validated = []
         for entry in modules:
             if _validate_entry(entry, f"application_catalog.{app_id}"):
-                validated.append(_apply_defaults(entry))
+                validated.append(_apply_defaults(entry, default_load_phase="startup"))
         if validated:
             existing = profiles.get(key, [])
             existing_paths = {e["path"].lower() for e in existing}
@@ -292,3 +326,80 @@ def get_dlls_for_process(exe_basename: str) -> list[dict[str, Any]]:
     common = list(profiles.get("_common", []))
     specific = profiles.get(exe_basename.lower(), [])
     return common + specific
+
+
+def get_startup_dlls_for_process(exe_basename: str) -> list[dict[str, Any]]:
+    """Return modules declared for process initialization in loader order."""
+    return [
+        module for module in get_dlls_for_process(exe_basename) if module["load_phase"] == "startup"
+    ]
+
+
+def select_startup_dlls_for_process(
+    exe_basename: str,
+    *,
+    seed_parts: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """Select one deterministic scoped startup dependency sequence.
+
+    The catalog declares possible imports and their occurrence likelihood. This
+    function makes the canonical profile choice once so every process using that
+    scope, and every source observing it, sees the same dependency set.
+    """
+    selected: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for module in get_startup_dlls_for_process(exe_basename):
+        normalized_path = str(module["path"]).replace("/", "\\").lower()
+        if normalized_path in seen_paths:
+            continue
+        probability = float(module.get("startup_probability", 1.0))
+        if probability <= 0.0:
+            continue
+        if probability < 1.0:
+            seed = ":".join(
+                (
+                    "startup-module-selection",
+                    exe_basename.lower(),
+                    *(str(part) for part in seed_parts),
+                    normalized_path,
+                )
+            )
+            if random.Random(_stable_seed(seed)).random() >= probability:
+                continue
+        selected.append(module)
+        seen_paths.add(normalized_path)
+    return selected
+
+
+def get_runtime_dlls_for_process(exe_basename: str) -> list[dict[str, Any]]:
+    """Return process-compatible modules that may load after initialization."""
+    return [
+        module
+        for module in load_dll_profiles().get(exe_basename.lower(), [])
+        if module["load_phase"] == "runtime"
+    ]
+
+
+def module_is_compatible_with_process(exe_basename: str, module_path: str) -> bool:
+    """Return whether a configured non-OS module belongs to the executable.
+
+    Windows installation-tree modules are shared operating-system components and
+    remain legal for any Windows process. Unknown paths are accepted for explicit
+    action-specific adapters such as MMC snap-ins. A non-OS path already declared
+    in the unified profile catalog is exclusive to its declared executable owners.
+    """
+    if _is_windows_system_module_path(module_path):
+        return True
+
+    module_name = _extract_exe_basename(module_path)
+    owners = {
+        profile_exe
+        for profile_exe, modules in load_dll_profiles().items()
+        if profile_exe != "_common"
+        and any(
+            not _is_windows_system_module_path(module["path"])
+            and _extract_exe_basename(module["path"]) == module_name
+            for module in modules
+        )
+    }
+    return not owners or exe_basename.lower() in owners

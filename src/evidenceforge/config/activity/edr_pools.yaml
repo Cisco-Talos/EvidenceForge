@@ -25,6 +25,31 @@ group_policy_extension_guids:
 # impossible side effects such as dsquery.exe writing installers or browsers
 # deleting Security.evtx.
 file_side_effect_profiles:
+  - name: windows_error_reporting
+    executables: ["werfault.exe", "wermgr.exe"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
+
+  - name: windows_defender_history
+    executables: ["msmpeng.exe", "mpcmdrun.exe"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
+
+  - name: windows_explorer_state
+    executables: ["explorer.exe"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\report-{rand}.docx.lnk"
+      - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
+
+  - name: windows_office_cache
+    executables: ["winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Office\\16.0\\OfficeFileCache\\{rand}.dat"
+
   - name: chrome_cache
     executables: ["chrome.exe", "chrome"]
     actions: ["create", "modify"]
@@ -57,12 +82,17 @@ file_side_effect_profiles:
       - "/home/{user}/.cache/{hex}.tmp"
       - "/home/{user}/.bash_history"
 
-  - name: package_manager
-    executables: ["apt", "apt-get", "dnf", "yum", "dpkg", "rpm"]
+  - name: package_manager_debian
+    executables: ["apt", "apt-get", "dpkg"]
     actions: ["modify"]
     paths_linux:
       - "/var/log/apt/history.log"
       - "/var/lib/dpkg/status"
+
+  - name: package_manager_rpm
+    executables: ["dnf", "yum", "rpm"]
+    actions: ["modify"]
+    paths_linux:
       - "/var/lib/dnf/history.sqlite"
 
   - name: linux_systemd_timesync_state
@@ -185,6 +215,32 @@ file_side_effect_profiles:
     paths_linux:
       - "/tmp/.tmp-{rand}"
 
+# Source-native ownership constraints for otherwise generic ambient pools.
+# A matching artifact is eligible only for the listed executable families.
+file_ownership_rules:
+  - path_contains: ["\\Windows\\WER\\ReportQueue\\"]
+    executables: ["werfault.exe", "wermgr.exe"]
+  - path_contains: ["\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\"]
+    executables: ["msmpeng.exe", "mpcmdrun.exe"]
+  - path_contains: ["\\Windows\\SoftwareDistribution\\"]
+    executables: ["tiworker.exe", "usoclient.exe", "wuauclt.exe", "msiexec.exe"]
+  - path_contains: ["\\Microsoft\\Office\\16.0\\OfficeFileCache\\"]
+    executables: ["winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe"]
+  - path_contains: ["\\Microsoft\\Windows\\Recent\\"]
+    executables: ["explorer.exe", "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe"]
+
+registry_ownership_rules:
+  - key_contains: ["\\Component Based Servicing\\"]
+    executables: ["trustedinstaller.exe", "tiworker.exe", "dism.exe", "poqexec.exe"]
+  - key_contains: ["\\Windows Defender\\"]
+    executables: ["msmpeng.exe", "mpcmdrun.exe", "securityhealthservice.exe"]
+  - key_contains: ["\\Microsoft\\Office\\"]
+    executables: ["winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe"]
+  - key_contains: ["\\Explorer\\", "\\Windows\\Shell\\"]
+    executables: ["explorer.exe"]
+  - key_contains: ["\\Installer\\", "\\CurrentVersion\\Uninstall\\", "\\CurrentVersion\\App Paths\\"]
+    executables: ["msiexec.exe"]
+
 installed_software_products:
   - name: "Microsoft Update Health Tools"
     publisher: "Microsoft Corporation"
@@ -235,7 +291,6 @@ file_paths_windows:
   - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
   # System paths
   - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
-  - "C:\\Windows\\Temp\\{rand}.tmp"
   - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
   - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
 

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
     defender_platform_version,
+    file_path_templates_for_process,
     file_path_templates_for_user,
     get_dll_pool,
     get_file_paths,
@@ -20,6 +21,7 @@ from evidenceforge.generation.activity.edr_pools import (
     materialize_edr_template,
     materialize_edr_template_group,
     normalize_defender_platform_path,
+    registry_entries_for_process,
     select_ambient_file_churn_effect,
     select_command_file_side_effect,
     select_file_side_effect,
@@ -178,7 +180,19 @@ class TestLoadEdrPools:
 
         assert effect is not None
         _action, path = effect
-        assert path.startswith(("/var/log/apt/", "/var/lib/dpkg/", "/var/lib/dnf/"))
+        assert path.startswith(("/var/log/apt/", "/var/lib/dpkg/"))
+        assert not path.startswith("/var/lib/dnf/")
+
+    def test_root_dnf_keeps_only_rpm_state_side_effects(self):
+        effect = select_file_side_effect(
+            process_name="/usr/bin/dnf",
+            command_line="dnf makecache --timer",
+            os_category="linux",
+            rng=random.Random(5),
+            user="root",
+        )
+
+        assert effect == ("modify", "/var/lib/dnf/history.sqlite")
 
 
 class TestFilePaths:
@@ -278,6 +292,34 @@ class TestFilePaths:
         )
 
         assert effect is None
+
+    def test_generic_windows_paths_exclude_unowned_system_temp_template(self):
+        """Generic churn must not assign one Windows Temp grammar to arbitrary processes."""
+        paths = get_file_paths("windows")
+
+        assert not any(path.startswith("C:\\Windows\\Temp\\") for path in paths)
+
+        installer_paths = {
+            effect[1]
+            for seed in range(20)
+            if (
+                effect := select_file_side_effect(
+                    process_name=r"C:\Windows\System32\msiexec.exe",
+                    command_line="msiexec.exe /i package.msi /quiet",
+                    os_category="windows",
+                    rng=random.Random(seed),
+                    user="SYSTEM",
+                )
+            )
+            is not None
+        }
+        assert any(path.startswith(r"C:\Windows\Temp\MSI") for path in installer_paths)
+        assert all(
+            path.startswith(
+                (r"C:\Windows\Temp\MSI", "C:\\Windows\\SoftwareDistribution\\Download\\")
+            )
+            for path in installer_paths
+        )
 
     def test_linux_generic_paths_avoid_action_incompatible_sources(self):
         paths = get_file_paths("linux")
@@ -442,6 +484,41 @@ class TestRegistryKeys:
         assert not any(r"Services\DNS\Parameters\ListenAddresses" in key for key in rendered)
         assert not any(r"App Paths\WinSCP.exe" in key for key in rendered)
         assert not any("WDigest" in key for key in rendered)
+
+    def test_registry_artifacts_require_source_native_process_owners(self):
+        entries = get_registry_keys_hkcu() + get_registry_keys_hklm()
+
+        assert not any(
+            "Component Based Servicing" in key
+            for key, _name, _value in registry_entries_for_process(entries, "svchost.exe")
+        )
+        assert any(
+            "Component Based Servicing" in key
+            for key, _name, _value in registry_entries_for_process(entries, "TiWorker.exe")
+        )
+        assert not any(
+            "Microsoft\\Office" in key
+            for key, _name, _value in registry_entries_for_process(entries, "powershell.exe")
+        )
+        assert any(
+            "Microsoft\\Office" in key
+            for key, _name, _value in registry_entries_for_process(entries, "WINWORD.EXE")
+        )
+
+
+def test_windows_ambient_file_artifacts_require_source_native_process_owners():
+    templates = get_file_paths("windows")
+
+    generic = file_path_templates_for_process(templates, "svchost.exe")
+    assert not any("\\WER\\ReportQueue\\" in path for path in generic)
+    assert not any("\\DetectionHistory\\" in path for path in generic)
+    assert not any("\\SoftwareDistribution\\" in path for path in generic)
+
+    defender = file_path_templates_for_process(templates, "MsMpEng.exe")
+    assert any("\\DetectionHistory\\" in path for path in defender)
+
+    servicing = file_path_templates_for_process(templates, "TiWorker.exe")
+    assert any("\\SoftwareDistribution\\" in path for path in servicing)
 
 
 class TestDllPool:

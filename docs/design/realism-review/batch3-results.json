@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "review_baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "recorded_at": "2026-08-07",
+  "branch": "codex/batch3-network-contracts",
+  "remediation_batch": 3,
+  "scope": {
+    "finding_ids": ["REAL-005", "REAL-007", "REAL-009"],
+    "verified_siblings": [
+      "dynamic PAT lifetime ownership",
+      "inbound ICMP static-NAT projection",
+      "Zeek analyzer-confirmed service semantics",
+      "sensor clock coherence",
+      "Linux PID and eCAR source-timing gate regression"
+    ]
+  },
+  "commands": {
+    "generate": "uv run eforge generate /private/tmp/eforge-realism-review/branch-enterprise.yaml -o OUTPUT",
+    "probe": "uv run python scripts/realism_review_probe.py OUTPUT --output REPORT",
+    "evaluate": "uv run eforge eval OUTPUT -s /private/tmp/eforge-realism-review/branch-enterprise.yaml --format text",
+    "repeat_compare": "diff -qr OUTPUT OUTPUT_REPEAT",
+    "config": "uv run eforge validate-config",
+    "tests_non_slow": "uv run pytest --no-cov",
+    "tests_parallel_slow": "uv run pytest --no-cov --include-slow -q tests/integration/test_parallel_generation.py",
+    "lint": "uv run ruff check .",
+    "format_check": "uv run ruff format --check ."
+  },
+  "integrated_dataset": {
+    "scenario": "/private/tmp/eforge-realism-review/branch-enterprise.yaml",
+    "profile": "enterprise_standard",
+    "duration": "6h",
+    "output": "/private/tmp/eforge-batch3-network-gate-v3/branch-enterprise",
+    "repeat": "/private/tmp/eforge-batch3-network-gate-v3/branch-enterprise-repeat",
+    "data_files": 40,
+    "data_bytes": 32233729,
+    "data_manifest_sha256": "26125f304d0670fb4e19c15e611d538339268b152459d9f1d2a362f5afc7b401",
+    "repeat_equivalence": "byte-identical complete output tree"
+  },
+  "probe": {
+    "baseline_output": "/private/tmp/eforge-postbatch2-lifecycle-loop5b/branch-enterprise",
+    "baseline_report": "/private/tmp/eforge-batch3-old-probe.json",
+    "final_report": "/private/tmp/eforge-batch3-network-gate-v3/probe.json",
+    "baseline": {
+      "errors": 103,
+      "warnings": 2,
+      "by_check": {
+        "asa_pat_lifetime": 5,
+        "asa_inbound_icmp_nat": 35,
+        "zeek_file_interval": 26,
+        "zeek_unconfirmed_service": 37
+      }
+    },
+    "final": {
+      "errors": 0,
+      "warnings": 2,
+      "batch3_checks": {
+        "asa_pat_lifetime": 0,
+        "asa_inbound_icmp_nat": 0,
+        "ids_transport_semantics": 0,
+        "zeek_file_interval": 0,
+        "zeek_unconfirmed_service": 0,
+        "ecar_linux_pid_chronology": 0
+      },
+      "scheduled_batch5_warnings": {
+        "zeek_aaaa_success_distribution": 1,
+        "zeek_ocsp_duration_distribution": 1
+      }
+    }
+  },
+  "evaluation": {
+    "records": 49969,
+    "sources": 18,
+    "overall_score_rounded": 96,
+    "acceptance_passed": true,
+    "spec_conformance": 100,
+    "format_constraints": 100,
+    "ids_correlation_integrity": 100,
+    "causal_ordering": 100,
+    "event_presence": 100,
+    "temporal_integrity": 100
+  },
+  "quality_gates": [
+    {
+      "name": "configuration_validation",
+      "status": "passed",
+      "result": "0 errors, 0 warnings, 0 info items across 87 files"
+    },
+    {
+      "name": "ruff_check",
+      "status": "passed",
+      "result": "All checks passed"
+    },
+    {
+      "name": "ruff_format_check",
+      "status": "passed",
+      "result": "453 files already formatted"
+    },
+    {
+      "name": "non_slow_tests",
+      "status": "passed",
+      "result": "5153 passed, 41 skipped in 235.52 seconds"
+    },
+    {
+      "name": "targeted_parallel_slow_tests",
+      "status": "passed",
+      "result": "5 passed in 3.96 seconds"
+    },
+    {
+      "name": "integrated_evaluation",
+      "status": "passed",
+      "result": "96/100 over 49,969 records from 18 sources; all hard acceptance requirements passed"
+    }
+  ],
+  "limitations": [
+    "The scenario retains its documented undeclared portal hostname warning; this is outside Batch 3.",
+    "Uniform OCSP file duration and universally successful AAAA answers remain scheduled for Batch 5.",
+    "Generated datasets and probe reports remain temporary and untracked; commands, locations, counts, and hashes are durable here."
+  ]
+}

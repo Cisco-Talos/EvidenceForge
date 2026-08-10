@@ -26,6 +26,7 @@ import random
 import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -162,6 +163,33 @@ def test_rsyslog_fd_state_stays_process_local(linux_system):
     assert min(fds) >= 4
     assert max(fds) <= 64
     assert fds == sorted(fds)
+
+
+def test_rsyslog_ambient_health_uses_durable_queue_state(linux_system):
+    """Ambient rsyslog rows report evolving state without inventing reloads."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    rng = random.Random(81)
+    entry = {
+        "app": "rsyslogd",
+        "params": {
+            "relay_target": ["logrelay01"],
+            "queue_name": ["fwdRule1"],
+            "worker_count": ["9"],
+        },
+        "messages": [
+            "omfwd: target {relay_target} using disk-assisted queue {queue_name}, "
+            "checkpoint {checkpoint}"
+        ],
+    }
+
+    first = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
+    second = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
+
+    first_checkpoint = int(first.rsplit(" ", 1)[-1])
+    second_checkpoint = int(second.rsplit(" ", 1)[-1])
+    assert second_checkpoint > first_checkpoint
+    assert "reload" not in first.lower()
+    assert "reload" not in second.lower()
 
 
 def test_journald_housekeeping_is_sparse_over_visible_window(linux_system):
@@ -333,6 +361,33 @@ def test_polkit_action_messages_pair_action_with_source_native_program(linux_sys
         path = re.search(r"\[([^]]+)\]", message)
         if path is not None:
             assert path.group(1) in allowed_paths[action]
+
+
+def test_polkit_timezone_mutation_is_workstation_only_and_single_use(linux_system, state_manager):
+    """Baseline timezone mutation is never a recurring server-side action."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine._scenario_tz = ZoneInfo("America/New_York")
+    entry = {
+        "params": {"action_id": ["org.freedesktop.timedate1.set-timezone"]},
+    }
+    rng = random.Random(7)
+
+    action, process = engine._polkit_action_profile_for_system(entry, rng, linux_system)
+
+    assert action == "org.freedesktop.systemd1.manage-units"
+    assert process == "/usr/bin/systemctl"
+
+    workstation = linux_system.model_copy(update={"type": "workstation"})
+    action, process = engine._polkit_action_profile_for_system(entry, rng, workstation)
+    command = engine._polkit_action_command_line(action, process, rng, workstation)
+    next_action, next_process = engine._polkit_action_profile_for_system(entry, rng, workstation)
+
+    assert command.startswith("/usr/bin/timedatectl set-timezone ")
+    assert not command.endswith(" America/New_York")
+    assert engine._linux_effective_timezones[workstation.hostname] in command
+    assert next_action == "org.freedesktop.systemd1.manage-units"
+    assert next_process == "/usr/bin/systemctl"
 
 
 def test_polkit_action_messages_materialize_companion_process(linux_system, state_manager):
@@ -600,6 +655,77 @@ def test_non_sudo_extra_syslog_limits_remain_literal(linux_system):
     )
 
 
+def test_unattended_upgrade_limits_are_host_conditioned(linux_system):
+    """Unattended-upgrade caps must not become identical fleet-wide quotas."""
+    entry = {
+        "app": "unattended-upgr",
+        "messages": ["Checking", "No packages"],
+        "max_per_host_window": 8,
+    }
+    window_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    systems = [
+        linux_system.model_copy(
+            update={
+                "hostname": f"LINUX-UPGRADE-{index:02d}",
+                "type": "server",
+                "roles": ["web_server"] if index % 2 else ["mail_server"],
+            }
+        )
+        for index in range(16)
+    ]
+
+    first = [_extra_syslog_effective_limit(system, entry, window_start) for system in systems]
+    second = [_extra_syslog_effective_limit(system, entry, window_start) for system in systems]
+
+    assert first == second
+    assert all(0 <= count <= 8 for count in first)
+    assert len(set(first)) >= 3
+    assert sum(count == 8 for count in first) <= 2
+
+
+def test_package_maintenance_uses_one_refresh_window_per_host(linux_system):
+    """Successful repository traffic clusters once instead of restarting minutes later."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    first = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "security.ubuntu.com",
+        first,
+    )
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "archive.ubuntu.com",
+        first + timedelta(minutes=2),
+    )
+    assert not engine._package_maintenance_connection_allowed(
+        linux_system,
+        "security.ubuntu.com",
+        first + timedelta(minutes=6),
+    )
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "security.ubuntu.com",
+        first + timedelta(hours=12),
+    )
+    assert engine._package_maintenance_connection_allowed(
+        linux_system,
+        "api.github.com",
+        first + timedelta(minutes=7),
+    )
+
+
+def test_ambient_registry_noise_emits_only_state_changes():
+    """Repeated writes of an unchanged ambient value are suppressed."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    target = r"HKLM\SOFTWARE\Policies\Example\Enabled"
+
+    assert engine._ambient_registry_write_changes_state("WS-01", target, "DWORD (0x1)")
+    assert not engine._ambient_registry_write_changes_state("WS-01", target, "DWORD (0x1)")
+    assert engine._ambient_registry_write_changes_state("WS-01", target, "DWORD (0x0)")
+    assert engine._ambient_registry_write_changes_state("WS-02", target, "DWORD (0x1)")
+
+
 def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     """Anacron syslog should be a coherent daily run, not random repeated fragments."""
     engine = type("FakeEngine", (object,), {})()
@@ -771,6 +897,53 @@ def test_cron_schedule_without_slot_jitter_stays_minute_aligned(linux_system):
     assert len(fire_times) == 2
     assert all(fire_time.second == 0 for fire_time in fire_times)
     assert all(fire_time.microsecond == 0 for fire_time in fire_times)
+
+
+def test_scheduled_tasks_execute_in_timestamp_order_not_config_order(linux_system):
+    """Scheduled process state should follow occurrence time across task definitions."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    later_systemd_task = {
+        "service": "php-sessionclean",
+        "type": "systemd_timer",
+        "frequency": "daily",
+        "typical_hour": 12,
+        "jitter_minutes": 1,
+        "distro": "debian",
+    }
+    earlier_cron_task = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "frequency": "daily",
+        "typical_hour": 12,
+        "jitter_minutes": 1,
+        "distro": "debian",
+        "cron_user": "sysstat",
+        "cron_commands": {"debian": "debian-sa1 1 1"},
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [later_systemd_task, earlier_cron_task]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            random.Random(11),
+            {"cron": 1337, "systemd": 1},
+            False,
+            False,
+        )
+
+    calls = engine._emit_scheduled_event.call_args_list
+    assert [call.args[0]["service"] for call in calls] == [
+        "debian-sa1",
+        "php-sessionclean",
+    ]
+    assert [call.args[2] for call in calls] == sorted(call.args[2] for call in calls)
 
 
 def test_resolve_cron_command_rejects_non_string_overlay_values():
@@ -1111,6 +1284,58 @@ class TestGenerateSystemProcess:
             and c[0][0].process.image.endswith("spoolsv.exe")
         ]
         assert len(security_creates) == 1
+
+    def test_reuses_named_svchost_service_but_not_other_services(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Each `svchost -s` service name owns at most one active process."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+
+        schedule_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s Schedule",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+        reused_schedule_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s Schedule",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+        bits_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=15),
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s BITS",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert reused_schedule_pid == schedule_pid
+        assert bits_pid != schedule_pid
+        service_creates = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "system_process_create"
+            and call[0][0].process.image.endswith("svchost.exe")
+        ]
+        assert [event.process.command_line for event in service_creates] == [
+            "svchost.exe -k netsvcs -p -s Schedule",
+            "svchost.exe -k netsvcs -p -s BITS",
+        ]
 
     def test_stale_cleanup_preserves_catalog_singleton_service_agents(
         self, win_system, timestamp, state_manager

@@ -25,7 +25,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.emitters.zeek_files import (
     _bounded_file_transfer_observation,
@@ -45,11 +45,11 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_pe.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
-        return event.event_type in self._supported_types and event.pe is not None
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
+        return event.event_type in self._supported_types and event.protocol.pe is not None
 
-    def emit(self, event: SecurityEvent) -> None:
-        pe = event.pe
+    def emit(self, event: CanonicalOccurrence) -> None:
+        pe = event.protocol.pe
         event_data: dict[str, Any] = {
             "ts": _pe_analyzer_timestamp(event),
             "id": pe.id,
@@ -71,6 +71,7 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
             **self._sensor_metadata(
                 event,
                 self.format_def.name if self.format_def else "zeek_pe",
+                analyzer_file_id=pe.id,
             ),
         }
         self.emit_event(event_data)
@@ -83,12 +84,12 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
         return self._render_zeek_json(event_data)
 
 
-def _pe_analyzer_timestamp(event: SecurityEvent) -> datetime:
+def _pe_analyzer_timestamp(event: CanonicalOccurrence) -> datetime:
     """Return a PE analyzer time after the owning files.log artifact."""
-    pe = event.pe
+    pe = event.protocol.pe
     if pe is None:
         return event.timestamp
-    if event.network is not None and event.file_transfer is not None:
+    if event.network is not None and event.protocol.primary_file_transfer is not None:
         file_ts, file_duration = _bounded_file_transfer_observation(
             event,
             min_start=_related_http_analyzer_timestamp(event),

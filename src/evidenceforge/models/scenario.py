@@ -33,6 +33,7 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 """
 
 import ipaddress
+import math
 import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -1069,8 +1070,8 @@ class _PeriodicEventBase(_EventSpecBase):
     @classmethod
     def validate_positive_rate(cls, v: float | None) -> float | None:
         """Rate must be positive."""
-        if v is not None and v <= 0:
-            raise ValueError("rate must be greater than 0")
+        if v is not None and (not math.isfinite(v) or v <= 0):
+            raise ValueError("rate must be finite and greater than 0")
         return v
 
     @model_validator(mode="after")
@@ -2486,6 +2487,12 @@ class Scenario(BaseModel):
     """
 
     version: str = Field(default="1.0")
+    generation_seed: int = Field(
+        default=42,
+        ge=0,
+        le=2**64 - 1,
+        description="Public deterministic seed controlling every generation substream.",
+    )
     name: str = Field(..., pattern="^[a-zA-Z0-9_-]+$")
     description: str
     environment: Environment

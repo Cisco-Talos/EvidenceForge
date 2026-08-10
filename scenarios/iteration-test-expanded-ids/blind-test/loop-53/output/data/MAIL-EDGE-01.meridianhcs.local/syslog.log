@@ -1,0 +1,513 @@
+<30>1 2024-03-18T12:00:49.516135Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 387984.
+<86>1 2024-03-18T12:01:04.547306Z MAIL-EDGE-01 sshd 3766849 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:01:04.880122Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 272140.
+<30>1 2024-03-18T12:01:52.087781Z MAIL-EDGE-01 unattended-upgr 29078 - - Package tzdata kept back for phased update percentage 70
+<30>1 2024-03-18T12:05:14.664044Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T12:05:55.549876Z MAIL-EDGE-01 rsyslogd 19786 - - omfwd: target logrelay01 using disk-assisted queue local-spool, checkpoint 90354
+<30>1 2024-03-18T12:05:58.629246Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.97'
+<78>1 2024-03-18T12:06:00.133000Z MAIL-EDGE-01 CRON 3769545 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:06:06.393276Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1243
+<30>1 2024-03-18T12:06:26.058000Z MAIL-EDGE-01 anacron 17712 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:06:26.983538Z MAIL-EDGE-01 anacron 17712 - - Will run job `cron.daily' in 5 min.
+<30>1 2024-03-18T12:08:34.841113Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 370241.
+<30>1 2024-03-18T12:08:53.125492Z MAIL-EDGE-01 rsyslogd 19786 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 90783
+<30>1 2024-03-18T12:09:06.090535Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 122: banned by affinity mask 00000001 (nvme0q2)
+<30>1 2024-03-18T12:09:06.120199Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 32 affinity hint keeps vector on CPU 2 (nvme0q1)
+<30>1 2024-03-18T12:10:07.584033Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.98'
+<85>1 2024-03-18T12:10:36.586047Z MAIL-EDGE-01 sudo 3770177 - - ops : TTY=pts/0 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/journalctl -u imaps --since "15 min ago"
+<86>1 2024-03-18T12:10:36.845047Z MAIL-EDGE-01 sudo 3770177 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T12:10:42.570499Z MAIL-EDGE-01 sudo 3770177 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:10:43.384206Z MAIL-EDGE-01 unattended-upgr 29078 - - dpkg --status-fd: processing triggers for man-db (openssl)
+<30>1 2024-03-18T12:11:30.877932Z MAIL-EDGE-01 anacron 17712 - - Job `cron.daily' started
+<30>1 2024-03-18T12:11:34.198293Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.99'
+<86>1 2024-03-18T12:11:37.567547Z MAIL-EDGE-01 sshd 3770315 - - Connection from 10.10.1.35 port 59093 on 10.10.2.25 port 22
+<86>1 2024-03-18T12:11:39.808798Z MAIL-EDGE-01 sshd 3770315 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 59093 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T12:11:39.895968Z MAIL-EDGE-01 sshd 3770315 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T12:11:40.651140Z MAIL-EDGE-01 systemd-logind 19795 - - New session 272438 of user aisha.johnson.
+<30>1 2024-03-18T12:11:49.031293Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from eu-smtp-inbound-1.mimecast.com[103.13.70.204]
+<30>1 2024-03-18T12:11:49.440898Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00F92F1A3C: client=eu-smtp-inbound-1.mimecast.com[103.13.70.204]
+<30>1 2024-03-18T12:11:49.867675Z MAIL-EDGE-01 postfix/cleanup 3770343 - - 00F92F1A3C: message-id=<notices-b9dac45a-8235363@benefits-serviceportal.com>
+<30>1 2024-03-18T12:11:50.750798Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00F92F1A3C: from=<notices@benefits-serviceportal.com>, size=1619, nrcpt=3 (queue active)
+<30>1 2024-03-18T12:11:51.275403Z MAIL-EDGE-01 postfix/local 3770342 - - 00F92F1A3C: to=<priya.patel@meridianhcs.com>, relay=local, delay=1.8, delays=0.41/0.06/0.57/0.76, dsn=2.0.0, status=sent (delivered to maildir)
+<85>1 2024-03-18T12:11:52.247086Z MAIL-EDGE-01 sudo 3770352 - - ops : TTY=pts/0 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/df -h /var
+<86>1 2024-03-18T12:11:52.318086Z MAIL-EDGE-01 sudo 3770352 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T12:11:54.534580Z MAIL-EDGE-01 sudo 3770352 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:11:56.627144Z MAIL-EDGE-01 postfix/smtp 3770353 - - 00F92F1A3C: to=<diego.ramirez@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=7.22, delays=2.11/1.00/0.58/3.53, dsn=2.0.0, status=sent (250 2.6.0 <notices-b9dac45a-8235363@benefits-serviceportal.com> [InternalId=653158520] Queued mail for delivery)
+<30>1 2024-03-18T12:11:56.757818Z MAIL-EDGE-01 postfix/smtp 3770353 - - 00F92F1A3C: to=<evelyn.brooks@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=7.4, delays=1.21/0.47/2.87/2.85, dsn=2.0.0, status=sent (250 2.6.0 <notices-b9dac45a-8235363@benefits-serviceportal.com> [InternalId=653158520] Queued mail for delivery)
+<30>1 2024-03-18T12:11:56.962493Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00F92F1A3C: removed
+<86>1 2024-03-18T12:12:08.794560Z MAIL-EDGE-01 sshd 3770315 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:12:09.005355Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 272438.
+<30>1 2024-03-18T12:12:54.201108Z MAIL-EDGE-01 anacron 17712 - - Job `cron.daily' terminated
+<30>1 2024-03-18T12:12:55.188954Z MAIL-EDGE-01 anacron 17712 - - Normal exit (1 job run)
+<30>1 2024-03-18T12:14:48.652471Z MAIL-EDGE-01 rsyslogd 19786 - - main Q: queue main has 1107 messages pending, worker threads 3
+<30>1 2024-03-18T12:14:56.104572Z MAIL-EDGE-01 polkitd 58312 - - Operator of unix-process:3770794:181528620 successfully authenticated as unix-user:admin to gain TEMPORARY authorization for action org.freedesktop.systemd1.manage-units for system-bus-name::1.101 [/usr/bin/systemctl] (owned by unix-user:deploy)
+<30>1 2024-03-18T12:14:56.861681Z MAIL-EDGE-01 unattended-upgr 29078 - - Allowed origins are: o=Ubuntu,a=jammy-security
+<30>1 2024-03-18T12:15:11.921362Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T12:15:34.306067Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1244
+<30>1 2024-03-18T12:16:22.078365Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mxa-0023b701.gslb.pphosted.com[148.163.173.56]
+<30>1 2024-03-18T12:16:23.000807Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 0858A551F: client=mxa-0023b701.gslb.pphosted.com[148.163.173.56]
+<30>1 2024-03-18T12:16:23.965947Z MAIL-EDGE-01 postfix/cleanup 3770984 - - 0858A551F: message-id=<notifications-af95fc02-7931674@partnerrelay.io>
+<30>1 2024-03-18T12:16:25.171483Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0858A551F: from=<notifications@partnerrelay.io>, size=1448, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:16:35.497509Z MAIL-EDGE-01 postfix/smtp 3771004 - - 0858A551F: to=<lina.nguyen@meridianhcs.com>, relay=mail-clinical.meridianhcs.com[10.10.2.26]:25, delay=12.54, delays=1.68/1.96/5.58/3.33, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 000EAF3334A)
+<30>1 2024-03-18T12:16:35.987553Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0858A551F: removed
+<30>1 2024-03-18T12:18:06.398438Z MAIL-EDGE-01 polkitd 58312 - - Subject unix-process:3771242:181548563 is authorized for action org.freedesktop.systemd1.manage-units
+<30>1 2024-03-18T12:18:26.367750Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 018150D65: client=WS-PPATEL-01.meridianhcs.local[10.10.1.32], sasl_method=LOGIN, sasl_username=priya.patel
+<30>1 2024-03-18T12:18:26.381584Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-PPATEL-01.meridianhcs.local[10.10.1.32]
+<30>1 2024-03-18T12:18:26.627821Z MAIL-EDGE-01 postfix/cleanup 3771291 - - 018150D65: message-id=<100001TGK30N.1000KSUKOD@meridianhcs.com>
+<30>1 2024-03-18T12:18:26.865701Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 018150D65: from=<priya.patel@meridianhcs.com>, size=1276, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:18:26.978701Z MAIL-EDGE-01 postfix/local 3771290 - - 018150D65: to=<sophia.martinez@meridianhcs.com>, relay=local, delay=0.63, delays=0.10/0.12/0.25/0.15, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:18:27.056129Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 018150D65: removed
+<30>1 2024-03-18T12:18:31.219488Z MAIL-EDGE-01 dovecot 3769719 - - imap-login: Login: user=<priya.patel>, method=PLAIN, rip=10.10.1.32, lip=10.10.2.25, mpid=3771293, TLS, session=<AAAAAHG5KS>
+<30>1 2024-03-18T12:19:05.035477Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 126482.
+<30>1 2024-03-18T12:19:30.266094Z MAIL-EDGE-01 dovecot 3771293 - - imap(priya.patel)<3771293><AAAAAHG5KS>: Disconnected: Logged out in=6907 out=438303 deleted=0 expunged=0 trashed=0 hdr_count=6 hdr_bytes=12276 body_count=2 body_bytes=420991
+<30>1 2024-03-18T12:20:38.605296Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1247
+<30>1 2024-03-18T12:20:41.549234Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1250
+<30>1 2024-03-18T12:21:35.409999Z MAIL-EDGE-01 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:21:37.053643Z MAIL-EDGE-01 systemd 1 - - Finished motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:22:16.976464Z MAIL-EDGE-01 polkitd 58312 - - Subject unix-process:3771834:181573494 is authorized for action org.freedesktop.packagekit.system-update
+<30>1 2024-03-18T12:24:04.983465Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T12:24:05.308203Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 000CB8D0909: client=mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T12:24:05.737293Z MAIL-EDGE-01 postfix/cleanup 3772075 - - 000CB8D0909: message-id=<100000I9EMNA.1000OREDIL@meridianhcs.com>
+<30>1 2024-03-18T12:24:05.960091Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 000CB8D0909: from=<diego.ramirez@meridianhcs.com>, size=1529, nrcpt=3 (queue active)
+<30>1 2024-03-18T12:24:06.387829Z MAIL-EDGE-01 postfix/local 3772074 - - 000CB8D0909: to=<aisha.johnson@meridianhcs.com>, relay=local, delay=0.98, delays=0.23/0.14/0.20/0.41, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:24:06.409212Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 000CB8D0909: removed
+<30>1 2024-03-18T12:24:06.461021Z MAIL-EDGE-01 postfix/local 3772074 - - 000CB8D0909: to=<marcus.chen@meridianhcs.com>, relay=local, delay=1.06, delays=0.17/0.17/0.32/0.41, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:24:06.534212Z MAIL-EDGE-01 postfix/local 3772074 - - 000CB8D0909: to=<priya.patel@meridianhcs.com>, relay=local, delay=1.15, delays=0.32/0.17/0.40/0.26, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:25:24.912210Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.106'
+<86>1 2024-03-18T12:26:05.243913Z MAIL-EDGE-01 sshd 3772356 - - Connection from 10.10.1.31 port 58786 on 10.10.2.25 port 22
+<86>1 2024-03-18T12:26:07.488080Z MAIL-EDGE-01 sshd 3772356 - - Accepted publickey for marcus.chen from 10.10.1.31 port 58786 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T12:26:07.633270Z MAIL-EDGE-01 sshd 3772356 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T12:26:08.269450Z MAIL-EDGE-01 systemd-logind 19795 - - New session 272570 of user marcus.chen.
+<30>1 2024-03-18T12:26:20.186235Z MAIL-EDGE-01 rsyslogd 19786 - - omfwd: target logrelay01 using disk-assisted queue local-spool, checkpoint 91727
+<30>1 2024-03-18T12:28:24.563992Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2024-03-18T12:29:47.194238Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.107'
+<30>1 2024-03-18T12:29:56.299258Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 122: banned by affinity mask 00000002 (nvme0q2)
+<30>1 2024-03-18T12:32:24.760810Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 5 done for microk8s
+<30>1 2024-03-18T12:34:01.362240Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 303765.
+<86>1 2024-03-18T12:34:37.981342Z MAIL-EDGE-01 su 3764870 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T12:34:40.127342Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 271944.
+<30>1 2024-03-18T12:34:45.371159Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<sophia.martinez>, method=PLAIN, rip=10.10.1.36, lip=10.10.2.25, mpid=3773543, TLS, session=<AAAACKtBFX>
+<30>1 2024-03-18T12:35:10.098248Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<aisha.johnson>, method=PLAIN, rip=10.10.1.35, lip=10.10.2.25, mpid=3773632, TLS, session=<AAAAAwMZrk>
+<78>1 2024-03-18T12:36:00.121000Z MAIL-EDGE-01 CRON 3773753 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:36:18.321641Z MAIL-EDGE-01 dovecot 3773632 - - imap(aisha.johnson)<3773632><AAAAAwMZrk>: Disconnected: Logged out in=4371 out=318442 deleted=0 expunged=0 trashed=0 hdr_count=4 hdr_bytes=2752 body_count=1 body_bytes=310168
+<30>1 2024-03-18T12:36:39.694233Z MAIL-EDGE-01 dovecot 3773543 - - imap(sophia.martinez)<3773543><AAAACKtBFX>: Disconnected: Logged out in=8890 out=114542 deleted=0 expunged=0 trashed=0 hdr_count=6 hdr_bytes=5964 body_count=1 body_bytes=104906
+<30>1 2024-03-18T12:37:35.035055Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.110'
+<30>1 2024-03-18T12:38:24.995134Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 643950.
+<30>1 2024-03-18T12:39:11.029076Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-MCHEN-01.meridianhcs.local[10.10.1.31]
+<30>1 2024-03-18T12:39:11.508832Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 000757C8F56: client=WS-MCHEN-01.meridianhcs.local[10.10.1.31], sasl_method=LOGIN, sasl_username=marcus.chen
+<30>1 2024-03-18T12:39:12.053518Z MAIL-EDGE-01 postfix/cleanup 3774209 - - 000757C8F56: message-id=<1001HJ6MWU.105HYM6.6254@marcus-chen.meridianhcs.com>
+<30>1 2024-03-18T12:39:12.957064Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 000757C8F56: from=<marcus.chen@meridianhcs.com>, size=1493, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:39:20.735930Z MAIL-EDGE-01 postfix/smtp 3774226 - - 000757C8F56: to=<team@partnerrelay.io>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=9.29, delays=1.33/1.07/3.55/3.34, dsn=2.0.0, status=sent (250 OK id=14V4C3-00003G-00)
+<30>1 2024-03-18T12:39:21.090069Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 000757C8F56: removed
+<85>1 2024-03-18T12:42:15.801268Z MAIL-EDGE-01 sudo 3774634 - - svc_app : TTY=pts/5 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status systemd-resolved
+<86>1 2024-03-18T12:42:15.860268Z MAIL-EDGE-01 sudo 3774634 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:42:20.958327Z MAIL-EDGE-01 sudo 3774634 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:42:28.252359Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.111'
+<30>1 2024-03-18T12:42:52.068268Z MAIL-EDGE-01 dbus-daemon 19793 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.112'
+<30>1 2024-03-18T12:42:52.159407Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from eu-smtp-inbound-1.mimecast.com[185.58.84.48]
+<30>1 2024-03-18T12:42:52.758713Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00049D81471: client=eu-smtp-inbound-1.mimecast.com[185.58.84.48]
+<30>1 2024-03-18T12:42:53.591250Z MAIL-EDGE-01 postfix/cleanup 3774707 - - 00049D81471: message-id=<billing-63f99155-2142252@industrybriefs.net>
+<30>1 2024-03-18T12:42:54.445247Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00049D81471: from=<billing@industrybriefs.net>, size=1093, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:43:01.660551Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00049D81471: to=<evelyn.brooks@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=8.9, delays=2.45/0.26/2.43/3.76, dsn=2.0.0, status=sent (250 2.1.5 004CF0A312 queued for delivery)
+<30>1 2024-03-18T12:43:02.039927Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00049D81471: removed
+<85>1 2024-03-18T12:44:41.338868Z MAIL-EDGE-01 sudo 3774951 - - ops : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/apt list --upgradable
+<86>1 2024-03-18T12:44:41.381868Z MAIL-EDGE-01 sudo 3774951 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T12:44:58.372997Z MAIL-EDGE-01 sudo 3774951 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:45:29.554234Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 2 done for core22
+<85>1 2024-03-18T12:46:25.285230Z MAIL-EDGE-01 sudo 3775192 - - deploy : TTY=pts/3 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/du -sh /var/cache/apt
+<86>1 2024-03-18T12:46:25.482230Z MAIL-EDGE-01 sudo 3775192 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:46:25.972066Z MAIL-EDGE-01 sudo 3775192 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:47:41.357342Z MAIL-EDGE-01 sudo 3775377 - - ubuntu : TTY=pts/0 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/sbin/service systemd-resolved status
+<86>1 2024-03-18T12:47:41.575342Z MAIL-EDGE-01 sudo 3775377 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2024-03-18T12:47:53.403240Z MAIL-EDGE-01 sudo 3775377 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:48:24.955843Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 3 done for lxd
+<30>1 2024-03-18T12:48:29.787850Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T12:48:30.499939Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 06E369850: client=mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T12:48:31.645054Z MAIL-EDGE-01 postfix/cleanup 3775497 - - 06E369850: message-id=<1746897100.499514.89c6aefa@meridianhcs.com>
+<30>1 2024-03-18T12:48:32.960220Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 06E369850: from=<lina.nguyen@meridianhcs.com>, size=1675, nrcpt=1 (queue active)
+<30>1 2024-03-18T12:48:33.596309Z MAIL-EDGE-01 postfix/local 3775496 - - 06E369850: to=<priya.patel@meridianhcs.com>, relay=local, delay=3.05, delays=1.00/0.41/0.63/1.01, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T12:48:34.258373Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 06E369850: removed
+<30>1 2024-03-18T12:54:11.907393Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for lxd
+<85>1 2024-03-18T12:54:15.102927Z MAIL-EDGE-01 sudo 3776281 - - deploy : TTY=pts/2 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/journalctl -u imaps -n 50
+<86>1 2024-03-18T12:54:15.381927Z MAIL-EDGE-01 sudo 3776281 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:54:19.930629Z MAIL-EDGE-01 sudo 3776281 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:55:32.377882Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook core22.configure
+<86>1 2024-03-18T12:59:58.980982Z MAIL-EDGE-01 su 3777040 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T13:00:05.038982Z MAIL-EDGE-01 systemd-logind 19795 - - New session 272875 of user admin.
+<30>1 2024-03-18T13:05:14.091981Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<priya.patel>, method=PLAIN, rip=10.10.1.32, lip=10.10.2.25, mpid=3777616, TLS, session=<AAAAArYaY6>
+<78>1 2024-03-18T13:06:00.139000Z MAIL-EDGE-01 CRON 3777707 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:06:20.231617Z MAIL-EDGE-01 dovecot 3777616 - - imap(priya.patel)<3777616><AAAAArYaY6>: Disconnected: Logged out in=7220 out=77348 deleted=0 expunged=0 trashed=0 hdr_count=4 hdr_bytes=4404 body_count=0 body_bytes=64559
+<30>1 2024-03-18T13:08:05.184752Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 16: banned by affinity mask 00000002 (ahci)
+<30>1 2024-03-18T13:09:11.789638Z MAIL-EDGE-01 systemd-journald 19782 - - Runtime Journal (/run/log/journal/2f957776c30833f4527f35a12e12a9da) is 125.9M, max 1024M, 898.1M free.
+<30>1 2024-03-18T13:14:41.197666Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-SMARTINEZ-01.meridianhcs.local[10.10.1.36]
+<30>1 2024-03-18T13:14:41.741216Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 054BEE95D: client=WS-SMARTINEZ-01.meridianhcs.local[10.10.1.36], sasl_method=LOGIN, sasl_username=sophia.martinez
+<30>1 2024-03-18T13:14:42.204924Z MAIL-EDGE-01 postfix/cleanup 3778690 - - 054BEE95D: message-id=<01AD6DAC-6076-EA7B-CD23-F3F077E26097@meridianhcs.com>
+<30>1 2024-03-18T13:14:42.912946Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 054BEE95D: from=<sophia.martinez@meridianhcs.com>, size=1274, nrcpt=1 (queue active)
+<30>1 2024-03-18T13:14:48.822446Z MAIL-EDGE-01 postfix/smtp 3774226 - - 054BEE95D: to=<contact@vendorpost.net>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=7.2, delays=0.67/0.95/2.17/3.42, dsn=2.0.0, status=sent (250 OK id=26S8V0-00004T-00)
+<30>1 2024-03-18T13:14:49.159417Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 054BEE95D: removed
+<30>1 2024-03-18T13:18:10.870261Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<86>1 2024-03-18T13:18:32.219982Z MAIL-EDGE-01 su 3777040 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T13:18:35.027982Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 272875.
+<85>1 2024-03-18T13:18:38.345863Z MAIL-EDGE-01 sudo 3779138 - - svc_app : TTY=pts/2 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/lsblk
+<86>1 2024-03-18T13:18:38.485863Z MAIL-EDGE-01 sudo 3779138 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T13:18:41.801852Z MAIL-EDGE-01 sudo 3779138 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T13:18:50.512984Z MAIL-EDGE-01 sudo 3779162 - - deploy : TTY=pts/1 ; PWD=/home/ops ; USER=root ; COMMAND=/bin/systemctl is-active smtp
+<86>1 2024-03-18T13:18:50.557984Z MAIL-EDGE-01 sudo 3779162 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T13:18:52.281081Z MAIL-EDGE-01 sudo 3779162 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:23:39.351418Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed stale cache scope global after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T13:23:50.526767Z MAIL-EDGE-01 sshd 3772356 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:23:51.208488Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 272570.
+<30>1 2024-03-18T13:26:12.946202Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed stale cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T13:30:11.042486Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<priya.patel>, method=PLAIN, rip=10.10.1.32, lip=10.10.2.25, mpid=3780453, TLS, session=<AAAADMNuv1>
+<30>1 2024-03-18T13:30:29.243389Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 64: banned by affinity mask 00000002 (mlx5_comp0)
+<30>1 2024-03-18T13:31:33.418860Z MAIL-EDGE-01 dovecot 3780453 - - imap(priya.patel)<3780453><AAAADMNuv1>: Disconnected: Logged out in=2575 out=146909 deleted=0 expunged=0 trashed=0 hdr_count=2 hdr_bytes=1374 body_count=2 body_bytes=139627
+<30>1 2024-03-18T13:32:27.925846Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T13:32:51.180238Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from vendorpost-net.mail.protection.outlook.com[52.100.74.63]
+<30>1 2024-03-18T13:32:51.352949Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 07E56C6A6: client=vendorpost-net.mail.protection.outlook.com[52.100.74.63]
+<30>1 2024-03-18T13:32:51.550149Z MAIL-EDGE-01 postfix/cleanup 3780777 - - 07E56C6A6: message-id=<billing-7d2578ee-7349741@vendorpost.net>
+<30>1 2024-03-18T13:32:51.987326Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 07E56C6A6: from=<billing@vendorpost.net>, size=1146, nrcpt=1 (queue active)
+<30>1 2024-03-18T13:32:52.140037Z MAIL-EDGE-01 postfix/local 3780776 - - 07E56C6A6: to=<sophia.martinez@meridianhcs.com>, relay=local, delay=0.82, delays=0.09/0.03/0.28/0.42, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T13:32:52.378259Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 07E56C6A6: removed
+<30>1 2024-03-18T13:36:29.697365Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 863317.
+<30>1 2024-03-18T13:38:18.197804Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 5 done for lxd
+<85>1 2024-03-18T13:39:03.971869Z MAIL-EDGE-01 sudo 3781558 - - ops : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/bin/systemd-analyze blame
+<86>1 2024-03-18T13:39:04.216869Z MAIL-EDGE-01 sudo 3781558 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T13:39:09.754355Z MAIL-EDGE-01 sudo 3781558 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:39:58.964496Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T13:39:59.034367Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 07D50F380: client=mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T13:39:59.287487Z MAIL-EDGE-01 postfix/cleanup 3781650 - - 07D50F380: message-id=<219627518.111857.f63bc3b1@meridianhcs.com>
+<30>1 2024-03-18T13:39:59.610104Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 07D50F380: from=<omar.haddad@meridianhcs.com>, size=1197, nrcpt=1 (queue active)
+<30>1 2024-03-18T13:40:07.791306Z MAIL-EDGE-01 postfix/smtp 3774226 - - 07D50F380: to=<team@industrybriefs.net>, relay=smtp1.greatplains-mail.net[173.194.24.115]:25, delay=8.64, delays=2.43/0.23/2.41/3.58, dsn=2.0.0, status=sent (250 OK id=23GD3V-00002G-00)
+<30>1 2024-03-18T13:40:08.332413Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 07D50F380: removed
+<30>1 2024-03-18T13:41:29.688756Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 329526.
+<30>1 2024-03-18T13:43:48.810971Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T13:47:29.785802Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<86>1 2024-03-18T13:49:12.842954Z MAIL-EDGE-01 sshd 3782743 - - Connection from 10.10.1.35 port 55627 on 10.10.2.25 port 22
+<86>1 2024-03-18T13:49:15.048196Z MAIL-EDGE-01 sshd 3782743 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 55627 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T13:49:15.112373Z MAIL-EDGE-01 sshd 3782743 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T13:49:15.642538Z MAIL-EDGE-01 systemd-logind 19795 - - New session 273318 of user aisha.johnson.
+<30>1 2024-03-18T13:50:03.540529Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from aspmx.l.google.com[173.194.182.221]
+<30>1 2024-03-18T13:50:03.897813Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 0CB22CBC1: client=aspmx.l.google.com[173.194.182.221]
+<30>1 2024-03-18T13:50:04.297464Z MAIL-EDGE-01 postfix/cleanup 3782834 - - 0CB22CBC1: message-id=<workspace-e2b1dcaf-9440641@docflow-health.net>
+<30>1 2024-03-18T13:50:05.147848Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0CB22CBC1: from=<workspace@docflow-health.net>, size=1397, nrcpt=1 (queue active)
+<30>1 2024-03-18T13:50:05.581132Z MAIL-EDGE-01 postfix/local 3782833 - - 0CB22CBC1: to=<priya.patel@meridianhcs.com>, relay=local, delay=1.57, delays=0.19/0.21/0.43/0.74, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T13:50:05.644049Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0CB22CBC1: removed
+<30>1 2024-03-18T13:51:12.959707Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 45 classified for CPU 0 balancing on virtio0-input
+<30>1 2024-03-18T14:01:06.990244Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 187736 switched to UDP with advertised UDP packet size 512.
+<30>1 2024-03-18T14:01:08.449583Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 109848.
+<30>1 2024-03-18T14:02:33.310541Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2024-03-18T14:03:17.853687Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2024-03-18T14:03:23.420840Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2024-03-18T14:04:29.144346Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T14:04:49.847466Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<priya.patel>, method=PLAIN, rip=10.10.1.32, lip=10.10.2.25, mpid=3784511, TLS, session=<AAAAA8vEG0>
+<30>1 2024-03-18T14:05:47.587166Z MAIL-EDGE-01 dovecot 3784511 - - imap(priya.patel)<3784511><AAAAA8vEG0>: Disconnected: Logged out in=2647 out=267416 deleted=0 expunged=0 trashed=0 hdr_count=3 hdr_bytes=4989 body_count=0 body_bytes=254155
+<78>1 2024-03-18T14:06:00.270000Z MAIL-EDGE-01 CRON 3784629 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:06:24.904299Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2024-03-18T14:09:43.587176Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<sophia.martinez>, method=PLAIN, rip=10.10.1.36, lip=10.10.2.25, mpid=3784919, TLS, session=<AAAABIH78s>
+<30>1 2024-03-18T14:09:56.358016Z MAIL-EDGE-01 dovecot 3784919 - - imap(sophia.martinez)<3784919><AAAABIH78s>: Disconnected: Logged out in=5686 out=436120 deleted=0 expunged=0 trashed=0 hdr_count=5 hdr_bytes=4190 body_count=2 body_bytes=425465
+<30>1 2024-03-18T14:12:33.865946Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 24: banned by affinity mask 00000001 (ens160)
+<30>1 2024-03-18T14:12:52.370095Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 6 done for lxd
+<86>1 2024-03-18T14:13:29.014101Z MAIL-EDGE-01 sshd 3785230 - - Connection from 10.10.1.35 port 55799 on 10.10.2.25 port 22
+<86>1 2024-03-18T14:13:31.191289Z MAIL-EDGE-01 sshd 3785230 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 55799 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T14:13:31.253489Z MAIL-EDGE-01 sshd 3785230 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:13:31.842650Z MAIL-EDGE-01 systemd-logind 19795 - - New session 273535 of user aisha.johnson.
+<30>1 2024-03-18T14:14:28.237948Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-SMARTINEZ-01.meridianhcs.local[10.10.1.36]
+<30>1 2024-03-18T14:14:28.626613Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 04E39C96F: client=WS-SMARTINEZ-01.meridianhcs.local[10.10.1.36], sasl_method=LOGIN, sasl_username=sophia.martinez
+<30>1 2024-03-18T14:14:29.494611Z MAIL-EDGE-01 postfix/cleanup 3785317 - - 04E39C96F: message-id=<1000011K3YXW.1000H1SJKA@meridianhcs.com>
+<30>1 2024-03-18T14:14:30.428275Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 04E39C96F: from=<sophia.martinez@meridianhcs.com>, size=1383, nrcpt=1 (queue active)
+<30>1 2024-03-18T14:14:37.493246Z MAIL-EDGE-01 postfix/smtp 3774226 - - 04E39C96F: to=<evelyn.brooks@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=8.72, delays=0.73/1.48/2.11/4.40, dsn=2.0.0, status=sent (250 2.1.5 007BA03EF4 queued for delivery)
+<30>1 2024-03-18T14:14:37.555537Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 04E39C96F: removed
+<30>1 2024-03-18T14:15:47.313966Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 249184 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T14:15:58.942749Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T14:17:12.573304Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2024-03-18T14:18:42.106302Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T14:19:52.864067Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2024-03-18T14:21:19.863547Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 32 affinity hint keeps vector on CPU 2 (nvme0q1)
+<30>1 2024-03-18T14:22:01.874003Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T14:22:25.522091Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1246
+<30>1 2024-03-18T14:22:44.218291Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T14:23:36.624233Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T14:27:15.710945Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 64: banned by affinity mask 00000008 (mlx5_comp0)
+<30>1 2024-03-18T14:28:27.090547Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2024-03-18T14:30:14.172435Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 181: banned by affinity mask 00000001 (mlx5_comp2)
+<30>1 2024-03-18T14:31:30.011690Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 331136.
+<30>1 2024-03-18T14:31:35.524308Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T14:31:36.221846Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T14:31:36.828499Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00C9CDA5FC: client=mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T14:31:37.870339Z MAIL-EDGE-01 postfix/cleanup 3786830 - - 00C9CDA5FC: message-id=<100001ASKG6B.10002A8249@meridianhcs.com>
+<30>1 2024-03-18T14:31:39.212553Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00C9CDA5FC: from=<evelyn.brooks@meridianhcs.com>, size=1297, nrcpt=1 (queue active)
+<30>1 2024-03-18T14:31:39.983206Z MAIL-EDGE-01 postfix/local 3786829 - - 00C9CDA5FC: to=<marcus.chen@meridianhcs.com>, relay=local, delay=3.05, delays=0.64/0.23/0.56/1.62, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T14:31:40.393673Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00C9CDA5FC: removed
+<30>1 2024-03-18T14:32:52.883345Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mx.zoho.com[136.143.177.86]
+<30>1 2024-03-18T14:32:53.307056Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 05428EDA7: client=mx.zoho.com[136.143.177.86]
+<30>1 2024-03-18T14:32:54.001970Z MAIL-EDGE-01 postfix/cleanup 3786944 - - 05428EDA7: message-id=<notifications-cb11fcff-4629169@customermailhub.com>
+<30>1 2024-03-18T14:32:54.857291Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 05428EDA7: from=<notifications@customermailhub.com>, size=1432, nrcpt=1 (queue active)
+<30>1 2024-03-18T14:33:03.519892Z MAIL-EDGE-01 postfix/smtp 3774226 - - 05428EDA7: to=<diego.ramirez@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=10.13, delays=1.55/0.69/3.65/4.24, dsn=2.0.0, status=sent (250 2.6.0 <notifications-cb11fcff-4629169@customermailhub.com> [InternalId=264401665] Queued mail for delivery)
+<30>1 2024-03-18T14:33:04.051804Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 05428EDA7: removed
+<30>1 2024-03-18T14:33:53.322927Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 393398.
+<30>1 2024-03-18T14:33:53.607813Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2024-03-18T14:35:50.974244Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<78>1 2024-03-18T14:36:00.251000Z MAIL-EDGE-01 CRON 3787213 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:36:42.012554Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 122: banned by affinity mask 00000002 (nvme0q2)
+<30>1 2024-03-18T14:37:03.800934Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<marcus.chen>, method=PLAIN, rip=10.10.1.31, lip=10.10.2.25, mpid=3787285, TLS, session=<AAAAA16q+L>
+<30>1 2024-03-18T14:37:26.182732Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<86>1 2024-03-18T14:38:36.468224Z MAIL-EDGE-01 sshd 3782743 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:38:37.531041Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 273318.
+<30>1 2024-03-18T14:38:59.090933Z MAIL-EDGE-01 dovecot 3787285 - - imap(marcus.chen)<3787285><AAAAA16q+L>: Disconnected: Logged out in=5087 out=446730 deleted=0 expunged=0 trashed=0 hdr_count=6 hdr_bytes=8202 body_count=2 body_bytes=436418
+<30>1 2024-03-18T14:40:05.193360Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 285307.
+<86>1 2024-03-18T14:40:06.900129Z MAIL-EDGE-01 sshd 3787551 - - Connection from 10.10.1.35 port 61588 on 10.10.2.25 port 22
+<86>1 2024-03-18T14:40:09.096325Z MAIL-EDGE-01 sshd 3787551 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 61588 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T14:40:09.219480Z MAIL-EDGE-01 sshd 3787551 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:40:09.776730Z MAIL-EDGE-01 systemd-logind 19795 - - New session 273775 of user aisha.johnson.
+<30>1 2024-03-18T14:41:02.202963Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 154: banned by affinity mask 00000001 (virtio1-input)
+<86>1 2024-03-18T14:41:40.013521Z MAIL-EDGE-01 sshd 3787551 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:41:40.786254Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 273775.
+<30>1 2024-03-18T14:43:18.941814Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 122: banned by affinity mask 00000004 (nvme0q2)
+<30>1 2024-03-18T14:43:47.025023Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T14:47:37.796381Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 7 done for core20
+<30>1 2024-03-18T14:54:24.136622Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-AJOHNSON-01.meridianhcs.local[10.10.1.35]
+<30>1 2024-03-18T14:54:24.819384Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00090EF6372: client=WS-AJOHNSON-01.meridianhcs.local[10.10.1.35], sasl_method=LOGIN, sasl_username=aisha.johnson
+<30>1 2024-03-18T14:54:25.379363Z MAIL-EDGE-01 postfix/cleanup 3788848 - - 00090EF6372: message-id=<AA5C5E0E-06CE-3801-B1DD-C377B1C6624F@meridianhcs.com>
+<30>1 2024-03-18T14:54:26.342778Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00090EF6372: from=<aisha.johnson@meridianhcs.com>, size=1423, nrcpt=1 (queue active)
+<30>1 2024-03-18T14:54:34.715939Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00090EF6372: to=<team@vendorpost.net>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=10, delays=1.23/0.63/4.39/3.75, dsn=2.0.0, status=sent (250 OK id=23C8VW-00002D-00)
+<30>1 2024-03-18T14:54:35.262997Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00090EF6372: removed
+<86>1 2024-03-18T15:01:42.038949Z MAIL-EDGE-01 sshd 3785230 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T15:01:42.564757Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 273535.
+<30>1 2024-03-18T15:02:58.907563Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1248
+<30>1 2024-03-18T15:04:06.303493Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2024-03-18T15:04:40.357721Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for lxd
+<30>1 2024-03-18T15:05:51.795065Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 606825.
+<78>1 2024-03-18T15:06:00.236000Z MAIL-EDGE-01 CRON 3790383 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:06:36.801850Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 45: banned by affinity mask 00000002 (virtio0-input)
+<30>1 2024-03-18T15:06:49.167300Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T15:07:20.173978Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 932590.
+<30>1 2024-03-18T15:07:51.557592Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T15:07:51.984312Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00425B6AE0: client=mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T15:07:52.250666Z MAIL-EDGE-01 postfix/cleanup 3790709 - - 00425B6AE0: message-id=<3692782526.42316.8ddc904c@meridianhcs.com>
+<30>1 2024-03-18T15:07:52.880290Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00425B6AE0: from=<lina.nguyen@meridianhcs.com>, size=1189, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:07:53.279010Z MAIL-EDGE-01 postfix/local 3790708 - - 00425B6AE0: to=<aisha.johnson@meridianhcs.com>, relay=local, delay=1.39, delays=0.36/0.20/0.40/0.43, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T15:07:53.564096Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00425B6AE0: removed
+<30>1 2024-03-18T15:07:57.731468Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-AJOHNSON-01.meridianhcs.local[10.10.1.35]
+<30>1 2024-03-18T15:07:58.137055Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00093C2E139: client=WS-AJOHNSON-01.meridianhcs.local[10.10.1.35], sasl_method=LOGIN, sasl_username=aisha.johnson
+<30>1 2024-03-18T15:07:58.533953Z MAIL-EDGE-01 postfix/cleanup 3790727 - - 00093C2E139: message-id=<121609FF-AFF2-1350-BCEC-8A52032BE7D0@meridianhcs.com>
+<30>1 2024-03-18T15:07:59.171472Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00093C2E139: from=<aisha.johnson@meridianhcs.com>, size=1455, nrcpt=4 (queue active)
+<30>1 2024-03-18T15:07:59.424059Z MAIL-EDGE-01 postfix/local 3790726 - - 00093C2E139: to=<finance@meridianhcs.com>, relay=local, delay=1.27, delays=0.34/0.22/0.43/0.28, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T15:07:59.505197Z MAIL-EDGE-01 postfix/local 3790726 - - 00093C2E139: to=<marcus.chen@meridianhcs.com>, relay=local, delay=1.38, delays=0.47/0.15/0.32/0.44, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T15:08:04.774920Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00093C2E139: to=<diego.ramirez@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=6.73, delays=1.57/0.79/2.04/2.33, dsn=2.0.0, status=sent (250 2.1.5 004FD32924 queued for delivery)
+<30>1 2024-03-18T15:08:04.999438Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00093C2E139: to=<evelyn.brooks@meridianhcs.com>, relay=mail-fin.meridianhcs.com[10.10.2.27]:25, delay=6.93, delays=1.39/1.31/2.57/1.66, dsn=2.0.0, status=sent (250 2.1.5 004FD32924 queued for delivery)
+<30>1 2024-03-18T15:08:05.193956Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00093C2E139: removed
+<30>1 2024-03-18T15:09:53.184108Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 7 done for microk8s
+<86>1 2024-03-18T15:11:21.908595Z MAIL-EDGE-01 sshd 3791272 - - Connection from 10.10.1.35 port 51933 on 10.10.2.25 port 22
+<86>1 2024-03-18T15:11:24.143818Z MAIL-EDGE-01 sshd 3791272 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 51933 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T15:11:24.197013Z MAIL-EDGE-01 sshd 3791272 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T15:11:24.806167Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274057 of user aisha.johnson.
+<30>1 2024-03-18T15:13:49.922276Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<aisha.johnson>, method=PLAIN, rip=10.10.1.35, lip=10.10.2.25, mpid=3791655, TLS, session=<AAAADHNDlN>
+<30>1 2024-03-18T15:14:12.924077Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T15:15:32.311516Z MAIL-EDGE-01 dovecot 3791655 - - imap(aisha.johnson)<3791655><AAAADHNDlN>: Disconnected: Logged out in=3745 out=284576 deleted=0 expunged=0 trashed=0 hdr_count=3 hdr_bytes=5367 body_count=0 body_bytes=271805
+<86>1 2024-03-18T15:16:20.711065Z MAIL-EDGE-01 su 3792123 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T15:16:25.446065Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274101 of user admin.
+<30>1 2024-03-18T15:17:41.625800Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 276248 switched to UDP with advertised UDP packet size 1232.
+<30>1 2024-03-18T15:20:02.660646Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1250
+<30>1 2024-03-18T15:20:41.317281Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2024-03-18T15:21:56.100973Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T15:22:05.140863Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 7 done for lxd
+<30>1 2024-03-18T15:23:27.824352Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T15:26:42.719021Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<marcus.chen>, method=PLAIN, rip=10.10.1.31, lip=10.10.2.25, mpid=3793889, TLS, session=<AAAABW8JNN>
+<30>1 2024-03-18T15:26:46.253802Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 584191.
+<30>1 2024-03-18T15:27:10.657035Z MAIL-EDGE-01 dovecot 3793889 - - imap(marcus.chen)<3793889><AAAABW8JNN>: Disconnected: Logged out in=4275 out=357682 deleted=0 expunged=0 trashed=0 hdr_count=5 hdr_bytes=7025 body_count=0 body_bytes=344776
+<30>1 2024-03-18T15:31:40.841236Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 428750 switched to TCP with advertised UDP packet size 1472.
+<86>1 2024-03-18T15:32:02.225002Z MAIL-EDGE-01 sshd 3794825 - - Connection from 10.10.1.31 port 58417 on 10.10.2.25 port 22
+<86>1 2024-03-18T15:32:04.420225Z MAIL-EDGE-01 sshd 3794825 - - Accepted publickey for marcus.chen from 10.10.1.31 port 58417 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T15:32:04.529465Z MAIL-EDGE-01 sshd 3794825 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T15:32:05.123641Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274243 of user marcus.chen.
+<30>1 2024-03-18T15:34:26.270284Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2024-03-18T15:34:43.751331Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2024-03-18T15:34:43.902326Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:34:44.193154Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<86>1 2024-03-18T15:35:17.718383Z MAIL-EDGE-01 su 3795392 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T15:35:22.247383Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274273 of user admin.
+<78>1 2024-03-18T15:36:00.233000Z MAIL-EDGE-01 CRON 3795527 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:39:49.801229Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 374211.
+<30>1 2024-03-18T15:39:50.238520Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 160731 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T15:39:57.444564Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-MCHEN-01.meridianhcs.local[10.10.1.31]
+<30>1 2024-03-18T15:39:57.765848Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 0DCC19FD6: client=WS-MCHEN-01.meridianhcs.local[10.10.1.31], sasl_method=LOGIN, sasl_username=marcus.chen
+<30>1 2024-03-18T15:39:58.336642Z MAIL-EDGE-01 postfix/cleanup 3796222 - - 0DCC19FD6: message-id=<297A03E5-9512-C6D9-352F-B0338B2DCFD6@meridianhcs.com>
+<30>1 2024-03-18T15:39:59.063455Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0DCC19FD6: from=<marcus.chen@meridianhcs.com>, size=1328, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:40:02.286870Z MAIL-EDGE-01 postfix/smtp 3774226 - - 0DCC19FD6: to=<support@vendorpost.net>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=4.53, delays=0.87/0.43/1.44/1.80, dsn=2.0.0, status=sent (250 OK id=10N531-00000G-00)
+<30>1 2024-03-18T15:40:02.553226Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0DCC19FD6: removed
+<86>1 2024-03-18T15:41:17.986482Z MAIL-EDGE-01 su 3796456 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T15:41:21.807482Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274327 of user admin.
+<30>1 2024-03-18T15:41:28.658676Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-AJOHNSON-01.meridianhcs.local[10.10.1.35]
+<30>1 2024-03-18T15:41:28.751395Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00036233C84: client=WS-AJOHNSON-01.meridianhcs.local[10.10.1.35], sasl_method=LOGIN, sasl_username=aisha.johnson
+<30>1 2024-03-18T15:41:28.924035Z MAIL-EDGE-01 postfix/cleanup 3796488 - - 00036233C84: message-id=<100000MKXN99.1001MALNEK@meridianhcs.com>
+<30>1 2024-03-18T15:41:29.203514Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00036233C84: from=<aisha.johnson@meridianhcs.com>, size=1184, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:41:35.401147Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00036233C84: to=<omar.haddad@meridianhcs.com>, relay=mail-clinical.meridianhcs.com[10.10.2.26]:25, delay=6.75, delays=1.86/0.77/1.88/2.25, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 0CC67B84F)
+<30>1 2024-03-18T15:41:35.716680Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00036233C84: removed
+<30>1 2024-03-18T15:42:27.547443Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook lxd.configure
+<30>1 2024-03-18T15:45:01.885843Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-PPATEL-01.meridianhcs.local[10.10.1.32]
+<30>1 2024-03-18T15:45:02.518471Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00A5590B1B: client=WS-PPATEL-01.meridianhcs.local[10.10.1.32], sasl_method=LOGIN, sasl_username=priya.patel
+<30>1 2024-03-18T15:45:03.228993Z MAIL-EDGE-01 postfix/cleanup 3797124 - - 00A5590B1B: message-id=<1001LRI3MQ.108CX6B.2669@priya-patel.meridianhcs.com>
+<30>1 2024-03-18T15:45:04.200303Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00A5590B1B: from=<priya.patel@meridianhcs.com>, size=1382, nrcpt=1 (queue active)
+<30>1 2024-03-18T15:45:09.396022Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00A5590B1B: to=<omar.haddad@meridianhcs.com>, relay=mail-clinical.meridianhcs.com[10.10.2.26]:25, delay=6.88, delays=1.43/0.70/1.95/2.81, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 0004BC4494E)
+<30>1 2024-03-18T15:45:09.539687Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00A5590B1B: removed
+<30>1 2024-03-18T15:46:36.498778Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T15:46:49.364763Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T15:46:54.349378Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 4 done for core22
+<30>1 2024-03-18T15:46:55.477822Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for core20
+<86>1 2024-03-18T16:01:23.075808Z MAIL-EDGE-01 sshd 3794825 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T16:01:23.272529Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274243.
+<86>1 2024-03-18T16:01:28.755320Z MAIL-EDGE-01 sshd 3791272 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T16:01:29.396023Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274057.
+<86>1 2024-03-18T16:02:18.839308Z MAIL-EDGE-01 sshd 3799867 - - Connection from 10.10.1.35 port 56790 on 10.10.2.25 port 22
+<86>1 2024-03-18T16:02:21.085554Z MAIL-EDGE-01 sshd 3799867 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 56790 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T16:02:21.214729Z MAIL-EDGE-01 sshd 3799867 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:02:21.694948Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274516 of user aisha.johnson.
+<30>1 2024-03-18T16:04:18.670987Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for core20
+<78>1 2024-03-18T16:06:00.112000Z MAIL-EDGE-01 CRON 3800229 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:06:37.715460Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for lxd
+<30>1 2024-03-18T16:06:58.176473Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mailhost.medclaims-processing.net[136.143.180.176]
+<30>1 2024-03-18T16:06:59.726033Z MAIL-EDGE-01 postfix/smtpd 3760261 - - NOQUEUE: reject: RCPT from mailhost.medclaims-processing.net[136.143.180.176]: 450 4.7.1 Client host rejected: try again later; from=<billing@medclaims-processing.net> to=<evelyn.brooks@meridianhcs.com> proto=ESMTP helo=<mailhost.medclaims-processing.net>
+<30>1 2024-03-18T16:08:01.221610Z MAIL-EDGE-01 systemd-resolved 19808 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 184743.
+<86>1 2024-03-18T16:11:49.832664Z MAIL-EDGE-01 sshd 3799867 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T16:11:50.148366Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274516.
+<86>1 2024-03-18T16:13:33.570967Z MAIL-EDGE-01 sshd 3800870 - - Connection from 10.10.1.31 port 62400 on 10.10.2.25 port 22
+<86>1 2024-03-18T16:13:35.774131Z MAIL-EDGE-01 sshd 3800870 - - Accepted publickey for marcus.chen from 10.10.1.31 port 62400 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T16:13:35.946386Z MAIL-EDGE-01 sshd 3800870 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T16:13:36.648542Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274615 of user marcus.chen.
+<30>1 2024-03-18T16:16:51.829478Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T16:16:52.904146Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 980371 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T16:16:54.629223Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:21:48.409809Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 322696.
+<30>1 2024-03-18T16:22:46.991957Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mxa-0023b701.gslb.pphosted.com[148.163.177.205]
+<30>1 2024-03-18T16:22:47.669261Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 005C3C7ED4: client=mxa-0023b701.gslb.pphosted.com[148.163.177.205]
+<30>1 2024-03-18T16:22:48.320653Z MAIL-EDGE-01 postfix/cleanup 3801716 - - 005C3C7ED4: message-id=<support-8d4177b8-6541150@partnerrelay.io>
+<30>1 2024-03-18T16:22:49.548219Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 005C3C7ED4: from=<support@partnerrelay.io>, size=1452, nrcpt=1 (queue active)
+<30>1 2024-03-18T16:22:50.139524Z MAIL-EDGE-01 postfix/local 3801715 - - 005C3C7ED4: to=<sophia.martinez@meridianhcs.com>, relay=local, delay=2.41, delays=0.73/0.16/0.38/1.14, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T16:22:50.455742Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 005C3C7ED4: removed
+<86>1 2024-03-18T16:27:18.681482Z MAIL-EDGE-01 su 3802154 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T16:27:25.647482Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274740 of user admin.
+<30>1 2024-03-18T16:27:43.834557Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T16:27:44.724316Z MAIL-EDGE-01 snapd 19805 - - stateengine.go:150: state ensure starting change 1245
+<86>1 2024-03-18T16:28:17.576383Z MAIL-EDGE-01 su 3795392 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T16:28:20.163383Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274273.
+<30>1 2024-03-18T16:28:55.905425Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T16:28:56.057974Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00F41F7559: client=mail-clinical.meridianhcs.com[10.10.2.26]
+<30>1 2024-03-18T16:28:56.541679Z MAIL-EDGE-01 postfix/cleanup 3802295 - - 00F41F7559: message-id=<1022197504.151268.6d8ff664@meridianhcs.com>
+<30>1 2024-03-18T16:28:57.166698Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00F41F7559: from=<omar.haddad@meridianhcs.com>, size=1384, nrcpt=1 (queue active)
+<30>1 2024-03-18T16:29:06.686687Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00F41F7559: to=<team@partnerrelay.io>, relay=smtp1.greatplains-mail.net[173.194.24.115]:25, delay=10.52, delays=1.42/0.51/3.60/5.00, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 007BBE69EA)
+<30>1 2024-03-18T16:29:07.441869Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00F41F7559: removed
+<30>1 2024-03-18T16:32:25.532140Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-SMARTINEZ-01.meridianhcs.local[10.10.1.36]
+<30>1 2024-03-18T16:32:25.625057Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 0061257850: client=WS-SMARTINEZ-01.meridianhcs.local[10.10.1.36], sasl_method=LOGIN, sasl_username=sophia.martinez
+<30>1 2024-03-18T16:32:25.763380Z MAIL-EDGE-01 postfix/cleanup 3802605 - - 0061257850: message-id=<1001RARUHD.100Q0F2.2120@sophia-martinez.meridianhcs.com>
+<30>1 2024-03-18T16:32:26.118513Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0061257850: from=<sophia.martinez@meridianhcs.com>, size=1430, nrcpt=1 (queue active)
+<30>1 2024-03-18T16:32:37.210797Z MAIL-EDGE-01 postfix/smtp 3774226 - - 0061257850: to=<orders@industrybriefs.net>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=11.53, delays=1.65/0.42/3.49/5.96, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 006BD0FD48)
+<30>1 2024-03-18T16:32:37.897184Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0061257850: removed
+<78>1 2024-03-18T16:36:00.138000Z MAIL-EDGE-01 CRON 3802904 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:36:19.699676Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from vendorpost-net.mail.protection.outlook.com[40.92.55.94]
+<30>1 2024-03-18T16:36:20.553334Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00C2C80495: client=vendorpost-net.mail.protection.outlook.com[40.92.55.94]
+<30>1 2024-03-18T16:36:21.451752Z MAIL-EDGE-01 postfix/cleanup 3802928 - - 00C2C80495: message-id=<alerts-cb7eab48-7608705@vendorpost.net>
+<30>1 2024-03-18T16:36:22.682688Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00C2C80495: from=<alerts@vendorpost.net>, size=1388, nrcpt=1 (queue active)
+<30>1 2024-03-18T16:36:31.481582Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00C2C80495: to=<lina.nguyen@meridianhcs.com>, relay=mail-clinical.meridianhcs.com[10.10.2.26]:25, delay=11.05, delays=3.04/1.40/1.38/5.23, dsn=2.0.0, status=sent (250 2.0.0 queued as 000AF7C5C0A on MAIL-CLIN-01)
+<30>1 2024-03-18T16:36:32.109079Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00C2C80495: removed
+<30>1 2024-03-18T16:37:29.477703Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:38:39.298661Z MAIL-EDGE-01 systemd-journald 19782 - - Rotating system journal.
+<30>1 2024-03-18T16:40:48.794412Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 137: banned by affinity mask 00000004 (ens192)
+<86>1 2024-03-18T16:43:17.476093Z MAIL-EDGE-01 sshd 3800870 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T16:43:18.539813Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274615.
+<86>1 2024-03-18T16:48:33.032886Z MAIL-EDGE-01 sshd 3804011 - - Connection from 10.10.1.35 port 55444 on 10.10.2.25 port 22
+<86>1 2024-03-18T16:48:35.204086Z MAIL-EDGE-01 sshd 3804011 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 55444 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T16:48:35.348283Z MAIL-EDGE-01 sshd 3804011 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:48:36.019515Z MAIL-EDGE-01 systemd-logind 19795 - - New session 274931 of user aisha.johnson.
+<30>1 2024-03-18T16:49:41.481350Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<sophia.martinez>, method=PLAIN, rip=10.10.1.36, lip=10.10.2.25, mpid=3804109, TLS, session=<AAAACdNb3J>
+<30>1 2024-03-18T16:50:06.450990Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T16:50:07.176066Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 0F8035E6C: client=mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T16:50:08.054163Z MAIL-EDGE-01 postfix/cleanup 3804158 - - 0F8035E6C: message-id=<1000016ONZTK.10015EDCND@meridianhcs.com>
+<30>1 2024-03-18T16:50:09.611303Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0F8035E6C: from=<evelyn.brooks@meridianhcs.com>, size=1612, nrcpt=2 (queue active)
+<30>1 2024-03-18T16:50:10.308378Z MAIL-EDGE-01 postfix/local 3804157 - - 0F8035E6C: to=<priya.patel@meridianhcs.com>, relay=local, delay=3.1, delays=1.22/0.39/0.55/0.94, dsn=2.0.0, status=sent (delivered to maildir)
+<30>1 2024-03-18T16:50:21.638495Z MAIL-EDGE-01 postfix/smtp 3774226 - - 0F8035E6C: to=<marina.holt@northbridge-advisory.com>, relay=relay2.northlake-messaging.net[66.96.142.245]:25, delay=14.38, delays=6.42/0.52/2.46/4.98, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 00131E4725)
+<30>1 2024-03-18T16:50:22.349564Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0F8035E6C: removed
+<30>1 2024-03-18T16:51:26.404841Z MAIL-EDGE-01 dovecot 3804109 - - imap(sophia.martinez)<3804109><AAAACdNb3J>: Disconnected: Logged out in=2092 out=88109 deleted=0 expunged=0 trashed=0 hdr_count=3 hdr_bytes=6501 body_count=2 body_bytes=74692
+<30>1 2024-03-18T16:52:01.104571Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 45: banned by affinity mask 00000004 (virtio0-input)
+<86>1 2024-03-18T16:52:16.219709Z MAIL-EDGE-01 sshd 3804363 - - Connection from 10.10.4.10 port 53594 on 10.10.2.25 port 22
+<85>1 2024-03-18T16:52:16.406709Z MAIL-EDGE-01 sshd 3804363 - - Invalid user unknown from 10.10.4.10 port 53594
+<84>1 2024-03-18T16:52:17.100709Z MAIL-EDGE-01 sshd 3804363 - - Failed password for invalid user unknown from 10.10.4.10 port 53594 ssh2
+<30>1 2024-03-18T16:52:27.589484Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T16:52:28.139782Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T16:52:28.147418Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 00C51E4CD9: client=mail-fin.meridianhcs.com[10.10.2.27]
+<30>1 2024-03-18T16:52:28.559477Z MAIL-EDGE-01 postfix/cleanup 3804378 - - 00C51E4CD9: message-id=<100000XMPTDY.1001GROJE5@meridianhcs.com>
+<30>1 2024-03-18T16:52:29.321783Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00C51E4CD9: from=<evelyn.brooks@meridianhcs.com>, size=1471, nrcpt=1 (queue active)
+<86>1 2024-03-18T16:52:32.436709Z MAIL-EDGE-01 sshd 3804363 - - Connection closed by invalid user unknown 10.10.4.10 port 53594 [preauth]
+<30>1 2024-03-18T16:52:38.714738Z MAIL-EDGE-01 postfix/smtp 3774226 - - 00C51E4CD9: to=<orders@industrybriefs.net>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=10.54, delays=1.50/0.70/3.64/4.69, dsn=2.0.0, status=sent (250 2.0.0 00005DD9 Message accepted for delivery)
+<30>1 2024-03-18T16:52:39.564798Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 00C51E4CD9: removed
+<30>1 2024-03-18T16:58:21.693757Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for lxd
+<86>1 2024-03-18T16:58:22.628041Z MAIL-EDGE-01 sshd 3804886 - - Connection from 10.10.1.35 port 64298 on 10.10.2.25 port 22
+<86>1 2024-03-18T16:58:24.870165Z MAIL-EDGE-01 sshd 3804886 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 64298 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T16:58:25.013387Z MAIL-EDGE-01 sshd 3804886 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:58:25.454643Z MAIL-EDGE-01 systemd-logind 19795 - - New session 275019 of user aisha.johnson.
+<30>1 2024-03-18T17:00:37.021259Z MAIL-EDGE-01 dovecot 3772320 - - imap-login: Login: user=<priya.patel>, method=PLAIN, rip=10.10.1.32, lip=10.10.2.25, mpid=3805094, TLS, session=<AAAABxW/qF>
+<30>1 2024-03-18T17:01:12.394485Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 64 affinity hint keeps vector on CPU 3 (mlx5_comp0)
+<86>1 2024-03-18T17:01:29.045040Z MAIL-EDGE-01 sshd 3804011 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:01:30.194851Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274931.
+<30>1 2024-03-18T17:01:53.544590Z MAIL-EDGE-01 dovecot 3805094 - - imap(priya.patel)<3805094><AAAABxW/qF>: Disconnected: Logged out in=1417 out=183713 deleted=0 expunged=0 trashed=0 hdr_count=3 hdr_bytes=4380 body_count=2 body_bytes=172015
+<30>1 2024-03-18T17:03:13.849624Z MAIL-EDGE-01 systemd-resolved 19808 - - Transaction 698615 switched to UDP+EDNS0 with advertised UDP packet size 1472.
+<30>1 2024-03-18T17:06:33.242337Z MAIL-EDGE-01 snapd 19805 - - taskrunner.go:271: change 1242 task 7 done for microk8s
+<30>1 2024-03-18T17:09:49.054697Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from WS-AJOHNSON-01.meridianhcs.local[10.10.1.35]
+<30>1 2024-03-18T17:09:49.425662Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 000F280BD3: client=WS-AJOHNSON-01.meridianhcs.local[10.10.1.35], sasl_method=LOGIN, sasl_username=aisha.johnson
+<30>1 2024-03-18T17:09:49.795188Z MAIL-EDGE-01 postfix/cleanup 3806203 - - 000F280BD3: message-id=<1001B0X3WK.1056LJ0.9529@aisha-johnson.meridianhcs.com>
+<30>1 2024-03-18T17:09:50.412837Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 000F280BD3: from=<aisha.johnson@meridianhcs.com>, size=1280, nrcpt=1 (queue active)
+<30>1 2024-03-18T17:09:56.784750Z MAIL-EDGE-01 postfix/smtp 3774226 - - 000F280BD3: to=<orders@vendorpost.net>, relay=relay1.northlake-messaging.net[103.13.69.137]:25, delay=7.3, delays=2.66/1.37/0.79/2.49, dsn=2.0.0, status=sent (250 2.0.0 Ok: queued as 00FA477DE4)
+<30>1 2024-03-18T17:09:57.238301Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 000F280BD3: removed
+<86>1 2024-03-18T17:11:59.899281Z MAIL-EDGE-01 sshd 3804886 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:12:00.259069Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 275019.
+<30>1 2024-03-18T17:12:28.191239Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2024-03-18T17:12:52.069965Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:15:41.869991Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T17:20:12.805172Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2024-03-18T17:21:53.913280Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T17:22:55.505182Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T17:24:48.110482Z MAIL-EDGE-01 su 3802154 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T17:24:51.635482Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 274740.
+<30>1 2024-03-18T17:24:57.439338Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 605669.
+<30>1 2024-03-18T17:28:12.421861Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 45 classified for CPU 0 balancing on virtio0-input
+<30>1 2024-03-18T17:29:00.835916Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:30:36.538523Z MAIL-EDGE-01 irqbalance 30611 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:32:40.304313Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<30>1 2024-03-18T17:32:58.869738Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T17:34:14.564118Z MAIL-EDGE-01 snapd 19805 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2024-03-18T17:34:27.725213Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<78>1 2024-03-18T17:36:00.349000Z MAIL-EDGE-01 CRON 3809247 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T17:37:19.933010Z MAIL-EDGE-01 sshd 3809401 - - Connection from 10.10.1.31 port 57687 on 10.10.2.25 port 22
+<86>1 2024-03-18T17:37:22.206191Z MAIL-EDGE-01 sshd 3809401 - - Accepted publickey for marcus.chen from 10.10.1.31 port 57687 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:37:22.260371Z MAIL-EDGE-01 sshd 3809401 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:37:22.816570Z MAIL-EDGE-01 systemd-logind 19795 - - New session 275370 of user marcus.chen.
+<30>1 2024-03-18T17:39:33.074991Z MAIL-EDGE-01 postfix/smtpd 3760261 - - connect from mxa-0023b701.gslb.pphosted.com[199.255.192.230]
+<30>1 2024-03-18T17:39:33.500305Z MAIL-EDGE-01 postfix/smtpd 3760261 - - 0EF925DCE: client=mxa-0023b701.gslb.pphosted.com[199.255.192.230]
+<30>1 2024-03-18T17:39:33.953137Z MAIL-EDGE-01 postfix/cleanup 3809671 - - 0EF925DCE: message-id=<3002472831.549689.681a3bb9@partnerrelay.io>
+<30>1 2024-03-18T17:39:34.511006Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0EF925DCE: from=<alerts@partnerrelay.io>, size=1416, nrcpt=1 (queue active)
+<30>1 2024-03-18T17:39:43.623463Z MAIL-EDGE-01 postfix/smtp 3774226 - - 0EF925DCE: to=<omar.haddad@meridianhcs.com>, relay=mail-clinical.meridianhcs.com[10.10.2.26]:25, delay=10.16, delays=1.57/0.92/1.63/6.04, dsn=2.0.0, status=sent (250 2.0.0 queued as 0068C1336D on MAIL-CLIN-01)
+<30>1 2024-03-18T17:39:44.070137Z MAIL-EDGE-01 postfix/qmgr 3774210 - - 0EF925DCE: removed
+<30>1 2024-03-18T17:42:49.147664Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2024-03-18T17:43:59.911387Z MAIL-EDGE-01 irqbalance 30611 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<86>1 2024-03-18T17:45:53.965506Z MAIL-EDGE-01 sshd 3810404 - - Connection from 10.10.1.35 port 59179 on 10.10.2.25 port 22
+<86>1 2024-03-18T17:45:56.146731Z MAIL-EDGE-01 sshd 3810404 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 59179 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T17:45:56.265897Z MAIL-EDGE-01 sshd 3810404 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T17:45:56.921132Z MAIL-EDGE-01 systemd-logind 19795 - - New session 275446 of user aisha.johnson.
+<30>1 2024-03-18T17:47:13.106639Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 122: banned by affinity mask 00000004 (nvme0q2)
+<30>1 2024-03-18T17:47:17.519292Z MAIL-EDGE-01 snapd 19805 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2024-03-18T17:49:40.600462Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook lxd.configure
+<30>1 2024-03-18T17:49:55.720414Z MAIL-EDGE-01 snapd 19805 - - daemon.go:460: gracefully waiting for hook lxd.configure
+<30>1 2024-03-18T17:53:01.089267Z MAIL-EDGE-01 systemd-resolved 19808 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 942565.
+<30>1 2024-03-18T17:54:49.088044Z MAIL-EDGE-01 systemd-resolved 19808 - - Flushed negative cache scope ens192 after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T17:55:00.980221Z MAIL-EDGE-01 sshd 3810404 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:55:01.954940Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 275446.
+<30>1 2024-03-18T17:55:28.490431Z MAIL-EDGE-01 irqbalance 30611 - - Skipping IRQ 16: banned by affinity mask 00000002 (ahci)
+<86>1 2024-03-18T17:57:25.311235Z MAIL-EDGE-01 sshd 3811871 - - Connection from 10.10.1.35 port 63865 on 10.10.2.25 port 22
+<86>1 2024-03-18T17:57:27.559459Z MAIL-EDGE-01 sshd 3811871 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 63865 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T17:57:27.651678Z MAIL-EDGE-01 sshd 3811871 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T17:57:28.170881Z MAIL-EDGE-01 systemd-logind 19795 - - New session 275551 of user aisha.johnson.
+<86>1 2024-03-18T17:57:57.484625Z MAIL-EDGE-01 sshd 3811871 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:57:58.104486Z MAIL-EDGE-01 systemd-logind 19795 - - Removed session 275551.
+<86>1 2024-03-18T17:58:35.816739Z MAIL-EDGE-01 sshd 3812012 - - Connection from 10.10.1.31 port 60308 on 10.10.2.25 port 22
+<86>1 2024-03-18T17:58:38.026959Z MAIL-EDGE-01 sshd 3812012 - - Accepted publickey for marcus.chen from 10.10.1.31 port 60308 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:58:38.132155Z MAIL-EDGE-01 sshd 3812012 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:58:38.716339Z MAIL-EDGE-01 systemd-logind 19795 - - New session 275560 of user marcus.chen.

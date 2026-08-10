@@ -12,18 +12,22 @@ import random
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     DnsContext,
-    IdsContext,
+    IdsAlertPlan,
     NatContext,
-    NetworkContext,
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import IdsAlertActionBundle, IdsAlertRequest
 from evidenceforge.generation.activity.generator import _TLS_VERSION_VALUES, _TLS_VERSION_WEIGHTS
+from evidenceforge.generation.activity.ssh_identity import (
+    baseline_ssh_auth_method,
+    baseline_ssh_client_key,
+)
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.utils.rng import _stable_seed
+from tests.network_factories import network_plan
 
 T0 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
 
@@ -33,11 +37,11 @@ T0 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
 
 class TestSnortRevField:
     def test_ids_context_default_rev(self):
-        ctx = IdsContext(sid=10001, message="test", classification="test")
+        ctx = IdsAlertPlan(sid=10001, message="test", classification="test")
         assert ctx.rev == 1
 
     def test_ids_context_custom_rev(self):
-        ctx = IdsContext(sid=10001, message="test", classification="test", rev=14)
+        ctx = IdsAlertPlan(sid=10001, message="test", classification="test", rev=14)
         assert ctx.rev == 14
 
     def test_snort_emitter_renders_rev(self, tmp_path):
@@ -48,22 +52,24 @@ class TestSnortRevField:
             sensor_hostnames=["ids-01"],
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="185.70.41.45",
                 src_port=12345,
                 dst_ip="10.10.3.10",
                 dst_port=80,
                 protocol="tcp",
             ),
-            ids=IdsContext(
-                sid=2002677,
-                rev=14,
-                message="ET SCAN Nikto Web App Scan in Progress",
-                classification="web-application-attack",
-                priority=2,
+            ids_alerts=(
+                IdsAlertPlan(
+                    sid=2002677,
+                    rev=14,
+                    message="ET SCAN Nikto Web App Scan in Progress",
+                    classification="web-application-attack",
+                    priority=2,
+                ),
             ),
         )
         event._sensor_hostnames_by_format = {"snort_alert": ["ids-01"]}
@@ -82,20 +88,22 @@ class TestSnortRevField:
             sensor_hostnames=["ids-01"],
         )
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.0.1",
                 src_port=54321,
                 dst_ip="10.0.0.2",
                 dst_port=22,
                 protocol="tcp",
             ),
-            ids=IdsContext(
-                sid=384,
-                message="PROTOCOL-ICMP PING",
-                classification="icmp-event",
+            ids_alerts=(
+                IdsAlertPlan(
+                    sid=384,
+                    message="PROTOCOL-ICMP PING",
+                    classification="icmp-event",
+                ),
             ),
         )
         event._sensor_hostnames_by_format = {"snort_alert": ["ids-01"]}
@@ -104,6 +112,8 @@ class TestSnortRevField:
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
         assert "[1:384:1]" in output
+        assert "[Classification: Generic ICMP event]" in output
+        assert "[Classification: icmp-event]" not in output
 
 
 class TestIdsAlertActionBundle:
@@ -201,7 +211,7 @@ class TestIdsAlertActionBundle:
 
         result = IdsAlertActionBundle(request).execute_with_result()
 
-        assert result.ids.sid == 2027758
+        assert result.alert.sid == 2027758
         assert result.dns is not None
         assert result.dns.query == "host-abcd.corp.example"
 
@@ -443,45 +453,44 @@ class TestTlsCipherStability:
 
 class TestSshKeyFingerprint:
     def test_different_source_hosts_get_different_keys(self):
-        keys = set()
-        for src_ip in ["10.10.1.10", "10.10.1.20", "10.10.1.30", "10.10.1.40"]:
-            _key_rng = random.Random(_stable_seed(f"ssh_client_key:{src_ip}:WEB-EXT-01:admin"))
-            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-            key_hash = "".join(
-                _key_rng.choices(
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
-                )
-            )
-            keys.add(f"{key_type}:{key_hash}")
+        keys = {
+            baseline_ssh_client_key(src_ip, "admin")
+            for src_ip in ["10.10.1.10", "10.10.1.20", "10.10.1.30", "10.10.1.40"]
+        }
         assert len(keys) == 4, f"Expected 4 unique keys, got {len(keys)}"
 
-    def test_same_source_host_and_user_gets_same_key(self):
-        keys = []
-        for _ in range(3):
-            _key_rng = random.Random(_stable_seed("ssh_client_key:10.10.1.10:WEB-EXT-01:admin"))
-            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-            key_hash = "".join(
-                _key_rng.choices(
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
-                )
-            )
-            keys.append(f"{key_type}:{key_hash}")
-        assert keys[0] == keys[1] == keys[2]
+    def test_same_source_host_and_user_keeps_key_across_targets(self):
+        keys = {
+            baseline_ssh_client_key("10.10.1.10", "admin")
+            for _target in ["10.10.2.10", "10.10.2.20", "10.10.3.10"]
+        }
+        assert len(keys) == 1
 
     def test_same_source_host_different_users_get_different_keys(self):
-        keys = set()
-        for username in ["admin", "root", "aisha.johnson", "marcus.chen"]:
-            _key_rng = random.Random(
-                _stable_seed(f"ssh_client_key:10.10.1.10:WEB-EXT-01:{username}")
-            )
-            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-            key_hash = "".join(
-                _key_rng.choices(
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
-                )
-            )
-            keys.add(f"{key_type}:{key_hash}")
+        keys = {
+            baseline_ssh_client_key("10.10.1.10", username)
+            for username in ["admin", "root", "aisha.johnson", "marcus.chen"]
+        }
         assert len(keys) == 4, f"Expected 4 user-scoped keys, got {len(keys)}"
+
+    def test_auth_method_is_stable_for_client_user_target_policy(self):
+        methods = {
+            baseline_ssh_auth_method("10.10.1.10", "10.10.3.10", "admin") for _session in range(10)
+        }
+        assert len(methods) == 1
+
+    def test_auth_policy_varies_across_fleet_tuples(self):
+        methods = {
+            baseline_ssh_auth_method(
+                f"10.10.1.{source_octet}",
+                f"10.10.2.{target_octet}",
+                username,
+            )
+            for source_octet in range(10, 15)
+            for target_octet in range(20, 25)
+            for username in ("admin", "deploy")
+        }
+        assert methods == {"password", "publickey"}
 
 
 # ── eCAR NAT-aware IP ────────────────────────────────────────────────────
@@ -501,10 +510,10 @@ class TestEcarNatAwareIp:
         dst_host.os = "Ubuntu 22.04"
         dst_host.os_category = "linux"
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=T0,
             event_type="connection",
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="185.70.41.45",
                 src_port=12345,
                 dst_ip="198.51.100.10",

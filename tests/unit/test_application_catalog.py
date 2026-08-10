@@ -11,6 +11,8 @@ from evidenceforge.generation.activity.application_catalog import (
     get_apps_for_persona,
     get_child_processes,
     get_pe_metadata,
+    is_deployment_compatible_application,
+    is_singleton_application_image,
     is_system_type_allowed,
     load_catalog,
     pick_app_and_command,
@@ -25,6 +27,43 @@ class TestCatalogLoading:
         data = load_catalog()
         assert "applications" in data
         assert len(data["applications"]) > 20
+
+    def test_remote_access_apps_share_one_deployment_cohort(self):
+        apps = get_apps_for_persona(
+            "sales",
+            "windows",
+            "user_app",
+            "workstation",
+            "meridianhcs.local",
+        )
+        remote_ids = {
+            app["id"] for app in apps if app.get("compatibility_group") == "remote_access_stack"
+        }
+
+        assert len(remote_ids) == 1
+
+    def test_remote_access_ui_is_singleton_per_session(self):
+        assert is_singleton_application_image(
+            r"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe",
+            "windows",
+        )
+
+    def test_long_lived_desktop_apps_are_singleton_per_session(self):
+        images = (
+            r"C:\Users\sophia.martinez\AppData\Local\slack\Slack.exe",
+            r"C:\Users\sophia.martinez\AppData\Roaming\Zoom\bin\Zoom.exe",
+            r"C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe",
+            r"C:\Users\sophia.martinez\AppData\Local\Microsoft\Teams\current\Teams.exe",
+            r"C:\Users\sophia.martinez\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+        )
+
+        assert all(is_singleton_application_image(image, "windows") for image in images)
+
+    def test_incompatible_remote_access_app_is_rejected_for_deployment(self):
+        assert is_deployment_compatible_application("vpnui.exe", "windows", "meridianhcs.local")
+        assert not is_deployment_compatible_application(
+            "ZSATray.exe", "windows", "meridianhcs.local"
+        )
 
     def test_all_entries_have_fully_qualified_paths(self):
         """P0-1: No bare filenames — all image paths must be fully qualified."""

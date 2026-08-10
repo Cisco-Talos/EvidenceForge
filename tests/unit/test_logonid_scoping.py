@@ -524,6 +524,13 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
     step_2.events = [Mock(type="process")]
 
     engine.scenario.storyline = [step_1, step_2]
+    engine.authored_intent_ledger = Mock()
+    engine.authored_intent_ledger.intent_at.side_effect = [
+        Mock(intent_id="intent-1"),
+        Mock(intent_id="intent-2"),
+        Mock(intent_id="intent-3"),
+    ]
+    engine.intent_execution_ledger = Mock()
 
     parsed_times = {
         step_1.time: datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
@@ -561,6 +568,7 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
     assert observed_times == sorted(observed_times)
     assert observed_times[1] == observed_times[0] + timedelta(seconds=10)
     assert observed_times[2] > observed_times[1]
+    assert engine.intent_execution_ledger.mark_planned.call_count == 3
 
 
 def test_log_cleared_storyline_event_inherits_recent_wevtutil_logon_id(

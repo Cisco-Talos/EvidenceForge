@@ -24,25 +24,25 @@
 
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
 class ZeekDhcpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek dhcp.log format (NDJSON).
 
-    Renders DHCP transaction logs from DhcpContext on SecurityEvent.
+    Renders DHCP transaction logs from DhcpContext on CanonicalOccurrence.
     """
 
     _log_filename = "dhcp.json"
     _flat_filename = "zeek_dhcp.json"
     _supported_types: set[str] = {"dhcp_lease"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """DHCP emitter handles dhcp_lease events with DHCP context."""
         return event.event_type in self._supported_types and event.dhcp is not None
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render dhcp.log entry from DhcpContext."""
         if event.dhcp is None:
             return

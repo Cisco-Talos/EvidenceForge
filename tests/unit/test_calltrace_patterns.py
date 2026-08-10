@@ -171,7 +171,7 @@ class TestProcessAccessCallTraceOwnership:
         generator = ActivityGenerator(state_manager, {})
         dispatched = []
         generator.dispatcher = Mock()
-        generator.dispatcher.dispatch.side_effect = dispatched.append
+        generator.dispatcher.dispatch_builder.side_effect = dispatched.append
 
         assert generator.generate_process_access(
             user,

@@ -53,14 +53,21 @@ service_account_delegation:
       weight: 36
       processes:
         - image: "C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe"
+          system_types: [server, domain_controller]
+          compatibility_group: backup_platform
+          compatibility_option: veeam
           command_line: "\"C:\\Program Files\\Veeam\\Backup and Replication\\Backup\\Veeam.Backup.Service.exe\""
           parent_key: "services"
           weight: 5
         - image: "C:\\Program Files\\Commvault\\ContentStore\\Base\\GxCVD.exe"
+          compatibility_group: backup_platform
+          compatibility_option: commvault
           command_line: "\"C:\\Program Files\\Commvault\\ContentStore\\Base\\GxCVD.exe\" -service"
           parent_key: "services"
           weight: 3
         - image: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+          compatibility_group: backup_platform
+          compatibility_option: native
           command_line: "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\backup-check.ps1"
           parent_key: "taskeng"
           weight: 1

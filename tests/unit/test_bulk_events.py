@@ -20,6 +20,7 @@ from evidenceforge.generation.actions import (
     ScheduledScanOverlapRequest,
     WebScanActionBundle,
     WebScanRequest,
+    WorkstationLockResult,
 )
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.storyline import (
@@ -32,6 +33,7 @@ from evidenceforge.generation.engine.storyline import (
     _iter_shuffled_port_scan_pairs,
     _observed_web_scan_status,
     _port_scan_connection_profile,
+    _sample_network_hosts,
     _scan_target_exposes_port,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
@@ -659,6 +661,29 @@ class TestWebScanConnectionProfile:
 
 
 class TestPortScanPairIteration:
+    def test_sample_network_hosts_handles_ipv6_64_without_enumeration(self):
+        import ipaddress
+
+        network = ipaddress.ip_network("2001:db8:1234::/64")
+        sampled = _sample_network_hosts(network, 3, random.Random(29))
+
+        assert len(sampled) == 3
+        assert len(set(sampled)) == 3
+        assert all(ipaddress.ip_address(address) in network for address in sampled)
+        assert str(network.network_address) not in sampled
+
+    def test_sample_network_hosts_matches_ipv4_host_semantics(self):
+        import ipaddress
+
+        network = ipaddress.ip_network("10.0.0.0/8")
+        sampled = _sample_network_hosts(network, 5, random.Random(31))
+
+        assert len(sampled) == 5
+        assert len(set(sampled)) == 5
+        assert all(ipaddress.ip_address(address) in network for address in sampled)
+        assert str(network.network_address) not in sampled
+        assert str(network.broadcast_address) not in sampled
+
     def test_iter_shuffled_port_scan_pairs_covers_product_once(self):
         targets = ["10.0.0.10", "10.0.0.11", "10.0.0.12"]
         ports = [22, 80, 443, 3389]
@@ -1301,7 +1326,7 @@ class TestWebScanPresets:
         http = captured[0]["http"]
         assert http.method == "HEAD"
         assert http.response_body_len == 0
-        assert http.resp_mime_types == []
+        assert http.resp_mime_types == ()
 
     def test_web_scan_paths_are_shuffled_between_passes(self):
         import inspect
@@ -1777,3 +1802,44 @@ class TestWorkstationLockUnlockEventSpec:
     def test_unlock_defaults(self):
         spec = WorkstationUnlockEventSpec()
         assert spec.type == "workstation_unlock"
+
+    def test_storyline_records_already_locked_transition_as_skipped(self):
+        """A realistic lock no-op must not be labeled as emitted ground truth."""
+        from unittest.mock import Mock
+
+        event_time = datetime(2026, 4, 16, 17, 20, tzinfo=UTC)
+        system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        session = SimpleNamespace(
+            system=system.hostname,
+            logon_type=2,
+            session_kind="interactive",
+            start_time=event_time - timedelta(hours=2),
+            logon_id="0x12345",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = Mock()
+        engine.state_manager.get_sessions_for_user.return_value = [session]
+        engine.activity_generator = Mock()
+        engine.activity_generator.generate_workstation_lock.return_value = WorkstationLockResult(
+            emitted=False,
+            skipped_reason="workstation_already_locked",
+        )
+        engine.dispatcher = SimpleNamespace(storyline_cluster_id="evt-lock")
+
+        malicious_event = engine._execute_typed_event(
+            spec=WorkstationLockEventSpec(),
+            actor=actor,
+            system=system,
+            time=event_time,
+            activity="Lock workstation",
+            explicit_types={"workstation_lock"},
+        )
+
+        assert malicious_event["skipped_reason"] == "workstation_already_locked"
+        engine.activity_generator.generate_workstation_lock.assert_called_once_with(
+            user=actor,
+            system=system,
+            time=event_time,
+            logon_id="0x12345",
+        )

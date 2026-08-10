@@ -53,6 +53,7 @@ class ActiveSession:
         source_ip: Source IP address for the logon
         session_id: Windows terminal/session ID rendered by Security/Sysmon sources
         explorer_pid: PID of explorer.exe instance for this interactive session
+        windows_shell_bootstrapped: Whether the initial Windows shell chain was created
         process_tree_root: Root PID for this session's process tree
         last_activity_time: Last baseline activity timestamp (for login cooldown)
         network_close_time: Close time for a transport connection backing the session
@@ -67,6 +68,8 @@ class ActiveSession:
     source_ip: str
     session_id: int = 0
     explorer_pid: int | None = None
+    windows_shell_bootstrapped: bool = False
+    initial_explorer_pid: int | None = None
     session_shell_pid: int | None = None  # Linux: per-session bash login shell
     session_user_manager_pid: int | None = None  # Linux: per-session systemd --user
     session_winlogon_pid: int | None = None  # Windows: per-RDP-session winlogon
@@ -79,7 +82,7 @@ class ActiveSession:
     transport_pid: int | None = None
     ecar_object_id: str = ""
     storyline_protected: bool = False
-    logon_guid: str = ""
+    logon_guid: str = ""  # Final once first published; null/non-null policy is immutable
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
     end_plan: SessionEndPlan | None = None
@@ -119,6 +122,7 @@ class RunningProcess:
     primary_tid: int = -1
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
+    end_time: datetime | None = None
 
 
 @dataclass

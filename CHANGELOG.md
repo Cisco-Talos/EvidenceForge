@@ -6,6 +6,100 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v1.15.0 (2026-08-10)
+
+This minor release completes the non-breaking canonical event and action-bundle
+architecture, substantially strengthens cross-source lifecycle realism, and
+incorporates repeated blind-assessment fixes across endpoint, network, email,
+and evaluation behavior.
+
+**Canonical architecture and safety**
+
+- Added the canonical contract foundation and completed occurrence, dispatch,
+  session/authentication, interactive-session, network-projection,
+  world-capability, evaluation-validity, and workload-safety boundaries
+  (`0b0ad32c`, `b89855c9`, `739dbea2`, `b2f1dd68`, `91247365`, `c139c77a`,
+  `03401ad0`, `868eb35d`, `53934a16`).
+- Closed the post-migration realism blockers without restoring compatibility
+  layers or changing the public scenario schema (`2ab8e5e9`).
+
+**Windows endpoint, identity, and session realism**
+
+- Enforced module lifecycles, channel-time-derived record IDs, and more varied
+  startup module profiles (`49148992`, `f4979524`, `df33ad10`).
+- Modeled authentication attempts and privilege-event ownership, and kept
+  desktop bootstrap and session lifecycles attached to their canonical logons
+  (`cfd6e10a`, `5c7786d6`, `f5604488`, `2942320d`).
+- Made enterprise software cohorts and endpoint singleton planning coherent
+  and atomic across process and network ownership (`c0a01395`, `b96a96be`,
+  `4a816bcc`, `b7275437`, `d5c6900a`).
+- Reused resident desktop resources and named service processes, and bound
+  endpoint effects and ambient Windows file activity to native process owners
+  (`b3cd49a0`, `d7162d57`, `4f062448`, `90a997db`).
+- Preserved host timezone state and canonical shell bootstrap timing, modeled
+  complete Windows session-process lifecycles, and prevented duplicate RDP
+  shell bootstrap (`bfbe3ed3`, `a1227098`, `ea914c19`, `81fc795c`, `4cc75358`).
+
+**Remote access and Linux lifecycle ownership**
+
+- Enforced Linux process-observation chronology and bounded SSH client
+  ownership, then attached Windows SSH clients, credentials, receiver
+  lifecycles, routine scheduling, and responder processes to their owning
+  sessions (`8616105d`, `a8ddb632`, `2312ec24`, `eeb97e11`, `00a36029`,
+  `316f0da7`, `84294984`).
+- Preserved explicit-credential source semantics and modeled one-shot caller
+  behavior, while assigning Linux SMB activity to native client processes
+  (`f0c6117d`, `17f73d05`, `ebab5c8f`).
+
+**Network, protocol, proxy, and source-native projection**
+
+- Ordered HTTP activity and made persistent transactions share coherent,
+  durable observation identities (`04eb354c`, `8f1593f3`, `9dc294ad`,
+  `481f0ed8`).
+- Ordered and retained ASA translations, modeled coherent sensor clocks and
+  passive datagram accounting, and clipped perimeter teardown observations to
+  visible intervals (`20f08d56`, `2ed74a5d`, `dc4d519c`, `0e75af19`,
+  `e5f5aac8`).
+- Defined and annotated proxy tunnel accounting, omitted unavailable totals,
+  reconciled byte scopes, and attached proxy flows to native client processes
+  (`76421d75`, `1f9e4f5d`, `1f854be8`, `998d9942`, `1ee7ad95`, `ea53038a`).
+- Enforced half-open collection windows, gated analyzers on captured content,
+  normalized Zeek histories, preserved TLS certificate observation, and
+  excluded implausible external client networks (`4565b2e0`, `9e3e7c28`,
+  `e3e9ed9a`, `fc51a85d`, `1f9dd5d1`).
+- Rendered source-native output against explicit versioned schemas
+  (`c3f17ead`).
+
+**Long-lived services, maintenance, packages, and applications**
+
+- Honored bounded process deadlines and completed ownership/closure for APT
+  frontends, package managers, and their transport helpers (`318dfe59`,
+  `490e363b`, `eba43cd9`, `ed2e4d80`).
+- Modeled durable ServiceHealth agents and stateful fleet maintenance
+  (`2a205e0b`, `294d2c80`).
+- Reused resident mail clients, preserved durable but varied rsyslog health
+  state, and aligned generated email artifacts with their owning applications
+  (`07751e47`, `481a48d1`, `772ebabc`, `60ae2587`).
+
+**Evaluation correctness and regression coverage**
+
+- Reconciled storyline pivot identity, explicit-proxy paths, duration windows,
+  account deletion, and truthful already-satisfied action no-ops, restoring
+  full pivot linkability on the expanded IDS assessment (`dcb89ca6`).
+- Corrected the private-IPv6 network regression expectation (`f17096f0`).
+
+**Assessment, documentation, and CI**
+
+- Published the complete realism review, reconciled its remediation roadmap,
+  and recorded the post-Batch-2 and post-Batch-7b effectiveness gates
+  (`7238ca61`, `2b473a3d`, `f2a15f6a`, `0934e808`, `ca03d731`).
+- Recorded assessment loops 15-34 and their individual handoffs, then completed
+  the expanded iteration-test loop documentation (`ff7928e0`, `2eb98588`,
+  `53c454aa`, `6472d02a`, `45467a6b`, `161f30ff`, `6339e586`).
+- Extended CI time allowance for the expanded validation suite (`40ac5f71`).
+- Updated Ruff to 0.16.1 and setup-uv to 9.0.0, retaining explicit cache
+  pruning for cache-enabled GitHub Actions jobs (`8c4685c7`, `93a4510e`).
+
 ## v1.14.1 (2026-08-04)
 
 This patch release corrects source-native network and endpoint behavior found

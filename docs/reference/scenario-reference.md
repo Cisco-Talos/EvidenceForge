@@ -14,6 +14,7 @@ Scenario files are YAML documents that define the environment, users, systems, p
 
 ```yaml
 version: "1.0"
+generation_seed: 42          # Optional uint64 (default: 42); controls deterministic substreams
 name: scenario-name          # Alphanumeric, dash, underscore
 description: |
   Multi-line scenario description
@@ -67,6 +68,10 @@ EvidenceForge reports a validation-time input error that names the conflicting
 field and source files. Lists such as `storyline`, `users`, and `systems` are
 owned as whole fields and are not automatically concatenated.
 
+Duplicate mapping keys within any YAML file are rejected before composition. A scenario must
+express one unambiguous value for each field; duplicate keys are never treated as last-value-wins
+overrides.
+
 Nested includes are allowed and are resolved relative to the file that declares
 them:
 
@@ -82,6 +87,10 @@ environment:
 
 The singular `include` key is accepted as a convenience for one file, but
 `includes` is the preferred form for new scenarios.
+
+Scenario composition is bounded to 32 levels, 256 files, 16 MiB of source YAML, and 1,000,000
+expanded nodes. These parsing limits are always enforced; the trusted large-workload override
+does not disable them.
 
 For larger exercise families, keep reusable organization context separate from
 scenario-specific narrative files:
@@ -111,6 +120,31 @@ change a shared organization section, copy that organization include into the
 scenario's local `includes/` directory and include the local copy instead of the
 shared one. Do not include both copies of the same section, because duplicate
 fields are validation errors rather than overrides.
+
+## Deterministic Seed and Workload Envelope
+
+`generation_seed` is a public unsigned 64-bit integer. Identical scenario content, seed, selected
+formats, and generator version reproduce the same deterministic substreams. The CLI can override
+the scenario value for one run:
+
+```bash
+uv run eforge generate scenario.yaml --seed 8675309 -o output
+```
+
+The effective seed is recorded in `collection_profile.json`. Use explicit seed matrices instead
+of changing the scenario name or unrelated content to obtain independent deterministic runs.
+
+Before validation or generation allocates the workload, EvidenceForge estimates the primary
+duration, warm-up, periodic and explicit occurrences, canonical fan-out, rendered records, and
+attachment/email expansion. The default supported envelope is 31 days of primary activity, 7 days
+of warm-up, 1,000,000 periodic occurrences, 5,000,000 explicit occurrences, 20,000,000 canonical
+occurrences, and 200,000,000 rendered records. Per-attachment and aggregate email payload limits
+are also enforced.
+
+`eforge validate` and `eforge generate` reject an estimated overrun. For a reviewed, trusted run
+with adequate resources, pass `--allow-large-workload`; this bypasses the workload estimate only.
+It does not relax YAML ambiguity, include budgets, path containment, regular-file, symlink, or
+archive safety checks.
 
 ## Environment
 
@@ -220,7 +254,7 @@ systems:
     type: workstation          # Required: workstation|server|domain_controller
     assigned_user: jsmith      # Optional: reference to username
     services: ["IIS"]          # Optional
-    roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, mail_server
+    roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, dhcp_server, mail_server
 ```
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
@@ -367,6 +401,7 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS and full destination URLs
 - `dns_server` — DNS resolution target
+- `dhcp_server` — DHCP acquisition/renewal target; pair with a concrete service such as `windows-dhcp-server` or `dhcpd`
 
 Inbound traffic is constrained by network topology: DMZ hosts receive substantial external traffic, while internal servers only receive connections from other internal systems. The firewall policy determines what gets permitted vs denied — denied connection attempts still produce firewall deny records and source-side sensor visibility.
 
@@ -531,7 +566,7 @@ The engine manages user sessions with exact transport-type matching. When a stor
 Multi-phase remote activities use action-bundle semantics internally. For example,
 an SSH request is modeled as one SSH session action that coordinates transport,
 auth, session, process, bash-history, endpoint/EDR, and teardown evidence before
-the engine dispatches individual canonical `SecurityEvent`s. An RDP request is
+the engine dispatches individual `CanonicalOccurrence` snapshots. An RDP request is
 modeled as one remote interactive session action that coordinates source-side
 `mstsc.exe`, TCP/3389 transport, target Type 10 logon/session metadata, and
 source-visible ordering before dispatch. Windows remote-admin events such as
@@ -892,7 +927,7 @@ automated, interval-driven, or explicitly minutes/hours apart.
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
 
-**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, lock state, source endpoints, validation evidence, and termination ordering. DC-side Kerberos ticket evidence uses the internal Kerberos/DC bundle so TGT/TGS timing, source IP/port, TGT cache behavior, and service-principal identity stay aligned. Windows audit/account-management events use internal Windows audit bundles so subject session ownership, target identity, source timing, and Sysmon/eCAR process-access context stay aligned. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. DHCP server, DNS resolver, domain controller, forward proxy, SSH receiver, and RDP receiver are typed capabilities used consistently by baseline and storyline planning. An activity that requires a distinct peer excludes its requesting host; missing capability remains missing instead of becoming the sole host or a fabricated address. Optional baseline activity skips that family, while authored intent that cannot satisfy its required contract is rejected. Public recursive DNS and NTP endpoints shipped as validated configuration are external capabilities only for traffic that can realistically use them. The model is also used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, lock state, source endpoints, validation evidence, and termination ordering. DC-side Kerberos ticket evidence uses the internal Kerberos/DC bundle so TGT/TGS timing, source IP/port, TGT cache behavior, and service-principal identity stay aligned. Windows audit/account-management events use internal Windows audit bundles so subject session ownership, target identity, source timing, and Sysmon/eCAR process-access context stay aligned. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 
@@ -939,7 +974,7 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP acquisition and renewal are modeled internally as a DHCP lease action bundle: one lease identity drives Zeek DHCP/conn fan-out, lease metadata, link-local visibility, and Linux `dhclient` syslog companions. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. The scenario must contain a distinct modeled DHCP server, declared with `roles: [dhcp_server]` or a recognized DHCP service. Authored `dhcp_lease` intent fails validation without one; optional baseline DHCP activity is skipped. DHCP acquisition and renewal are modeled internally as a DHCP lease action bundle: one lease identity drives Zeek DHCP/conn fan-out, lease metadata, link-local visibility, and Linux `dhclient` syslog companions. The lease's T1 renewal interval is selected once and retained for that lifecycle. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
 
 ### Port Scan Events
 
@@ -1259,7 +1294,7 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
 ```
 
-HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`, `response_body_len`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent. The `referrer` field defaults to `null` (auto-generated from the traffic context — search engine, same-origin, social, or blank); set it explicitly for phishing click scenarios or specific referrer chain modeling (e.g., `referrer: "https://evil.example.com/page"`). The same `referrer` and `response_body_len` fields are available on `beacon` events.
+HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`, `response_body_len`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single CanonicalOccurrence. The `referrer` field defaults to `null` (auto-generated from the traffic context — search engine, same-origin, social, or blank); set it explicitly for phishing click scenarios or specific referrer chain modeling (e.g., `referrer: "https://evil.example.com/page"`). The same `referrer` and `response_body_len` fields are available on `beacon` events.
 
 **Byte and connection state overrides:** `orig_bytes` (originator payload bytes), `resp_bytes` (responder payload bytes), `response_body_len` (HTTP response body bytes rendered in `web_access` / `proxy_access`), `conn_state` (Zeek connection outcome: SF, S0, REJ, etc.). When omitted, the engine auto-sizes bytes based on the event's `technique`, `description`, URI, and HTTP status (exfiltration -> large `orig_bytes`; C2 -> small bidirectional; downloads -> large successful response bodies; 4xx/5xx -> small error pages), and defaults `conn_state` to SF. Set `response_body_len` to pin exact HTTP body bytes; if it is omitted on an HTTP event, explicit `resp_bytes` is also used as the HTTP body-size override before connection-level protocol overhead is added. Set `conn_state` explicitly to model failed connections (e.g., `S0` for a dead C2 channel, `REJ` for a blocked exfil attempt).
 

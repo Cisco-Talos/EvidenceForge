@@ -338,6 +338,46 @@ class TestStorylineAccountLifecycle:
         assert resolved_pid == pid
         engine.activity_generator.generate_system_process.assert_not_called()
 
+    def test_backup_server_binary_is_not_selected_on_workstation(self):
+        """Server-side backup controllers must not be assigned to workstations."""
+        engine = object.__new__(BaselineMixin)
+        engine.scenario = SimpleNamespace(name="deployment-a")
+        config = {
+            "caller_profiles": [
+                {
+                    "name": "backup_agents",
+                    "account_terms": ["backup"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Program Files\Veeam\Veeam.Backup.Service.exe",
+                            "command_line": "Veeam.Backup.Service.exe",
+                            "parent_key": "services",
+                            "weight": 10,
+                            "system_types": ["server"],
+                        },
+                        {
+                            "image": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                            "command_line": "powershell.exe -File backup-check.ps1",
+                            "parent_key": "taskeng",
+                            "weight": 1,
+                        },
+                    ],
+                }
+            ]
+        }
+        workstation = SimpleNamespace(type="workstation")
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            choice = engine._pick_service_account_delegation_process(
+                "svc_backup", random.Random(3), workstation
+            )
+
+        assert choice["image"].endswith("powershell.exe")
+
 
 class TestIdsFalsePositiveSignatures:
     """Baseline false positives should not claim artifacts the generator does not model."""

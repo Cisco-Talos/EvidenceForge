@@ -228,6 +228,18 @@ def generate(
         "systems you are authorized to test. Off by default (payloads use the inert, "
         "non-resolving canary).",
     ),
+    seed: int | None = typer.Option(
+        None,
+        "--seed",
+        min=0,
+        max=2**64 - 1,
+        help="Override scenario generation_seed for this deterministic run.",
+    ),
+    allow_large_workload: bool = typer.Option(
+        False,
+        "--allow-large-workload",
+        help="Trusted override for documented resource limits; path safety remains enforced.",
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -275,6 +287,8 @@ def generate(
 
         scenario_data = merge_builtin_personas(scenario_data)
         scenario = Scenario(**scenario_data)
+        if seed is not None:
+            scenario = scenario.model_copy(update={"generation_seed": seed})
         console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
         console.print(f"  Description: {scenario.description}")
         console.print(f"  Users: {len(scenario.environment.users)}")
@@ -290,6 +304,7 @@ def generate(
             scenario,
             oob_hosts=oob_hosts,
             scenario_root=scenario_file.parent,
+            allow_large_workload=allow_large_workload,
         )
         issues = validator.validate()
 
@@ -528,6 +543,8 @@ def generate(
                 scenario_root=scenario_dir,
                 output_target=output_target,
                 oob_hosts=oob_hosts,
+                generation_seed=seed,
+                allow_large_workload=allow_large_workload,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -732,6 +749,11 @@ def validate(
         "'validate before generate' stays reliable for live-callback scenarios. Validation "
         "only: no callback is ever made. Repeatable.",
     ),
+    allow_large_workload: bool = typer.Option(
+        False,
+        "--allow-large-workload",
+        help="Report, but do not reject, documented generation resource-limit overruns.",
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -796,6 +818,7 @@ def validate(
         scenario,
         oob_hosts=oob_hosts,
         scenario_root=scenario_file.parent,
+        allow_large_workload=allow_large_workload,
     )
     issues = validator.validate()
 
@@ -865,6 +888,11 @@ def eval_cmd(
         "--real-parsers",
         help="[Reserved] Evaluate using real downstream parser binaries (not yet implemented).",
         is_flag=True,
+    ),
+    allow_large_evaluation: bool = typer.Option(
+        False,
+        "--allow-large-evaluation",
+        help="Trusted override for evaluator corpus byte/file/record-count limits.",
     ),
 ) -> None:
     """Evaluate a generated dataset for quality across four pillars.
@@ -1017,6 +1045,7 @@ def eval_cmd(
                 scenario=scenario,
                 verbose=verbose,
                 progress_callback=eval_progress,
+                allow_large_evaluation=allow_large_evaluation,
             )
             report = engine.run()
 

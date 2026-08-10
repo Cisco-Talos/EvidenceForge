@@ -22,7 +22,7 @@
 
 """Tests for baseline canonical event migration.
 
-Verifies that baseline activities dispatch through SecurityEvent to
+Verifies that baseline activities dispatch through OccurrenceBuilder to
 multiple emitters, producing correlated cross-source records.
 """
 
@@ -34,9 +34,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from evidenceforge.events.contexts import HostContext, HttpContext, IdsContext
+from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.dll_load_profiles import (
+    module_is_compatible_with_process,
+)
 from evidenceforge.generation.activity.generator import (
     _ntp_association_poll_seconds,
     _ntp_parser_min_gap_seconds,
@@ -44,7 +47,6 @@ from evidenceforge.generation.activity.generator import (
 )
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
-    _LINUX_AMBIENT_SSH_NOISE_BAND,
     _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
     _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
     BaselineMixin,
@@ -52,6 +54,8 @@ from evidenceforge.generation.engine.baseline import (
     _baseline_inbound_ids_probe_profile,
     _dhcp_renewal_epochs_for_hour,
     _extra_syslog_service_values,
+    _gpo_refresh_command_line,
+    _gpo_refresh_occurrences_for_hour,
     _linux_ambient_logind_probability,
     _linux_baseline_pam_close_lead,
     _linux_baseline_pam_open_lead,
@@ -59,7 +63,6 @@ from evidenceforge.generation.engine.baseline import (
     _linux_sudo_command_runtime,
     _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
-    _module_matches_process,
     _ntp_observed_second,
     _ntp_sync_interval_seconds,
     _ntp_sync_seconds_for_hour,
@@ -71,6 +74,8 @@ from evidenceforge.generation.engine.baseline import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+from evidenceforge.models.exceptions import StateError
+from tests.network_factories import network_plan
 
 
 @pytest.fixture
@@ -111,6 +116,35 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
     assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
     assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
     assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
+
+
+def test_gpo_refresh_schedule_is_host_scoped_and_nonuniform() -> None:
+    """GPO refresh recurrence should persist across hours without exact three-hour ticks."""
+    state: dict[str, float | int] = {"scheduled_second": 317.25, "sequence": 0}
+    repeat_state = dict(state)
+    occurrences: list[tuple[float, int]] = []
+    repeated: list[tuple[float, int]] = []
+    for hour in range(24):
+        occurrences.extend(_gpo_refresh_occurrences_for_hour("WKS-01", hour * 3600, state))
+        repeated.extend(_gpo_refresh_occurrences_for_hour("WKS-01", hour * 3600, repeat_state))
+
+    assert occurrences == repeated
+    assert len(occurrences) >= 12
+    gaps = [
+        later[0] - earlier[0]
+        for earlier, later in zip(occurrences[:-1], occurrences[1:], strict=True)
+    ]
+    assert all(60 * 60 <= gap <= 120 * 60 for gap in gaps)
+    assert len({round(gap, 3) for gap in gaps}) >= 8
+
+
+def test_gpo_refresh_commands_are_data_driven_and_force_is_rare() -> None:
+    """Ordinary gpupdate invocations should dominate forced refresh morphologies."""
+    commands = [_gpo_refresh_command_line("WKS-01", sequence) for sequence in range(500)]
+
+    assert len(set(commands)) == 4
+    assert commands.count("gpupdate.exe") > 300
+    assert sum("/force" in command for command in commands) < 80
 
 
 def test_interactive_startup_activity_pacing_spreads_early_baseline_events():
@@ -199,6 +233,31 @@ def test_interactive_startup_activity_pacing_respects_hour_and_logoff_boundaries
         )
         is None
     )
+
+
+def test_planned_baseline_logoff_is_published_to_all_session_consumers():
+    """A path without the local deadline map must still reject post-logoff reuse."""
+
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    state_manager = StateManager()
+    state_manager.set_current_time(current_hour - timedelta(hours=2))
+    logon_id = state_manager.create_session(
+        "analyst",
+        "WS-01",
+        2,
+        "-",
+        logon_guid_required=False,
+    )
+    engine = object.__new__(BaselineMixin)
+    engine.state_manager = state_manager
+
+    engine._publish_planned_session_end_plans(
+        current_hour,
+        {("WS-01", logon_id): 15 * 60},
+    )
+
+    assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=14)) is not None
+    assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=16)) is None
 
 
 def test_locked_workstation_activity_defers_until_after_unlock():
@@ -593,10 +652,10 @@ class TestModuleLoadProcessMatching:
         chrome_module = r"C:\Program Files\Google\Chrome\Application\120.0.6099.225\libegl.dll"
         edge_module = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_elf.dll"
 
-        assert _module_matches_process("chrome.exe", chrome_module)
-        assert not _module_matches_process("msedge.exe", chrome_module)
-        assert _module_matches_process("msedge.exe", edge_module)
-        assert not _module_matches_process("chrome.exe", edge_module)
+        assert module_is_compatible_with_process("chrome.exe", chrome_module)
+        assert not module_is_compatible_with_process("msedge.exe", chrome_module)
+        assert module_is_compatible_with_process("msedge.exe", edge_module)
+        assert not module_is_compatible_with_process("chrome.exe", edge_module)
 
 
 class TestIdsAlertCorrelation:
@@ -683,7 +742,7 @@ class TestIdsAlertCorrelation:
     def test_ids_connection_dispatches_to_snort(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """generate_connection() with IdsContext should dispatch to snort emitter."""
+        """generate_connection() with IdsAlertPlan should dispatch to snort emitter."""
         activity_gen.generate_connection(
             src_ip="203.0.113.50",
             dst_ip="10.0.10.1",
@@ -694,23 +753,24 @@ class TestIdsAlertCorrelation:
             duration=0.5,
             orig_bytes=500,
             resp_bytes=200,
-            ids=IdsContext(
-                sid=10001,
-                message="ET SCAN potential SSH scan",
-                classification="Attempted Information Leak",
-                priority=2,
-            ),
+            ids_alerts=[
+                IdsAlertPlan(
+                    sid=10001,
+                    message="ET SCAN potential SSH scan",
+                    classification="Attempted Information Leak",
+                    priority=2,
+                )
+            ],
         )
 
-        # Snort emitter should receive the event with IdsContext
+        # Snort emitter should receive the event with IdsAlertPlan
         snort = mock_emitters["snort_alert"]
         assert snort.emit.called
         event = snort.emit.call_args[0][0]
-        assert event.ids is not None
-        assert event.ids.sid == 10001
+        assert event.ids_alerts[0].sid == 10001
         assert event.network is not None
-        assert event.network.transaction is not None
-        event.network.validate_finalized_transaction()
+        assert event.network is not None
+        assert event.network.stable_id
 
     def test_ufw_block_packet_profile_is_valid_and_stable(self):
         """UFW blocked SYN metadata should be valid and path-stable by source."""
@@ -767,12 +827,14 @@ class TestIdsAlertCorrelation:
             duration=1.0,
             orig_bytes=100,
             resp_bytes=50,
-            ids=IdsContext(
-                sid=10002,
-                message="ET SCAN SSH scan",
-                classification="Attempted Recon",
-                priority=3,
-            ),
+            ids_alerts=[
+                IdsAlertPlan(
+                    sid=10002,
+                    message="ET SCAN SSH scan",
+                    classification="Attempted Recon",
+                    priority=3,
+                )
+            ],
         )
 
         # Zeek conn should also receive the connection
@@ -1046,8 +1108,8 @@ class TestIdsAlertCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.ssl is not None
-        assert event.x509 is not None
+        assert event.protocol.ssl is not None
+        assert event.protocol.leaf_certificate is not None
         assert event.network.duration > 0.8
 
 
@@ -1115,9 +1177,9 @@ class TestWebAccessCorrelation:
         web = mock_emitters["web_access"]
         assert web.emit.called
         event = web.emit.call_args[0][0]
-        assert event.http is not None
-        assert event.http.method == "GET"
-        assert event.http.status_code == 200
+        assert event.protocol.http is not None
+        assert event.protocol.http.method == "GET"
+        assert event.protocol.http.status_code == 200
 
     def test_http_connection_also_dispatches_to_zeek_http(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1152,7 +1214,7 @@ class TestWebAccessCorrelation:
         zeek_http = mock_emitters["zeek_http"]
         assert zeek_http.emit.called
         event = zeek_http.emit.call_args[0][0]
-        assert event.http.uri == "/api/v1/data"
+        assert event.protocol.http.uri == "/api/v1/data"
 
     def test_caller_http_context_not_overwritten(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1186,9 +1248,9 @@ class TestWebAccessCorrelation:
         web = mock_emitters["web_access"]
         event = web.emit.call_args[0][0]
         # Should be our custom context, not auto-generated
-        assert event.http.method == "DELETE"
-        assert event.http.uri == "/api/v1/resource/42"
-        assert event.http.status_code == 204
+        assert event.protocol.http.method == "DELETE"
+        assert event.protocol.http.uri == "/api/v1/resource/42"
+        assert event.protocol.http.status_code == 204
 
     def test_static_zero_body_success_normalizes_to_not_modified(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1220,10 +1282,10 @@ class TestWebAccessCorrelation:
         )
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
-        assert event.http.status_code == 304
-        assert event.http.status_msg == "Not Modified"
-        assert event.http.response_body_len == 0
-        assert event.http.resp_mime_types == []
+        assert event.protocol.http.status_code == 304
+        assert event.protocol.http.status_msg == "Not Modified"
+        assert event.protocol.http.response_body_len == 0
+        assert event.protocol.http.resp_mime_types == ()
 
     def test_auto_http_static_resource_uses_stable_response_size(
         self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
@@ -1258,16 +1320,16 @@ class TestWebAccessCorrelation:
         )
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
-        assert event.http.uri == "/favicon.ico"
-        assert event.http.response_body_len == apply_transfer_size_variance(
+        assert event.protocol.http.uri == "/favicon.ico"
+        assert event.protocol.http.response_body_len == apply_transfer_size_variance(
             response_size_for_status(200, "portal.example.com", "/favicon.ico"),
             status_code=200,
             host="portal.example.com",
             uri="/favicon.ico",
             content_type="image/x-icon",
-            variant_key=f"10.0.10.50:{event.http.user_agent}",
+            variant_key=f"10.0.10.50:{event.protocol.http.user_agent}",
         )
-        assert event.http.resp_mime_types == ["image/x-icon"]
+        assert event.protocol.http.resp_mime_types == ("image/x-icon",)
 
     def test_server_like_auto_http_uses_service_user_agent(
         self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
@@ -1309,10 +1371,10 @@ class TestWebAccessCorrelation:
         event = next(
             call.args[0]
             for call in mock_emitters["zeek_http"].emit.call_args_list
-            if call.args[0].event_type == "connection" and call.args[0].http is not None
+            if call.args[0].event_type == "connection" and call.args[0].protocol.http is not None
         )
-        assert event.http is not None
-        assert "Mozilla/" not in event.http.user_agent
+        assert event.protocol.http is not None
+        assert "Mozilla/" not in event.protocol.http.user_agent
         if event.process is not None:
             assert not re.search(
                 r"(?i)\\(msedge|chrome|firefox|iexplore)\.exe$",
@@ -1341,12 +1403,13 @@ class TestSmbFileTransferCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.file_transfer is not None
-        assert event.file_transfer.source == "SMB"
-        assert event.file_transfer.fuid.startswith("F")
-        assert event.file_transfer.is_orig is False
-        assert event.file_transfer.seen_bytes <= 250000
-        assert event.file_transfer.total_bytes == 250000
+        assert event.protocol.primary_file_transfer is not None
+        assert event.protocol.primary_file_transfer.source == "SMB"
+        assert event.protocol.primary_file_transfer.fuid.startswith("F")
+        assert event.protocol.primary_file_transfer.is_orig is False
+        assert event.protocol.primary_file_transfer.seen_bytes <= 250000
+        assert event.protocol.primary_file_transfer.total_bytes == 250000
+        assert event.network.resp_bytes > event.protocol.primary_file_transfer.total_bytes
 
     def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1366,7 +1429,7 @@ class TestSmbFileTransferCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.file_transfer is None
+        assert event.protocol.primary_file_transfer is None
 
 
 class TestSystemProcessCanonical:
@@ -1682,16 +1745,16 @@ class TestSyslogContext:
 
 
 class TestWeirdContext:
-    """Weird events attach to connection SecurityEvents."""
+    """Weird events attach to canonical connection occurrences."""
 
     def test_weird_context_on_connection(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
         """Connection events can carry WeirdContext for zeek_weird emitter."""
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import HostContext, NetworkContext, WeirdContext
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.events.contexts import HostContext, WeirdContext
 
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=timestamp,
             event_type="connection",
             src_host=HostContext(
@@ -1701,7 +1764,7 @@ class TestWeirdContext:
                 os_category="linux",
                 system_type="server",
             ),
-            network=NetworkContext(
+            network=network_plan(
                 src_ip="10.0.10.1",
                 src_port=50000,
                 dst_ip="8.8.8.8",
@@ -1725,9 +1788,8 @@ class TestDhcpLease:
 
         due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
             last_renewal=warmup_lease_epoch,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour,
-            rng=random.Random(7),
         )
 
         hour_start = current_hour.timestamp()
@@ -1744,9 +1806,8 @@ class TestDhcpLease:
 
         due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
             last_renewal=recent_renewal_epoch,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour,
-            rng=random.Random(11),
         )
 
         assert len(due) == 2
@@ -1764,9 +1825,8 @@ class TestDhcpLease:
 
         due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
             last_renewal=recent_renewal_epoch,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour,
-            rng=random.Random(11),
         )
 
         assert due
@@ -1778,15 +1838,39 @@ class TestDhcpLease:
 
         next_due, next_updated, next_pending = _dhcp_renewal_epochs_for_hour(
             last_renewal=updated_last,
-            lease_time=3600.0,
+            renewal_interval=1800.0,
             current_hour=current_hour + timedelta(hours=1),
-            rng=random.Random(12),
             next_renewal=pending_next,
         )
 
         assert next_due[0][0] == pending_next
         assert next_updated >= next_due[-1][0]
         assert next_pending is not None
+
+    def test_dhcp_renewal_schedule_keeps_one_lease_scoped_t1(self):
+        """Every renewal in one lease lifecycle should retain its selected T1."""
+        current_hour = datetime(2024, 3, 15, 13, 0, 0, tzinfo=UTC)
+        last_renewal = datetime(2024, 3, 15, 12, 53, 0, tzinfo=UTC).timestamp()
+
+        due, updated_last, pending_next = _dhcp_renewal_epochs_for_hour(
+            last_renewal=last_renewal,
+            renewal_interval=1627.5,
+            current_hour=current_hour,
+        )
+        next_due, _next_last, _next_pending = _dhcp_renewal_epochs_for_hour(
+            last_renewal=updated_last,
+            renewal_interval=1627.5,
+            current_hour=current_hour + timedelta(hours=1),
+            next_renewal=pending_next,
+        )
+
+        epochs = [epoch for epoch, _interval in due + next_due]
+        assert len(epochs) >= 3
+        assert all(interval == pytest.approx(1627.5) for _epoch, interval in due + next_due)
+        assert all(
+            later - earlier == pytest.approx(1627.5)
+            for earlier, later in zip(epochs[:-1], epochs[1:], strict=True)
+        )
 
     def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
         """DHCP lease requests should expose durable deterministic anchors."""
@@ -1816,6 +1900,7 @@ class TestDhcpLease:
             system=linux,
             time=timestamp,
             mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
         )
         executor = Mock()
 
@@ -1833,6 +1918,7 @@ class TestDhcpLease:
             system=linux,
             time=timestamp,
             mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
             uid="CTest123456789ab",
         )
 
@@ -1855,6 +1941,24 @@ class TestDhcpLease:
         assert dhcp_events[0].network.orig_bytes != 300
         assert dhcp_events[0].network.resp_bytes != 300
 
+    def test_dhcp_lease_bundle_rejects_self_server(self, activity_gen, state_manager, timestamp):
+        """The canonical bundle must reject a client/server self-edge."""
+        client = System(
+            hostname="WKS-01",
+            ip="10.0.0.1",
+            os="Windows 11",
+            type="workstation",
+        )
+        state_manager.set_current_time(timestamp)
+
+        with pytest.raises(StateError, match="distinct server address"):
+            activity_gen.generate_dhcp_lease(
+                system=client,
+                time=timestamp,
+                mac="00:50:56:ab:cd:ef",
+                server_addr=client.ip,
+            )
+
     def test_dhcp_lease_payload_sizes_vary_by_client(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -1871,6 +1975,7 @@ class TestDhcpLease:
                 system=system,
                 time=timestamp,
                 mac=mac,
+                server_addr="10.0.0.1",
                 uid=f"C{system.hostname.replace('-', '')}",
                 msg_types=["REQUEST", "ACK"],
             )
@@ -1904,6 +2009,7 @@ class TestDhcpLease:
             system=linux,
             time=timestamp,
             mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
             uid="CTest123456789ab",
         )
 
@@ -1955,7 +2061,7 @@ class TestDhcpLease:
 
 
 class TestAnonymousLogon:
-    """Anonymous logon events dispatch without creating sessions."""
+    """Anonymous logons use a complete short-lived session lifecycle."""
 
     def test_generate_anonymous_logon_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2020,17 +2126,17 @@ class TestAnonymousLogon:
         assert event.remote_auth is not None
         assert event.remote_auth.primary_transport is not None
         assert event.remote_auth.primary_transport.transaction_id == (
-            network_event.network.transaction.stable_id
+            network_event.network.stable_id
         )
         assert event.lifecycle is not None
         assert event.lifecycle.group_id == event.remote_auth.stable_id
         assert network_event.lifecycle is not None
         assert network_event.lifecycle.parent_group_id == event.remote_auth.stable_id
 
-    def test_anonymous_logon_no_session_created(
+    def test_anonymous_logon_session_is_closed_after_paired_logoff(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """Anonymous logon should NOT create a session in StateManager."""
+        """Anonymous session identity should remain resolvable after normal closure."""
         dc = System(
             hostname="DC-01",
             ip="10.0.10.100",
@@ -2042,6 +2148,15 @@ class TestAnonymousLogon:
         activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
         sessions_after = len(state_manager.state.active_sessions)
         assert sessions_after == sessions_before
+        event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        )
+        identity = state_manager.get_session_identity(event.auth.logon_id)
+        assert identity is not None
+        assert identity.object_id == event.identity_plan.object_id
+        assert identity.logon_guid == "{00000000-0000-0000-0000-000000000000}"
 
     def test_anonymous_logon_plans_transport_without_source_host_metadata(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2101,13 +2216,16 @@ class TestAnonymousLogon:
         assert win_events[1].auth.username == "ANONYMOUS LOGON"
         assert win_events[1].auth.logon_id == win_events[0].auth.logon_id
         assert win_events[1].auth.logon_type == 3
-        assert ecar_events[0].edr is not None
-        assert ecar_events[1].edr is not None
-        assert ecar_events[0].edr.object_id
-        assert ecar_events[1].edr.object_id == ecar_events[0].edr.object_id
+        assert ecar_events[0].identity_plan is not None
+        assert ecar_events[1].identity_plan is not None
+        assert ecar_events[0].identity_plan.object_id
+        assert ecar_events[1].identity_plan.object_id == ecar_events[0].identity_plan.object_id
         assert ecar_events[1].auth.logon_id == ecar_events[0].auth.logon_id
-        assert ecar_events[0].lifecycle is None
-        assert ecar_events[1].lifecycle is None
+        assert ecar_events[0].lifecycle is not None
+        assert ecar_events[1].lifecycle is not None
+        assert ecar_events[0].lifecycle.group_id == ecar_events[1].lifecycle.group_id
+        assert ecar_events[0].lifecycle.phase == "start"
+        assert ecar_events[1].lifecycle.phase == "closure"
         assert timestamp < win_events[1].timestamp <= timestamp + timedelta(seconds=30)
         assert len(state_manager.state.active_sessions) == sessions_before
 
@@ -2174,7 +2292,7 @@ class TestBaselineSshTiming:
     """Regression tests for baseline SSH connection/syslog correlation."""
 
     def test_disconnect_uses_same_duration_as_generated_connection(self):
-        """Baseline SSH disconnect timing should share the bundle transport duration."""
+        """Routine SSH should have one world-planned generation path."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
@@ -2182,30 +2300,22 @@ class TestBaselineSshTiming:
         source = inspect.getsource(BaselineMixin)
         assert "_linux_remote_admin_hour_probability(system)" in source
         assert "_linux_remote_admin_session_count(rng, system)" in source
-        assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
-        assert "generate_ssh_session(" in source
-        assert "duration=ssh_duration" in source
-        assert "max(1.0, ssh_duration)" in source
-        assert "emit_session_close=disconnect_time < self.end_time" in source
-        assert 'source="baseline_ssh_noise"' in source
+        assert "bootstrap_user_session(" in source
+        assert 'session_kind="ssh"' in source
+        assert "allow_existing=True" in source
+        assert 'source="baseline_ssh_noise"' not in source
 
-    def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
-        """Generic syslog SSH churn should not blanket every Linux host."""
+    def test_syslog_noise_does_not_own_remote_admin_sessions(self):
+        """Ambient syslog must not independently synthesize SSH sessions."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
-        assert _LINUX_AMBIENT_SSH_NOISE_BAND <= 0.01
         assert _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY <= 0.35
         assert _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY <= 0.25
-        assert 'source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server"' in (
-            source
-        )
-        assert "ssh_identity = self._pick_baseline_ssh_identity" in source
-        assert "at_time=ts" in source
-        assert "ssh_user_model, src_sys_obj = ssh_identity" in source
-        assert "ssh_user = ssh_user_model.username" in source
+        assert "_LINUX_AMBIENT_SSH_NOISE_BAND" not in source
+        assert 'source="baseline_ssh_noise"' not in source
 
 
 class TestBaselineRegistryRealism:
@@ -2222,6 +2332,51 @@ class TestBaselineRegistryRealism:
         )
 
         assert datetime.fromisoformat(value).replace(tzinfo=UTC) < event_time
+
+    def test_registry_writer_candidates_preserve_native_ownership(self):
+        from evidenceforge.generation.engine.baseline import _registry_writer_candidates
+
+        pids = {
+            "services": 100,
+            "svchost_local_system": 101,
+            "svchost_wusvcs": 102,
+            "msiexec": 103,
+            "msmpeng": 104,
+            "mpcmdrun": 105,
+            "explorer": 106,
+            "runtime_broker": 107,
+        }
+
+        cbs = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages",
+            pids,
+            "alice",
+        )
+        office = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Office\16.0\Word\Reading Locations",
+            pids,
+            "alice",
+        )
+        explorer = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs",
+            pids,
+            "alice",
+        )
+        defender = _registry_writer_candidates(
+            r"HKLM\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection",
+            pids,
+            "alice",
+        )
+
+        assert cbs == []
+        assert office == []
+        assert {image.rsplit("\\", 1)[-1].lower() for _pid, image, _user in explorer} == {
+            "explorer.exe"
+        }
+        assert {image.rsplit("\\", 1)[-1].lower() for _pid, image, _user in defender} == {
+            "msmpeng.exe",
+            "mpcmdrun.exe",
+        }
 
     def test_registry_noise_prefers_dynamic_pools_and_filters_repeated_tells(self):
         import inspect
@@ -2321,7 +2476,7 @@ class TestBaselineRegistryRealism:
         fake_activity_generator = SimpleNamespace(
             _build_host_context=Mock(return_value=host_context),
             _get_sid=Mock(return_value="S-1-5-20"),
-            dispatcher=SimpleNamespace(dispatch=dispatched.append),
+            dispatcher=SimpleNamespace(dispatch_builder=dispatched.append),
         )
         baseline = SimpleNamespace(
             emitters={"windows_event_sysmon": Mock()},
@@ -2434,7 +2589,7 @@ class TestSensorStartup:
     def test_generate_sensor_startup_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """generate_sensor_startup() should dispatch SecurityEvent."""
+        """generate_sensor_startup() should dispatch OccurrenceBuilder."""
         activity_gen.generate_sensor_startup(
             sensor_hostname="fw01",
             time=timestamp,
@@ -3028,12 +3183,12 @@ class TestWebAccessExternalVisitors:
         by_uri = {kw["http"].uri: kw["http"] for kw in collected}
         assert by_uri["/assets/css/main.063cbaf5.css"].status_code == 304
         assert by_uri["/assets/css/main.063cbaf5.css"].response_body_len == 0
-        assert by_uri["/assets/css/main.063cbaf5.css"].resp_mime_types == []
+        assert by_uri["/assets/css/main.063cbaf5.css"].resp_mime_types == ()
         assert by_uri["/assets/js/app.bundle.bf9655b3.js"].status_code == 206
         assert by_uri["/assets/js/app.bundle.bf9655b3.js"].response_body_len == 1152
-        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == [
-            "application/javascript"
-        ]
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == (
+            "application/javascript",
+        )
         root_row = next(kw for kw in collected if kw["http"].uri == "/")
         assert root_row["http"].trans_depth == 1
         assert root_row["duration"] >= 0.2

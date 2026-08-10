@@ -177,8 +177,8 @@ class TestSourceCorrectness:
 
 
 class TestFieldAgreement:
-    def test_matching_timestamps(self):
-        """Records from different formats within 30s should agree."""
+    def test_unjoinable_records_are_explicitly_skipped(self):
+        """Timestamp proximity alone is not a configured cross-source pivot."""
         records = {
             "windows_event_security": [
                 _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
@@ -189,10 +189,11 @@ class TestFieldAgreement:
         }
         scorer = PlausibilityScorer()
         result = scorer._score_field_agreement(records)
-        assert result.score == 100.0
+        assert result.score is None
+        assert result.skipped
 
-    def test_drifted_timestamps(self):
-        """Records from different formats > 30s apart should disagree."""
+    def test_unjoinable_same_bucket_does_not_receive_vacuous_credit(self):
+        """Sharing a coarse time bucket does not prove field agreement."""
         records = {
             "windows_event_security": [
                 _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
@@ -202,9 +203,10 @@ class TestFieldAgreement:
             ],
         }
         scorer = PlausibilityScorer()
-        # Same bucket → agree
+        # Same bucket alone is not an agreement denominator.
         r1 = scorer._score_field_agreement(records)
-        assert r1.score == 100.0
+        assert r1.score is None
+        assert r1.skipped
 
 
 class TestBaselineAggregate:
@@ -259,8 +261,8 @@ class TestEndToEnd:
         assert result.number == 3
         assert result.name == "Causality"
         assert result.weight == 0.25
-        assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert result.score is None
+        assert len(result.sub_scores) == 7
 
     def test_with_retail_scenario(self):
         """Run on real fixtures — should produce valid scores."""
@@ -286,7 +288,7 @@ class TestEndToEnd:
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
         assert result.score is not None
-        assert len(result.sub_scores) == 6
+        assert len(result.sub_scores) == 7
 
 
 def _make_scenario_with_domain(domain="example.com"):
@@ -1013,6 +1015,186 @@ class TestBeaconProxyMatcher:
                 "id.resp_p": 22,
             },
             event,
+        )
+
+    def test_explicit_proxy_client_leg_uses_proxy_listener_port(self):
+        """Logical HTTPS traffic should retain its physical client-to-proxy trace."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="jsmith",
+            system="WS-01",
+            system_ip="10.0.10.50",
+            activity="HTTPS upload through explicit proxy",
+            details={"dst_ip": "192.0.2.20", "dst_port": 443},
+            event_types=["connection"],
+        )
+        scorer = CrossSourceScorer()
+        scorer._proxy_mode = "explicit"
+        scorer._proxy_ips = {"10.0.20.20"}
+        scorer._proxy_listener_port = 8080
+
+        assert scorer._connection_matches_zeek(
+            {
+                "id.orig_h": "10.0.10.50",
+                "id.orig_p": 54000,
+                "id.resp_h": "10.0.20.20",
+                "id.resp_p": 8080,
+            },
+            event,
+        )
+        assert not scorer._connection_matches_zeek(
+            {
+                "id.orig_h": "10.0.10.50",
+                "id.orig_p": 54000,
+                "id.resp_h": "10.0.20.20",
+                "id.resp_p": 3128,
+            },
+            event,
+        )
+
+    def test_http_connection_matches_proxy_transaction_trace(self):
+        """Logical HTTP connections should retain source-aware protocol evidence."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="jsmith",
+            system="WS-01",
+            system_ip="10.0.10.50",
+            activity="HTTP upload through explicit proxy",
+            details={
+                "dst_ip": "192.0.2.20",
+                "dst_port": 443,
+                "hostname": "upload.example.test",
+            },
+            event_types=["connection"],
+        )
+        scorer = CrossSourceScorer()
+        scorer._proxy_mode = "explicit"
+        scorer._proxy_ips = {"10.0.20.20"}
+
+        assert scorer._record_matches(
+            _record(
+                "proxy_access",
+                {
+                    "client_ip": "10.0.10.50",
+                    "host": "upload.example.test",
+                    "url": "upload.example.test:443",
+                },
+                ts=T0,
+            ),
+            "proxy_access",
+            event,
+            "connection",
+        )
+        assert not scorer._record_matches(
+            _record(
+                "proxy_access",
+                {
+                    "client_ip": "10.0.10.99",
+                    "host": "upload.example.test",
+                    "url": "upload.example.test:443",
+                },
+                ts=T0,
+            ),
+            "proxy_access",
+            event,
+            "connection",
+        )
+
+    def test_http_connection_rejects_unrelated_direct_client(self):
+        """Destination proximity alone must not attach another client's HTTP trace."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="jsmith",
+            system="WS-01",
+            system_ip="10.0.10.50",
+            activity="Direct HTTP request",
+            details={
+                "dst_ip": "192.0.2.20",
+                "dst_port": 80,
+                "hostname": "upload.example.test",
+            },
+            event_types=["connection"],
+        )
+        scorer = CrossSourceScorer()
+        scorer._proxy_ips = set()
+
+        assert scorer._record_matches(
+            _record(
+                "zeek_http",
+                {
+                    "id.orig_h": "10.0.10.50",
+                    "id.resp_h": "192.0.2.20",
+                    "host": "upload.example.test",
+                },
+                ts=T0,
+            ),
+            "zeek_http",
+            event,
+            "connection",
+        )
+        assert not scorer._record_matches(
+            _record(
+                "zeek_http",
+                {
+                    "id.orig_h": "10.0.10.99",
+                    "id.resp_h": "192.0.2.20",
+                    "host": "upload.example.test",
+                },
+                ts=T0,
+            ),
+            "zeek_http",
+            event,
+            "connection",
+        )
+
+    def test_dns_query_step_matches_each_typed_sub_event(self):
+        """A multi-query storyline step should not collapse to its final query."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="APP-01",
+            system_ip="10.0.20.30",
+            activity="Resolve attacker infrastructure",
+            details={"query": "last.example.test", "rcode": "NXDOMAIN"},
+            event_types=["dns_query"],
+            sub_details=[
+                {
+                    "query": "first.example.test",
+                    "rcode": "NOERROR",
+                    "answer": "192.0.2.20",
+                },
+                {"query": "last.example.test", "rcode": "NXDOMAIN"},
+            ],
+        )
+        scorer = CrossSourceScorer()
+
+        assert scorer._record_matches(
+            _record(
+                "zeek_dns",
+                {"query": "first.example.test", "answers": ["192.0.2.20"]},
+                ts=T0,
+            ),
+            "zeek_dns",
+            event,
+            "dns_query",
+        )
+        assert scorer._record_matches(
+            _record("zeek_dns", {"query": "last.example.test"}, ts=T0),
+            "zeek_dns",
+            event,
+            "dns_query",
         )
 
     def test_ecar_connection_match_uses_directional_ip_roles(self):

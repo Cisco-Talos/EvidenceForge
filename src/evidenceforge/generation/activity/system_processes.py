@@ -260,6 +260,7 @@ def pick_system_service_process(
     rng: random.Random,
     host_type: str = "workstation",
     host: Any | None = None,
+    deployment_key: str = "default",
 ) -> tuple[str, str, str]:
     """Pick a random system service process appropriate for the host role.
 
@@ -280,6 +281,26 @@ def pick_system_service_process(
         pool.extend(services.get("server", []))
     else:
         pool.extend(services.get("workstation", []))
+
+    grouped_options: dict[str, set[str]] = {}
+    for entry in pool:
+        group = str(entry.get("compatibility_group") or "")
+        option = str(entry.get("compatibility_option") or "")
+        if group and option:
+            grouped_options.setdefault(group, set()).add(option)
+    selected_options = {
+        group: random.Random(_stable_seed(f"software_deployment:{deployment_key}:{group}")).choice(
+            sorted(options)
+        )
+        for group, options in grouped_options.items()
+    }
+    pool = [
+        entry
+        for entry in pool
+        if not entry.get("compatibility_group")
+        or selected_options.get(str(entry["compatibility_group"]))
+        == str(entry.get("compatibility_option") or "")
+    ]
 
     if not pool:
         return (r"C:\Windows\System32\conhost.exe", "conhost.exe 0x4", "csrss_s0")

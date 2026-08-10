@@ -35,6 +35,7 @@ import ipaddress
 import logging
 import re
 from collections import defaultdict
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from urllib.parse import urlsplit
@@ -62,6 +63,7 @@ from evidenceforge.events.observation_manifest import (
     ObservationManifestEvent,
     observation_manifest_matches_scenario,
 )
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.time import parse_duration
 
@@ -72,6 +74,20 @@ class CausalityScorer(DimensionScorer):
     number = 3
     name = "Causality"
     weight = 0.25
+
+    _NETWORK_ONLY_PIVOT_TYPES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "beacon",
+            "connection",
+            "credential_spray",
+            "dga_queries",
+            "dhcp_lease",
+            "dns_query",
+            "dns_tunnel",
+            "port_scan",
+            "web_scan",
+        }
+    )
 
     def score(
         self,
@@ -84,7 +100,7 @@ class CausalityScorer(DimensionScorer):
         if context.observation_manifest is not None and not observation_manifest_matches_scenario(
             context.observation_manifest, scenario
         ):
-            context = EvaluationContext(observation_manifest=None)
+            context = replace(context, observation_manifest=None)
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
@@ -130,6 +146,7 @@ class CausalityScorer(DimensionScorer):
                         event.details["hostname"] = apgt["target_system"]
                         event.details["_anchor_host_adversarial_payload"] = apgt["target_system"]
             self._proxy_mode = scenario.environment.proxy.mode
+            self._proxy_listener_port = scenario.environment.proxy.listener_port
             self._proxy_ips = {
                 system.ip
                 for system in scenario.environment.systems
@@ -154,45 +171,52 @@ class CausalityScorer(DimensionScorer):
                     server.name.lower(): server.hostname.lower()
                     for server in email_config.mail_servers
                 }
+            self._initialize_pivot_identity(scenario)
             # Build host-time index and find traces
             host_time_index = self._build_host_time_index(records)
             self._find_traces(resolved, records, host_time_index)
         else:
             self._proxy_mode = "transparent"
+            self._proxy_listener_port = 8080
             self._proxy_ips = set()
             self._email_actor_emails = {}
             self._email_server_ips = {}
             self._email_server_hosts = {}
+            self._initialize_pivot_identity(scenario)
             host_time_index = self._build_host_time_index(records)
 
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
 
-        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 6})
+        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 7})
         s1 = self._score_causal_ordering(records, scenario)
         progress("sub_score_done", {"name": "Causal Ordering", "score": s1.score})
 
-        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 6})
+        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 7})
         s2 = self._score_event_presence(resolved, context)
         progress("sub_score_done", {"name": "Event Presence", "score": s2.score})
 
-        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 6})
+        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 7})
         s3 = self._score_indicator_accuracy(resolved)
         progress("sub_score_done", {"name": "Indicator Accuracy", "score": s3.score})
 
-        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 6})
+        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 7})
         s4 = self._score_pivot_linkability(resolved, context)
         progress("sub_score_done", {"name": "Pivot Linkability", "score": s4.score})
 
-        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 6})
+        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 7})
         s5 = self._score_temporal_integrity(resolved, context)
         progress("sub_score_done", {"name": "Temporal Integrity", "score": s5.score})
 
-        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 6})
+        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 7})
         s6 = self._score_storyline_trace_coverage(resolved, vis, host_time_index, context)
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s6.score})
 
-        sub_scores = [s1, s2, s3, s4, s5, s6]
+        progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 7})
+        s7 = self._score_intent_reconciliation(scenario, context)
+        progress("sub_score_done", {"name": "Intent Reconciliation", "score": s7.score})
+
+        sub_scores = [s1, s2, s3, s4, s5, s6, s7]
         dim_score = aggregate_sub_scores(sub_scores)
 
         host_log_profile = _build_host_log_profile(records, vis, scenario)
@@ -204,6 +228,113 @@ class CausalityScorer(DimensionScorer):
             score=dim_score,
             sub_scores=sub_scores,
             supplementary={"host_log_profile": host_log_profile},
+        )
+
+    @staticmethod
+    def _score_intent_reconciliation(
+        scenario: Scenario,
+        context: EvaluationContext,
+    ) -> SubScore:
+        """Require every authored typed intent to survive planning reconciliation."""
+
+        authored = AuthoredIntentLedger.from_scenario(scenario)
+        if not authored.intents:
+            return SubScore(
+                name="Intent Reconciliation",
+                key="intent_reconciliation",
+                weight=0.0,
+                score=None,
+                skipped=True,
+                details="Scenario has no authored storyline or red-herring intents",
+            )
+        ground_truth = context.ground_truth
+        if ground_truth is None or ground_truth.intent_reconciliation is None:
+            return SubScore(
+                name="Intent Reconciliation",
+                key="intent_reconciliation",
+                weight=0.0,
+                score=0.0,
+                details="Canonical ground truth has no authored-intent reconciliation",
+                sample_failures=["GROUND_TRUTH.json is missing the intent_reconciliation contract"],
+            )
+
+        reconciliation = ground_truth.intent_reconciliation
+        rows_by_id = {row.intent_id: row for row in reconciliation.intents}
+        authored_by_id = {intent.intent_id: intent for intent in authored.intents}
+        expected_ids = authored.intent_ids
+        actual_ids = frozenset(rows_by_id)
+        missing_rows = expected_ids - actual_ids
+        unexpected_rows = actual_ids - expected_ids
+        unplanned = {
+            intent_id
+            for intent_id in expected_ids & actual_ids
+            if not rows_by_id[intent_id].planned
+        }
+        mismatched_metadata = {
+            intent_id
+            for intent_id in expected_ids & actual_ids
+            if (
+                rows_by_id[intent_id].ground_truth_section,
+                rows_by_id[intent_id].storyline_id,
+                rows_by_id[intent_id].event_type,
+                rows_by_id[intent_id].semantic_instance_key,
+                rows_by_id[intent_id].authored_time,
+                rows_by_id[intent_id].actor,
+                rows_by_id[intent_id].system,
+                rows_by_id[intent_id].activity,
+            )
+            != (
+                authored_by_id[intent_id].section.value,
+                authored_by_id[intent_id].step_id,
+                authored_by_id[intent_id].event_type,
+                authored_by_id[intent_id].semantic_instance_key,
+                authored_by_id[intent_id].authored_time,
+                authored_by_id[intent_id].actor,
+                authored_by_id[intent_id].system,
+                authored_by_id[intent_id].activity,
+            )
+        }
+        failures = [
+            f"Missing reconciliation row for authored intent {value}" for value in missing_rows
+        ]
+        failures.extend(f"Authored intent was not planned: {value}" for value in unplanned)
+        failures.extend(
+            f"Reconciliation metadata differs from authored intent: {value}"
+            for value in mismatched_metadata
+        )
+        failures.extend(f"Unexpected reconciliation intent: {value}" for value in unexpected_rows)
+        failures.extend(
+            f"Reconciliation reported missing intent: {value}"
+            for value in reconciliation.missing_intent_ids
+        )
+        failures.extend(
+            f"Reconciliation reported unexpected intent: {value}"
+            for value in reconciliation.unexpected_intent_ids
+        )
+        reported_missing = frozenset(reconciliation.missing_intent_ids)
+        reported_unexpected = frozenset(reconciliation.unexpected_intent_ids)
+        expected_missing = missing_rows | unplanned
+        missing_summary_drift = reported_missing ^ expected_missing
+        unexpected_ids = unexpected_rows | reported_unexpected
+        failures.extend(
+            f"Reconciliation missing-intent summary differs from rows: {value}"
+            for value in missing_summary_drift
+        )
+        invalid_ids = expected_missing | mismatched_metadata | missing_summary_drift
+        total_assertions = len(expected_ids) + len(unexpected_ids)
+        correct = max(0, len(expected_ids) - len(invalid_ids))
+        score = 100.0 * correct / total_assertions if total_assertions else 0.0
+        return SubScore(
+            name="Intent Reconciliation",
+            key="intent_reconciliation",
+            weight=0.0,
+            score=score,
+            details=(
+                f"{correct}/{total_assertions} authored/planner reconciliation assertions pass; "
+                f"{reconciliation.occurred_count} intents dispatched canonical events and "
+                f"{reconciliation.observed_count} had visible or delayed source evidence"
+            ),
+            sample_failures=sorted(set(failures))[:10],
         )
 
     # --- Host-time index ---
@@ -347,10 +478,29 @@ class CausalityScorer(DimensionScorer):
         event: ResolvedEvent,
         context: EvaluationContext,
     ) -> bool:
+        if cls._event_generation_exempt(event, context):
+            return True
         manifest_event = cls._manifest_event(event, context)
         if manifest_event is None:
             return False
         return manifest_event.visible_or_delayed_count == 0 and manifest_event.non_visible_count > 0
+
+    @staticmethod
+    def _event_generation_exempt(
+        event: ResolvedEvent,
+        context: EvaluationContext,
+    ) -> bool:
+        """Return whether ground truth records an authored step as a valid no-op."""
+
+        document = context.ground_truth
+        if document is None or not event.storyline_id:
+            return False
+        matching = [
+            record
+            for record in document.events
+            if record.storyline_id == event.storyline_id and record.kind in event.event_types
+        ]
+        return bool(matching) and all(not record.emitted for record in matching)
 
     @classmethod
     def _format_group_observation_exempt(
@@ -359,6 +509,8 @@ class CausalityScorer(DimensionScorer):
         group_formats: set[str],
         context: EvaluationContext,
     ) -> bool:
+        if cls._event_generation_exempt(event, context):
+            return True
         manifest_event = cls._manifest_event(event, context)
         if manifest_event is None:
             return False
@@ -391,7 +543,7 @@ class CausalityScorer(DimensionScorer):
         raw_score = (100.0 * raw_found / raw_total) if raw_total > 0 else 100.0
         return (
             f"{adjusted_details}; raw {raw_found}/{raw_total} ({raw_score:.1f}/100), "
-            f"{excluded} excluded by observation profile"
+            f"{excluded} excluded by generation/observation contract"
         )
 
     def _search_for_event_indexed(
@@ -410,13 +562,13 @@ class CausalityScorer(DimensionScorer):
 
         forward_extra_secs = 0
         if event_type in _DURATION_EVENT_TYPES:
+            duration_str = event.details.get("duration", "")
             interval_str = event.details.get("interval", "")
-            if interval_str:
+            window_str = duration_str or interval_str
+            if window_str:
                 try:
-                    forward_extra_secs = min(
-                        int(parse_duration(interval_str).total_seconds()), 3600
-                    )
-                except Exception:
+                    forward_extra_secs = min(int(parse_duration(window_str).total_seconds()), 3600)
+                except (TypeError, ValueError):
                     forward_extra_secs = 3600
             else:
                 forward_extra_secs = 3600
@@ -581,6 +733,14 @@ class CausalityScorer(DimensionScorer):
                     and self._host_matches(f.get("hostname"), event.system)
                     and self._connection_ip_matches(f, event)
                 )
+            if format_name in {"proxy_access", "zeek_http"}:
+                if not self._beacon_source_matches(f, event):
+                    return False
+                expected_dst = str(event.details.get("dst_ip") or "")
+                expected_hostname = str(event.details.get("hostname") or "")
+                return self._beacon_dst_matches(f, expected_dst) or self._beacon_dst_matches(
+                    f, expected_hostname
+                )
         elif event_type == "process_terminate":
             if format_name == "windows_event_security":
                 return f.get("EventID") == 4689 and self._host_matches(
@@ -653,6 +813,17 @@ class CausalityScorer(DimensionScorer):
             if format_name == "windows_event_security":
                 return f.get("EventID") == 4720 and self._host_matches(
                     f.get("Computer"), event.system
+                )
+        elif event_type == "account_deleted":
+            if format_name == "windows_event_security":
+                expected_target = event.details.get("target_username")
+                return (
+                    f.get("EventID") == 4726
+                    and self._host_matches(f.get("Computer"), event.system)
+                    and (
+                        not expected_target
+                        or self._user_matches(f.get("TargetUserName"), str(expected_target))
+                    )
                 )
         elif event_type == "group_member_added":
             if format_name == "windows_event_security":
@@ -776,9 +947,13 @@ class CausalityScorer(DimensionScorer):
                         f, expected_hostname
                     )
         elif event_type == "dns_query":
-            expected_query = event.details.get("query", "")
+            expected_queries = {
+                str(details["query"])
+                for details in (event.sub_details or [event.details])
+                if details.get("query")
+            }
             if format_name == "zeek_dns":
-                return f.get("query") == expected_query
+                return f.get("query") in expected_queries
             if format_name == "zeek_conn":
                 return f.get("id.resp_p") == 53 and f.get("id.orig_h") == event.system_ip
         elif event_type == "web_scan":
@@ -1304,7 +1479,7 @@ class CausalityScorer(DimensionScorer):
                 proxy_mode == "explicit"
                 and orig_h == source_ip
                 and resp_h in proxy_ips
-                and self._connection_port_matches(fields, details)
+                and self._proxy_client_port_matches(fields)
             ):
                 return True
             if (
@@ -1319,7 +1494,7 @@ class CausalityScorer(DimensionScorer):
         if event.system_ip and orig_h == event.system_ip:
             if "dst_ip" in details:
                 if proxy_mode == "explicit" and resp_h in proxy_ips:
-                    return self._connection_port_matches(fields, details)
+                    return self._proxy_client_port_matches(fields)
                 return resp_h == details["dst_ip"] and self._connection_port_matches(
                     fields, details
                 )
@@ -1338,6 +1513,15 @@ class CausalityScorer(DimensionScorer):
         if "source_ip" in details and orig_h == details["source_ip"]:
             return self._connection_port_matches(fields, details)
         return False
+
+    def _proxy_client_port_matches(self, fields: dict[str, Any]) -> bool:
+        """Match the physical client-to-proxy listener, not the logical origin port."""
+
+        return self._record_has_expected_port(
+            fields,
+            {int(getattr(self, "_proxy_listener_port", 8080))},
+            ("id.resp_p", "dst_port"),
+        )
 
     @staticmethod
     def _connection_port_matches(fields: dict[str, Any], details: dict[str, Any]) -> bool:
@@ -1415,11 +1599,29 @@ class CausalityScorer(DimensionScorer):
             for username in cls._expected_usernames_for_event(event)
         )
 
-    @staticmethod
-    def _user_matches(record_user: Any, expected: str) -> bool:
+    @classmethod
+    def _user_matches(cls, record_user: Any, expected: str) -> bool:
         if record_user is None:
             return False
-        return str(record_user).lower() == expected.lower()
+        return bool(
+            cls._username_match_aliases(record_user) & cls._username_match_aliases(expected)
+        )
+
+    @staticmethod
+    def _username_match_aliases(raw: Any) -> set[str]:
+        text = str(raw or "").strip().lower()
+        if not text or text == "-":
+            return set()
+        aliases = {text}
+        email_match = re.search(r"<?([a-z0-9._%+$-]+@[a-z0-9.-]+\.[a-z]{2,})>?", text)
+        if email_match:
+            email = email_match.group(1)
+            aliases.update({email, email.split("@", 1)[0]})
+        if "\\" in text:
+            aliases.add(text.rsplit("\\", 1)[-1])
+        if "@" in text:
+            aliases.add(text.split("@", 1)[0])
+        return aliases
 
     @staticmethod
     def _host_matches(record_host: Any, expected: str) -> bool:
@@ -1467,9 +1669,12 @@ class CausalityScorer(DimensionScorer):
         if client_ip:
             return self._ip_matches(client_ip, expected_src)
         orig_h = fields.get("id.orig_h")
-        resp_h = fields.get("id.resp_h")
-        if orig_h and resp_h in proxy_ips:
-            return self._ip_matches(orig_h, expected_src)
+        if orig_h:
+            if self._ip_matches(orig_h, expected_src):
+                return True
+            # An explicit proxy's origin-side protocol trace is still part of the
+            # logical transaction even though its physical source is the proxy.
+            return orig_h in proxy_ips
         return True
 
     @staticmethod
@@ -1539,7 +1744,8 @@ class CausalityScorer(DimensionScorer):
                 name="Causal Ordering",
                 key="causal_ordering",
                 weight=0.25,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No causal pair rules defined",
             )
 
@@ -1694,7 +1900,16 @@ class CausalityScorer(DimensionScorer):
                 break
             failures.append(failure)
 
-        score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
+        if total_pairs == 0:
+            return SubScore(
+                name="Causal Ordering",
+                key="causal_ordering",
+                weight=0.25,
+                score=None,
+                skipped=True,
+                details="No applicable causal pairs in this dataset",
+            )
+        score = 100.0 * correct_pairs / total_pairs
         return SubScore(
             name="Causal Ordering",
             key="causal_ordering",
@@ -1876,7 +2091,8 @@ class CausalityScorer(DimensionScorer):
                 name="Event Presence",
                 key="event_presence",
                 weight=0.20,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
         raw_total = len(resolved)
@@ -1937,7 +2153,8 @@ class CausalityScorer(DimensionScorer):
                 name="Indicator Accuracy",
                 key="indicator_accuracy",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
         total_checks = 0
@@ -1958,7 +2175,16 @@ class CausalityScorer(DimensionScorer):
                             f"Event {event.index}: {indicator_name} mismatch in {trace.source_format}"
                         )
 
-        score = (100.0 * correct_checks / total_checks) if total_checks > 0 else 100.0
+        if total_checks == 0:
+            return SubScore(
+                name="Indicator Accuracy",
+                key="indicator_accuracy",
+                weight=0.15,
+                score=None,
+                skipped=True,
+                details="No checkable authored indicators were present in matched traces",
+            )
+        score = 100.0 * correct_checks / total_checks
         return SubScore(
             name="Indicator Accuracy",
             key="indicator_accuracy",
@@ -2098,14 +2324,21 @@ class CausalityScorer(DimensionScorer):
                 name="Pivot Linkability",
                 key="pivot_linkability",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="Fewer than 2 events — nothing to link",
             )
+        expected_visible = [
+            event
+            for event in resolved
+            if event.traces or not self._event_observation_exempt(event, context)
+        ]
+        excluded = len(resolved) - len(expected_visible)
         expected_by_event = {
-            event.index: self._expected_indicator_values(event) for event in resolved
+            event.index: self._expected_indicator_values(event) for event in expected_visible
         }
         events_by_indicator: dict[str, list[ResolvedEvent]] = defaultdict(list)
-        for event in resolved:
+        for event in expected_visible:
             for indicator in expected_by_event[event.index]:
                 events_by_indicator[indicator].append(event)
         edges: dict[tuple[int, int], set[str]] = defaultdict(set)
@@ -2116,16 +2349,10 @@ class CausalityScorer(DimensionScorer):
 
         total_pairs = 0
         linkable = 0
-        excluded = 0
         failures: list[str] = []
-        by_index = {event.index: event for event in resolved}
+        by_index = {event.index: event for event in expected_visible}
         for (first_index, second_index), indicators in sorted(edges.items()):
             a, b = by_index[first_index], by_index[second_index]
-            if (not a.traces and self._event_observation_exempt(a, context)) or (
-                not b.traces and self._event_observation_exempt(b, context)
-            ):
-                excluded += 1
-                continue
             total_pairs += 1
             observed_a = self._observed_indicator_values(a)
             observed_b = self._observed_indicator_values(b)
@@ -2137,9 +2364,21 @@ class CausalityScorer(DimensionScorer):
                     f"Events {first_index}→{second_index}: expected pivot not present in both "
                     f"rendered traces ({a.actor}@{a.system} → {b.actor}@{b.system})"
                 )
-        score = (100.0 * linkable / total_pairs) if total_pairs > 0 else 100.0
+        if total_pairs == 0:
+            return SubScore(
+                name="Pivot Linkability",
+                key="pivot_linkability",
+                weight=0.15,
+                score=None,
+                skipped=True,
+                details=(
+                    f"No expected-visible narrative edges share an expected pivot; "
+                    f"{len(expected_visible)} events are isolated, {excluded} contract-exempt"
+                ),
+            )
+        score = 100.0 * linkable / total_pairs
         connected = {index for edge in edges for index in edge}
-        isolated = len(resolved) - len(connected)
+        isolated = len(expected_visible) - len(connected)
         return SubScore(
             name="Pivot Linkability",
             key="pivot_linkability",
@@ -2148,25 +2387,54 @@ class CausalityScorer(DimensionScorer):
             adjusted=excluded > 0,
             details=(
                 f"{linkable}/{total_pairs} inferred expected-visible narrative edges retain a "
-                f"shared rendered pivot; {isolated} isolated events, {excluded} observation-exempt"
+                f"shared rendered pivot; {isolated} isolated events, {excluded} contract-exempt"
             ),
             sample_failures=failures,
         )
 
+    def _initialize_pivot_identity(self, scenario: Scenario) -> None:
+        """Build scenario-owned identity aliases used only by pivot evaluation."""
+
+        self._pivot_host_aliases: dict[str, str] = {}
+        self._pivot_host_ips: dict[str, str] = {}
+        self._pivot_ip_hosts: dict[str, str] = {}
+        for system in scenario.environment.systems:
+            canonical = system.hostname.lower().rstrip(".")
+            aliases = {canonical, canonical.split(".", 1)[0]}
+            for alias in aliases:
+                self._pivot_host_aliases[alias] = canonical
+            normalized_ip = self._normalize_pivot_ip(system.ip)
+            if normalized_ip:
+                self._pivot_host_ips[canonical] = normalized_ip
+                self._pivot_ip_hosts[normalized_ip] = canonical
+
+        self._pivot_user_aliases: dict[str, str] = {}
+        for user in scenario.environment.users:
+            canonical = user.username.lower()
+            self._pivot_user_aliases[canonical] = canonical
+            if user.email:
+                self._pivot_user_aliases[user.email.lower()] = canonical
+
     def _expected_indicator_values(self, event: ResolvedEvent) -> set[str]:
-        values = {
-            self._scoped_actor_indicator(event.actor, event.system),
-            f"host:{event.system.lower()}",
-        }
-        if event.system_ip:
-            values.add(f"ip:{event.system_ip.lower()}")
+        values: set[str] = set()
+        include_actor, include_system = self._implicit_pivot_owners(event)
+        if include_actor:
+            self._add_expected_actor(values, event.actor, event.system)
+        if include_system:
+            self._add_pivot_value(values, "host", event.system)
+            self._add_pivot_value(values, "ip", event.system_ip)
+
         key_namespaces = {
             "source_ip": "ip",
             "dst_ip": "ip",
             "answer_ip": "ip",
+            "answer": "ip",
+            "requested_ip": "ip",
+            "target_ips": "ip",
             "hostname": "host",
             "server": "host",
             "target_system": "host",
+            "target_server": "host",
             "query": "domain",
             "base_domain": "domain",
             "url": "url",
@@ -2174,25 +2442,84 @@ class CausalityScorer(DimensionScorer):
             "artifact_id": "artifact",
             "message_ids": "artifact",
             "target_username": "user",
+            "target_accounts": "user",
             "success_account": "user",
+            "member_name": "user",
+            "sender": "user",
+            "to": "user",
+            "cc": "user",
+            "bcc": "user",
+            "mailbox": "user",
             "output_file": "file",
             "process_name": "process",
+            "target_process": "process",
         }
         for detail in event.sub_details or [event.details]:
             for key, namespace in key_namespaces.items():
+                if "email_read" in event.event_types and key == "message_ids":
+                    # EmailReadEventSpec documents these IDs for the narrative only.
+                    # Opaque TLS/proxy mailbox access cannot prove which message was read.
+                    continue
+                if key == "server" and "email_read" in event.event_types:
+                    server_name = str(detail.get(key) or "").lower()
+                    resolved_server = self._email_server_hosts.get(server_name)
+                    if resolved_server:
+                        self._add_pivot_value(values, namespace, resolved_server)
+                    continue
+                if key == "mailbox" and not include_actor:
+                    continue
+                if (
+                    key == "answer"
+                    and "dns_query" in event.event_types
+                    and str(detail.get("rcode") or "").upper() != "NOERROR"
+                ):
+                    continue
                 raw = detail.get(key)
-                items = raw if isinstance(raw, list) else [raw]
-                for item in items:
-                    if item not in (None, "", "-"):
-                        values.add(f"{namespace}:{str(item).lower()}")
+                self._add_pivot_value(values, namespace, raw)
+
+            success = detail.get("success")
+            if isinstance(success, dict):
+                self._add_pivot_value(values, "user", success.get("account"))
+
         email_gt = self._email_gt.get(event.storyline_id) or {}
-        for key, namespace in (("message_id", "artifact"), ("smtp_uids", "artifact")):
+        for key, namespace in (
+            ("message_id", "artifact"),
+            ("smtp_uids", "artifact"),
+            ("uid", "artifact"),
+        ):
             raw = email_gt.get(key)
-            items = raw if isinstance(raw, list) else [raw]
-            for item in items:
-                if item:
-                    values.add(f"{namespace}:{str(item).lower()}")
+            self._add_pivot_value(values, namespace, raw)
         return values
+
+    def _implicit_pivot_owners(self, event: ResolvedEvent) -> tuple[bool, bool]:
+        """Return whether actor and system identity are observable for this event."""
+
+        event_types = set(event.event_types)
+        if event_types == {"raw"}:
+            return False, False
+        if event_types == {"email_message"}:
+            sender = str(event.details.get("sender") or "").lower()
+            actor_email = self._email_actor_emails.get(event.actor.lower(), "")
+            outbound = not sender or bool(actor_email and sender == actor_email)
+            return outbound, outbound
+        if event_types == {"email_read"}:
+            actor_observable = not event.traces or any(
+                trace.source_format == "proxy_access" for trace in event.traces
+            )
+            return actor_observable, True
+        if event_types and event_types <= self._NETWORK_ONLY_PIVOT_TYPES:
+            return False, True
+        return True, True
+
+    def _add_expected_actor(self, values: set[str], actor: str, system: str) -> None:
+        normalized = self._normalize_pivot_user(actor)
+        if not normalized:
+            return
+        if normalized in {"root", "system", "local service", "network service"}:
+            canonical_host = self._canonical_pivot_host(system)
+            values.add(f"user:{normalized}@{canonical_host}")
+            return
+        values.add(f"user:{normalized}")
 
     def _observed_indicator_values(self, event: ResolvedEvent) -> set[str]:
         values: set[str] = set()
@@ -2202,18 +2529,32 @@ class CausalityScorer(DimensionScorer):
                 "SubjectUserName": "user",
                 "principal": "user",
                 "username": "user",
+                "mailfrom": "user",
+                "sender": "user",
+                "mailbox": "user",
+                "to": "user",
+                "cc": "user",
+                "bcc": "user",
                 "Computer": "host",
                 "hostname": "host",
                 "host": "host",
                 "server_name": "host",
+                "TargetServerName": "host",
+                "TargetInfo": "host",
                 "IpAddress": "ip",
                 "id.orig_h": "ip",
                 "id.resp_h": "ip",
                 "src_ip": "ip",
                 "dst_ip": "ip",
+                "client_ip": "ip",
+                "client_addr": "ip",
+                "assigned_addr": "ip",
+                "mapped_src_ip": "ip",
+                "mapped_dst_ip": "ip",
                 "query": "domain",
                 "url": "url",
                 "uri": "url",
+                "artifact_id": "artifact",
                 "message_id": "artifact",
                 "msg_id": "artifact",
                 "uid": "artifact",
@@ -2222,19 +2563,98 @@ class CausalityScorer(DimensionScorer):
                 "NewProcessName": "process",
             }
             for field_name, namespace in field_namespaces.items():
-                val = trace.fields.get(field_name)
-                if val and val != "-":
-                    values.add(f"{namespace}:{str(val).lower()}")
+                self._add_pivot_value(values, namespace, trace.fields.get(field_name))
+            for answer in self._iter_pivot_values(trace.fields.get("answers")):
+                namespace = "ip" if self._normalize_pivot_ip(answer) else "domain"
+                self._add_pivot_value(values, namespace, answer)
         actor_indicator = self._scoped_actor_indicator(event.actor, event.system)
-        if any(value in values for value in {f"user:{event.actor.lower()}", actor_indicator}):
+        normalized_actor = self._normalize_pivot_user(event.actor)
+        if any(value in values for value in {f"user:{normalized_actor}", actor_indicator}):
             values.add(actor_indicator)
         return values
 
+    def _add_pivot_value(self, values: set[str], namespace: str, raw: Any) -> None:
+        for item in self._iter_pivot_values(raw):
+            if item in (None, "", "-"):
+                continue
+            if namespace == "ip":
+                normalized_ip = self._normalize_pivot_ip(item)
+                if not normalized_ip:
+                    continue
+                values.add(f"ip:{normalized_ip}")
+                host = self._pivot_ip_hosts.get(normalized_ip)
+                if host:
+                    values.add(f"host:{host}")
+                continue
+            if namespace == "host":
+                normalized_ip = self._normalize_pivot_ip(item)
+                if normalized_ip:
+                    self._add_pivot_value(values, "ip", normalized_ip)
+                    continue
+                host = self._canonical_pivot_host(item)
+                if not host:
+                    continue
+                values.add(f"host:{host}")
+                host_ip = self._pivot_host_ips.get(host)
+                if host_ip:
+                    values.add(f"ip:{host_ip}")
+                continue
+            if namespace == "user":
+                user = self._normalize_pivot_user(item)
+                if user:
+                    values.add(f"user:{user}")
+                continue
+            text = str(item).strip().lower()
+            if namespace == "domain":
+                text = text.rstrip(".")
+            if text:
+                values.add(f"{namespace}:{text}")
+
     @staticmethod
-    def _scoped_actor_indicator(actor: str, system: str) -> str:
-        normalized = actor.lower()
+    def _iter_pivot_values(raw: Any) -> list[Any]:
+        if isinstance(raw, list | tuple | set):
+            return list(raw)
+        return [raw]
+
+    @staticmethod
+    def _normalize_pivot_ip(raw: Any) -> str | None:
+        try:
+            parsed = ipaddress.ip_address(str(raw).strip().strip("[]"))
+        except ValueError:
+            return None
+        if parsed.version == 6 and getattr(parsed, "ipv4_mapped", None) is not None:
+            parsed = parsed.ipv4_mapped
+        return parsed.compressed.lower()
+
+    def _canonical_pivot_host(self, raw: Any) -> str:
+        host = str(raw or "").strip().lower().rstrip(".")
+        if not host:
+            return ""
+        return self._pivot_host_aliases.get(
+            host, self._pivot_host_aliases.get(host.split(".", 1)[0], host)
+        )
+
+    def _normalize_pivot_user(self, raw: Any) -> str:
+        text = self._normalize_email_address(raw).strip().lower()
+        if not text:
+            return ""
+        direct = self._pivot_user_aliases.get(text)
+        if direct:
+            return direct
+        if "\\" in text:
+            text = text.rsplit("\\", 1)[-1]
+        direct = self._pivot_user_aliases.get(text)
+        if direct:
+            return direct
+        if "@" in text:
+            local = text.split("@", 1)[0]
+            return self._pivot_user_aliases.get(local, text)
+        return text
+
+    def _scoped_actor_indicator(self, actor: str, system: str) -> str:
+        normalized = self._normalize_pivot_user(actor)
         if normalized in {"root", "system", "local service", "network service"}:
-            return f"user:{normalized}@{system.lower()}"
+            return f"user:{normalized}@{self._canonical_pivot_host(system)}"
         return f"user:{normalized}"
 
     # --- Sub-score 5: Temporal Integrity ---
@@ -2249,7 +2669,8 @@ class CausalityScorer(DimensionScorer):
                 name="Temporal Integrity",
                 key="temporal_integrity",
                 weight=0.15,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
         raw_total = len(resolved)
@@ -2350,7 +2771,8 @@ class CausalityScorer(DimensionScorer):
                 name="Storyline Trace Coverage",
                 key="storyline_trace_coverage",
                 weight=0.10,
-                score=100.0,
+                score=None,
+                skipped=True,
                 details="No storyline events",
             )
 
@@ -2418,6 +2840,20 @@ class CausalityScorer(DimensionScorer):
                 else:
                     total_expected += 1
 
+        if total_expected == 0 and raw_total_expected == 0:
+            return SubScore(
+                name="Storyline Trace Coverage",
+                key="storyline_trace_coverage",
+                weight=0.10,
+                score=0.0,
+                details=(
+                    f"0/0 format traces: {len(resolved)} authored storyline events have no "
+                    "enabled expected source group"
+                ),
+                sample_failures=[
+                    "No enabled output source can prove the authored storyline evidence"
+                ],
+            )
         score = (100.0 * found / total_expected) if total_expected > 0 else 100.0
         raw_score = (100.0 * raw_found / raw_total_expected) if raw_total_expected > 0 else 100.0
         return SubScore(

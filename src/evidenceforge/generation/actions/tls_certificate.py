@@ -281,7 +281,7 @@ class TlsCertificatePlanner:
 
     @staticmethod
     def x509_contexts(plan: TlsCertificatePresentationPlan) -> list[X509Context]:
-        """Project finalized certificate truth into compatibility X.509 contexts."""
+        """Project finalized certificate truth into source-neutral X.509 subplans."""
 
         contexts: list[X509Context] = []
         for certificate, fuid in zip(plan.certificates, plan.certificate_fuids, strict=True):
@@ -314,10 +314,10 @@ class TlsCertificatePlanner:
         plan: TlsCertificatePresentationPlan,
         contexts: list[X509Context],
     ) -> None:
-        """Reject mutations that make compatibility X.509 fields diverge from the plan."""
+        """Reject X.509 projections that diverge from certificate identity truth."""
 
         if len(contexts) != len(plan.certificates):
-            raise ValueError("X.509 compatibility chain length diverged from TLS presentation")
+            raise ValueError("X.509 chain length diverged from TLS presentation")
         for certificate, fuid, context in zip(
             plan.certificates,
             plan.certificate_fuids,
@@ -332,4 +332,4 @@ class TlsCertificatePlanner:
                 or context.certificate_issuer != certificate.issuer_name
                 or tuple(context.san_dns) != certificate.san_dns
             ):
-                raise ValueError("X.509 compatibility fields diverged from canonical TLS truth")
+                raise ValueError("X.509 fields diverged from canonical TLS truth")

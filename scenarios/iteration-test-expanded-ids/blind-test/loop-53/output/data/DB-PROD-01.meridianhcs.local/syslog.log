@@ -1,0 +1,370 @@
+<30>1 2024-03-18T12:01:10.593215Z DB-PROD-01 rsyslogd 29379 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 108371
+<86>1 2024-03-18T12:01:35.417984Z DB-PROD-01 sshd 112514 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T12:01:35.659824Z DB-PROD-01 systemd-logind 29553 - - Removed session 276138.
+<30>1 2024-03-18T12:02:54.433865Z DB-PROD-01 polkitd 19476 - - Subject unix-process:120557:207377007 is authorized for action org.freedesktop.packagekit.system-update
+<30>1 2024-03-18T12:05:52.260467Z DB-PROD-01 polkitd 19476 - - Subject unix-process:120933:207395089 is authorized for action org.freedesktop.systemd1.manage-units
+<30>1 2024-03-18T12:06:04.178487Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.133'
+<85>1 2024-03-18T12:06:14.056119Z DB-PROD-01 sudo 120986 - - ubuntu : TTY=pts/1 ; PWD=/tmp ; USER=root ; COMMAND=/bin/systemctl status sshd --no-pager
+<86>1 2024-03-18T12:06:14.226119Z DB-PROD-01 sudo 120986 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<30>1 2024-03-18T12:06:15.468209Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 2
+<86>1 2024-03-18T12:06:18.792723Z DB-PROD-01 sudo 120986 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:07:23.546902Z DB-PROD-01 sudo 121146 - - deploy : TTY=pts/1 ; PWD=/var/log ; USER=root ; COMMAND=/bin/systemctl status mysql --no-pager
+<86>1 2024-03-18T12:07:23.745902Z DB-PROD-01 sudo 121146 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:07:27.205349Z DB-PROD-01 sudo 121146 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:07:28.731635Z DB-PROD-01 sudo 121157 - - svc_app : TTY=pts/0 ; PWD=/var/log ; USER=root ; COMMAND=/usr/sbin/iptables -L -n -v
+<86>1 2024-03-18T12:07:28.846635Z DB-PROD-01 sudo 121157 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:07:34.109708Z DB-PROD-01 sudo 121157 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:08:32.761070Z DB-PROD-01 polkitd 19476 - - Operator of unix-process:121297:207411308 successfully authenticated as unix-user:deploy to gain TEMPORARY authorization for action org.freedesktop.systemd1.manage-units for system-bus-name::1.134 [/usr/bin/systemctl] (owned by unix-user:root)
+<30>1 2024-03-18T12:09:21.659708Z DB-PROD-01 rsyslogd 29379 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 108942
+<30>1 2024-03-18T12:09:24.136958Z DB-PROD-01 irqbalance 48622 - - IRQ 64 affinity hint keeps vector on CPU 3 (mlx5_comp0)
+<30>1 2024-03-18T12:09:24.484960Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.135'
+<85>1 2024-03-18T12:09:45.806559Z DB-PROD-01 sudo 121460 - - backup : TTY=pts/0 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/tail -n 120 /var/log/auth.log
+<86>1 2024-03-18T12:09:45.842559Z DB-PROD-01 sudo 121460 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T12:09:48.522435Z DB-PROD-01 sudo 121460 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:10:18.300613Z DB-PROD-01 irqbalance 48622 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T12:11:33.260210Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 2
+<30>1 2024-03-18T12:12:18.873374Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 86: banned by affinity mask 00000001 (mlx5_comp1)
+<86>1 2024-03-18T12:12:24.658509Z DB-PROD-01 sshd 121820 - - Connection from 10.10.1.31 port 59999 on 10.10.4.10 port 22
+<86>1 2024-03-18T12:12:26.946705Z DB-PROD-01 sshd 121820 - - Accepted publickey for marcus.chen from 10.10.1.31 port 59999 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T12:12:27.078869Z DB-PROD-01 sshd 121820 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T12:12:27.579118Z DB-PROD-01 systemd-logind 29553 - - New session 276681 of user marcus.chen.
+<30>1 2024-03-18T12:14:04.149191Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T12:14:04.985231Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.136'
+<30>1 2024-03-18T12:15:44.091312Z DB-PROD-01 rsyslogd 29379 - - main Q: queue action-remote has 3108 messages pending, worker threads 1
+<30>1 2024-03-18T12:16:01.456222Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T12:16:15.032434Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.138'
+<30>1 2024-03-18T12:19:55.847843Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.140'
+<30>1 2024-03-18T12:19:58.412268Z DB-PROD-01 irqbalance 48622 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2024-03-18T12:20:58.603687Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.141'
+<30>1 2024-03-18T12:21:52.699472Z DB-PROD-01 rsyslogd 29379 - - omfwd: target 10.10.2.30 using disk-assisted queue action-remote, checkpoint 109880
+<85>1 2024-03-18T12:22:48.649801Z DB-PROD-01 sudo 123278 - - backup : TTY=pts/0 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/needrestart -b
+<86>1 2024-03-18T12:22:48.824801Z DB-PROD-01 sudo 123278 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T12:23:01.979618Z DB-PROD-01 sudo 123278 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:24:18.562843Z DB-PROD-01 rsyslogd 29379 - - main Q: queue fwdRule1 has 2686 messages pending, worker threads 1
+<30>1 2024-03-18T12:24:50.981550Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T12:25:43.805666Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<85>1 2024-03-18T12:26:12.849049Z DB-PROD-01 sudo 123719 - - svc_app : TTY=pts/5 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/ss -ltnp
+<86>1 2024-03-18T12:26:13.105049Z DB-PROD-01 sudo 123719 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:26:14.772206Z DB-PROD-01 sudo 123719 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T12:26:18.428929Z DB-PROD-01 sshd 123728 - - Connection from 10.10.1.35 port 52706 on 10.10.4.10 port 22
+<86>1 2024-03-18T12:26:20.606121Z DB-PROD-01 sshd 123728 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 52706 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T12:26:20.762302Z DB-PROD-01 sshd 123728 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T12:26:21.226539Z DB-PROD-01 systemd-logind 29553 - - New session 276792 of user aisha.johnson.
+<86>1 2024-03-18T12:26:23.021219Z DB-PROD-01 sshd 119838 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T12:26:24.129953Z DB-PROD-01 systemd-logind 29553 - - Removed session 276564.
+<30>1 2024-03-18T12:27:43.935297Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T12:29:21.753230Z DB-PROD-01 irqbalance 48622 - - IRQ 32 affinity hint keeps vector on CPU 2 (nvme0q1)
+<30>1 2024-03-18T12:29:45.956161Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.144'
+<86>1 2024-03-18T12:30:13.148425Z DB-PROD-01 su 124289 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T12:30:18.340425Z DB-PROD-01 systemd-logind 29553 - - New session 276824 of user admin.
+<30>1 2024-03-18T12:31:34.429302Z DB-PROD-01 dbus-daemon 29510 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.145'
+<30>1 2024-03-18T12:31:34.797584Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<86>1 2024-03-18T12:31:35.595665Z DB-PROD-01 sshd 121820 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T12:31:36.633432Z DB-PROD-01 systemd-logind 29553 - - Removed session 276681.
+<85>1 2024-03-18T12:32:12.118023Z DB-PROD-01 sudo 124567 - - backup : TTY=pts/1 ; PWD=/var/log ; USER=root ; COMMAND=/bin/systemctl restart mysql
+<86>1 2024-03-18T12:32:12.174023Z DB-PROD-01 sudo 124567 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T12:32:23.952517Z DB-PROD-01 sudo 124567 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:33:27.220175Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<30>1 2024-03-18T12:33:27.835498Z DB-PROD-01 irqbalance 48622 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T12:36:36.029388Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 1
+<30>1 2024-03-18T12:36:51.391862Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<85>1 2024-03-18T12:38:48.390017Z DB-PROD-01 sudo 125516 - - deploy : TTY=pts/2 ; PWD=/var/log ; USER=root ; COMMAND=/bin/systemctl status sshd
+<86>1 2024-03-18T12:38:48.548017Z DB-PROD-01 sudo 125516 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:38:51.562555Z DB-PROD-01 sudo 125516 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:39:01.202717Z DB-PROD-01 sudo 125549 - - backup : TTY=pts/1 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/vmstat 1 5
+<86>1 2024-03-18T12:39:01.340717Z DB-PROD-01 sudo 125549 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<86>1 2024-03-18T12:39:06.904776Z DB-PROD-01 sudo 125549 - - pam_unix(sudo:session): session closed for user root
+<85>1 2024-03-18T12:40:44.401752Z DB-PROD-01 sudo 125780 - - deploy : TTY=pts/0 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/tail -n 40 /var/log/auth.log
+<86>1 2024-03-18T12:40:44.570752Z DB-PROD-01 sudo 125780 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:40:47.209507Z DB-PROD-01 sudo 125780 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:43:57.055534Z DB-PROD-01 rsyslogd 29379 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 111184
+<86>1 2024-03-18T12:46:48.468841Z DB-PROD-01 sshd 126604 - - Connection from 10.10.1.35 port 58640 on 10.10.4.10 port 22
+<86>1 2024-03-18T12:46:50.742998Z DB-PROD-01 sshd 126604 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 58640 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T12:46:50.808235Z DB-PROD-01 sshd 126604 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T12:46:51.328393Z DB-PROD-01 systemd-logind 29553 - - New session 276955 of user aisha.johnson.
+<86>1 2024-03-18T12:48:41.799808Z DB-PROD-01 sshd 118812 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:48:42.419667Z DB-PROD-01 systemd-logind 29553 - - Removed session 276507.
+<30>1 2024-03-18T12:49:49.527307Z DB-PROD-01 systemd-journald 29339 - - Runtime Journal (/run/log/journal/fe8fa70879889de570120a2b29c5a048) is 598.2M, max 4096M, 3497.8M free.
+<86>1 2024-03-18T12:58:36.275015Z DB-PROD-01 sshd 126604 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:58:37.170844Z DB-PROD-01 systemd-logind 29553 - - Removed session 276955.
+<30>1 2024-03-18T13:00:01.630197Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 2
+<30>1 2024-03-18T13:00:02.575421Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 2
+<86>1 2024-03-18T13:01:01.571458Z DB-PROD-01 sshd 123728 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T13:01:02.650254Z DB-PROD-01 systemd-logind 29553 - - Removed session 276792.
+<30>1 2024-03-18T13:05:22.439391Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 45: banned by affinity mask 00000004 (virtio0-input)
+<30>1 2024-03-18T13:05:44.648925Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<30>1 2024-03-18T13:11:51.553570Z DB-PROD-01 irqbalance 48622 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2024-03-18T13:12:24.336339Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T13:12:57.152375Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 2
+<30>1 2024-03-18T13:13:46.362274Z DB-PROD-01 irqbalance 48622 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T13:14:58.700501Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T13:21:05.421069Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T13:21:14.108042Z DB-PROD-01 irqbalance 48622 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T13:21:42.829379Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 2
+<30>1 2024-03-18T13:21:58.600025Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 1
+<30>1 2024-03-18T13:23:58.881806Z DB-PROD-01 irqbalance 48622 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T13:25:42.875561Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 2
+<30>1 2024-03-18T13:26:01.232180Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T13:32:51.669889Z DB-PROD-01 irqbalance 48622 - - IRQ 137 classified for CPU 3 balancing on ens192
+<86>1 2024-03-18T13:34:16.523350Z DB-PROD-01 sshd 131726 - - Connection from 10.10.1.31 port 57677 on 10.10.4.10 port 22
+<86>1 2024-03-18T13:34:18.735567Z DB-PROD-01 sshd 131726 - - Accepted publickey for marcus.chen from 10.10.1.31 port 57677 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T13:34:18.789731Z DB-PROD-01 sshd 131726 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T13:34:19.248956Z DB-PROD-01 systemd-logind 29553 - - New session 277336 of user marcus.chen.
+<30>1 2024-03-18T13:35:07.155610Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T13:35:17.646558Z DB-PROD-01 irqbalance 48622 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2024-03-18T13:36:31.073072Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<30>1 2024-03-18T13:38:00.531553Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<30>1 2024-03-18T13:41:04.002594Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 154: banned by affinity mask 00000001 (virtio1-input)
+<86>1 2024-03-18T13:42:20.049818Z DB-PROD-01 sshd 132571 - - Connection from 10.10.1.21 port 39382 on 10.10.4.10 port 22
+<86>1 2024-03-18T13:42:22.252061Z DB-PROD-01 sshd 132571 - - Accepted password for lina.nguyen from 10.10.1.21 port 39382 ssh2
+<86>1 2024-03-18T13:42:22.375259Z DB-PROD-01 sshd 132571 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T13:42:23.026480Z DB-PROD-01 systemd-logind 29553 - - New session 277401 of user lina.nguyen.
+<86>1 2024-03-18T13:42:23.515768Z DB-PROD-01 sshd 132577 - - Connection from 10.10.1.31 port 51071 on 10.10.4.10 port 22
+<86>1 2024-03-18T13:42:25.769930Z DB-PROD-01 sshd 132577 - - Accepted publickey for marcus.chen from 10.10.1.31 port 51071 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T13:42:25.896111Z DB-PROD-01 sshd 132577 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T13:42:26.620306Z DB-PROD-01 systemd-logind 29553 - - New session 277402 of user marcus.chen.
+<86>1 2024-03-18T13:45:17.917196Z DB-PROD-01 sshd 132571 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T13:45:18.583972Z DB-PROD-01 systemd-logind 29553 - - Removed session 277401.
+<30>1 2024-03-18T13:45:33.508094Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<86>1 2024-03-18T13:47:31.037675Z DB-PROD-01 su 133193 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T13:47:34.433675Z DB-PROD-01 systemd-logind 29553 - - New session 277442 of user admin.
+<86>1 2024-03-18T13:48:51.622101Z DB-PROD-01 sshd 133314 - - Connection from 10.10.1.21 port 42238 on 10.10.4.10 port 22
+<86>1 2024-03-18T13:48:53.891296Z DB-PROD-01 sshd 133314 - - Accepted password for lina.nguyen from 10.10.1.21 port 42238 ssh2
+<86>1 2024-03-18T13:48:53.951477Z DB-PROD-01 sshd 133314 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T13:48:54.480659Z DB-PROD-01 systemd-logind 29553 - - New session 277452 of user lina.nguyen.
+<30>1 2024-03-18T13:49:11.893564Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<86>1 2024-03-18T13:49:21.676039Z DB-PROD-01 sshd 131726 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:49:22.524856Z DB-PROD-01 systemd-logind 29553 - - Removed session 277336.
+<86>1 2024-03-18T13:59:03.195894Z DB-PROD-01 sshd 132577 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:59:04.283677Z DB-PROD-01 systemd-logind 29553 - - Removed session 277402.
+<86>1 2024-03-18T13:59:25.852425Z DB-PROD-01 su 124289 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T13:59:28.300425Z DB-PROD-01 systemd-logind 29553 - - Removed session 276824.
+<30>1 2024-03-18T14:02:49.835697Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T14:03:34.444691Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T14:05:47.705462Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T14:07:08.522685Z DB-PROD-01 irqbalance 48622 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T14:07:10.578626Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<30>1 2024-03-18T14:07:11.498718Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T14:07:23.121280Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T14:08:36.648673Z DB-PROD-01 irqbalance 48622 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T14:08:38.753953Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<30>1 2024-03-18T14:08:58.867985Z DB-PROD-01 irqbalance 48622 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<86>1 2024-03-18T14:10:45.298147Z DB-PROD-01 sshd 133314 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T14:10:46.131901Z DB-PROD-01 systemd-logind 29553 - - Removed session 277452.
+<30>1 2024-03-18T14:11:17.772633Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<30>1 2024-03-18T14:11:50.934854Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<86>1 2024-03-18T14:13:27.139699Z DB-PROD-01 su 136014 - - pam_unix(su:session): session opened for user root(uid=0) by (uid=0)
+<30>1 2024-03-18T14:13:33.921881Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 137: banned by affinity mask 00000008 (ens192)
+<86>1 2024-03-18T14:13:34.508699Z DB-PROD-01 systemd-logind 29553 - - New session 277649 of user root.
+<30>1 2024-03-18T14:14:36.613838Z DB-PROD-01 irqbalance 48622 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2024-03-18T14:14:40.756354Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T14:16:30.049702Z DB-PROD-01 irqbalance 48622 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2024-03-18T14:17:42.386184Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T14:18:47.945258Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 1
+<30>1 2024-03-18T14:19:42.599242Z DB-PROD-01 irqbalance 48622 - - IRQ 32 classified for CPU 2 balancing on nvme0q1
+<30>1 2024-03-18T14:20:19.151787Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<30>1 2024-03-18T14:21:00.846656Z DB-PROD-01 irqbalance 48622 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2024-03-18T14:21:37.110210Z DB-PROD-01 irqbalance 48622 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<86>1 2024-03-18T14:22:46.282495Z DB-PROD-01 su 137131 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T14:22:51.698495Z DB-PROD-01 systemd-logind 29553 - - New session 277723 of user admin.
+<86>1 2024-03-18T14:23:06.696826Z DB-PROD-01 su 137165 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T14:23:10.697826Z DB-PROD-01 systemd-logind 29553 - - New session 277728 of user admin.
+<30>1 2024-03-18T14:23:50.969197Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 2
+<30>1 2024-03-18T14:24:24.720940Z DB-PROD-01 systemd-journald 29339 - - Rotating system journal.
+<30>1 2024-03-18T14:25:50.003407Z DB-PROD-01 irqbalance 48622 - - IRQ 45 classified for CPU 0 balancing on virtio0-input
+<86>1 2024-03-18T14:27:11.274491Z DB-PROD-01 sshd 137671 - - Connection from 10.10.1.35 port 62016 on 10.10.4.10 port 22
+<86>1 2024-03-18T14:27:13.454694Z DB-PROD-01 sshd 137671 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 62016 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T14:27:13.593891Z DB-PROD-01 sshd 137671 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:27:14.189088Z DB-PROD-01 systemd-logind 29553 - - New session 277759 of user aisha.johnson.
+<86>1 2024-03-18T14:29:30.741291Z DB-PROD-01 sshd 137949 - - Connection from 10.10.1.31 port 64808 on 10.10.4.10 port 22
+<86>1 2024-03-18T14:29:32.954485Z DB-PROD-01 sshd 137949 - - Accepted publickey for marcus.chen from 10.10.1.31 port 64808 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T14:29:33.023705Z DB-PROD-01 sshd 137949 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T14:29:33.594838Z DB-PROD-01 systemd-logind 29553 - - New session 277777 of user marcus.chen.
+<86>1 2024-03-18T14:29:48.361889Z DB-PROD-01 sshd 137985 - - Connection from 10.10.1.35 port 63285 on 10.10.4.10 port 22
+<86>1 2024-03-18T14:29:50.577052Z DB-PROD-01 sshd 137985 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 63285 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T14:29:50.702265Z DB-PROD-01 sshd 137985 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:29:51.333501Z DB-PROD-01 systemd-logind 29553 - - New session 277779 of user aisha.johnson.
+<86>1 2024-03-18T14:31:12.534649Z DB-PROD-01 sshd 137949 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T14:31:13.366515Z DB-PROD-01 systemd-logind 29553 - - Removed session 277777.
+<86>1 2024-03-18T14:31:41.859364Z DB-PROD-01 sshd 138199 - - Connection from 10.10.1.35 port 55259 on 10.10.4.10 port 22
+<86>1 2024-03-18T14:31:44.034534Z DB-PROD-01 sshd 138199 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 55259 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T14:31:44.106739Z DB-PROD-01 sshd 138199 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T14:31:44.593934Z DB-PROD-01 systemd-logind 29553 - - New session 277795 of user aisha.johnson.
+<86>1 2024-03-18T14:32:05.417327Z DB-PROD-01 sshd 138245 - - Connection from 10.10.1.21 port 57828 on 10.10.4.10 port 22
+<86>1 2024-03-18T14:32:07.629574Z DB-PROD-01 sshd 138245 - - Accepted password for lina.nguyen from 10.10.1.21 port 57828 ssh2
+<86>1 2024-03-18T14:32:07.695785Z DB-PROD-01 sshd 138245 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T14:32:08.126976Z DB-PROD-01 systemd-logind 29553 - - New session 277798 of user lina.nguyen.
+<86>1 2024-03-18T14:33:58.526000Z DB-PROD-01 login 7530 - - pam_unix(login:session): session opened for user lina.nguyen(uid=5302) by LOGIN(uid=0)
+<86>1 2024-03-18T14:34:02.056000Z DB-PROD-01 systemd-logind 29553 - - New session 277814 of user lina.nguyen.
+<30>1 2024-03-18T14:35:44.748380Z DB-PROD-01 irqbalance 48622 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2024-03-18T14:37:29.928987Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 181: banned by affinity mask 00000004 (mlx5_comp2)
+<30>1 2024-03-18T14:38:24.720073Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 137: banned by affinity mask 00000001 (ens192)
+<86>1 2024-03-18T14:38:35.494397Z DB-PROD-01 sshd 137671 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:38:36.557187Z DB-PROD-01 systemd-logind 29553 - - Removed session 277759.
+<86>1 2024-03-18T14:39:34.751756Z DB-PROD-01 su 139105 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T14:39:41.047756Z DB-PROD-01 systemd-logind 29553 - - New session 277858 of user admin.
+<30>1 2024-03-18T14:43:12.808834Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 1
+<30>1 2024-03-18T14:44:31.400604Z DB-PROD-01 irqbalance 48622 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2024-03-18T14:44:53.342984Z DB-PROD-01 irqbalance 48622 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<86>1 2024-03-18T14:44:54.369675Z DB-PROD-01 su 133193 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T14:44:57.408675Z DB-PROD-01 systemd-logind 29553 - - Removed session 277442.
+<86>1 2024-03-18T14:45:14.300495Z DB-PROD-01 su 137131 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T14:45:17.655495Z DB-PROD-01 systemd-logind 29553 - - Removed session 277723.
+<86>1 2024-03-18T14:46:04.808184Z DB-PROD-01 sshd 139812 - - Connection from 10.10.1.21 port 57057 on 10.10.4.10 port 22
+<86>1 2024-03-18T14:46:07.078414Z DB-PROD-01 sshd 139812 - - Accepted password for lina.nguyen from 10.10.1.21 port 57057 ssh2
+<86>1 2024-03-18T14:46:07.143559Z DB-PROD-01 sshd 139812 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T14:46:07.710783Z DB-PROD-01 systemd-logind 29553 - - New session 277910 of user lina.nguyen.
+<86>1 2024-03-18T14:46:53.307496Z DB-PROD-01 sshd 138199 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:46:53.626232Z DB-PROD-01 systemd-logind 29553 - - Removed session 277795.
+<30>1 2024-03-18T14:48:13.542096Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T14:48:26.443798Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 16: banned by affinity mask 00000004 (ahci)
+<30>1 2024-03-18T14:49:30.325709Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T14:49:36.518598Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<30>1 2024-03-18T14:49:56.973782Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<86>1 2024-03-18T14:55:59.601471Z DB-PROD-01 sshd 137985 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:55:59.999267Z DB-PROD-01 systemd-logind 29553 - - Removed session 277779.
+<86>1 2024-03-18T15:00:41.041492Z DB-PROD-01 sshd 138245 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T15:00:41.586220Z DB-PROD-01 systemd-logind 29553 - - Removed session 277798.
+<30>1 2024-03-18T15:02:01.515892Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 154: banned by affinity mask 00000008 (virtio1-input)
+<86>1 2024-03-18T15:02:06.422123Z DB-PROD-01 sshd 139812 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T15:02:06.806975Z DB-PROD-01 systemd-logind 29553 - - Removed session 277910.
+<30>1 2024-03-18T15:02:32.409697Z DB-PROD-01 irqbalance 48622 - - IRQ 86 affinity hint keeps vector on CPU 2 (mlx5_comp1)
+<30>1 2024-03-18T15:03:08.081306Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<30>1 2024-03-18T15:03:24.151134Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T15:03:49.403591Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T15:06:15.810618Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 2
+<30>1 2024-03-18T15:06:40.388674Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 2
+<86>1 2024-03-18T15:11:40.405077Z DB-PROD-01 sshd 143041 - - Connection from 10.10.1.21 port 56662 on 10.10.4.10 port 22
+<86>1 2024-03-18T15:11:42.952304Z DB-PROD-01 sshd 143041 - - Accepted password for lina.nguyen from 10.10.1.21 port 56662 ssh2
+<86>1 2024-03-18T15:11:43.101480Z DB-PROD-01 sshd 143041 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T15:11:43.707688Z DB-PROD-01 systemd-logind 29553 - - New session 278114 of user lina.nguyen.
+<30>1 2024-03-18T15:11:49.926152Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T15:14:19.189253Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 1
+<30>1 2024-03-18T15:16:10.141245Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 1
+<30>1 2024-03-18T15:19:45.249670Z DB-PROD-01 irqbalance 48622 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<86>1 2024-03-18T15:20:27.314655Z DB-PROD-01 sshd 144262 - - Connection from 10.10.1.31 port 64415 on 10.10.4.10 port 22
+<86>1 2024-03-18T15:20:29.602868Z DB-PROD-01 sshd 144262 - - Accepted publickey for marcus.chen from 10.10.1.31 port 64415 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T15:20:29.783025Z DB-PROD-01 sshd 144262 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T15:20:30.391283Z DB-PROD-01 systemd-logind 29553 - - New session 278185 of user marcus.chen.
+<30>1 2024-03-18T15:25:13.298316Z DB-PROD-01 irqbalance 48622 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<86>1 2024-03-18T15:25:51.311745Z DB-PROD-01 sshd 144262 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T15:25:51.854571Z DB-PROD-01 systemd-logind 29553 - - Removed session 278185.
+<30>1 2024-03-18T15:27:12.016163Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T15:29:38.203541Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T15:29:44.628207Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T15:30:57.805209Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T15:33:37.362533Z DB-PROD-01 irqbalance 48622 - - IRQ 32 affinity hint keeps vector on CPU 2 (nvme0q1)
+<86>1 2024-03-18T15:35:43.267798Z DB-PROD-01 sshd 143041 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T15:35:43.527523Z DB-PROD-01 systemd-logind 29553 - - Removed session 278114.
+<30>1 2024-03-18T15:35:56.036514Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T15:36:00.359699Z DB-PROD-01 su 136014 - - pam_unix(su:session): session closed for user root
+<86>1 2024-03-18T15:36:03.482699Z DB-PROD-01 systemd-logind 29553 - - Removed session 277649.
+<30>1 2024-03-18T15:36:33.634002Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T15:36:57.325638Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 1
+<30>1 2024-03-18T15:37:07.746151Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<86>1 2024-03-18T15:39:45.613690Z DB-PROD-01 sshd 146942 - - Connection from 10.10.1.35 port 63290 on 10.10.4.10 port 22
+<86>1 2024-03-18T15:39:47.845877Z DB-PROD-01 sshd 146942 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 63290 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T15:39:47.985067Z DB-PROD-01 sshd 146942 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T15:39:48.487275Z DB-PROD-01 systemd-logind 29553 - - New session 278339 of user aisha.johnson.
+<30>1 2024-03-18T15:42:01.335588Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 16: banned by affinity mask 00000001 (ahci)
+<30>1 2024-03-18T15:42:45.502546Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T15:43:33.415461Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<86>1 2024-03-18T15:45:56.212387Z DB-PROD-01 su 147752 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T15:46:00.270387Z DB-PROD-01 systemd-logind 29553 - - New session 278391 of user admin.
+<30>1 2024-03-18T15:46:00.385263Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T15:46:07.485714Z DB-PROD-01 irqbalance 48622 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2024-03-18T15:49:10.151527Z DB-PROD-01 irqbalance 48622 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T15:53:03.645674Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<30>1 2024-03-18T16:00:22.323992Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 1
+<86>1 2024-03-18T16:07:50.341503Z DB-PROD-01 sshd 146942 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T16:07:50.565250Z DB-PROD-01 systemd-logind 29553 - - Removed session 278339.
+<30>1 2024-03-18T16:17:02.151535Z DB-PROD-01 irqbalance 48622 - - IRQ 32 affinity hint keeps vector on CPU 2 (nvme0q1)
+<30>1 2024-03-18T16:18:45.546021Z DB-PROD-01 irqbalance 48622 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T16:19:40.210665Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T16:25:19.893479Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T16:26:09.222228Z DB-PROD-01 irqbalance 48622 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T16:29:38.978344Z DB-PROD-01 irqbalance 48622 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<86>1 2024-03-18T16:32:04.626600Z DB-PROD-01 sshd 152784 - - Connection from 10.10.1.35 port 62338 on 10.10.4.10 port 22
+<86>1 2024-03-18T16:32:06.892734Z DB-PROD-01 sshd 152784 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 62338 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T16:32:06.957000Z DB-PROD-01 sshd 152784 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:32:07.655188Z DB-PROD-01 systemd-logind 29553 - - New session 278758 of user aisha.johnson.
+<30>1 2024-03-18T16:32:10.023261Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T16:32:58.753447Z DB-PROD-01 irqbalance 48622 - - IRQ 86 affinity hint keeps vector on CPU 2 (mlx5_comp1)
+<86>1 2024-03-18T16:34:37.329992Z DB-PROD-01 sshd 153039 - - Connection from 10.10.1.21 port 42741 on 10.10.4.10 port 22
+<86>1 2024-03-18T16:34:39.613181Z DB-PROD-01 sshd 153039 - - Accepted password for lina.nguyen from 10.10.1.21 port 42741 ssh2
+<86>1 2024-03-18T16:34:39.785398Z DB-PROD-01 sshd 153039 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T16:34:40.275596Z DB-PROD-01 systemd-logind 29553 - - New session 278778 of user lina.nguyen.
+<30>1 2024-03-18T16:34:42.113085Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<86>1 2024-03-18T16:38:11.846281Z DB-PROD-01 sshd 153401 - - Connection from 10.10.1.35 port 55165 on 10.10.4.10 port 22
+<30>1 2024-03-18T16:38:13.186849Z DB-PROD-01 irqbalance 48622 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<86>1 2024-03-18T16:38:14.019453Z DB-PROD-01 sshd 153401 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 55165 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T16:38:14.148668Z DB-PROD-01 sshd 153401 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T16:38:14.852849Z DB-PROD-01 systemd-logind 29553 - - New session 278807 of user aisha.johnson.
+<30>1 2024-03-18T16:42:10.215299Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 64: banned by affinity mask 00000004 (mlx5_comp0)
+<30>1 2024-03-18T16:44:11.171072Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 1
+<30>1 2024-03-18T16:44:17.959830Z DB-PROD-01 irqbalance 48622 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T16:44:44.824968Z DB-PROD-01 multipathd 55945 - - sda: remaining active paths: 2
+<86>1 2024-03-18T16:45:42.267663Z DB-PROD-01 sshd 152784 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T16:45:43.122464Z DB-PROD-01 systemd-logind 29553 - - Removed session 278758.
+<30>1 2024-03-18T16:48:55.966910Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<86>1 2024-03-18T16:48:56.023570Z DB-PROD-01 sshd 154431 - - Connection from 10.10.1.31 port 53923 on 10.10.4.10 port 22
+<86>1 2024-03-18T16:48:58.224773Z DB-PROD-01 sshd 154431 - - Accepted publickey for marcus.chen from 10.10.1.31 port 53923 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T16:48:58.389904Z DB-PROD-01 sshd 154431 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T16:48:59.076159Z DB-PROD-01 systemd-logind 29553 - - New session 278892 of user marcus.chen.
+<30>1 2024-03-18T16:49:53.437558Z DB-PROD-01 irqbalance 48622 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2024-03-18T16:53:23.139683Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T16:53:24.289768Z DB-PROD-01 irqbalance 48622 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T16:53:59.171230Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T16:54:03.008976Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T17:00:17.091753Z DB-PROD-01 systemd-journald 29339 - - Vacuuming done, freed 132.1M of archived journals.
+<86>1 2024-03-18T17:01:11.458919Z DB-PROD-01 sshd 153401 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:01:12.344639Z DB-PROD-01 systemd-logind 29553 - - Removed session 278807.
+<86>1 2024-03-18T17:01:42.475213Z DB-PROD-01 sshd 153039 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T17:01:43.256040Z DB-PROD-01 systemd-logind 29553 - - Removed session 278778.
+<86>1 2024-03-18T17:03:32.608014Z DB-PROD-01 sshd 154431 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T17:03:33.110790Z DB-PROD-01 systemd-logind 29553 - - Removed session 278892.
+<30>1 2024-03-18T17:08:10.400767Z DB-PROD-01 irqbalance 48622 - - Skipping IRQ 32: banned by affinity mask 00000008 (nvme0q1)
+<86>1 2024-03-18T17:08:49.989387Z DB-PROD-01 su 147752 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T17:08:52.450387Z DB-PROD-01 systemd-logind 29553 - - Removed session 278391.
+<86>1 2024-03-18T17:14:24.500579Z DB-PROD-01 sshd 158039 - - Connection from 10.10.2.30 port 58612 on 10.10.4.10 port 22
+<86>1 2024-03-18T17:14:26.762777Z DB-PROD-01 sshd 158039 - - Accepted password for root from 10.10.2.30 port 58612 ssh2
+<86>1 2024-03-18T17:14:26.925939Z DB-PROD-01 sshd 158039 - - pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T17:14:27.450141Z DB-PROD-01 systemd-logind 29553 - - New session 279097 of user root.
+<86>1 2024-03-18T17:14:40.016186Z DB-PROD-01 sshd 158087 - - Connection from 10.10.1.21 port 34316 on 10.10.4.10 port 22
+<86>1 2024-03-18T17:14:42.968396Z DB-PROD-01 sshd 158087 - - Accepted password for lina.nguyen from 10.10.1.21 port 34316 ssh2
+<86>1 2024-03-18T17:14:43.092639Z DB-PROD-01 sshd 158087 - - pam_unix(sshd:session): session opened for user lina.nguyen(uid=5302) by (uid=0)
+<86>1 2024-03-18T17:14:43.661863Z DB-PROD-01 systemd-logind 29553 - - New session 279099 of user lina.nguyen.
+<30>1 2024-03-18T17:16:37.141070Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<86>1 2024-03-18T17:17:49.159829Z DB-PROD-01 sshd 158624 - - Connection from 10.10.1.35 port 53450 on 10.10.4.10 port 22
+<86>1 2024-03-18T17:17:51.355999Z DB-PROD-01 sshd 158624 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 53450 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T17:17:51.402264Z DB-PROD-01 sshd 158624 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T17:17:51.852424Z DB-PROD-01 systemd-logind 29553 - - New session 279123 of user aisha.johnson.
+<30>1 2024-03-18T17:18:39.828531Z DB-PROD-01 irqbalance 48622 - - IRQ 86 affinity hint keeps vector on CPU 2 (mlx5_comp1)
+<30>1 2024-03-18T17:18:40.643217Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T17:23:15.710704Z DB-PROD-01 multipathd 55945 - - dm-0: remaining active paths: 1
+<30>1 2024-03-18T17:26:43.560950Z DB-PROD-01 irqbalance 48622 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<30>1 2024-03-18T17:26:53.292670Z DB-PROD-01 irqbalance 48622 - - IRQ 32 classified for CPU 2 balancing on nvme0q1
+<30>1 2024-03-18T17:27:41.645306Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T17:27:42.211997Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<30>1 2024-03-18T17:27:54.978401Z DB-PROD-01 multipathd 55945 - - sdb: remaining active paths: 2
+<30>1 2024-03-18T17:30:12.371743Z DB-PROD-01 irqbalance 48622 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:30:44.046887Z DB-PROD-01 multipathd 55945 - - dm-0: add missing path
+<86>1 2024-03-18T17:31:11.359616Z DB-PROD-01 su 160905 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T17:31:16.641616Z DB-PROD-01 systemd-logind 29553 - - New session 279232 of user admin.
+<30>1 2024-03-18T17:32:39.480117Z DB-PROD-01 irqbalance 48622 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:32:40.045730Z DB-PROD-01 irqbalance 48622 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<86>1 2024-03-18T17:33:45.410109Z DB-PROD-01 sshd 161320 - - Connection from 10.10.1.31 port 53868 on 10.10.4.10 port 22
+<86>1 2024-03-18T17:33:47.600317Z DB-PROD-01 sshd 161320 - - Accepted publickey for marcus.chen from 10.10.1.31 port 53868 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T17:33:47.680560Z DB-PROD-01 sshd 161320 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T17:33:48.217733Z DB-PROD-01 systemd-logind 29553 - - New session 279251 of user marcus.chen.
+<86>1 2024-03-18T17:37:35.102068Z DB-PROD-01 sshd 158087 - - pam_unix(sshd:session): session closed for user lina.nguyen
+<86>1 2024-03-18T17:37:36.191860Z DB-PROD-01 systemd-logind 29553 - - Removed session 279099.
+<86>1 2024-03-18T17:43:45.079341Z DB-PROD-01 sshd 158624 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:43:45.451090Z DB-PROD-01 systemd-logind 29553 - - Removed session 279123.
+<86>1 2024-03-18T17:44:32.563000Z DB-PROD-01 login 9495 - - pam_unix(login:session): session opened for user aisha.johnson(uid=2528) by LOGIN(uid=0)
+<86>1 2024-03-18T17:44:34.958000Z DB-PROD-01 systemd-logind 29553 - - New session 279338 of user aisha.johnson.
+<30>1 2024-03-18T17:49:17.795132Z DB-PROD-01 multipathd 55945 - - sdb: add missing path
+<30>1 2024-03-18T17:49:49.905531Z DB-PROD-01 irqbalance 48622 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T17:50:12.941742Z DB-PROD-01 multipathd 55945 - - sda: add missing path
+<86>1 2024-03-18T17:52:19.936034Z DB-PROD-01 sshd 158039 - - pam_unix(sshd:session): session closed for user root
+<86>1 2024-03-18T17:52:21.035738Z DB-PROD-01 systemd-logind 29553 - - Removed session 279097.

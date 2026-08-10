@@ -179,6 +179,31 @@ class TestProcessPoolSize:
         ]
         assert all("ntdsutil.exe" not in image for image in picks)
 
+    def test_remote_access_service_stack_is_one_deployment_cohort(self):
+        """One deployment should not independently mix competing VPN/SASE services."""
+        host_a = SimpleNamespace(hostname="WS-01", os="Windows 11", type="workstation")
+        host_b = SimpleNamespace(hostname="WS-02", os="Windows 11", type="workstation")
+        product_exes = {
+            "vpnagent.exe": "cisco",
+            "pangps.exe": "globalprotect",
+            "zsaservice.exe": "zscaler",
+            "zsatunnel.exe": "zscaler",
+        }
+        observed: set[str] = set()
+        for host in (host_a, host_b):
+            for seed in range(500):
+                image = pick_system_service_process(
+                    random.Random(seed),
+                    "workstation",
+                    host,
+                    "meridianhcs.local",
+                )[0]
+                exe = image.rsplit("\\", 1)[-1].lower()
+                if exe in product_exes:
+                    observed.add(product_exes[exe])
+
+        assert len(observed) == 1
+
     def test_workstation_update_tasks_do_not_run_on_domain_controllers(self):
         """Desktop updater scheduled tasks should stay on workstation hosts."""
         workstation_update_exes = {

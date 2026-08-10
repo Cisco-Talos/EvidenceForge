@@ -109,8 +109,8 @@ relationships:
   source.windows_security_process_create:
     class: source_latency
     position: after
-    min_ms: 35
-    max_ms: 900
+    min_ms: 4
+    max_ms: 24
   source.windows_explicit_credentials_after_process_create:
     class: source_latency
     position: after
@@ -129,8 +129,13 @@ relationships:
   source.sysmon_process_create:
     class: source_latency
     position: after
-    min_ms: 18
-    max_ms: 1100
+    min_ms: 3
+    max_ms: 22
+  source.sysmon_module_after_process_create:
+    class: source_latency
+    position: after
+    min_ms: 5
+    max_ms: 180
   source.sysmon_process_terminate:
     class: source_latency
     position: after
@@ -332,8 +337,9 @@ endpoint_clock:
 network_sensor_observation:
   # Default assumes distributed security infrastructure where core, DMZ, and
   # packet-broker taps observe the same flow through different capture paths.
-  # Sensor clocks remain controlled, but buffering and path differences should
-  # not make dual-sensor rows look mechanically cloned.
+  # Sensor clocks remain controlled. The event_jitter envelope is interpreted
+  # as slow clock wander shared by nearby observations, never independent
+  # per-flow timestamp noise.
   default_profile: distributed_taps
   profiles:
     distributed_taps:
@@ -347,8 +353,8 @@ network_sensor_observation:
         min: 500
         max: 25000
       event_jitter_us:
-        min: -90000
-        max: 90000
+        min: -1500
+        max: 1500
       capture_loss:
         probability: 0.12
         min_fraction: 0.0005
@@ -401,6 +407,19 @@ firewall_observation:
     asa_default:
       tcp_embryonic_timeout_seconds: 30
       tcp_idle_timeout_seconds: 3600
+
+windows_startup_modules:
+  # Source-visible loader telemetry commonly arrives in a tight burst, but
+  # dependency work and collector batching produce a heavy tail rather than
+  # one fixed per-process cadence.
+  initial_delay_us:
+    min: 250
+    max: 6500
+  inter_load_gap_us:
+    median: 1900
+    sigma: 0.95
+    min: 120
+    max: 65000
 
 windows_event_time:
   collision_spacing:

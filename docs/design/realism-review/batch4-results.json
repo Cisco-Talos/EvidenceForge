@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "review_baseline_commit": "0a035e97d94cd2a35ebd1498cc4e133336fe14a4",
+  "recorded_at": "2026-08-07",
+  "branch": "codex/batch4-world-capabilities",
+  "remediation_batch": 4,
+  "scope": {
+    "finding_ids": ["REAL-008", "REAL-012"],
+    "verified_siblings": [
+      "scheduled-task materialization order and Linux PID chronology",
+      "single SSH session-shell ownership",
+      "OCSP source-local observation coherence",
+      "client-scoped public recursive DNS operator state"
+    ]
+  },
+  "commands": {
+    "generate": "uv run eforge generate SCENARIO -o OUTPUT",
+    "probe": "uv run python scripts/realism_review_probe.py OUTPUT --output REPORT",
+    "evaluate": "uv run eforge eval OUTPUT -s SCENARIO --format text",
+    "repeat_compare": "diff -qr OUTPUT OUTPUT_REPEAT",
+    "data_manifest_hash": "cd OUTPUT/data && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256",
+    "config": "uv run eforge validate-config",
+    "tests_non_slow": "uv run pytest --no-cov -q",
+    "tests_parallel_slow": "uv run pytest --no-cov --include-slow -q tests/integration/test_parallel_generation.py",
+    "lint": "uv run ruff check .",
+    "format_check": "uv run ruff format --check ."
+  },
+  "datasets": [
+    {
+      "name": "minimal-no-modeled-infrastructure",
+      "scenario": "tests/fixtures/scenarios/minimal.yaml",
+      "profile": "complete",
+      "duration": "1h",
+      "output": "/private/tmp/eforge-batch4-minimal-v2",
+      "data_files": 9,
+      "data_bytes": 323909,
+      "data_manifest_sha256": "dc4e6b21287e3de4def355d599070ff82035f047252c32c443f2971159d13918",
+      "probe_errors": 0
+    },
+    {
+      "name": "mixed-role-branch-office",
+      "scenario": "scenarios/branch-office-example/scenario.yaml",
+      "profile": "complete",
+      "duration": "6h",
+      "output": "/private/tmp/eforge-batch4-branch-office",
+      "data_files": 39,
+      "data_bytes": 31095227,
+      "data_manifest_sha256": "9faae677014a3303f619b69534bd5b8d3047e5b12c412522b84c931da7792dd4",
+      "probe_errors": 0
+    },
+    {
+      "name": "branch-office-complete",
+      "scenario": "/private/tmp/eforge-realism-review/branch-24h-complete-1.yaml",
+      "profile": "complete",
+      "duration": "24h",
+      "output": "/private/tmp/eforge-batch4-24h-complete-v3",
+      "data_files": 40,
+      "data_bytes": 111864044,
+      "data_manifest_sha256": "0422fb8806d1736cd87bd375df5c9924aefa5dc5923986aca7b3d2113e7e1c15",
+      "probe_errors": 0
+    },
+    {
+      "name": "branch-office-enterprise-standard",
+      "scenario": "/private/tmp/eforge-realism-review/branch-24h-enterprise_standard-1.yaml",
+      "profile": "enterprise_standard",
+      "duration": "24h",
+      "output": "/private/tmp/eforge-batch4-24h-enterprise-v5-final",
+      "repeat": "/private/tmp/eforge-batch4-24h-enterprise-v4-repeat",
+      "data_files": 40,
+      "data_bytes": 109599334,
+      "data_manifest_sha256": "d252390cf92173971487ae0f7259ddfb51e5c1f77e59e17334d68581a46e2d53",
+      "repeat_equivalence": "byte-identical across the final-code output, the post-OCSP output, and its independently generated repeat",
+      "probe_errors": 0
+    },
+    {
+      "name": "baseline-seven-day",
+      "scenario": "/private/tmp/eforge-realism-review/baseline-7d-1.yaml",
+      "profile": "complete",
+      "duration": "7d",
+      "output": "/private/tmp/eforge-batch4-7d-baseline-v3",
+      "data_files": 14,
+      "data_bytes": 181091393,
+      "data_manifest_sha256": "4bf2da57244fb3d2931b6fac53d887429f47798ef48a082887d6564c31b0141a",
+      "probe_errors": 0
+    }
+  ],
+  "rendered_invariants": {
+    "dhcp": {
+      "enterprise_rows": 190,
+      "server_addresses": ["10.44.20.10"],
+      "client_server_collisions": 0,
+      "assigned_server_collisions": 0
+    },
+    "ocsp": {
+      "enterprise_rows": 76,
+      "response_file_durations": 76,
+      "distinct_response_file_durations": 76,
+      "duration_seconds_min": 0.00348,
+      "duration_seconds_max": 0.049593,
+      "missing_http_file_response_companions": 0
+    },
+    "aaaa": {
+      "enterprise_queries": 496,
+      "answered": 204,
+      "nodata": 292
+    },
+    "public_dns_state": {
+      "old_minimal_operator_coherence_errors": 1,
+      "old_seven_day_operator_coherence_errors": 3,
+      "final_minimal_operator_coherence_errors": 0,
+      "final_seven_day_operator_coherence_errors": 0,
+      "final_seven_day_client_operator_pools": {
+        "10.0.1.10": ["208.67.222.222"],
+        "10.0.1.11": ["1.1.1.1", "1.0.0.1"],
+        "10.0.2.10": ["8.8.8.8", "8.8.4.4"]
+      }
+    },
+    "windows_gpo": {
+      "ordinary_processes": 58,
+      "forced_processes": 1
+    },
+    "probe": {
+      "minimal_errors": 0,
+      "mixed_role_errors": 0,
+      "complete_24h_errors": 0,
+      "enterprise_24h_errors": 0,
+      "baseline_7d_errors": 0
+    }
+  },
+  "evaluation": [
+    {
+      "dataset": "branch-office-complete",
+      "records": 173812,
+      "sources": 18,
+      "overall_score": 91.981,
+      "acceptance_passed": true,
+      "spec_conformance": 100,
+      "format_constraints": 100,
+      "causal_ordering": 100
+    },
+    {
+      "dataset": "branch-office-enterprise-standard",
+      "records": 167854,
+      "sources": 18,
+      "overall_score": 92.34075656371016,
+      "acceptance_passed": true,
+      "spec_conformance": 100,
+      "format_constraints": 100,
+      "cross_source_field_agreement": 100,
+      "causal_ordering": 100
+    },
+    {
+      "dataset": "baseline-seven-day",
+      "records": 199734,
+      "sources": 10,
+      "overall_score": 96.11077970084847,
+      "acceptance_passed": true,
+      "spec_conformance": 100,
+      "format_constraints": 100,
+      "cross_source_field_agreement": 100,
+      "causal_ordering": 100
+    }
+  ],
+  "quality_gates": [
+    {
+      "name": "configuration_validation",
+      "status": "passed",
+      "result": "0 errors, 0 warnings, 0 info items across 87 files"
+    },
+    {
+      "name": "ruff_check",
+      "status": "passed",
+      "result": "All checks passed"
+    },
+    {
+      "name": "ruff_format_check",
+      "status": "passed",
+      "result": "453 files already formatted"
+    },
+    {
+      "name": "focused_batch_tests",
+      "status": "passed",
+      "result": "655 passed, 1 skipped across the final compatibility and Batch 4 suites"
+    },
+    {
+      "name": "non_slow_tests",
+      "status": "passed",
+      "result": "5172 passed, 41 skipped in 236.33 seconds"
+    },
+    {
+      "name": "targeted_parallel_slow_tests",
+      "status": "passed",
+      "result": "5 passed in 3.43 seconds"
+    }
+  ],
+  "limitations": [
+    "The branch scenario retains its documented undeclared portal hostname warning; this is outside Batch 4.",
+    "The seven-day scenario retains four documented user-placement warnings; these are outside Batch 4.",
+    "The complete and enterprise evaluator indicator, pivot, and diurnal notices are existing scenario/evaluator behavior scheduled for Batch 5.",
+    "Generated datasets and probe reports remain temporary and untracked; commands, locations, counts, and hashes are durable here."
+  ]
+}

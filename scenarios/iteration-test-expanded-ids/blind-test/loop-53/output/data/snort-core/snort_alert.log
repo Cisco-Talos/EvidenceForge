@@ -1,0 +1,52 @@
+03/18-12:18:18.327569 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:43621 -> 10.10.2.10:53
+03/18-12:33:41.742928 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.3.20:34364 -> 10.10.2.10:53
+03/18-12:42:40.812134 [**] [1:2000560:10] ET POLICY HTTP CONNECT Tunnel Attempt Inbound [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.2.10:63945 -> 32.49.44.207:8080
+03/18-12:42:46.471404 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:44762 -> 10.10.2.10:53
+03/18-12:48:23.482599 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.2.26:41929 -> 10.10.2.10:53
+03/18-13:27:17.213448 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.1.31:56040 -> 10.10.2.10:53
+03/18-13:29:48.908666 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.1.22:43789 -> 10.10.2.10:53
+03/18-13:30:28.912065 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.2.26:42733 -> 10.10.2.10:53
+03/18-13:34:02.166415 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:37905 -> 10.10.2.10:53
+03/18-13:34:53.157176 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:58665 -> 10.10.2.10:53
+03/18-13:37:09.505435 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 37.75.195.175 -> 10.10.2.25
+03/18-13:44:06.848401 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:58184 -> 10.10.2.10:53
+03/18-13:46:38.585635 [**] [1:2000357:9] ET P2P BitTorrent Traffic [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.2.10:63976 -> 165.116.172.245:6881
+03/18-13:54:04.138165 [**] [1:382:1] PROTOCOL-ICMP PING Linux [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 145.78.103.167 -> 10.10.2.25
+03/18-14:15:11.571230 [**] [1:2002911:7] ET SCAN Potential SSH Scan [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 10.10.3.10:56563 -> 10.10.2.30:22
+03/18-14:24:05.233654 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:39658 -> 10.10.2.10:53
+03/18-14:24:36.683926 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:45584 -> 10.10.2.10:53
+03/18-14:31:19.699018 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:58926 -> 10.10.2.10:53
+03/18-14:37:59.144736 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:38617 -> 10.10.2.10:53
+03/18-14:38:56.500993 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:40480 -> 10.10.2.10:53
+03/18-14:50:45.555527 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:45968 -> 10.10.2.10:53
+03/18-15:20:34.694177 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.2.26:43700 -> 10.10.2.10:53
+03/18-15:24:17.732642 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.1.34:56702 -> 10.10.2.10:53
+03/18-15:38:16.044936 [**] [1:2016149:3] ET INFO Session Traversal Utilities for NAT (STUN Binding Request) [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {UDP} 10.10.2.25:48813 -> 47.252.228.131:3478
+03/18-15:53:35.214639 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.26:55812 -> 10.10.2.10:53
+03/18-15:54:29.439998 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.2.30:46872 -> 10.10.2.10:53
+03/18-16:08:47.885591 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:54967 -> 10.10.2.10:53
+03/18-16:12:51.321282 [**] [1:2000357:9] ET P2P BitTorrent Traffic [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.1.21:40150 -> 67.188.136.231:6881
+03/18-16:17:40.402987 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.2.25:47172 -> 10.10.2.10:53
+03/18-16:45:40.271914 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.30:53125 -> 10.10.2.10:53
+03/18-16:45:40.308799 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.30:40789 -> 10.10.2.10:53
+03/18-16:50:41.079209 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.30:38098 -> 10.10.2.10:53
+03/18-16:50:43.068624 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.30:52291 -> 10.10.2.10:53
+03/18-16:55:43.702120 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.30:33349 -> 10.10.2.10:53
+03/18-16:55:46.026762 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.2.30:42226 -> 10.10.2.10:53
+03/18-16:59:41.389613 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.2.26:34517 -> 10.10.2.10:53
+03/18-17:00:57.201842 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:41320 -> 10.10.2.10:53
+03/18-17:06:02.163541 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:58697 -> 10.10.2.10:53
+03/18-17:09:27.153544 [**] [1:2000560:10] ET POLICY HTTP CONNECT Tunnel Attempt Inbound [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.2.26:45563 -> 181.114.25.104:8080
+03/18-17:11:38.907458 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:42712 -> 10.10.2.10:53
+03/18-17:11:44.384926 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.1.22:57758 -> 10.10.2.10:53
+03/18-17:17:08.061276 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:46334 -> 10.10.2.10:53
+03/18-17:22:12.395160 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.1.32:62417 -> 10.10.2.10:53
+03/18-17:22:31.384042 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:58837 -> 10.10.2.10:53
+03/18-17:25:25.366704 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.1.32:50340 -> 10.10.2.10:53
+03/18-17:27:59.669296 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:46860 -> 10.10.2.10:53
+03/18-17:33:08.948675 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:58402 -> 10.10.2.10:53
+03/18-17:38:29.190996 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:49453 -> 10.10.2.10:53
+03/18-17:43:37.353349 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:46582 -> 10.10.2.10:53
+03/18-17:51:43.445613 [**] [1:2000357:9] ET P2P BitTorrent Traffic [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.1.34:52676 -> 181.114.25.104:6881
+03/18-17:57:45.302090 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.20:39527 -> 10.10.2.10:53
+03/18-17:59:53.646792 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:43424 -> 10.10.2.10:53

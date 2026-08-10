@@ -156,7 +156,9 @@ class TestProxyParserRegistration:
             "10.0.0.1 - jsmith [15/Jul/2024:10:00:00 +0000] "
             '"GET https://example.com/download?q=1 HTTP/1.1" 200 1024 '
             '"-" "Mozilla/5.0 (Windows NT 10.0)" '
-            '"cs_bytes=2048 sc_bytes=1024 proxy_action=ssl-inspect ssl_bump=bump"',
+            '"cs_bytes=2048 sc_bytes=1024 proxy_action=tunnel-setup ssl_bump=peek '
+            "byte_scope=connect-control-message tunnel_cs_bytes=8192 "
+            'tunnel_sc_bytes=65536 tunnel_duration_ms=2500"',
             1,
         )
 
@@ -164,8 +166,12 @@ class TestProxyParserRegistration:
         assert record.fields["host"] == "example.com"
         assert record.fields["cs_bytes"] == 2048
         assert record.fields["sc_bytes"] == 1024
-        assert record.fields["proxy_action"] == "ssl-inspect"
-        assert record.fields["ssl_bump_action"] == "bump"
+        assert record.fields["proxy_action"] == "tunnel-setup"
+        assert record.fields["ssl_bump_action"] == "peek"
+        assert record.fields["byte_scope"] == "connect-control-message"
+        assert record.fields["tunnel_cs_bytes"] == 8192
+        assert record.fields["tunnel_sc_bytes"] == 65536
+        assert record.fields["tunnel_duration_ms"] == 2500
 
     def test_proxy_access_combined_columns_pass_format_validation(self):
         parser = get_parser("proxy_access")

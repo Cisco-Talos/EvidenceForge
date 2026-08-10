@@ -24,14 +24,14 @@
 
 import json
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, Thread
 
 import pytest
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import DnsContext, HttpContext, NetworkContext, X509Context
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import DnsContext, HttpContext, X509Context
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkSensorObservation,
@@ -45,6 +45,7 @@ from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
+from tests.network_factories import network_plan
 
 
 class TestPerSensorDirectoryRouting:
@@ -93,10 +94,10 @@ class TestPerSensorDirectoryRouting:
             x509_emitter = ZeekX509Emitter(x509_fmt, base, sensor_hostnames=["core", "dmz"])
             files_emitter = ZeekFilesEmitter(files_fmt, base, sensor_hostnames=["core", "dmz"])
 
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=50000,
                     dst_ip="8.8.8.8",
@@ -295,6 +296,70 @@ class TestPerSensorDirectoryRouting:
         assert row["id.orig_p"] == 8
         assert row["id.resp_p"] == 0
 
+    def test_sensor_observation_contains_child_timestamp_and_interval(self):
+        """Protocol-child projection cannot escape its frozen sensor interval."""
+
+        fmt = load_format("zeek_files")
+        started = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        closed = started + timedelta(seconds=1)
+        observation = NetworkSensorObservation(
+            sensor_identity="core",
+            path_role="internal",
+            capture_profile="full",
+            tuple_view=NetworkTuple("10.0.0.1", 51000, "10.0.0.2", 443, "tcp"),
+            connection_uid="CChildBoundsObserved",
+            connection_ids=(),
+            file_ids=(),
+            local_orig=True,
+            local_resp=True,
+            observed_start_time=started,
+            observed_close_time=closed,
+            traffic=NetworkTrafficLedger(),
+            visible_formats=frozenset({"zeek_files"}),
+        )
+        emitter = ZeekEmitter(fmt, Path("unused.json"))
+        render_data = {
+            "ts": started + timedelta(seconds=2),
+            "duration": 3.0,
+        }
+
+        emitter._apply_sensor_observation(render_data, observation, started)
+
+        assert render_data["ts"] == closed
+        assert render_data["duration"] == 0.0
+
+    def test_sensor_observation_contains_dns_response_interval(self):
+        """A projected DNS response interval ends no later than its sensor flow."""
+
+        fmt = load_format("zeek_dns")
+        started = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        closed = started + timedelta(milliseconds=10)
+        observation = NetworkSensorObservation(
+            sensor_identity="core",
+            path_role="internal",
+            capture_profile="full",
+            tuple_view=NetworkTuple("10.0.0.1", 51000, "10.0.0.53", 53, "udp"),
+            connection_uid="CDnsBoundsObserved",
+            connection_ids=(),
+            file_ids=(),
+            local_orig=True,
+            local_resp=True,
+            observed_start_time=started,
+            observed_close_time=closed,
+            traffic=NetworkTrafficLedger(),
+            visible_formats=frozenset({"zeek_dns"}),
+        )
+        emitter = ZeekEmitter(fmt, Path("unused.json"))
+        render_data = {
+            "ts": started + timedelta(milliseconds=8),
+            "rtt": 0.01,
+        }
+
+        emitter._apply_sensor_observation(render_data, observation, started)
+
+        assert render_data["ts"] == started + timedelta(milliseconds=8)
+        assert render_data["rtt"] == pytest.approx(0.002)
+
     @pytest.mark.parametrize("conn_duration", [0.024625, 0.024925])
     def test_dns_emitter_does_not_synthesize_sensor_observation(self, conn_duration):
         """Direct DNS emission preserves canonical source timing and accounting."""
@@ -304,10 +369,10 @@ class TestPerSensorDirectoryRouting:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(conn_fmt, base, sensor_hostnames=["core", "dmz"])
             dns_emitter = ZeekDnsEmitter(dns_fmt, base, sensor_hostnames=["core", "dmz"])
-            event = SecurityEvent(
+            event = OccurrenceBuilder(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
-                network=NetworkContext(
+                network=network_plan(
                     src_ip="10.0.0.1",
                     src_port=41710,
                     dst_ip="10.0.0.53",
@@ -711,10 +776,10 @@ class TestPerSensorDirectoryRouting:
             emitter = ZeekEmitter(fmt, base, sensor_hostnames=["dmz"])
 
             emitter.emit(
-                SecurityEvent(
+                OccurrenceBuilder(
                     timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                     event_type="connection",
-                    network=NetworkContext(
+                    network=network_plan(
                         src_ip="10.0.0.1",
                         src_port=50000,
                         dst_ip="8.8.8.8",

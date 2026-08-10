@@ -25,7 +25,7 @@
 from datetime import datetime
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.emitters.zeek_files import (
     _tls_certificate_file_timestamp,
@@ -44,16 +44,18 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_x509.json"
     _supported_types: set[str] = {"connection"}
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         return (
             event.event_type in self._supported_types
             and event.network is not None
             and event.network.conn_state == "SF"
-            and (event.x509 is not None or bool(event.x509_chain))
+            and (event.protocol.leaf_certificate is not None or bool(event.protocol.x509_chain))
         )
 
-    def emit(self, event: SecurityEvent) -> None:
-        certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+    def emit(self, event: CanonicalOccurrence) -> None:
+        certificates = event.protocol.x509_chain or (
+            [event.protocol.leaf_certificate] if event.protocol.leaf_certificate is not None else []
+        )
         previous_file_timestamp: datetime | None = None
         previous_x509_timestamp: datetime | None = None
         for position, x509 in enumerate(certificates):
@@ -74,7 +76,7 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
 
     def _emit_certificate(
         self,
-        event: SecurityEvent,
+        event: CanonicalOccurrence,
         x509: Any,
         *,
         position: int,
@@ -82,7 +84,11 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         chain_not_before: datetime | None,
     ) -> datetime:
         format_name = self.format_def.name if self.format_def else "zeek_x509"
-        sensor_metadata = self._sensor_metadata(event, format_name)
+        sensor_metadata = self._sensor_metadata(
+            event,
+            format_name,
+            analyzer_file_id=x509.fuid,
+        )
         timestamp = _tls_certificate_x509_timestamp(
             event,
             x509,

@@ -40,6 +40,7 @@ from typing import Any
 import yaml
 
 from evidenceforge.models import Scenario
+from evidenceforge.models.exceptions import PathSafetyError
 from evidenceforge.models.ids import policy_fingerprint
 from evidenceforge.utils.rng import _stable_seed
 
@@ -166,6 +167,7 @@ class ScenarioValidator:
         scenario: Scenario,
         oob_hosts: tuple[str, ...] = (),
         scenario_root: Path | None = None,
+        allow_large_workload: bool = False,
     ):
         """Initialize validator with a scenario.
 
@@ -179,6 +181,7 @@ class ScenarioValidator:
         self.scenario = scenario
         self.oob_hosts = tuple(oob_hosts)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
+        self.allow_large_workload = allow_large_workload
         self.issues: list[ValidationIssue] = []
 
         # Build lookup sets for fast reference checking
@@ -215,6 +218,32 @@ class ScenarioValidator:
             for host in identity.hosts
         }
 
+    def _validate_workload_limits(self) -> None:
+        """Reject compact scenarios whose projected work exceeds supported defaults."""
+
+        from evidenceforge.generation.workload import estimate_workload
+
+        try:
+            estimate = estimate_workload(self.scenario, scenario_root=self.scenario_root)
+        except (OSError, ValueError, yaml.YAMLError, PathSafetyError):
+            # The owning asset/schema validators provide the actionable parse/path issue.
+            return
+        for violation in estimate.limit_violations:
+            self.issues.append(
+                ValidationIssue(
+                    severity="info" if self.allow_large_workload else "error",
+                    field_path="workload",
+                    message=(
+                        f"Trusted large-workload override accepted: {violation}"
+                        if self.allow_large_workload
+                        else f"Projected workload exceeds the supported envelope: {violation}"
+                    ),
+                    suggestion=(
+                        "Review available capacity, then use --allow-large-workload explicitly."
+                    ),
+                )
+            )
+
     def validate(self) -> list[ValidationIssue]:
         """Run all validation checks and return issues found.
 
@@ -226,6 +255,7 @@ class ScenarioValidator:
         self._validate_user_primary_system_references()
         self._validate_group_member_references()
         self._validate_storyline_references()
+        self._validate_action_capabilities()
         self._validate_ids_alert_attachments()
         self._validate_uniqueness()
         self._validate_expanded_activities()
@@ -248,6 +278,7 @@ class ScenarioValidator:
         self._validate_spillage_events()
         self._validate_adversarial_payload_events()
         self._validate_email_config()
+        self._validate_workload_limits()
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
@@ -330,7 +361,17 @@ class ScenarioValidator:
                         )
                         if protocol != str(signature.get("proto", "tcp")).lower():
                             self._warn_ids_mismatch(path, attachment.sid, "protocol", protocol)
-                        signature_port = int(signature.get("dst_port", 0))
+                        predicate = signature.get("predicate")
+                        predicate_port = (
+                            predicate.get("destination_port")
+                            if isinstance(predicate, dict)
+                            else None
+                        )
+                        signature_port = int(
+                            predicate_port
+                            if predicate_port is not None
+                            else signature.get("dst_port", 0)
+                        )
                         if dst_ports and signature_port not in {0, *dst_ports}:
                             observed_ports: object = (
                                 next(iter(dst_ports)) if len(dst_ports) == 1 else sorted(dst_ports)
@@ -781,6 +822,67 @@ class ScenarioValidator:
                     )
                 )
 
+    def _validate_action_capabilities(self) -> None:
+        """Reject authored actions whose target world lacks a required capability."""
+
+        from evidenceforge.generation.world_model import HostCapability, WorldModel
+
+        world = WorldModel(self.scenario, self.scenario.environment.domain or "corp.local")
+        requirements = {
+            "ssh_session": HostCapability.SSH_RECEIVER,
+            "rdp_session": HostCapability.RDP_RECEIVER,
+        }
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings or []),
+        ):
+            for event_idx, event in enumerate(events):
+                target = world.systems_by_hostname.get(event.system)
+                if target is None:
+                    continue
+                for spec_idx, spec in enumerate(event.events):
+                    field_path = f"{section_name}.{event_idx}.events.{spec_idx}"
+                    if spec.type == "dhcp_lease":
+                        owners = world.systems_with_capability(
+                            HostCapability.DHCP_SERVER,
+                            distinct_from=target,
+                        )
+                        if owners:
+                            continue
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=field_path,
+                                message=(
+                                    f"[{event.id}] DHCP lease for '{target.hostname}' has no "
+                                    "distinct modeled DHCP server"
+                                ),
+                                suggestion=(
+                                    "Add a different system with role 'dhcp_server' or a DHCP "
+                                    "server service such as 'dhcpd'"
+                                ),
+                            )
+                        )
+                        continue
+
+                    required = requirements.get(spec.type)
+                    if required is None or world.hosts[target.hostname].supports(required):
+                        continue
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=(
+                                f"[{event.id}] Event type '{spec.type}' targets "
+                                f"'{target.hostname}', which lacks capability '{required.value}'"
+                            ),
+                            suggestion=(
+                                "Declare a compatible target OS/type or add the corresponding "
+                                "server service explicitly"
+                            ),
+                        )
+                    )
+
     def _validate_uniqueness(self) -> None:
         """Check for duplicate usernames, hostnames, and IPs."""
         # Check duplicate usernames
@@ -1139,29 +1241,19 @@ class ScenarioValidator:
         """Validate optional email corpus sidecar and return known message IDs."""
         if not email_config.corpus:
             return set()
-        corpus_path = Path(email_config.corpus)
-        if not corpus_path.is_absolute():
-            corpus_path = self.scenario_root / corpus_path
-        if not corpus_path.exists():
-            self.issues.append(
-                ValidationIssue(
-                    severity="error",
-                    field_path="environment.email.corpus",
-                    message=f"Email corpus file not found: {email_config.corpus}",
-                    suggestion="Create the corpus file relative to the scenario YAML directory.",
-                )
-            )
-            return set()
         try:
-            with corpus_path.open("r", encoding="utf-8") as handle:
-                raw = yaml.safe_load(handle) or {}
-        except (OSError, yaml.YAMLError) as exc:
+            from evidenceforge.utils.assets import load_email_corpus_yaml
+
+            raw = load_email_corpus_yaml(self.scenario_root, email_config.corpus) or {}
+        except (OSError, ValueError, yaml.YAMLError, PathSafetyError) as exc:
             self.issues.append(
                 ValidationIssue(
                     severity="error",
                     field_path="environment.email.corpus",
-                    message=f"Email corpus file could not be parsed: {exc}",
-                    suggestion="Fix email_corpus.yaml so it is valid YAML.",
+                    message=f"Email corpus file could not be safely loaded: {exc}",
+                    suggestion=(
+                        "Use a regular, non-symlink YAML file relative to the scenario directory."
+                    ),
                 )
             )
             return set()

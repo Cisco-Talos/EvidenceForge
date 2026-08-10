@@ -1,0 +1,134 @@
+03/18-12:03:35.902978 [**] [1:2018959:4] ET POLICY PE EXE or DLL Windows file download HTTP [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.20:53579 -> 159.216.160.44:80
+03/18-12:03:55.408538 [**] [1:2027316:2] ET INFO Observed Let's Encrypt Certificate [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:44525 -> 151.101.1.229:443
+03/18-12:04:04.990841 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 145.78.103.167 -> 10.10.3.10
+03/18-12:04:08.255949 [**] [1:2000334:14] ET P2P BitTorrent peer sync [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.10:52838 -> 51.15.106.11:6881
+03/18-12:05:19.747989 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 74.172.69.175 -> 10.10.3.10
+03/18-12:05:32.565565 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:53453 -> 10.10.2.10:53
+03/18-12:12:01.180610 [**] [1:2025712:2] ET INFO External IP Lookup Domain (ipify.org) [**] [Classification: Misc activity] [Priority: 2] {TCP} 10.10.3.20:40805 -> 54.230.104.234:443
+03/18-12:14:55.037955 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:43664 -> 182.220.8.216:443
+03/18-12:17:48.454143 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:48163 -> 139.195.243.242:443
+03/18-12:31:34.304531 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:57289 -> 10.10.3.10:443
+03/18-12:32:21.441870 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:58440 -> 10.10.3.10:443
+03/18-12:33:11.630683 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:63738 -> 10.10.3.10:443
+03/18-12:35:09.257560 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:58731 -> 10.10.3.10:443
+03/18-12:36:52.555181 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:34610 -> 10.10.2.10:53
+03/18-12:37:11.649022 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:62641 -> 10.10.3.10:443
+03/18-12:39:10.833056 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:61701 -> 10.10.3.10:443
+03/18-12:40:23.870343 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:65409 -> 10.10.3.10:443
+03/18-12:40:35.832643 [**] [1:2023882:2] ET INFO Observed Telegram Domain (t.me) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:59277 -> 23.45.197.190:443
+03/18-12:41:12.581051 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 175.29.181.188 -> 10.10.3.10
+03/18-12:41:23.132200 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:48586 -> 52.84.215.166:443
+03/18-12:41:59.426237 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:61409 -> 10.10.3.10:443
+03/18-12:43:07.017110 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:49913 -> 10.10.3.10:443
+03/18-12:44:13.027077 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 37.75.195.175 -> 10.10.3.10
+03/18-12:44:41.093533 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:63722 -> 10.10.3.10:443
+03/18-12:46:13.078553 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:59639 -> 10.10.3.10:443
+03/18-12:46:57.072784 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:37970 -> 10.10.2.10:53
+03/18-12:47:00.182783 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:62005 -> 10.10.3.10:443
+03/18-12:48:10.004926 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:62201 -> 10.10.3.10:443
+03/18-12:49:15.270466 [**] [1:2002910:4] ET SCAN Rapid HTTP/HTTPS Connection Attempts [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 185.70.41.45:53739 -> 10.10.3.10:443
+03/18-12:50:03.364792 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:46863 -> 10.10.2.10:53
+03/18-12:51:22.986779 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:39561 -> 146.169.213.117:443
+03/18-12:57:36.370117 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 185.249.5.220 -> 10.10.3.10
+03/18-13:15:19.490156 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 45.33.74.51 -> 10.10.3.10
+03/18-13:19:13.973366 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:41286 -> 104.16.20.18:443
+03/18-13:21:03.186458 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:39824 -> 52.84.255.1:443
+03/18-13:23:43.588311 [**] [1:2013504:3] ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:60583 -> 171.131.110.251:80
+03/18-13:28:30.914861 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:35135 -> 10.10.2.10:53
+03/18-13:29:14.301998 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 74.172.69.175 -> 10.10.3.10
+03/18-13:32:17.295715 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:48213 -> 10.10.2.10:53
+03/18-13:35:21.384815 [**] [1:2023672:2] ET INFO Python-urllib Outbound Request [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:54608 -> 139.195.243.242:443
+03/18-13:41:30.459686 [**] [1:2028401:1] ET JA3 Hash - Possible Malware - Various RAT [**] [Classification: Potentially Bad Traffic] [Priority: 1] {TCP} 10.10.3.20:56729 -> 104.16.93.154:443
+03/18-13:44:22.029004 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:54651 -> 13.107.13.246:443
+03/18-13:49:34.391260 [**] [1:2023672:2] ET INFO Python-urllib Outbound Request [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:59748 -> 138.191.213.103:443
+03/18-13:51:45.271107 [**] [1:2027316:2] ET INFO Observed Let's Encrypt Certificate [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:39675 -> 104.18.138.154:443
+03/18-13:55:45.644587 [**] [1:2024897:3] ET INFO External IP Lookup (ipinfo.io) [**] [Classification: Misc activity] [Priority: 2] {TCP} 10.10.3.20:49645 -> 151.101.1.229:443
+03/18-13:57:57.968907 [**] [1:2028401:1] ET JA3 Hash - Possible Malware - Various RAT [**] [Classification: Potentially Bad Traffic] [Priority: 1] {TCP} 10.10.3.20:46942 -> 104.16.20.18:443
+03/18-13:59:53.516078 [**] [1:2023672:2] ET INFO Python-urllib Outbound Request [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:51351 -> 87.136.158.10:443
+03/18-14:05:16.980436 [**] [1:2013504:3] ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:50913 -> 91.189.91.82:80
+03/18-14:06:02.211312 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:44373 -> 10.10.2.10:53
+03/18-14:11:46.940873 [**] [1:2028401:1] ET JA3 Hash - Possible Malware - Various RAT [**] [Classification: Potentially Bad Traffic] [Priority: 1] {TCP} 10.10.3.20:58493 -> 13.107.31.172:443
+03/18-14:12:45.057262 [**] [1:2022476:1] ET INFO LibreSSL Outbound Connection [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:52327 -> 23.72.75.198:443
+03/18-14:15:07.119162 [**] [1:2002911:7] ET SCAN Potential SSH Scan [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 10.10.3.10:34882 -> 10.10.2.30:22
+03/18-14:16:00.143713 [**] [1:2000428:10] ET POLICY ZIP file download [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:41336 -> 23.45.197.190:80
+03/18-14:19:42.697330 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 156.32.3.55 -> 10.10.3.10
+03/18-14:35:02.502729 [**] [1:2010935:3] ET POLICY Outgoing Basic Auth Base64 HTTP Password detected [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.20:59117 -> 54.230.247.32:80
+03/18-14:39:31.758894 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:45720 -> 52.84.247.252:443
+03/18-14:52:31.706188 [**] [1:382:1] PROTOCOL-ICMP PING Linux [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 45.33.74.51 -> 10.10.3.10
+03/18-14:52:44.396702 [**] [1:2000334:14] ET P2P BitTorrent peer sync [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.20:56404 -> 87.136.158.10:6881
+03/18-14:53:35.595894 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 38.186.148.245 -> 10.10.3.10
+03/18-14:54:54.103149 [**] [1:2000357:9] ET P2P BitTorrent Traffic [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.10:48092 -> 170.9.85.134:6881
+03/18-14:55:01.391123 [**] [1:2010935:3] ET POLICY Outgoing Basic Auth Base64 HTTP Password detected [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.20:58429 -> 13.107.20.96:80
+03/18-14:57:55.770541 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:39832 -> 151.101.1.46:443
+03/18-15:05:39.723942 [**] [1:2027316:2] ET INFO Observed Let's Encrypt Certificate [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:50393 -> 13.107.45.52:443
+03/18-15:14:27.236357 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 45.33.74.51 -> 10.10.3.10
+03/18-15:18:44.884481 [**] [1:2013028:4] ET POLICY curl User-Agent Outbound [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:58818 -> 182.220.8.216:80
+03/18-15:19:46.346808 [**] [1:2024897:3] ET INFO External IP Lookup (ipinfo.io) [**] [Classification: Misc activity] [Priority: 2] {TCP} 10.10.3.20:46744 -> 104.18.96.208:443
+03/18-15:22:46.895408 [**] [1:2024392:2] ET INFO STUN Binding Success Response [**] [Classification: Misc activity] [Priority: 3] {UDP} 145.78.103.167:62694 -> 10.10.3.10:3478
+03/18-15:22:47.443314 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 37.75.195.175 -> 10.10.3.10
+03/18-15:22:47.483460 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 37.75.195.175 -> 10.10.3.10
+03/18-15:23:15.741775 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:44341 -> 10.10.2.10:53
+03/18-15:24:13.169529 [**] [1:2027316:2] ET INFO Observed Let's Encrypt Certificate [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:49480 -> 13.107.0.12:443
+03/18-15:25:45.947692 [**] [1:2024290:2] ET INFO Observed AWS S3 Domain (s3.amazonaws.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:39580 -> 52.84.215.166:443
+03/18-15:28:44.451670 [**] [1:382:1] PROTOCOL-ICMP PING Linux [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 175.29.181.188 -> 10.10.3.10
+03/18-15:29:10.016927 [**] [1:2024897:3] ET INFO External IP Lookup (ipinfo.io) [**] [Classification: Misc activity] [Priority: 2] {TCP} 10.10.3.20:51037 -> 13.107.31.172:443
+03/18-15:33:44.504468 [**] [1:2028401:1] ET JA3 Hash - Possible Malware - Various RAT [**] [Classification: Potentially Bad Traffic] [Priority: 1] {TCP} 10.10.3.20:60499 -> 23.72.75.198:443
+03/18-15:35:36.316716 [**] [1:2013028:4] ET POLICY curl User-Agent Outbound [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:54161 -> 112.77.145.17:80
+03/18-15:40:38.588197 [**] [1:2023882:2] ET INFO Observed Telegram Domain (t.me) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:34964 -> 87.136.158.10:443
+03/18-15:42:24.274662 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:55753 -> 10.10.2.10:53
+03/18-15:46:45.237352 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:45931 -> 139.195.243.242:443
+03/18-15:47:42.418204 [**] [1:2010935:3] ET POLICY Outgoing Basic Auth Base64 HTTP Password detected [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.20:34605 -> 104.18.138.154:80
+03/18-15:51:21.269603 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 74.172.69.175 -> 10.10.3.10
+03/18-15:53:58.073017 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:45740 -> 10.10.2.10:53
+03/18-15:55:25.114341 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 74.172.69.175 -> 10.10.3.10
+03/18-16:03:03.228020 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:55259 -> 10.10.2.10:53
+03/18-16:09:21.597889 [**] [1:2000428:10] ET POLICY ZIP file download [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:43702 -> 13.107.13.246:80
+03/18-16:09:35.965781 [**] [1:2016149:3] ET INFO Session Traversal Utilities for NAT (STUN Binding Request) [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {UDP} 10.10.3.20:38478 -> 35.197.140.85:3478
+03/18-16:15:29.839577 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.3.10:52066 -> 10.10.2.10:53
+03/18-16:23:08.597517 [**] [1:2024392:2] ET INFO STUN Binding Success Response [**] [Classification: Misc activity] [Priority: 3] {UDP} 145.78.103.167:51946 -> 10.10.3.10:3478
+03/18-16:26:54.164852 [**] [1:2013028:4] ET POLICY curl User-Agent Outbound [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:38726 -> 114.89.172.30:80
+03/18-16:26:54.862247 [**] [1:2013028:4] ET POLICY curl User-Agent Outbound [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:49455 -> 104.18.96.208:80
+03/18-16:27:29.747391 [**] [1:2025712:2] ET INFO External IP Lookup Domain (ipify.org) [**] [Classification: Misc activity] [Priority: 2] {TCP} 10.10.3.20:50448 -> 13.107.45.52:443
+03/18-16:28:53.216692 [**] [1:2018959:4] ET POLICY PE EXE or DLL Windows file download HTTP [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.20:43185 -> 13.107.240.224:80
+03/18-16:32:03.109022 [**] [1:382:1] PROTOCOL-ICMP PING Linux [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 45.33.74.51 -> 10.10.3.10
+03/18-16:32:40.479539 [**] [1:2000357:9] ET P2P BitTorrent Traffic [**] [Classification: Potential Corporate Privacy Violation] [Priority: 2] {TCP} 10.10.3.10:49727 -> 178.145.157.68:6881
+03/18-16:41:34.133215 [**] [1:384:1] PROTOCOL-ICMP PING [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 145.78.103.167 -> 10.10.3.10
+03/18-16:41:34.218818 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 145.78.103.167 -> 10.10.3.10
+03/18-16:42:22.953748 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 38.186.148.245 -> 10.10.3.10
+03/18-16:43:02.931551 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:58617 -> 23.45.197.190:443
+03/18-16:44:05.670845 [**] [1:384:1] PROTOCOL-ICMP PING [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 145.78.103.167 -> 10.10.3.10
+03/18-16:54:54.012002 [**] [1:2022476:1] ET INFO LibreSSL Outbound Connection [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:59588 -> 87.136.158.10:443
+03/18-16:58:13.954029 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.3.10:56827 -> 10.10.2.10:53
+03/18-16:58:18.153893 [**] [1:2016149:3] ET INFO Session Traversal Utilities for NAT (STUN Binding Request) [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {UDP} 10.10.3.10:51759 -> 199.238.98.244:3478
+03/18-16:59:44.028708 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 156.32.3.55 -> 10.10.3.10
+03/18-17:00:34.096866 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 38.186.148.245 -> 10.10.3.10
+03/18-17:00:44.501029 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:34704 -> 10.10.2.10:53
+03/18-17:05:48.671735 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:33278 -> 10.10.2.10:53
+03/18-17:11:16.594670 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:39014 -> 10.10.2.10:53
+03/18-17:13:20.292289 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:35431 -> 13.107.31.172:443
+03/18-17:13:24.173994 [**] [1:2016360:1] ET INFO Observed Discord Domain (discordapp.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:53936 -> 172.217.12.195:443
+03/18-17:13:53.638770 [**] [1:2024897:3] ET INFO External IP Lookup (ipinfo.io) [**] [Classification: Misc activity] [Priority: 2] {TCP} 10.10.3.20:37238 -> 104.18.216.114:443
+03/18-17:16:22.915710 [**] [1:2027757:2] ET DNS Query for .to TLD [**] [Classification: Potentially Bad Traffic] [Priority: 3] {UDP} 10.10.3.20:48689 -> 10.10.2.10:53
+03/18-17:16:37.030187 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:56079 -> 10.10.2.10:53
+03/18-17:17:27.422738 [**] [1:2016149:3] ET INFO Session Traversal Utilities for NAT (STUN Binding Request) [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {UDP} 10.10.3.20:56657 -> 203.185.218.214:3478
+03/18-17:17:51.660347 [**] [1:2027863:3] ET DNS Query to a .tk domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:35547 -> 10.10.2.10:53
+03/18-17:17:59.090924 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 145.78.103.167 -> 10.10.3.10
+03/18-17:18:43.708748 [**] [1:2000575:8] ET SCAN ICMP PING IPTools [**] [Classification: Attempted Information Leak] [Priority: 3] {ICMP} 37.75.195.175 -> 10.10.3.10
+03/18-17:19:56.778825 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.20:41028 -> 10.10.2.10:53
+03/18-17:20:29.994171 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 176.104.17.67 -> 10.10.3.10
+03/18-17:21:45.783217 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:36731 -> 10.10.2.10:53
+03/18-17:26:10.308412 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 145.78.103.167 -> 10.10.3.10
+03/18-17:26:49.197649 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:42693 -> 10.10.2.10:53
+03/18-17:27:23.369023 [**] [1:366:1] PROTOCOL-ICMP PING BSDtype [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 74.172.69.175 -> 10.10.3.10
+03/18-17:29:46.481011 [**] [1:2029706:1] ET DNS Query to .cloud TLD [**] [Classification: Misc activity] [Priority: 3] {UDP} 10.10.3.10:36597 -> 10.10.2.10:53
+03/18-17:30:01.341273 [**] [1:2013504:3] ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management [**] [Classification: Potential Corporate Privacy Violation] [Priority: 3] {TCP} 10.10.3.20:34246 -> 139.195.243.242:80
+03/18-17:32:07.575744 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:55333 -> 10.10.2.10:53
+03/18-17:37:12.869416 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:59772 -> 10.10.2.10:53
+03/18-17:42:39.096633 [**] [1:2027865:4] ET DNS Query to a .top domain [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:42792 -> 10.10.2.10:53
+03/18-17:45:22.142839 [**] [1:2025991:2] ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:40771 -> 52.84.247.252:443
+03/18-17:46:07.104543 [**] [1:2024392:2] ET INFO STUN Binding Success Response [**] [Classification: Misc activity] [Priority: 3] {UDP} 45.33.74.51:49488 -> 10.10.3.10:3478
+03/18-17:51:48.900206 [**] [1:2024392:2] ET INFO STUN Binding Success Response [**] [Classification: Misc activity] [Priority: 3] {UDP} 156.32.3.55:64922 -> 10.10.3.10:3478
+03/18-17:52:28.757199 [**] [1:2024291:4] ET DNS Query to .bit TLD [**] [Classification: Potentially Bad Traffic] [Priority: 2] {UDP} 10.10.3.10:42331 -> 10.10.2.10:53
+03/18-17:56:32.672973 [**] [1:2024290:2] ET INFO Observed AWS S3 Domain (s3.amazonaws.com) [**] [Classification: Misc activity] [Priority: 3] {TCP} 10.10.3.20:43315 -> 160.50.170.34:443
+03/18-17:59:30.852294 [**] [1:384:1] PROTOCOL-ICMP PING [**] [Classification: Generic ICMP event] [Priority: 3] {ICMP} 45.33.74.51 -> 10.10.3.10
+03/18-17:59:30.923356 [**] [1:2003068:6] ET SCAN ICMP Unusual PING detected [**] [Classification: Attempted Information Leak] [Priority: 2] {ICMP} 45.33.74.51 -> 10.10.3.10

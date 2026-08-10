@@ -25,10 +25,9 @@
 import logging
 from pathlib import Path
 
-import yaml
-
 from evidenceforge.config import get_personas_directory
 from evidenceforge.config.overlay import get_overlay_directory
+from evidenceforge.utils.yaml_loader import load_yaml_file
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +58,7 @@ def load_builtin_personas() -> list[dict]:
         package_personas = []
         for path in sorted(personas_dir.glob("*.yaml")):
             try:
-                with open(path) as f:
-                    data = yaml.safe_load(f)
+                data = load_yaml_file(path)
                 if data and isinstance(data, dict) and "name" in data:
                     package_personas.append(data)
             except Exception as e:
@@ -74,8 +72,7 @@ def load_builtin_personas() -> list[dict]:
         if overlay_personas_dir.is_dir():
             for path in sorted(overlay_personas_dir.glob("*.yaml")):
                 try:
-                    with open(path) as f:
-                        data = yaml.safe_load(f)
+                    data = load_yaml_file(path)
                     if data and isinstance(data, dict) and "name" in data:
                         if data["name"] != path.stem:
                             logger.warning(

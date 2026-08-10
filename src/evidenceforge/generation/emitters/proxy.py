@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.output_targets import OutputTarget
@@ -103,26 +103,70 @@ def _proxy_action(px: Any, *, setup: bool = False) -> str:
     return "forward"
 
 
-def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | datetime]:
+def _connect_setup_fields(
+    px: Any,
+    net: Any,
+    request_time: datetime,
+) -> dict[str, int | str | datetime]:
     """Return action-planned CONNECT setup fields, with raw-event compatibility."""
 
     transaction = getattr(px, "transaction", None)
     if transaction is not None and transaction.tunnel_request_at is not None:
-        return {
+        fields: dict[str, int | str | datetime] = {
             "timestamp": transaction.tunnel_request_at,
             "sc_bytes": transaction.tunnel_setup_sc_bytes,
             "cs_bytes": transaction.tunnel_setup_cs_bytes,
             "time_taken": transaction.tunnel_setup_time_taken_ms,
         }
-    seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
-    rng = random.Random(seed)
-    host_len = len(str(px.host or ""))
-    return {
-        "timestamp": request_time,
-        "sc_bytes": rng.randint(90, 260),
-        "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
-        "time_taken": rng.randint(20, 450),
+    else:
+        seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
+        rng = random.Random(seed)
+        host_len = len(str(px.host or ""))
+        fields = {
+            "timestamp": request_time,
+            "sc_bytes": rng.randint(90, 260),
+            "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
+            "time_taken": rng.randint(20, 450),
+        }
+
+    fields["byte_scope"] = "connect-control-message"
+    fields.update(
+        _connect_tunnel_payload_fields(
+            px,
+            net,
+            setup_cs_bytes=int(fields["cs_bytes"]),
+            setup_sc_bytes=int(fields["sc_bytes"]),
+        )
+    )
+    return fields
+
+
+def _connect_tunnel_payload_fields(
+    px: Any,
+    net: Any,
+    *,
+    setup_cs_bytes: int,
+    setup_sc_bytes: int,
+) -> dict[str, int]:
+    """Return tunneled payload counters excluding the CONNECT exchange."""
+    if net is None:
+        return {}
+    method = str(getattr(px, "method", "") or "").upper()
+    tunnel_status = getattr(px, "tunnel_status_code", None)
+    if tunnel_status is None:
+        tunnel_status = getattr(px, "status_code", 200) if method == "CONNECT" else 200
+    transaction = getattr(px, "transaction", None)
+    terminal_outcome = getattr(transaction, "terminal_outcome", "")
+    if int(tunnel_status or 0) >= 400 or terminal_outcome not in {"", "success"}:
+        return {}
+
+    fields = {
+        "tunnel_cs_bytes": max(0, int(net.orig_bytes or 0) - setup_cs_bytes),
+        "tunnel_sc_bytes": max(0, int(net.resp_bytes or 0) - setup_sc_bytes),
     }
+    if net.duration is not None:
+        fields["tunnel_duration_ms"] = max(0, round(float(net.duration) * 1000))
+    return fields
 
 
 def _splunk_json_timestamp(value: datetime | str | None) -> str:
@@ -237,6 +281,13 @@ def _proxy_metadata(event_data: dict[str, Any]) -> str:
     ssl_bump = _ssl_bump_action(event_data)
     if ssl_bump:
         parts.append(f"ssl_bump={ssl_bump}")
+    byte_scope = str(event_data.get("byte_scope") or "")
+    if byte_scope:
+        parts.append(f"byte_scope={byte_scope}")
+    for key in ("tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
+        value = event_data.get(key)
+        if value not in {None, ""}:
+            parts.append(f"{key}={_int_value(value, 0)}")
     return " ".join(parts)
 
 
@@ -245,7 +296,7 @@ class ProxyEmitter(HostMultiplexEmitter):
 
     Per-host FQDN directory routing: each proxy server gets its own access log.
 
-    Handles SecurityEvents with ProxyContext (fan-out from connection events).
+    Handles canonical occurrences with an aggregate proxy protocol plan.
     For HTTPS connections, emits a CONNECT entry only for the first request
     in a tunnel session (per client_ip + host), then subsequent requests
     reuse the existing tunnel without additional CONNECTs.
@@ -302,17 +353,17 @@ class ProxyEmitter(HostMultiplexEmitter):
         finally:
             self.format_def.output.header_template = header_template
 
-    def can_handle(self, event: SecurityEvent) -> bool:
+    def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Handle connection events that carry a ProxyContext."""
-        return event.event_type in self._supported_types and event.proxy is not None
+        return event.event_type in self._supported_types and event.protocol.proxy is not None
 
-    def emit(self, event: SecurityEvent) -> None:
+    def emit(self, event: CanonicalOccurrence) -> None:
         """Render ProxyContext to the configured proxy access format.
 
         For HTTPS (port 443), emits CONNECT entry only for the first request
         to a (proxy_fqdn, client_ip, host, dst_port) tuple within the tunnel timeout window.
         """
-        px = event.proxy
+        px = event.protocol.proxy
         net = event.network
         request_time = px.transaction.request_at if px.transaction is not None else event.timestamp
 
@@ -328,7 +379,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                     needs_connect = False
 
             if needs_connect:
-                setup = _connect_setup_fields(px, request_time)
+                setup = _connect_setup_fields(px, net, request_time)
                 connect_data = {
                     "timestamp": setup["timestamp"],
                     "client_ip": px.client_ip,
@@ -348,6 +399,10 @@ class ProxyEmitter(HostMultiplexEmitter):
                     "cache_result": "NONE",
                     "referrer": None,
                     "proxy_action": _proxy_action(px, setup=True),
+                    "byte_scope": setup["byte_scope"],
+                    "tunnel_cs_bytes": setup.get("tunnel_cs_bytes"),
+                    "tunnel_sc_bytes": setup.get("tunnel_sc_bytes"),
+                    "tunnel_duration_ms": setup.get("tunnel_duration_ms"),
                     "_host_fqdn": px.proxy_fqdn,
                 }
                 self._dispatch(connect_data)
@@ -375,6 +430,16 @@ class ProxyEmitter(HostMultiplexEmitter):
             "proxy_action": _proxy_action(px),
             "_host_fqdn": px.proxy_fqdn,
         }
+        if str(px.method).upper() == "CONNECT":
+            event_data["byte_scope"] = "connect-control-message"
+            event_data.update(
+                _connect_tunnel_payload_fields(
+                    px,
+                    net,
+                    setup_cs_bytes=max(0, int(px.cs_bytes or 0)),
+                    setup_sc_bytes=max(0, int(px.sc_bytes or 0)),
+                )
+            )
         self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
@@ -450,4 +515,8 @@ class ProxyEmitter(HostMultiplexEmitter):
         content_type = event_data.get("content_type")
         if content_type:
             record["http_content_type"] = str(content_type)
+        for key in ("byte_scope", "tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
+            value = event_data.get(key)
+            if value not in {None, ""}:
+                record[key] = value
         return json.dumps(record, sort_keys=True, separators=(",", ":"))

@@ -592,8 +592,6 @@ Controls when successful SMB connections also produce Zeek `files.log` observati
 
 ```yaml
 min_transfer_bytes: 32768
-missing_bytes_probability: 0.02
-timeout_probability: 0.005
 mime_types:
   - {mime_type: application/pdf, weight: 18}
 analyzer_sets:
@@ -609,11 +607,13 @@ filename_templates:
 | Field | Type | Description |
 |-------|------|-------------|
 | `min_transfer_bytes` | integer | Minimum originator or responder payload bytes before an SMB connection is treated as a file transfer |
-| `missing_bytes_probability` | float | Probability that a transfer has non-zero Zeek `missing_bytes` |
-| `timeout_probability` | float | Probability that the Zeek file-analysis row has `timedout: true` |
 | `mime_types` | weighted list | MIME type mix for SMB file observations |
 | `analyzer_sets` | weighted list | Zeek file analyzers attached to the observation, such as `MD5` or `SHA1` |
 | `filename_templates` | weighted list | Optional SMB share/path templates for `files.log` `filename`. Supported placeholders include `{server}`, `{share}`, `{department}`, `{project}`, `{basename}`, `{ext}`, and `{user}` |
+
+Capture loss is not configured here. Observation profiles own source-local packet loss, Zeek
+`missed_bytes`/history gaps, and the resulting `files.log` completeness so those records remain
+consistent with the parent transport.
 
 ## traffic_rates.yaml
 

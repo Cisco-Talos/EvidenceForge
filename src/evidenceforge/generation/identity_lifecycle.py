@@ -26,9 +26,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import EdrContext
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.identity import (
+    EntityIdentity,
     EventIdentityPlan,
     ProcessIdentity,
     SessionIdentity,
@@ -50,7 +50,7 @@ class IdentityLifecyclePlanner:
     def __init__(self, state_manager: StateManager) -> None:
         self._state_manager = state_manager
 
-    def plan(self, event: SecurityEvent) -> None:
+    def plan(self, event: OccurrenceBuilder) -> None:
         """Attach a frozen identity plan and lifecycle metadata in place.
 
         Planning runs before ``StateManager.apply`` so termination and logoff
@@ -60,10 +60,10 @@ class IdentityLifecyclePlanner:
 
         session = self._session_identity(event)
         process = self._process_identity(event)
-        plan = self._plan_roles(event, process=process, session=session)
+        inferred_plan = self._plan_roles(event, process=process, session=session)
+        plan = self._merge_plans(event.identity_plan, inferred_plan)
         if plan is not None:
             event.identity_plan = plan
-            self._project_compatibility(event, plan)
         if event.lifecycle is None:
             event.lifecycle = self._plan_lifecycle(
                 event,
@@ -73,7 +73,7 @@ class IdentityLifecyclePlanner:
 
     def _plan_roles(
         self,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         *,
         process: ProcessIdentity | None,
         session: SessionIdentity | None,
@@ -141,15 +141,72 @@ class IdentityLifecyclePlanner:
                 return EventIdentityPlan(subject=reauth, actor=session, session=session)
             return EventIdentityPlan(subject=session, session=session)
 
+        subject = self._entity_identity(event)
         actor = process or self._network_actor_identity(event)
         target = self._network_target_identity(event)
-        if actor is not None or target is not None or session is not None:
-            return EventIdentityPlan(actor=actor, target=target, session=session)
+        if subject is not None or actor is not None or target is not None or session is not None:
+            return EventIdentityPlan(
+                subject=subject,
+                actor=actor,
+                target=target,
+                session=session,
+            )
+        return None
+
+    @staticmethod
+    def _entity_identity(event: OccurrenceBuilder) -> EntityIdentity | None:
+        """Return stable ownership for non-process evidence objects."""
+
+        host = event.src_host or event.dst_host
+        hostname = host.hostname if host is not None else ""
+        if event.event_type == "failed_logon":
+            auth = event.auth
+            semantic_key = (
+                event.occurrence_key.occurrence_id
+                if event.occurrence_key is not None
+                else stable_uuid(
+                    "authentication-attempt-key",
+                    hostname,
+                    auth.username if auth is not None else "",
+                    auth.source_ip if auth is not None else "",
+                    event.timestamp.isoformat(),
+                )
+            )
+            return EntityIdentity(
+                object_id=stable_uuid("authentication-attempt", semantic_key),
+                kind="authentication_attempt",
+                hostname=hostname,
+                semantic_key=semantic_key,
+            )
+        if event.file is not None:
+            semantic_key = f"{hostname}:{event.file.path.casefold()}"
+            return EntityIdentity(
+                object_id=stable_uuid("file-identity", semantic_key),
+                kind="file",
+                hostname=hostname,
+                semantic_key=semantic_key,
+            )
+        if event.registry is not None:
+            semantic_key = f"{hostname}:{event.registry.key.casefold()}:{event.registry.value}"
+            return EntityIdentity(
+                object_id=stable_uuid("registry-identity", semantic_key),
+                kind="registry",
+                hostname=hostname,
+                semantic_key=semantic_key,
+            )
+        if event.image_load is not None:
+            semantic_key = f"{hostname}:{event.image_load.image_loaded.casefold()}"
+            return EntityIdentity(
+                object_id=stable_uuid("module-identity", semantic_key),
+                kind="module",
+                hostname=hostname,
+                semantic_key=semantic_key,
+            )
         return None
 
     def _plan_lifecycle(
         self,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         *,
         process: ProcessIdentity | None,
         session: SessionIdentity | None,
@@ -204,41 +261,59 @@ class IdentityLifecyclePlanner:
             )
         return None
 
-    def _session_identity(self, event: SecurityEvent) -> SessionIdentity | None:
+    def _session_identity(self, event: OccurrenceBuilder) -> SessionIdentity | None:
         if event.auth is None or not event.auth.logon_id:
             return None
         return self._state_manager.get_session_identity(event.auth.logon_id)
 
-    def _process_identity(self, event: SecurityEvent) -> ProcessIdentity | None:
+    def _process_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         host = event.src_host or event.dst_host
         if host is None:
             return None
         if event.process is not None and event.process.pid >= 0:
-            return self._state_manager.get_process_identity(host.hostname, event.process.pid)
-        if event.network is not None and event.network.initiating_pid >= 0 and event.src_host:
-            return self._state_manager.get_process_identity(
+            if (
+                event.event_type not in _PROCESS_CLOSURE_TYPES
+                and self._state_manager.get_process(host.hostname, event.process.pid) is None
+            ):
+                return None
+            process = self._state_manager.get_process_identity(host.hostname, event.process.pid)
+            if process is not None:
+                return process
+        return None
+
+    def _network_actor_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
+        if event.network is None or event.src_host is None or event.network.initiating_pid < 0:
+            return None
+        if (
+            self._state_manager.get_process(
                 event.src_host.hostname,
                 event.network.initiating_pid,
             )
-        return None
-
-    def _network_actor_identity(self, event: SecurityEvent) -> ProcessIdentity | None:
-        if event.network is None or event.src_host is None or event.network.initiating_pid < 0:
+            is None
+        ):
             return None
         return self._state_manager.get_process_identity(
             event.src_host.hostname,
             event.network.initiating_pid,
         )
 
-    def _network_target_identity(self, event: SecurityEvent) -> ProcessIdentity | None:
+    def _network_target_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         if event.network is None or event.dst_host is None or event.network.responding_pid < 0:
+            return None
+        if (
+            self._state_manager.get_process(
+                event.dst_host.hostname,
+                event.network.responding_pid,
+            )
+            is None
+        ):
             return None
         return self._state_manager.get_process_identity(
             event.dst_host.hostname,
             event.network.responding_pid,
         )
 
-    def _target_process_identity(self, event: SecurityEvent) -> ProcessIdentity | None:
+    def _target_process_identity(self, event: OccurrenceBuilder) -> ProcessIdentity | None:
         host = event.src_host or event.dst_host
         if host is None:
             return None
@@ -258,7 +333,7 @@ class IdentityLifecyclePlanner:
 
     def _remote_thread_identity(
         self,
-        event: SecurityEvent,
+        event: OccurrenceBuilder,
         target: ProcessIdentity | None,
     ) -> ThreadIdentity | None:
         remote = event.remote_thread
@@ -271,18 +346,26 @@ class IdentityLifecyclePlanner:
         )
 
     @staticmethod
-    def _project_compatibility(event: SecurityEvent, plan: EventIdentityPlan) -> None:
-        """Fill legacy eCAR fields from canonical truth and reject contradictions."""
+    def _merge_plans(
+        explicit: EventIdentityPlan | None,
+        inferred: EventIdentityPlan | None,
+    ) -> EventIdentityPlan | None:
+        """Merge explicit entity ownership with richer state-backed identities."""
 
-        if event.edr is None:
-            event.edr = EdrContext()
-        if plan.object_id:
-            event.edr.object_id = plan.object_id
-        if plan.actor_id:
-            event.edr.actor_id = plan.actor_id
-        if plan.canonical_tid >= 0 and (
-            event.event_type in _PROCESS_START_TYPES | _PROCESS_CLOSURE_TYPES
-            or isinstance(plan.subject, ThreadIdentity)
-        ):
-            event.edr.tid = plan.canonical_tid
-        event.edr.validate_identity_plan(plan)
+        if explicit is None:
+            return inferred
+        if inferred is None:
+            return explicit
+        for role in ("subject", "actor", "target", "session"):
+            left = getattr(explicit, role)
+            right = getattr(inferred, role)
+            if left is not None and right is not None and left.object_id != right.object_id:
+                raise ValueError(
+                    f"Explicit {role} identity contradicts StateManager identity ownership"
+                )
+        return EventIdentityPlan(
+            subject=explicit.subject or inferred.subject,
+            actor=inferred.actor or explicit.actor,
+            target=inferred.target or explicit.target,
+            session=inferred.session or explicit.session,
+        )

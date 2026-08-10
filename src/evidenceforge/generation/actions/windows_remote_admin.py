@@ -29,10 +29,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     AuthContext,
-    EdrContext,
     FileContext,
     HostContext,
     ProcessContext,
@@ -40,10 +39,10 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.base import ActionAnchor
-from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
+from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 _LINUX_LOCAL_ACCOUNTS = {
@@ -170,6 +169,19 @@ class WindowsRemoteAdminExecutor(Protocol):
         """Generate canonical process-create evidence."""
         ...
 
+    def generate_process_termination(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+        **kwargs: Any,
+    ) -> None:
+        """Generate canonical process-termination evidence."""
+        ...
+
     def _clamp_after_visible_process_create(
         self,
         system: System,
@@ -267,7 +279,10 @@ class ExplicitCredentialUseActionBundle:
             self._request.system,
             subject_logon_id,
         )
-        process_pid = self._resolve_process_pid(subject_user, subject_logon_id)
+        process_pid, materialized_caller = self._resolve_process_pid(
+            subject_user,
+            subject_logon_id,
+        )
         event_time = self._request.time
         if process_pid > 0:
             event_time = self._executor._clamp_after_visible_process_create(
@@ -282,15 +297,13 @@ class ExplicitCredentialUseActionBundle:
             self._request.source_ip,
         )
         network_source_port = 0
-        if network_source_ip not in {"", "-"}:
+        if self._request.source_port > 0:
             network_source_port = (
                 self._request.source_port
                 if self._request.source_ip.strip().removeprefix("::ffff:") == network_source_ip
                 else 0
             )
-        if network_source_ip not in {"", "-"} and network_source_port <= 0:
-            network_source_port = self._sample_source_port()
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="explicit_credentials",
             dst_host=self._executor._build_host_context(self._request.system),
@@ -315,12 +328,27 @@ class ExplicitCredentialUseActionBundle:
                 source_port=network_source_port,
             ),
         )
-        self._executor.dispatcher.dispatch(event)
+        self._executor.dispatcher.dispatch_builder(event)
+        if materialized_caller:
+            lifetime_ms = 1800 + (_stable_seed(f"{self._request.stable_id}:caller_lifetime") % 5201)
+            self._executor.generate_process_termination(
+                subject_user,
+                self._request.system,
+                event_time + timedelta(milliseconds=lifetime_ms),
+                process_pid,
+                self._request.process_name,
+                subject_logon_id,
+            )
 
-    def _resolve_process_pid(self, subject_user: User, subject_logon_id: str) -> int:
-        """Return or materialize the caller process for the 4648 event."""
+    def _resolve_process_pid(
+        self,
+        subject_user: User,
+        subject_logon_id: str,
+    ) -> tuple[int, bool]:
+        """Return the caller PID and whether this bundle materialized it."""
 
         process_pid = self._request.process_pid or 0
+        materialized_caller = False
         if process_pid > 0 and self._request.process_name:
             running_process = self._executor.state_manager.get_process(
                 self._request.system.hostname,
@@ -344,18 +372,32 @@ class ExplicitCredentialUseActionBundle:
                 process_time,
                 subject_logon_id,
                 self._request.process_name,
-                ntpath.basename(self._request.process_name),
+                self._materialized_caller_command_line(),
             )
-        return process_pid
+            materialized_caller = True
+        return process_pid, materialized_caller
 
-    def _sample_source_port(self) -> int:
-        """Return a source-native ephemeral port for explicit credential network metadata."""
+    def _materialized_caller_command_line(self) -> str:
+        """Return action-native command semantics for a generated caller process."""
 
-        rng = _get_rng()
-        os_category = _get_os_category(self._request.system.os)
-        if os_category == "linux":
-            return rng.randint(32768, 60999)
-        return rng.randint(49152, 65535)
+        process_name = self._request.process_name
+        basename = ntpath.basename(process_name)
+        basename_lower = basename.lower()
+        target_username = self._request.target_username
+        target_server = self._request.target_server or self._request.system.hostname
+        if basename_lower == "runas.exe":
+            target = target_server.split(".", 1)[0]
+            return (
+                f'{basename} /netonly /user:{target_username} "cmd.exe /c dir \\\\{target}\\ADMIN$"'
+            )
+        if basename_lower == "mmc.exe":
+            return f"{basename} compmgmt.msc /computer={target_server}"
+        if basename_lower in {"powershell.exe", "pwsh.exe"}:
+            return (
+                f'{basename} -NoProfile -Command "Get-CimInstance Win32_OperatingSystem '
+                f"-ComputerName '{target_server}' -Credential '{target_username}'\""
+            )
+        return f'{basename} "{target_server}"'
 
 
 class WindowsServiceInstallActionBundle:
@@ -394,7 +436,7 @@ class WindowsServiceInstallActionBundle:
             0x2E0,
         )
         host = self._executor._build_host_context(self._request.system)
-        event = SecurityEvent(
+        event = OccurrenceBuilder(
             timestamp=self._request.time,
             event_type="service_installed",
             src_host=host,
@@ -418,7 +460,7 @@ class WindowsServiceInstallActionBundle:
                 service_account=self._request.service_account,
             ),
         )
-        self._executor.dispatcher.dispatch(event)
+        self._executor.dispatcher.dispatch_builder(event)
 
     def _emit_payload_file_create(self) -> None:
         """Emit dropped service binary evidence when the service path is not preexisting."""
@@ -441,13 +483,9 @@ class WindowsServiceInstallActionBundle:
             "services",
             0x2BC,
         )
-        services_obj_id = self._executor.state_manager.get_process_object_id(
-            self._request.system.hostname,
-            services_pid,
-        )
         file_time = self._request.time - timedelta(milliseconds=250)
-        self._executor.dispatcher.dispatch(
-            SecurityEvent(
+        self._executor.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
                 timestamp=file_time,
                 event_type="file_create",
                 src_host=self._executor._build_host_context(self._request.system),
@@ -465,15 +503,5 @@ class WindowsServiceInstallActionBundle:
                     logon_id="0x3e7",
                 ),
                 file=FileContext(path=service_path, action="create", pid=services_pid),
-                edr=EdrContext(
-                    object_id=stable_uuid(
-                        "service-install-file-edr",
-                        self._request.system.hostname,
-                        services_pid,
-                        service_path,
-                        file_time.isoformat(),
-                    ),
-                    actor_id=services_obj_id,
-                ),
             )
         )
