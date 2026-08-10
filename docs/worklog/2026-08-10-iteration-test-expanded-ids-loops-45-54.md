@@ -261,3 +261,22 @@ reviewers only a new data-only copy plus the shared assessment guidance.
 - Added SMB clients to exact-command and one-shot lifecycle classification.
 - The Loop 52 external-network probe examined 36,378 source-IP values with zero excluded hits.
 - Full activity-generator verification: 352 passed.
+
+## Loop 54 Family Contract
+
+- Fresh generation/eval: 84,155 records, 95.9478.
+- Initial blind scores: Hunter 56, Detection 64, Network 65, Host 55; average 60.0. The
+  Inconclusive/Synthetic split triggered deliberation.
+- Deliberation converged unanimously on Synthetic at 63/76/69/68, average 69.0.
+- Host proved 112/129 Sysmon Event 11 rows used one numeric `C:\Windows\Temp` grammar across all
+  nine Windows hosts and implausibly broad core-process owners.
+- Contract: ambient file churn must be process-native; generic system-temp templates cannot be
+  independently paired with arbitrary live processes.
+
+## Loop 54 Outcome
+
+- Removed the unowned generic `C:\Windows\Temp\{rand}.tmp` template from ambient Windows paths.
+- Preserved installer/update `MSI*.tmp` and user-shell temp conventions in executable-specific
+  side-effect profiles.
+- Loop 53 ownership probe: 185 Linux outbound SMB flows, zero `rsyncd` owners.
+- EDR pool verification: 65 passed.
