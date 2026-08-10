@@ -97,6 +97,8 @@ and evaluation behavior.
   the expanded iteration-test loop documentation (`ff7928e0`, `2eb98588`,
   `53c454aa`, `6472d02a`, `45467a6b`, `161f30ff`, `6339e586`).
 - Extended CI time allowance for the expanded validation suite (`40ac5f71`).
+- Updated Ruff to 0.16.1 and setup-uv to 9.0.0, retaining explicit cache
+  pruning for cache-enabled GitHub Actions jobs (`8c4685c7`, `93a4510e`).
 
 ## v1.14.1 (2026-08-04)
 
