@@ -8396,9 +8396,16 @@ class TestActivityGenerator:
         ]
         process = next(event for event in emitted if event.event_type == "process_create")
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        terminated = next(event for event in emitted if event.event_type == "process_terminate")
         assert explicit.auth.process_pid == process.process.pid
         assert explicit.auth.process_pid > 0
         assert process.timestamp < explicit.timestamp
+        assert process.process.command_line.startswith("runas.exe /netonly /user:admin01 ")
+        assert r"\\dc01\ADMIN$" in process.process.command_line
+        assert terminated.process.pid == process.process.pid
+        assert (
+            timedelta(seconds=1) < terminated.timestamp - explicit.timestamp < timedelta(seconds=8)
+        )
 
     def test_generate_explicit_credentials_handles_missing_caller_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
