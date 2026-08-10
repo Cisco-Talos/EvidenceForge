@@ -17293,7 +17293,18 @@ class ActivityGenerator:
                     rf"{profile}\AppData\Roaming\Thunderbird\Profiles\{token.lower()}.default-release"
                     rf"\ImapMail\{self._email_domain(user.email)}\INBOX"
                 )
-            return rf"{profile}\AppData\Local\Microsoft\Outlook\RoamCache\{token}.dat"
+            if exe_name == "outlook.exe":
+                return rf"{profile}\AppData\Local\Microsoft\Outlook\RoamCache\{token}.dat"
+            if exe_name in {"chrome.exe", "msedge.exe"}:
+                vendor_path = r"Microsoft\Edge" if exe_name == "msedge.exe" else r"Google\Chrome"
+                return (
+                    rf"{profile}\AppData\Local\{vendor_path}\User Data\Default"
+                    rf"\Cache\Cache_Data\f_{token.lower()}"
+                )
+            return (
+                rf"{profile}\AppData\Local\Packages"
+                rf"\microsoft.windowscommunicationsapps_8wekyb3d8bbwe\LocalState\{token}.dat"
+            )
         return f"/home/{user.username}/.thunderbird/{token.lower()}.default-release/ImapMail/INBOX"
 
     def _email_recipient_attachment_path(
@@ -17313,6 +17324,14 @@ class ActivityGenerator:
                 return (
                     rf"{profile}\AppData\Local\Thunderbird\Profiles\{token.lower()}.default-release"
                     rf"\cache2\entries\{filename}"
+                )
+            if exe_name in {"chrome.exe", "msedge.exe"}:
+                return rf"{profile}\Downloads\{filename}"
+            if exe_name != "outlook.exe":
+                return (
+                    rf"{profile}\AppData\Local\Packages"
+                    rf"\microsoft.windowscommunicationsapps_8wekyb3d8bbwe"
+                    rf"\LocalState\Attachments\{token}\{filename}"
                 )
             return (
                 rf"{profile}\AppData\Local\Microsoft\Windows\INetCache"

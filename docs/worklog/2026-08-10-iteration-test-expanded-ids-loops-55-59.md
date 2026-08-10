@@ -127,3 +127,32 @@ data-only blind panel before selecting the following family fix.
   late binding belongs in `StateManager`, which must also refresh its session secondary index.
 - **Sibling risk:** long-lived taskhostw processes and domain-controller outbound role leakage are
   independent families and remain queued for the final loop.
+
+## Loop 59
+
+- Generated 78,916 records from commit `84294984`; automated evaluation scored 95.72
+  (Parseability 100.00, Plausibility 96.50, Causality 89.57, Timing 96.00). Pivot linkability
+  remained the sole hard acceptance failure at 50.0 versus the 80.0 threshold.
+- The selected SSH responder lifecycle contract passed: 45 successful SSH closes were visible;
+  all seven whose exact responder process creation was also visible had the matching process
+  termination, with zero missing.
+- Fresh initial synthetic-confidence scores were 74 (Threat Hunter), 69 (Detection), 24
+  (Network), and 72 (Host/EDR), averaging 59.75. Deliberation revised them to 78/76/46/79
+  (mean 69.75) and selected endpoint application/file ownership as the top hard contradiction.
+
+### Email Endpoint File-Ownership Family Contract
+
+- **Owner:** the modeled recipient access application owns message-cache and attachment paths;
+  email endpoint generation selects those paths from the actual process image.
+- **Invariant:** Outlook alone may own `RoamCache` and `Content.Outlook`; Chrome/Edge use their
+  browser cache and Downloads paths; Thunderbird and Windows Mail retain application-native
+  locations. Actor/path cross-products that cannot occur are forbidden.
+- **Entry paths:** recipient delivery/read evidence over OWA/browser, Outlook, Thunderbird, or
+  Windows Mail, including messages with attachments.
+- **Consumers:** Sysmon Event 11 and eCAR FILE records, their actor process identity, and hunting
+  pivots from message/attachment artifacts.
+- **Layer rationale:** the owning application is already canonical process truth, so path
+  selection belongs in email endpoint artifact generation before emitters render it.
+- **Sibling risk:** RuntimeBroker generic file ownership and `taskhostw.exe` lifecycle remain
+  broader endpoint families; Loop 59 is the last requested loop, so this final fix has focused
+  unit verification but no Loop 60 regenerated corpus.
