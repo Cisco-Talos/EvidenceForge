@@ -149,6 +149,22 @@ _BASELINE_SERVER_ADMIN_PERSONA_ROLES = {
 }
 
 
+def _baseline_ssh_client_key(source_ip: str, username: str) -> tuple[str, str]:
+    """Return the durable public-key identity owned by one SSH client user."""
+    key_rng = random.Random(_stable_seed(f"ssh_client_key:{source_ip}:{username}"))
+    key_type = key_rng.choice(["RSA", "ED25519", "ECDSA"])
+    key_hash = "".join(
+        key_rng.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43)
+    )
+    return key_type, f"SHA256:{key_hash}"
+
+
+def _baseline_ssh_auth_method(source_ip: str, target_ip: str, username: str) -> str:
+    """Return the stable authentication policy for one client/user/target tuple."""
+    policy_rng = random.Random(_stable_seed(f"ssh_auth_policy:{source_ip}:{target_ip}:{username}"))
+    return "publickey" if policy_rng.random() < 0.7 else "password"
+
+
 def _ufw_block_syn_packet_len(src_ip: str) -> int:
     """Return a stable valid IP total length for a header-only blocked TCP SYN."""
     rng = random.Random(_stable_seed(f"ufw_syn_packet_len:{src_ip}"))
@@ -9081,12 +9097,8 @@ class BaselineMixin:
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
                     ssh_user = ssh_user_model.username
-                    _key_rng = random.Random(
-                        _stable_seed(f"ssh_client_key:{ip}:{system.hostname}:{ssh_user}")
-                    )
-                    key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-                    key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
-                    auth_method = "publickey" if rng.random() < 0.7 else "password"
+                    key_type, key_hash = _baseline_ssh_client_key(ip, ssh_user)
+                    auth_method = _baseline_ssh_auth_method(ip, system.ip, ssh_user)
                     disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
                     # Baseline remote-admin SSH is a modeled session, not loose
                     # syslog churn. The bundle owns transport, auth/PAM/logind,

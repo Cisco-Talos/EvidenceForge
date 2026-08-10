@@ -82,3 +82,44 @@ reviewers only a new data-only copy plus the shared assessment guidance.
   SSL certificate FUIDs are now projected only when the same sensor's frozen
   file observation permits X.509 analysis.
 - **Focused tests:** 82 passed across TLS, Zeek files, and network observation.
+
+## Loop 47 Family Contract
+
+- **Selected family:** durable SSH client credential identity and stable
+  client/user/target authentication policy.
+- **Classification:** `sibling_defect`; every session emitted through the
+  baseline SSH bundle consumes shared credential and policy state.
+- **Owning abstraction:** baseline remote-administration identity policy before
+  the SSH action bundle constructs transport, endpoint, auth, PAM, and logind
+  occurrences.
+- **Invariant:** a client/user owns one durable public-key fingerprint across
+  destinations unless explicit identity selection is modeled; repeated
+  sessions on one client/user/target tuple use its stable authentication policy
+  rather than independently redrawing password versus public key.
+- **Entry paths:** ambient baseline SSH sessions for all modeled administrators,
+  Windows and Linux clients, all Linux server targets, repeated and cross-zone
+  observations.
+- **Consumers:** SSH bundle requests, target syslog accepted-auth rows, PAM and
+  logind lifecycle, eCAR client/server/session records, Zeek transport, and
+  source command-line correlation.
+- **Layer rationale:** credentials and authentication policy are durable actor
+  state, not per-event source formatting. Fixing sshd messages would leave the
+  bundle's canonical request contradictory.
+- **Sibling risks:** per-user uniqueness on shared clients, fleet method
+  diversity, explicit storyline keys, password-only targets, repeat sessions,
+  source-port allocation, and SSH lifecycle timing.
+
+## Loop 47 Outcome
+
+- **Generation/eval:** 80,525 fresh records; 96.09963396291859; FAIL only on
+  pivot linkability (51.6129/100).
+- **Loop 46 family probe:** 530 SSL certificate references across two sensor
+  zones; zero references absent from sensor-local X.509 logs.
+- **Blind panel:** Synthetic/Real/Real/Synthetic at 67/18/27/64, average 44.0;
+  disagreement and a 49-point spread triggered deliberation.
+- **Deliberation:** 2-2 role split with narrow Synthetic consensus score 59,
+  confidence 68; final role scores 72/40/39/74.
+- **Selected family:** durable SSH client credential and authentication policy.
+  Key identity now belongs to client/user across targets, while auth method is
+  stable for each client/user/target tuple.
+- **Focused tests:** 158 passed, one skipped across baseline and realism tests.
