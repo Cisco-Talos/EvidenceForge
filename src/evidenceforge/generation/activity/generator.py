@@ -9788,12 +9788,6 @@ class ActivityGenerator:
             if session is not None:
                 os_cat = _get_os_category(system.os)
                 if os_cat == "windows":
-                    existing_explorer_pid = session.explorer_pid
-                    explorer_is_active = (
-                        existing_explorer_pid is not None
-                        and self.state_manager.get_process(system.hostname, existing_explorer_pid)
-                        is not None
-                    )
                     sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
                     parent_for_chain = None
                     for candidate in ("smss", "wininit", "winlogon", "services"):
@@ -9801,7 +9795,7 @@ class ActivityGenerator:
                         if pid and self.state_manager.get_process(system.hostname, pid):
                             parent_for_chain = pid
                             break
-                    if parent_for_chain is not None and not explorer_is_active:
+                    if parent_for_chain is not None and not session.windows_shell_bootstrapped:
                         winlogon_pid = session.session_winlogon_pid
                         if winlogon_pid is None:
                             winlogon_pid = self.state_manager.create_process(
@@ -9823,6 +9817,7 @@ class ActivityGenerator:
                         )
                         session.explorer_pid = explorer_pid
                         session.process_tree_root = winlogon_pid
+                        session.windows_shell_bootstrapped = True
                 session.last_activity_time = time
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")

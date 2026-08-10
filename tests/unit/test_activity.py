@@ -1943,6 +1943,13 @@ class TestActivityGenerator:
         session = state_manager.get_session(logon_id)
         assert session is not None
         first_explorer_pid = session.explorer_pid
+        assert first_explorer_pid is not None
+        state_manager.end_process(
+            test_system.hostname,
+            first_explorer_pid,
+            end_time=timestamp + timedelta(hours=1),
+        )
+        assert session.explorer_pid is None
 
         activity_gen.generate_logon(
             test_user,
@@ -1956,7 +1963,8 @@ class TestActivityGenerator:
 
         session = state_manager.get_session(logon_id)
         assert session is not None
-        assert session.explorer_pid == first_explorer_pid
+        assert session.explorer_pid is None
+        assert session.windows_shell_bootstrapped is True
         shell_creates = [
             call.args[0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list

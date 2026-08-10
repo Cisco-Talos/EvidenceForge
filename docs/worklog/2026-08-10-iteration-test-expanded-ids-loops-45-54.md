@@ -184,3 +184,22 @@ reviewers only a new data-only copy plus the shared assessment guidance.
 - Focused activity/spawn/RDP/world-model verification: 439 passed.
 - Loop 50 must generate fresh output from the committed fix and use a new blind panel before
   selecting another family.
+
+## Loop 50 Family Contract
+
+- Fresh generation/eval: 83,559 records, 96.2863.
+- Initial blind scores: Hunter 91, Detection 39, Network 56, Host 76; average 65.5.
+  Deliberation reconciled the 52-point spread to final 88/68/65/80, average 75.25.
+- The fresh post-fix probe still found two one-login/two-shell-chain RDP groups. Full generation
+  eagerly applies planned future termination, which clears live process references before a
+  second semantic path reaches the same active session.
+- Contract: initial Windows shell bootstrap is durable session-owned semantic state, not a
+  property inferred from the current live-process map.
+
+## Loop 50 Outcome
+
+- Added `ActiveSession.windows_shell_bootstrapped` and made canonical logon bootstrap consult it.
+- Strengthened the regression by removing Explorer from live state before replaying the same
+  Logon ID; no second shell chain may be created.
+- Focused activity/state/spawn/RDP/world verification: 541 passed.
+- Highest fresh deferred target: fleet-global Event 5156 thread-ID universe.
