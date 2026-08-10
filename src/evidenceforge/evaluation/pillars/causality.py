@@ -75,6 +75,20 @@ class CausalityScorer(DimensionScorer):
     name = "Causality"
     weight = 0.25
 
+    _NETWORK_ONLY_PIVOT_TYPES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "beacon",
+            "connection",
+            "credential_spray",
+            "dga_queries",
+            "dhcp_lease",
+            "dns_query",
+            "dns_tunnel",
+            "port_scan",
+            "web_scan",
+        }
+    )
+
     def score(
         self,
         records: dict[str, list[ParsedRecord]],
@@ -132,6 +146,7 @@ class CausalityScorer(DimensionScorer):
                         event.details["hostname"] = apgt["target_system"]
                         event.details["_anchor_host_adversarial_payload"] = apgt["target_system"]
             self._proxy_mode = scenario.environment.proxy.mode
+            self._proxy_listener_port = scenario.environment.proxy.listener_port
             self._proxy_ips = {
                 system.ip
                 for system in scenario.environment.systems
@@ -156,15 +171,18 @@ class CausalityScorer(DimensionScorer):
                     server.name.lower(): server.hostname.lower()
                     for server in email_config.mail_servers
                 }
+            self._initialize_pivot_identity(scenario)
             # Build host-time index and find traces
             host_time_index = self._build_host_time_index(records)
             self._find_traces(resolved, records, host_time_index)
         else:
             self._proxy_mode = "transparent"
+            self._proxy_listener_port = 8080
             self._proxy_ips = set()
             self._email_actor_emails = {}
             self._email_server_ips = {}
             self._email_server_hosts = {}
+            self._initialize_pivot_identity(scenario)
             host_time_index = self._build_host_time_index(records)
 
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
@@ -460,10 +478,29 @@ class CausalityScorer(DimensionScorer):
         event: ResolvedEvent,
         context: EvaluationContext,
     ) -> bool:
+        if cls._event_generation_exempt(event, context):
+            return True
         manifest_event = cls._manifest_event(event, context)
         if manifest_event is None:
             return False
         return manifest_event.visible_or_delayed_count == 0 and manifest_event.non_visible_count > 0
+
+    @staticmethod
+    def _event_generation_exempt(
+        event: ResolvedEvent,
+        context: EvaluationContext,
+    ) -> bool:
+        """Return whether ground truth records an authored step as a valid no-op."""
+
+        document = context.ground_truth
+        if document is None or not event.storyline_id:
+            return False
+        matching = [
+            record
+            for record in document.events
+            if record.storyline_id == event.storyline_id and record.kind in event.event_types
+        ]
+        return bool(matching) and all(not record.emitted for record in matching)
 
     @classmethod
     def _format_group_observation_exempt(
@@ -472,6 +509,8 @@ class CausalityScorer(DimensionScorer):
         group_formats: set[str],
         context: EvaluationContext,
     ) -> bool:
+        if cls._event_generation_exempt(event, context):
+            return True
         manifest_event = cls._manifest_event(event, context)
         if manifest_event is None:
             return False
@@ -504,7 +543,7 @@ class CausalityScorer(DimensionScorer):
         raw_score = (100.0 * raw_found / raw_total) if raw_total > 0 else 100.0
         return (
             f"{adjusted_details}; raw {raw_found}/{raw_total} ({raw_score:.1f}/100), "
-            f"{excluded} excluded by observation profile"
+            f"{excluded} excluded by generation/observation contract"
         )
 
     def _search_for_event_indexed(
@@ -523,13 +562,13 @@ class CausalityScorer(DimensionScorer):
 
         forward_extra_secs = 0
         if event_type in _DURATION_EVENT_TYPES:
+            duration_str = event.details.get("duration", "")
             interval_str = event.details.get("interval", "")
-            if interval_str:
+            window_str = duration_str or interval_str
+            if window_str:
                 try:
-                    forward_extra_secs = min(
-                        int(parse_duration(interval_str).total_seconds()), 3600
-                    )
-                except Exception:
+                    forward_extra_secs = min(int(parse_duration(window_str).total_seconds()), 3600)
+                except (TypeError, ValueError):
                     forward_extra_secs = 3600
             else:
                 forward_extra_secs = 3600
@@ -694,6 +733,14 @@ class CausalityScorer(DimensionScorer):
                     and self._host_matches(f.get("hostname"), event.system)
                     and self._connection_ip_matches(f, event)
                 )
+            if format_name in {"proxy_access", "zeek_http"}:
+                if not self._beacon_source_matches(f, event):
+                    return False
+                expected_dst = str(event.details.get("dst_ip") or "")
+                expected_hostname = str(event.details.get("hostname") or "")
+                return self._beacon_dst_matches(f, expected_dst) or self._beacon_dst_matches(
+                    f, expected_hostname
+                )
         elif event_type == "process_terminate":
             if format_name == "windows_event_security":
                 return f.get("EventID") == 4689 and self._host_matches(
@@ -766,6 +813,17 @@ class CausalityScorer(DimensionScorer):
             if format_name == "windows_event_security":
                 return f.get("EventID") == 4720 and self._host_matches(
                     f.get("Computer"), event.system
+                )
+        elif event_type == "account_deleted":
+            if format_name == "windows_event_security":
+                expected_target = event.details.get("target_username")
+                return (
+                    f.get("EventID") == 4726
+                    and self._host_matches(f.get("Computer"), event.system)
+                    and (
+                        not expected_target
+                        or self._user_matches(f.get("TargetUserName"), str(expected_target))
+                    )
                 )
         elif event_type == "group_member_added":
             if format_name == "windows_event_security":
@@ -889,9 +947,13 @@ class CausalityScorer(DimensionScorer):
                         f, expected_hostname
                     )
         elif event_type == "dns_query":
-            expected_query = event.details.get("query", "")
+            expected_queries = {
+                str(details["query"])
+                for details in (event.sub_details or [event.details])
+                if details.get("query")
+            }
             if format_name == "zeek_dns":
-                return f.get("query") == expected_query
+                return f.get("query") in expected_queries
             if format_name == "zeek_conn":
                 return f.get("id.resp_p") == 53 and f.get("id.orig_h") == event.system_ip
         elif event_type == "web_scan":
@@ -1417,7 +1479,7 @@ class CausalityScorer(DimensionScorer):
                 proxy_mode == "explicit"
                 and orig_h == source_ip
                 and resp_h in proxy_ips
-                and self._connection_port_matches(fields, details)
+                and self._proxy_client_port_matches(fields)
             ):
                 return True
             if (
@@ -1432,7 +1494,7 @@ class CausalityScorer(DimensionScorer):
         if event.system_ip and orig_h == event.system_ip:
             if "dst_ip" in details:
                 if proxy_mode == "explicit" and resp_h in proxy_ips:
-                    return self._connection_port_matches(fields, details)
+                    return self._proxy_client_port_matches(fields)
                 return resp_h == details["dst_ip"] and self._connection_port_matches(
                     fields, details
                 )
@@ -1451,6 +1513,15 @@ class CausalityScorer(DimensionScorer):
         if "source_ip" in details and orig_h == details["source_ip"]:
             return self._connection_port_matches(fields, details)
         return False
+
+    def _proxy_client_port_matches(self, fields: dict[str, Any]) -> bool:
+        """Match the physical client-to-proxy listener, not the logical origin port."""
+
+        return self._record_has_expected_port(
+            fields,
+            {int(getattr(self, "_proxy_listener_port", 8080))},
+            ("id.resp_p", "dst_port"),
+        )
 
     @staticmethod
     def _connection_port_matches(fields: dict[str, Any], details: dict[str, Any]) -> bool:
@@ -1528,11 +1599,29 @@ class CausalityScorer(DimensionScorer):
             for username in cls._expected_usernames_for_event(event)
         )
 
-    @staticmethod
-    def _user_matches(record_user: Any, expected: str) -> bool:
+    @classmethod
+    def _user_matches(cls, record_user: Any, expected: str) -> bool:
         if record_user is None:
             return False
-        return str(record_user).lower() == expected.lower()
+        return bool(
+            cls._username_match_aliases(record_user) & cls._username_match_aliases(expected)
+        )
+
+    @staticmethod
+    def _username_match_aliases(raw: Any) -> set[str]:
+        text = str(raw or "").strip().lower()
+        if not text or text == "-":
+            return set()
+        aliases = {text}
+        email_match = re.search(r"<?([a-z0-9._%+$-]+@[a-z0-9.-]+\.[a-z]{2,})>?", text)
+        if email_match:
+            email = email_match.group(1)
+            aliases.update({email, email.split("@", 1)[0]})
+        if "\\" in text:
+            aliases.add(text.rsplit("\\", 1)[-1])
+        if "@" in text:
+            aliases.add(text.split("@", 1)[0])
+        return aliases
 
     @staticmethod
     def _host_matches(record_host: Any, expected: str) -> bool:
@@ -1580,9 +1669,12 @@ class CausalityScorer(DimensionScorer):
         if client_ip:
             return self._ip_matches(client_ip, expected_src)
         orig_h = fields.get("id.orig_h")
-        resp_h = fields.get("id.resp_h")
-        if orig_h and resp_h in proxy_ips:
-            return self._ip_matches(orig_h, expected_src)
+        if orig_h:
+            if self._ip_matches(orig_h, expected_src):
+                return True
+            # An explicit proxy's origin-side protocol trace is still part of the
+            # logical transaction even though its physical source is the proxy.
+            return orig_h in proxy_ips
         return True
 
     @staticmethod
@@ -2236,11 +2328,17 @@ class CausalityScorer(DimensionScorer):
                 skipped=True,
                 details="Fewer than 2 events — nothing to link",
             )
+        expected_visible = [
+            event
+            for event in resolved
+            if event.traces or not self._event_observation_exempt(event, context)
+        ]
+        excluded = len(resolved) - len(expected_visible)
         expected_by_event = {
-            event.index: self._expected_indicator_values(event) for event in resolved
+            event.index: self._expected_indicator_values(event) for event in expected_visible
         }
         events_by_indicator: dict[str, list[ResolvedEvent]] = defaultdict(list)
-        for event in resolved:
+        for event in expected_visible:
             for indicator in expected_by_event[event.index]:
                 events_by_indicator[indicator].append(event)
         edges: dict[tuple[int, int], set[str]] = defaultdict(set)
@@ -2251,16 +2349,10 @@ class CausalityScorer(DimensionScorer):
 
         total_pairs = 0
         linkable = 0
-        excluded = 0
         failures: list[str] = []
-        by_index = {event.index: event for event in resolved}
+        by_index = {event.index: event for event in expected_visible}
         for (first_index, second_index), indicators in sorted(edges.items()):
             a, b = by_index[first_index], by_index[second_index]
-            if (not a.traces and self._event_observation_exempt(a, context)) or (
-                not b.traces and self._event_observation_exempt(b, context)
-            ):
-                excluded += 1
-                continue
             total_pairs += 1
             observed_a = self._observed_indicator_values(a)
             observed_b = self._observed_indicator_values(b)
@@ -2280,13 +2372,13 @@ class CausalityScorer(DimensionScorer):
                 score=None,
                 skipped=True,
                 details=(
-                    f"No authored narrative edges share an expected pivot; "
-                    f"{len(resolved)} events are isolated"
+                    f"No expected-visible narrative edges share an expected pivot; "
+                    f"{len(expected_visible)} events are isolated, {excluded} contract-exempt"
                 ),
             )
         score = 100.0 * linkable / total_pairs
         connected = {index for edge in edges for index in edge}
-        isolated = len(resolved) - len(connected)
+        isolated = len(expected_visible) - len(connected)
         return SubScore(
             name="Pivot Linkability",
             key="pivot_linkability",
@@ -2295,25 +2387,54 @@ class CausalityScorer(DimensionScorer):
             adjusted=excluded > 0,
             details=(
                 f"{linkable}/{total_pairs} inferred expected-visible narrative edges retain a "
-                f"shared rendered pivot; {isolated} isolated events, {excluded} observation-exempt"
+                f"shared rendered pivot; {isolated} isolated events, {excluded} contract-exempt"
             ),
             sample_failures=failures,
         )
 
+    def _initialize_pivot_identity(self, scenario: Scenario) -> None:
+        """Build scenario-owned identity aliases used only by pivot evaluation."""
+
+        self._pivot_host_aliases: dict[str, str] = {}
+        self._pivot_host_ips: dict[str, str] = {}
+        self._pivot_ip_hosts: dict[str, str] = {}
+        for system in scenario.environment.systems:
+            canonical = system.hostname.lower().rstrip(".")
+            aliases = {canonical, canonical.split(".", 1)[0]}
+            for alias in aliases:
+                self._pivot_host_aliases[alias] = canonical
+            normalized_ip = self._normalize_pivot_ip(system.ip)
+            if normalized_ip:
+                self._pivot_host_ips[canonical] = normalized_ip
+                self._pivot_ip_hosts[normalized_ip] = canonical
+
+        self._pivot_user_aliases: dict[str, str] = {}
+        for user in scenario.environment.users:
+            canonical = user.username.lower()
+            self._pivot_user_aliases[canonical] = canonical
+            if user.email:
+                self._pivot_user_aliases[user.email.lower()] = canonical
+
     def _expected_indicator_values(self, event: ResolvedEvent) -> set[str]:
-        values = {
-            self._scoped_actor_indicator(event.actor, event.system),
-            f"host:{event.system.lower()}",
-        }
-        if event.system_ip:
-            values.add(f"ip:{event.system_ip.lower()}")
+        values: set[str] = set()
+        include_actor, include_system = self._implicit_pivot_owners(event)
+        if include_actor:
+            self._add_expected_actor(values, event.actor, event.system)
+        if include_system:
+            self._add_pivot_value(values, "host", event.system)
+            self._add_pivot_value(values, "ip", event.system_ip)
+
         key_namespaces = {
             "source_ip": "ip",
             "dst_ip": "ip",
             "answer_ip": "ip",
+            "answer": "ip",
+            "requested_ip": "ip",
+            "target_ips": "ip",
             "hostname": "host",
             "server": "host",
             "target_system": "host",
+            "target_server": "host",
             "query": "domain",
             "base_domain": "domain",
             "url": "url",
@@ -2321,25 +2442,84 @@ class CausalityScorer(DimensionScorer):
             "artifact_id": "artifact",
             "message_ids": "artifact",
             "target_username": "user",
+            "target_accounts": "user",
             "success_account": "user",
+            "member_name": "user",
+            "sender": "user",
+            "to": "user",
+            "cc": "user",
+            "bcc": "user",
+            "mailbox": "user",
             "output_file": "file",
             "process_name": "process",
+            "target_process": "process",
         }
         for detail in event.sub_details or [event.details]:
             for key, namespace in key_namespaces.items():
+                if "email_read" in event.event_types and key == "message_ids":
+                    # EmailReadEventSpec documents these IDs for the narrative only.
+                    # Opaque TLS/proxy mailbox access cannot prove which message was read.
+                    continue
+                if key == "server" and "email_read" in event.event_types:
+                    server_name = str(detail.get(key) or "").lower()
+                    resolved_server = self._email_server_hosts.get(server_name)
+                    if resolved_server:
+                        self._add_pivot_value(values, namespace, resolved_server)
+                    continue
+                if key == "mailbox" and not include_actor:
+                    continue
+                if (
+                    key == "answer"
+                    and "dns_query" in event.event_types
+                    and str(detail.get("rcode") or "").upper() != "NOERROR"
+                ):
+                    continue
                 raw = detail.get(key)
-                items = raw if isinstance(raw, list) else [raw]
-                for item in items:
-                    if item not in (None, "", "-"):
-                        values.add(f"{namespace}:{str(item).lower()}")
+                self._add_pivot_value(values, namespace, raw)
+
+            success = detail.get("success")
+            if isinstance(success, dict):
+                self._add_pivot_value(values, "user", success.get("account"))
+
         email_gt = self._email_gt.get(event.storyline_id) or {}
-        for key, namespace in (("message_id", "artifact"), ("smtp_uids", "artifact")):
+        for key, namespace in (
+            ("message_id", "artifact"),
+            ("smtp_uids", "artifact"),
+            ("uid", "artifact"),
+        ):
             raw = email_gt.get(key)
-            items = raw if isinstance(raw, list) else [raw]
-            for item in items:
-                if item:
-                    values.add(f"{namespace}:{str(item).lower()}")
+            self._add_pivot_value(values, namespace, raw)
         return values
+
+    def _implicit_pivot_owners(self, event: ResolvedEvent) -> tuple[bool, bool]:
+        """Return whether actor and system identity are observable for this event."""
+
+        event_types = set(event.event_types)
+        if event_types == {"raw"}:
+            return False, False
+        if event_types == {"email_message"}:
+            sender = str(event.details.get("sender") or "").lower()
+            actor_email = self._email_actor_emails.get(event.actor.lower(), "")
+            outbound = not sender or bool(actor_email and sender == actor_email)
+            return outbound, outbound
+        if event_types == {"email_read"}:
+            actor_observable = not event.traces or any(
+                trace.source_format == "proxy_access" for trace in event.traces
+            )
+            return actor_observable, True
+        if event_types and event_types <= self._NETWORK_ONLY_PIVOT_TYPES:
+            return False, True
+        return True, True
+
+    def _add_expected_actor(self, values: set[str], actor: str, system: str) -> None:
+        normalized = self._normalize_pivot_user(actor)
+        if not normalized:
+            return
+        if normalized in {"root", "system", "local service", "network service"}:
+            canonical_host = self._canonical_pivot_host(system)
+            values.add(f"user:{normalized}@{canonical_host}")
+            return
+        values.add(f"user:{normalized}")
 
     def _observed_indicator_values(self, event: ResolvedEvent) -> set[str]:
         values: set[str] = set()
@@ -2349,18 +2529,32 @@ class CausalityScorer(DimensionScorer):
                 "SubjectUserName": "user",
                 "principal": "user",
                 "username": "user",
+                "mailfrom": "user",
+                "sender": "user",
+                "mailbox": "user",
+                "to": "user",
+                "cc": "user",
+                "bcc": "user",
                 "Computer": "host",
                 "hostname": "host",
                 "host": "host",
                 "server_name": "host",
+                "TargetServerName": "host",
+                "TargetInfo": "host",
                 "IpAddress": "ip",
                 "id.orig_h": "ip",
                 "id.resp_h": "ip",
                 "src_ip": "ip",
                 "dst_ip": "ip",
+                "client_ip": "ip",
+                "client_addr": "ip",
+                "assigned_addr": "ip",
+                "mapped_src_ip": "ip",
+                "mapped_dst_ip": "ip",
                 "query": "domain",
                 "url": "url",
                 "uri": "url",
+                "artifact_id": "artifact",
                 "message_id": "artifact",
                 "msg_id": "artifact",
                 "uid": "artifact",
@@ -2369,19 +2563,98 @@ class CausalityScorer(DimensionScorer):
                 "NewProcessName": "process",
             }
             for field_name, namespace in field_namespaces.items():
-                val = trace.fields.get(field_name)
-                if val and val != "-":
-                    values.add(f"{namespace}:{str(val).lower()}")
+                self._add_pivot_value(values, namespace, trace.fields.get(field_name))
+            for answer in self._iter_pivot_values(trace.fields.get("answers")):
+                namespace = "ip" if self._normalize_pivot_ip(answer) else "domain"
+                self._add_pivot_value(values, namespace, answer)
         actor_indicator = self._scoped_actor_indicator(event.actor, event.system)
-        if any(value in values for value in {f"user:{event.actor.lower()}", actor_indicator}):
+        normalized_actor = self._normalize_pivot_user(event.actor)
+        if any(value in values for value in {f"user:{normalized_actor}", actor_indicator}):
             values.add(actor_indicator)
         return values
 
+    def _add_pivot_value(self, values: set[str], namespace: str, raw: Any) -> None:
+        for item in self._iter_pivot_values(raw):
+            if item in (None, "", "-"):
+                continue
+            if namespace == "ip":
+                normalized_ip = self._normalize_pivot_ip(item)
+                if not normalized_ip:
+                    continue
+                values.add(f"ip:{normalized_ip}")
+                host = self._pivot_ip_hosts.get(normalized_ip)
+                if host:
+                    values.add(f"host:{host}")
+                continue
+            if namespace == "host":
+                normalized_ip = self._normalize_pivot_ip(item)
+                if normalized_ip:
+                    self._add_pivot_value(values, "ip", normalized_ip)
+                    continue
+                host = self._canonical_pivot_host(item)
+                if not host:
+                    continue
+                values.add(f"host:{host}")
+                host_ip = self._pivot_host_ips.get(host)
+                if host_ip:
+                    values.add(f"ip:{host_ip}")
+                continue
+            if namespace == "user":
+                user = self._normalize_pivot_user(item)
+                if user:
+                    values.add(f"user:{user}")
+                continue
+            text = str(item).strip().lower()
+            if namespace == "domain":
+                text = text.rstrip(".")
+            if text:
+                values.add(f"{namespace}:{text}")
+
     @staticmethod
-    def _scoped_actor_indicator(actor: str, system: str) -> str:
-        normalized = actor.lower()
+    def _iter_pivot_values(raw: Any) -> list[Any]:
+        if isinstance(raw, list | tuple | set):
+            return list(raw)
+        return [raw]
+
+    @staticmethod
+    def _normalize_pivot_ip(raw: Any) -> str | None:
+        try:
+            parsed = ipaddress.ip_address(str(raw).strip().strip("[]"))
+        except ValueError:
+            return None
+        if parsed.version == 6 and getattr(parsed, "ipv4_mapped", None) is not None:
+            parsed = parsed.ipv4_mapped
+        return parsed.compressed.lower()
+
+    def _canonical_pivot_host(self, raw: Any) -> str:
+        host = str(raw or "").strip().lower().rstrip(".")
+        if not host:
+            return ""
+        return self._pivot_host_aliases.get(
+            host, self._pivot_host_aliases.get(host.split(".", 1)[0], host)
+        )
+
+    def _normalize_pivot_user(self, raw: Any) -> str:
+        text = self._normalize_email_address(raw).strip().lower()
+        if not text:
+            return ""
+        direct = self._pivot_user_aliases.get(text)
+        if direct:
+            return direct
+        if "\\" in text:
+            text = text.rsplit("\\", 1)[-1]
+        direct = self._pivot_user_aliases.get(text)
+        if direct:
+            return direct
+        if "@" in text:
+            local = text.split("@", 1)[0]
+            return self._pivot_user_aliases.get(local, text)
+        return text
+
+    def _scoped_actor_indicator(self, actor: str, system: str) -> str:
+        normalized = self._normalize_pivot_user(actor)
         if normalized in {"root", "system", "local service", "network service"}:
-            return f"user:{normalized}@{system.lower()}"
+            return f"user:{normalized}@{self._canonical_pivot_host(system)}"
         return f"user:{normalized}"
 
     # --- Sub-score 5: Temporal Integrity ---

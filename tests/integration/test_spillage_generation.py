@@ -263,18 +263,19 @@ class TestSpillageGeneration:
 
 
 class TestSpillageEval:
-    def test_eval_rejects_unlinkable_storyline(self, spillage_scenario, tmp_path):
+    def test_eval_accepts_source_appropriate_storyline_pivots(self, spillage_scenario, tmp_path):
         out = _generate(spillage_scenario, tmp_path / "out")
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**spillage_scenario)).run()
-        failed = {
-            criterion.sub_score_key: criterion
+        pivot = next(
+            criterion
             for criterion in report.acceptance_criteria
-            if criterion.passed is False
-        }
+            if criterion.sub_score_key == "pivot_linkability"
+        )
 
-        assert report.acceptance_passed is False
-        assert failed["pivot_linkability"].actual is not None
-        assert failed["pivot_linkability"].actual < failed["pivot_linkability"].threshold
+        assert report.acceptance_passed is True
+        assert pivot.passed is True
+        assert pivot.actual is not None
+        assert pivot.actual >= pivot.threshold
 
     def test_eval_reads_canonical_ground_truth_not_synthesis(self, spillage_scenario, tmp_path):
         # Eval must rely on GROUND_TRUTH.json; with it removed, spillage cannot be matched.

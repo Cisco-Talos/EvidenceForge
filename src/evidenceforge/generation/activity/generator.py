@@ -176,6 +176,7 @@ from evidenceforge.generation.actions import (
     WindowsServiceInstallRequest,
     WorkstationLockActionBundle,
     WorkstationLockRequest,
+    WorkstationLockResult,
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
     file_transfer_hashes,
@@ -21964,18 +21965,21 @@ class ActivityGenerator:
         system: System,
         time: datetime,
         logon_id: str,
-    ) -> None:
-        """Generate workstation lock event (4800)."""
+    ) -> WorkstationLockResult:
+        """Attempt a workstation lock transition and report its outcome."""
         request = WorkstationLockRequest(
             user=user,
             system=system,
             time=time,
             logon_id=logon_id,
         )
-        WorkstationLockActionBundle(self, request).execute()
+        return WorkstationLockActionBundle(self, request).execute()
 
-    def _execute_workstation_lock_bundle(self, request: WorkstationLockRequest) -> None:
-        """Generate workstation lock event (4800)."""
+    def _execute_workstation_lock_bundle(
+        self,
+        request: WorkstationLockRequest,
+    ) -> WorkstationLockResult:
+        """Generate event 4800 only when the workstation enters the locked state."""
         user = request.user
         system = request.system
         time = request.time
@@ -21988,14 +21992,23 @@ class ActivityGenerator:
             or session.start_time > time
             or not _is_windows_workstation_session(session)
         ):
-            return
+            return WorkstationLockResult(
+                emitted=False,
+                skipped_reason="no_eligible_interactive_session",
+            )
         if not hasattr(self, "_last_workstation_lock_time"):
             self._last_workstation_lock_time = {}
         if self._locked_user_interactive_windows_session(user, system, time) is not None:
-            return
+            return WorkstationLockResult(
+                emitted=False,
+                skipped_reason="workstation_already_locked",
+            )
         lock_key = (system.hostname, user.username, logon_id)
         if lock_key in self._last_workstation_lock_time:
-            return
+            return WorkstationLockResult(
+                emitted=False,
+                skipped_reason="workstation_already_locked",
+            )
         self._last_workstation_lock_time[lock_key] = time
         session = self.state_manager.get_session(logon_id)
         if session is not None:
@@ -22012,6 +22025,7 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch_builder(event)
+        return WorkstationLockResult(emitted=True)
 
     def generate_workstation_unlock(
         self,

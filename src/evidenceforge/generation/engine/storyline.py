@@ -5764,12 +5764,16 @@ class StorylineMixin:
                 default=None,
             )
             logon_id = session.logon_id if session else "0x0"
-            self.activity_generator.generate_workstation_lock(
+            result = self.activity_generator.generate_workstation_lock(
                 user=actor,
                 system=system,
                 time=time,
                 logon_id=logon_id,
             )
+            if not result.emitted:
+                malicious_event["skipped_reason"] = (
+                    result.skipped_reason or "workstation_lock_not_emitted"
+                )
 
         elif spec.type == "workstation_unlock":
             sessions = self.state_manager.get_sessions_for_user(actor.username)

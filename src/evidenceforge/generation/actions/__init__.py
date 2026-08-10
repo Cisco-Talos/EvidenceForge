@@ -39,6 +39,7 @@ from evidenceforge.generation.actions.auth_session import (
     ServiceLogonRequest,
     WorkstationLockActionBundle,
     WorkstationLockRequest,
+    WorkstationLockResult,
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
 )
@@ -295,6 +296,7 @@ __all__ = [
     "WindowsRemoteAuthenticationRequest",
     "WorkstationLockActionBundle",
     "WorkstationLockRequest",
+    "WorkstationLockResult",
     "WorkstationUnlockActionBundle",
     "WorkstationUnlockRequest",
 ]

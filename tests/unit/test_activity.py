@@ -98,6 +98,7 @@ from evidenceforge.generation.actions import (
     WindowsServiceInstallRequest,
     WorkstationLockActionBundle,
     WorkstationLockRequest,
+    WorkstationLockResult,
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
 )
@@ -1096,12 +1097,13 @@ class TestActivityGenerator:
         )
         executor = Mock()
         executor._execute_service_logon_bundle.return_value = "0x3e7"
+        executor._execute_workstation_lock_bundle.return_value = WorkstationLockResult(emitted=True)
 
         assert ServiceLogonActionBundle(executor, service_request).execute() == "0x3e7"
         MachineAccountLogonActionBundle(executor, machine_request).execute()
         NtlmValidationActionBundle(executor, ntlm_request).execute()
         AnonymousLogonActionBundle(executor, anonymous_request).execute()
-        WorkstationLockActionBundle(executor, lock_request).execute()
+        lock_result = WorkstationLockActionBundle(executor, lock_request).execute()
         WorkstationUnlockActionBundle(executor, unlock_request).execute()
 
         executor._execute_service_logon_bundle.assert_called_once_with(service_request)
@@ -1110,6 +1112,7 @@ class TestActivityGenerator:
         executor._execute_anonymous_logon_bundle.assert_called_once_with(anonymous_request)
         executor._execute_workstation_lock_bundle.assert_called_once_with(lock_request)
         executor._execute_workstation_unlock_bundle.assert_called_once_with(unlock_request)
+        assert lock_result.emitted is True
 
     def test_kerberos_dc_bundle_anchors_are_stable(self, test_user, test_system):
         """Kerberos/DC requests should expose durable deterministic anchors."""
@@ -3877,8 +3880,13 @@ class TestActivityGenerator:
             start_time=lock_time - timedelta(minutes=5),
         )
 
-        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
-        activity_gen.generate_workstation_lock(
+        first_result = activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            lock_time,
+            logon_id,
+        )
+        second_result = activity_gen.generate_workstation_lock(
             test_user,
             test_system,
             lock_time + timedelta(minutes=1),
@@ -3894,6 +3902,11 @@ class TestActivityGenerator:
         events = [
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
+        assert first_result == WorkstationLockResult(emitted=True)
+        assert second_result == WorkstationLockResult(
+            emitted=False,
+            skipped_reason="workstation_already_locked",
+        )
         assert sum(event.event_type == "workstation_locked" for event in events) == 1
         assert sum(event.event_type == "workstation_unlocked" for event in events) == 1
 

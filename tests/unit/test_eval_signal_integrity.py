@@ -25,9 +25,11 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.evaluation.storyline import _match_activity, resolve_storyline
+from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
 
@@ -546,6 +548,473 @@ class TestPivotLinkability:
         pl = next(s for s in result.sub_scores if s.key == "pivot_linkability")
         assert pl.score is None
         assert pl.skipped
+
+    def test_account_deletion_links_to_deleted_accounts_later_logoff(self):
+        """Windows 4726 should preserve the account pivot into later session evidence."""
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-delete-account",
+                    "time": "+1h",
+                    "actor": "attacker",
+                    "system": "WS-01",
+                    "activity": "Delete compromised account",
+                    "events": [{"type": "account_deleted", "target_username": "jsmith"}],
+                },
+                {
+                    "id": "evt-account-logoff",
+                    "time": "+2h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Existing session logs off",
+                    "events": [{"type": "logoff"}],
+                },
+            ]
+        )
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4726,
+                        "Computer": "WS-01",
+                        "SubjectUserName": "attacker",
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=T0 + timedelta(hours=1),
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4634,
+                        "Computer": "WS-01",
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=T0 + timedelta(hours=2),
+                ),
+            ]
+        }
+
+        result = SignalIntegrityScorer().score(records, scenario)
+
+        presence = next(score for score in result.sub_scores if score.key == "event_presence")
+        pivot = next(score for score in result.sub_scores if score.key == "pivot_linkability")
+        assert presence.score == 100.0
+        assert pivot.score == 100.0
+
+    def test_ground_truth_noop_is_removed_from_expected_pivot_graph(self):
+        """A truthful already-satisfied action should not require phantom evidence."""
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-before-lock",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Execute first command",
+                    "events": [{"type": "process", "process_name": "cmd.exe"}],
+                },
+                {
+                    "id": "evt-lock-noop",
+                    "time": "+2h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Lock workstation",
+                    "events": [{"type": "workstation_lock"}],
+                },
+                {
+                    "id": "evt-after-lock",
+                    "time": "+3h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Execute second command",
+                    "events": [{"type": "process", "process_name": "whoami.exe"}],
+                },
+            ]
+        )
+        ground_truth = GroundTruthDocument.model_validate(
+            {
+                "scenario_name": scenario.name,
+                "scenario_description": scenario.description,
+                "generated_at": T0 + timedelta(hours=8),
+                "observation_profile": scenario.observation_profile,
+                "collection_window": {
+                    "start": "2024-01-15T10:00:00Z",
+                    "end": "2024-01-15T18:00:00Z",
+                },
+                "events": [
+                    {
+                        "record_id": "evt-lock-noop#0",
+                        "kind": "workstation_lock",
+                        "storyline_id": "evt-lock-noop",
+                        "time": T0 + timedelta(hours=2),
+                        "actor": "jsmith",
+                        "system": "WS-01",
+                        "activity": "Lock workstation",
+                        "ground_truth_section": "storyline",
+                        "emitted": False,
+                        "skipped_reason": "workstation_already_locked",
+                        "attributes": {},
+                    }
+                ],
+            }
+        )
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "Computer": "WS-01",
+                        "SubjectUserName": "jsmith",
+                        "NewProcessName": r"C:\Windows\System32\cmd.exe",
+                    },
+                    ts=T0 + timedelta(hours=1),
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "Computer": "WS-01",
+                        "SubjectUserName": "jsmith",
+                        "NewProcessName": r"C:\Windows\System32\whoami.exe",
+                    },
+                    ts=T0 + timedelta(hours=3),
+                ),
+            ]
+        }
+
+        result = SignalIntegrityScorer().score(
+            records,
+            scenario,
+            context=EvaluationContext(ground_truth=ground_truth),
+        )
+
+        presence = next(score for score in result.sub_scores if score.key == "event_presence")
+        pivot = next(score for score in result.sub_scores if score.key == "pivot_linkability")
+        assert presence.score == 100.0
+        assert presence.adjusted is True
+        assert presence.raw_score == 100.0 * 2 / 3
+        assert pivot.score == 100.0
+        assert pivot.adjusted is True
+        assert not pivot.sample_failures
+
+    def test_host_and_inventory_ip_are_one_pivot(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-pivot-host",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Execute command",
+                    "events": [{"type": "process", "process_name": "cmd.exe"}],
+                },
+                {
+                    "id": "evt-pivot-dns",
+                    "time": "+2h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Resolve command endpoint",
+                    "events": [
+                        {
+                            "type": "dns_query",
+                            "query": "api.example.test",
+                            "answer": "192.0.2.10",
+                        }
+                    ],
+                },
+            ]
+        )
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "Computer": "WS-01.example.test",
+                        "SubjectUserName": "jsmith",
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
+                    },
+                    ts=T0 + timedelta(hours=1),
+                )
+            ],
+            "zeek_dns": [
+                _record(
+                    "zeek_dns",
+                    {
+                        "id.orig_h": "10.0.10.50",
+                        "id.resp_h": "10.0.20.10",
+                        "query": "api.example.test",
+                        "answers": ["192.0.2.10"],
+                    },
+                    ts=T0 + timedelta(hours=2),
+                )
+            ],
+        }
+
+        result = SignalIntegrityScorer().score(records, scenario)
+
+        pivot = next(score for score in result.sub_scores if score.key == "pivot_linkability")
+        assert pivot.score == 100.0
+
+    def test_source_native_proxy_and_dhcp_fields_are_normalized(self):
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        scenario = _scenario_with_storyline([])
+        scorer = SignalIntegrityScorer()
+        scorer._initialize_pivot_identity(scenario)
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="jsmith",
+            system="WS-01",
+            system_ip="10.0.10.50",
+            activity="network activity",
+            details={},
+            event_types=["connection"],
+            traces=[
+                _record(
+                    "proxy_access",
+                    {
+                        "client_ip": "10.0.10.50",
+                        "username": "EXAMPLE\\jsmith",
+                    },
+                    ts=T0,
+                ),
+                _record(
+                    "zeek_dhcp",
+                    {
+                        "client_addr": "10.0.10.50",
+                        "assigned_addr": "10.0.10.50",
+                    },
+                    ts=T0,
+                ),
+            ],
+        )
+
+        observed = scorer._observed_indicator_values(event)
+
+        assert "ip:10.0.10.50" in observed
+        assert "host:ws-01" in observed
+        assert "user:jsmith" in observed
+
+    def test_target_server_and_domain_account_are_normalized(self):
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        scenario = _scenario_with_storyline([])
+        scorer = SignalIntegrityScorer()
+        scorer._initialize_pivot_identity(scenario)
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="jsmith",
+            system="WS-01",
+            system_ip="10.0.10.50",
+            activity="explicit credentials",
+            details={},
+            event_types=["explicit_credentials"],
+            traces=[
+                _record(
+                    "windows_event_security",
+                    {
+                        "TargetUserName": "EXAMPLE\\jsmith",
+                        "TargetServerName": "SRV-01.example.test",
+                    },
+                    ts=T0,
+                )
+            ],
+        )
+
+        observed = scorer._observed_indicator_values(event)
+
+        assert "user:jsmith" in observed
+        assert "host:srv-01" in observed
+        assert "ip:10.0.20.10" in observed
+        assert scorer._user_matches("EXAMPLE\\jsmith", "jsmith")
+        assert scorer._user_matches("jsmith@example.test", "jsmith")
+
+    def test_unknown_email_domains_remain_distinct_pivots(self):
+        scenario = _scenario_with_storyline([])
+        scorer = SignalIntegrityScorer()
+        scorer._initialize_pivot_identity(scenario)
+
+        first = scorer._normalize_pivot_user("notice@external-one.test")
+        second = scorer._normalize_pivot_user("notice@external-two.test")
+
+        assert first == "notice@external-one.test"
+        assert second == "notice@external-two.test"
+        assert first != second
+
+    def test_opaque_email_read_does_not_claim_message_identity(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-email-delivery",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Receive external email",
+                    "events": [
+                        {
+                            "type": "email_message",
+                            "sender": "notice@external.test",
+                            "to": ["j@x.com"],
+                            "artifact_id": "message-one",
+                        }
+                    ],
+                },
+                {
+                    "id": "evt-email-read",
+                    "time": "+2h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Read email over IMAPS",
+                    "events": [
+                        {
+                            "type": "email_read",
+                            "protocol": "imaps",
+                            "message_ids": ["message-one"],
+                        }
+                    ],
+                },
+            ]
+        )
+        scorer = SignalIntegrityScorer()
+        scorer._email_gt = {}
+        scorer._email_actor_emails = {"jsmith": "j@x.com"}
+        scorer._email_server_hosts = {}
+        scorer._initialize_pivot_identity(scenario)
+        delivery, mailbox_read = resolve_storyline(scenario.storyline, scenario)
+        mailbox_read.traces = [
+            _record(
+                "zeek_conn",
+                {"id.orig_h": "10.0.10.50", "id.resp_h": "10.0.20.10"},
+                ts=T0 + timedelta(hours=2),
+            )
+        ]
+
+        delivery_expected = scorer._expected_indicator_values(delivery)
+        read_expected = scorer._expected_indicator_values(mailbox_read)
+
+        assert "artifact:message-one" in delivery_expected
+        assert "artifact:message-one" not in read_expected
+        assert not delivery_expected & read_expected
+
+    def test_nxdomain_answer_is_not_an_expected_pivot(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-nxdomain",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Resolve missing domain",
+                    "events": [
+                        {
+                            "type": "dns_query",
+                            "query": "missing.example.test",
+                            "rcode": "NXDOMAIN",
+                            "answer": "192.0.2.99",
+                        }
+                    ],
+                }
+            ]
+        )
+        scorer = SignalIntegrityScorer()
+        scorer._email_gt = {}
+        scorer._email_server_hosts = {}
+        scorer._email_actor_emails = {"jsmith": "j@x.com"}
+        scorer._initialize_pivot_identity(scenario)
+        event = resolve_storyline(scenario.storyline, scenario)[0]
+
+        expected = scorer._expected_indicator_values(event)
+
+        assert "ip:192.0.2.99" not in expected
+
+    def test_duration_event_search_covers_authored_window_up_to_one_hour(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-dga-window",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Run DGA queries",
+                    "events": [
+                        {
+                            "type": "dga_queries",
+                            "interval": "30s",
+                            "duration": "45m",
+                            "tld": ".top",
+                        }
+                    ],
+                }
+            ]
+        )
+        scorer = SignalIntegrityScorer()
+        scorer._email_gt = {}
+        scorer._email_server_hosts = {}
+        scorer._email_actor_emails = {"jsmith": "j@x.com"}
+        scorer._initialize_pivot_identity(scenario)
+        event = resolve_storyline(scenario.storyline, scenario)[0]
+        late_record = _record(
+            "zeek_dns",
+            {
+                "id.orig_h": "10.0.10.50",
+                "id.resp_h": "10.0.20.10",
+                "query": "late-generated-name.top",
+            },
+            ts=T0 + timedelta(hours=1, minutes=30),
+        )
+        records = {"zeek_dns": [late_record]}
+        index = scorer._build_host_time_index(records)
+
+        traces = scorer._search_for_event_indexed(event, "dga_queries", index)
+
+        assert traces == [late_record]
+
+    def test_missing_local_lifecycle_trace_still_fails(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-before-lock",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Execute command",
+                    "events": [{"type": "process", "process_name": "cmd.exe"}],
+                },
+                {
+                    "id": "evt-missing-lock",
+                    "time": "+2h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Lock workstation",
+                    "events": [{"type": "workstation_lock"}],
+                },
+            ]
+        )
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "Computer": "WS-01",
+                        "SubjectUserName": "jsmith",
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
+                    },
+                    ts=T0 + timedelta(hours=1),
+                )
+            ]
+        }
+
+        result = SignalIntegrityScorer().score(records, scenario)
+
+        pivot = next(score for score in result.sub_scores if score.key == "pivot_linkability")
+        assert pivot.score == 0.0
+        assert "Events 0→1" in pivot.sample_failures[0]
 
 
 class TestTemporalIntegrity:

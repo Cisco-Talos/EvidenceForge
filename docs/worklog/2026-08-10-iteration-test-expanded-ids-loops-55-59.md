@@ -156,3 +156,30 @@ data-only blind panel before selecting the following family fix.
 - **Sibling risk:** RuntimeBroker generic file ownership and `taskhostw.exe` lifecycle remain
   broader endpoint families; Loop 59 is the last requested loop, so this final fix has focused
   unit verification but no Loop 60 regenerated corpus.
+
+## Post-Loop 59 Pivot Contract Corrections
+
+The five remaining Loop 59 pivot failures reduced to two distinct code defects rather than five
+generator failures:
+
+- Four edges touched `evt-024`, a workstation-lock request issued while Aisha's existing
+  interactive session was already locked. Suppressing a second Windows 4800 was realistic, but
+  the storyline ground truth incorrectly labeled the authored request as emitted and evaluation
+  therefore required phantom evidence.
+- The fifth edge touched `evt-032`, whose account deletion was correctly rendered as Windows 4726
+  for `svc_mhsync`; the causality matcher recognized account creation (4720) but not account
+  deletion (4726).
+
+The workstation-lock action bundle now returns a typed outcome. Storyline execution records
+`workstation_already_locked` as an emitted-false ground-truth no-op, and coverage/pivot evaluation
+excludes such generation-contract no-ops while reconnecting the surrounding expected-visible
+narrative. The Windows matcher now recognizes 4726 with host and target-account agreement.
+
+Fresh generation from the canonical scenario produced 78,920 parsed records across 20 sources.
+`evt-024` was recorded with `emitted: false` and
+`skipped_reason: workstation_already_locked`; `evt-032` remained emitted with target account
+`svc_mhsync`. Deterministic evaluation scored 97.73 overall and 97.83 for causality, passed every
+hard acceptance criterion, and raised pivot linkability from the prior 31/62 (50.0) to 67/67
+(100.0) with no pivot failures. Event presence was 45/45 expected-visible events (100.0), with the
+single truthful no-op reported separately from the raw 45/46 result. Affected-family validation
+passed 699 tests, and the complete non-slow suite passed 5,327 tests with 41 skips.
