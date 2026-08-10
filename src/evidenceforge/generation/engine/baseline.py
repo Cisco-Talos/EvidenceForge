@@ -98,10 +98,6 @@ from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
     pick_granted_access,
 )
-from evidenceforge.generation.activity.ssh_identity import (
-    baseline_ssh_auth_method,
-    baseline_ssh_client_key,
-)
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
@@ -128,7 +124,6 @@ logger = logging.getLogger(__name__)
 
 _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
 _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
-_LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
 _BASELINE_GUARDED_SUCCESS_PORTS = {445, 3389}
 _BASELINE_RDP_SERVICE_ALIASES = {"rdp", "termservice", "terminal-services", "xrdp"}
 _BASELINE_SMB_SERVICE_ALIASES = {"smb", "samba", "smbd", "lanmanserver", "ad-ds"}
@@ -9065,51 +9060,6 @@ class BaselineMixin:
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                             facility=10,
                         )
-                elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
-                    ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
-                    if ssh_identity is None:
-                        continue
-                    ssh_user_model, src_sys_obj = ssh_identity
-                    ip = src_sys_obj.ip
-                    # Resolve source system for WFP 5156 emission and OS-aware port
-                    from evidenceforge.generation.activity.generator import _ephemeral_port
-
-                    _src_os = _get_os_category(src_sys_obj.os) if src_sys_obj else "linux"
-                    port = self.activity_generator.reserve_ssh_source_port(
-                        ip,
-                        system.ip,
-                        _ephemeral_port(rng, _src_os),
-                        rng,
-                        _src_os,
-                        time=ts,
-                    )
-                    ssh_duration = rng.uniform(30.0, 1800.0)
-                    ssh_user = ssh_user_model.username
-                    key_type, key_hash = baseline_ssh_client_key(ip, ssh_user)
-                    # Preserve the established baseline RNG stream while auth truth moves
-                    # from a per-session draw to a stable client/user/target policy.
-                    rng.random()
-                    auth_method = baseline_ssh_auth_method(ip, system.ip, ssh_user)
-                    disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
-                    # Baseline remote-admin SSH is a modeled session, not loose
-                    # syslog churn. The bundle owns transport, auth/PAM/logind,
-                    # endpoint session evidence, and optional close ordering.
-                    self.activity_generator.generate_ssh_session(
-                        user=ssh_user_model,
-                        target_system=system,
-                        time=ts,
-                        source_ip=ip,
-                        source_system=src_sys_obj,
-                        source_port=port,
-                        duration=ssh_duration,
-                        orig_bytes=rng.randint(2000, 50000),
-                        resp_bytes=rng.randint(5000, 200000),
-                        auth_method=auth_method,
-                        public_key_type=key_type if auth_method == "publickey" else "",
-                        public_key_hash=key_hash if auth_method == "publickey" else "",
-                        emit_session_close=disconnect_time < self.end_time,
-                        source="baseline_ssh_noise",
-                    )
                 elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd

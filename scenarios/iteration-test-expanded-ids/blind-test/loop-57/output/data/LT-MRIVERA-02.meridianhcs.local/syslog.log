@@ -1,0 +1,275 @@
+<30>1 2024-03-18T12:02:39.106893Z LT-MRIVERA-02 gnome-shell 49610 - - Window manager warning: Overwriting existing binding of keysym Super_L with keysym Print
+<30>1 2024-03-18T12:09:52.223880Z LT-MRIVERA-02 polkitd 51580 - - Subject unix-process:2835336:138299113 is not authorized for action org.freedesktop.login1.reboot
+<30>1 2024-03-18T12:11:29.889741Z LT-MRIVERA-02 snapd 21826 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T12:15:19.037396Z LT-MRIVERA-02 irqbalance 7691 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2024-03-18T12:16:09.050684Z LT-MRIVERA-02 gnome-shell 49610 - - Extension appindicatorsupport@rgcjonas.gmail.com already enabled
+<30>1 2024-03-18T12:17:33.555722Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Indexed 43 file(s) under /home/deploy/Documents
+<30>1 2024-03-18T12:18:52.013281Z LT-MRIVERA-02 gnome-shell 49610 - - Extension ubuntu-dock@ubuntu.com already enabled
+<30>1 2024-03-18T12:19:22.509510Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Indexed 12 file(s) under /home/ubuntu/Documents
+<30>1 2024-03-18T12:19:44.477087Z LT-MRIVERA-02 irqbalance 7691 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T12:20:38.082000Z LT-MRIVERA-02 anacron 31919 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:20:39.618687Z LT-MRIVERA-02 anacron 31919 - - Will run job `cron.daily' in 11 min.
+<30>1 2024-03-18T12:22:38.854862Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710764558.8249] dhcp4 (ens192): state changed renew -> bound
+<30>1 2024-03-18T12:26:31.741424Z LT-MRIVERA-02 thermald 11395 - - cooling device 0 intel_powerclamp type: 0x02
+<30>1 2024-03-18T12:27:39.847461Z LT-MRIVERA-02 cups-browsed 9139 - - Printer FRONTDESK-MFP was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T12:28:45.413609Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'deploy' has logged in
+<86>1 2024-03-18T12:29:29.603877Z LT-MRIVERA-02 login 2837070 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T12:29:35.535877Z LT-MRIVERA-02 systemd-logind 21625 - - New session 207737 of user root.
+<30>1 2024-03-18T12:29:35.632591Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710764975.5386] dhcp4 (ens192): state changed renew -> bound
+<30>1 2024-03-18T12:29:43.467181Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'ubuntu' has logged in
+<30>1 2024-03-18T12:30:18.682271Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710765018.4563] dhcp4 (ens192): state changed renew -> bound
+<30>1 2024-03-18T12:31:15.835364Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.80'
+<30>1 2024-03-18T12:31:40.066610Z LT-MRIVERA-02 anacron 31919 - - Job `cron.daily' started
+<78>1 2024-03-18T12:32:00.087000Z LT-MRIVERA-02 CRON 2837330 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:32:10.543752Z LT-MRIVERA-02 snapd 21826 - - stateengine.go:150: state ensure starting change 6069
+<30>1 2024-03-18T12:32:15.437550Z LT-MRIVERA-02 packagekitd 45919 - - get-updates transaction /757923
+<30>1 2024-03-18T12:32:22.244506Z LT-MRIVERA-02 snapd 21826 - - taskrunner.go:271: change 6067 task 1 done for core22
+<30>1 2024-03-18T12:32:53.635828Z LT-MRIVERA-02 fwupd 22409 - - metadata is 6 days old, scheduling refresh
+<30>1 2024-03-18T12:34:19.886894Z LT-MRIVERA-02 anacron 31919 - - Job `cron.daily' terminated
+<30>1 2024-03-18T12:34:21.190667Z LT-MRIVERA-02 anacron 31919 - - Normal exit (1 job run)
+<30>1 2024-03-18T12:34:35.666537Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710765275.5985] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T12:34:39.277828Z LT-MRIVERA-02 snapd 21826 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2024-03-18T12:34:39.339242Z LT-MRIVERA-02 irqbalance 7691 - - Skipping IRQ 137: banned by affinity mask 00000004 (ens192)
+<30>1 2024-03-18T12:34:54.892136Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.81'
+<86>1 2024-03-18T12:35:08.379877Z LT-MRIVERA-02 login 2837070 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T12:35:12.363877Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 207737.
+<30>1 2024-03-18T12:35:20.296899Z LT-MRIVERA-02 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:35:20.890176Z LT-MRIVERA-02 systemd 1 - - Finished motd-news.service - Message of the Day.
+<86>1 2024-03-18T12:36:06.441520Z LT-MRIVERA-02 su 2828428 - - pam_unix(su:session): session closed for user ubuntu
+<86>1 2024-03-18T12:36:09.747520Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 206999.
+<30>1 2024-03-18T12:36:43.896227Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710765403.8862] device (ens192): state change: disconnected -> prepare
+<86>1 2024-03-18T12:39:13.807156Z LT-MRIVERA-02 login 2837954 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T12:39:18.973156Z LT-MRIVERA-02 systemd-logind 21625 - - New session 207825 of user ubuntu.
+<86>1 2024-03-18T12:43:47.805128Z LT-MRIVERA-02 login 2838355 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T12:43:53.314128Z LT-MRIVERA-02 systemd-logind 21625 - - New session 207866 of user root.
+<30>1 2024-03-18T12:45:03.914509Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T12:45:05.188509Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T12:45:06.815509Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<30>1 2024-03-18T12:45:29.692273Z LT-MRIVERA-02 polkitd 51580 - - Unregistered Authentication Agent for unix-session:158 (system bus name :1.84, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<30>1 2024-03-18T12:47:57.041804Z LT-MRIVERA-02 rsyslogd 21526 - - omfwd: target logrelay01 using disk-assisted queue main, checkpoint 18882
+<30>1 2024-03-18T12:50:02.785216Z LT-MRIVERA-02 irqbalance 7691 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<86>1 2024-03-18T12:51:40.835138Z LT-MRIVERA-02 su 2839044 - - pam_unix(su:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T12:51:45.225138Z LT-MRIVERA-02 systemd-logind 21625 - - New session 207937 of user root.
+<86>1 2024-03-18T12:57:12.132621Z LT-MRIVERA-02 login 2839488 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T12:57:18.383621Z LT-MRIVERA-02 systemd-logind 21625 - - New session 207987 of user admin.
+<86>1 2024-03-18T12:58:57.352156Z LT-MRIVERA-02 login 2837954 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T12:58:59.898156Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 207825.
+<30>1 2024-03-18T12:59:14.809567Z LT-MRIVERA-02 gnome-shell 49610 - - Monitor 0 configuration unchanged after hotplug event
+<86>1 2024-03-18T13:01:08.950200Z LT-MRIVERA-02 login 2839824 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T13:01:12.515200Z LT-MRIVERA-02 systemd-logind 21625 - - New session 208024 of user ubuntu.
+<78>1 2024-03-18T13:02:00.235000Z LT-MRIVERA-02 CRON 2839893 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:02:28.395362Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<86>1 2024-03-18T13:04:11.219128Z LT-MRIVERA-02 login 2838355 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T13:04:15.255128Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 207866.
+<30>1 2024-03-18T13:04:56.553528Z LT-MRIVERA-02 avahi-daemon 47316 - - Registering new address record for ens192.
+<30>1 2024-03-18T13:04:59.909016Z LT-MRIVERA-02 systemd-journald 21458 - - Vacuuming done, freed 60.3M of archived journals.
+<30>1 2024-03-18T13:07:27.139328Z LT-MRIVERA-02 rsyslogd 21526 - - main Q: queue fwdRule1 has 1619 messages pending, worker threads 1
+<30>1 2024-03-18T13:10:19.634714Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.85'
+<30>1 2024-03-18T13:10:55.241443Z LT-MRIVERA-02 irqbalance 7691 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T13:14:51.889812Z LT-MRIVERA-02 polkitd 51580 - - Registered Authentication Agent for unix-session:166 (system bus name :1.87 [/usr/libexec/kf5/polkit-kde-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2024-03-18T13:16:00.296319Z LT-MRIVERA-02 irqbalance 7691 - - IRQ 45 classified for CPU 0 balancing on virtio0-input
+<30>1 2024-03-18T13:17:13.956618Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T13:17:15.470618Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T13:17:16.977618Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<30>1 2024-03-18T13:19:56.956649Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Resetting tracker extract task after idle timeout 804831
+<30>1 2024-03-18T13:21:10.713601Z LT-MRIVERA-02 thermald 11395 - - thermal zone acpitz: trip point updated
+<85>1 2024-03-18T13:29:33.304962Z LT-MRIVERA-02 sudo 2842259 - - ubuntu : TTY=pts/1 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/systemctl list-timers --all --no-pager
+<86>1 2024-03-18T13:29:33.325962Z LT-MRIVERA-02 sudo 2842259 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2024-03-18T13:29:38.395657Z LT-MRIVERA-02 sudo 2842259 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T13:31:06.072180Z LT-MRIVERA-02 login 2842386 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T13:31:13.385180Z LT-MRIVERA-02 systemd-logind 21625 - - New session 208294 of user ubuntu.
+<78>1 2024-03-18T13:32:00.163000Z LT-MRIVERA-02 CRON 2842462 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:36:00.859810Z LT-MRIVERA-02 cups-browsed 9139 - - Browse remote printer FINANCE-MFP at 425379
+<30>1 2024-03-18T13:36:00.883410Z LT-MRIVERA-02 irqbalance 7691 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<86>1 2024-03-18T13:41:06.764347Z LT-MRIVERA-02 su 2843305 - - pam_unix(su:session): session opened for user ubuntu(uid=1000) by (uid=0)
+<30>1 2024-03-18T13:41:08.659308Z LT-MRIVERA-02 polkitd 51580 - - Subject unix-process:2843307:138846756 is authorized for action org.freedesktop.packagekit.system-update
+<86>1 2024-03-18T13:41:09.979347Z LT-MRIVERA-02 systemd-logind 21625 - - New session 208383 of user ubuntu.
+<30>1 2024-03-18T13:41:41.420991Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T13:46:54.904786Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710769614.7548] device (ens192): state change: disconnected -> prepare
+<30>1 2024-03-18T13:48:10.619783Z LT-MRIVERA-02 systemd-resolved 21916 - - Transaction 886408 switched to UDP with advertised UDP packet size 1232.
+<30>1 2024-03-18T13:49:17.167806Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Miner finished crawling /home/deploy/Documents
+<30>1 2024-03-18T13:49:24.432145Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T13:49:25.736145Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T13:49:27.438145Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<86>1 2024-03-18T13:50:20.129621Z LT-MRIVERA-02 login 2839488 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T13:50:23.455621Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 207987.
+<30>1 2024-03-18T13:55:59.958745Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.91'
+<30>1 2024-03-18T13:56:00.760568Z LT-MRIVERA-02 polkitd 51580 - - Registered Authentication Agent for unix-session:171 (system bus name :1.93 [/usr/libexec/kf5/polkit-kde-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2024-03-18T13:56:28.825919Z LT-MRIVERA-02 cups-browsed 9139 - - Created local queue FRONTDESK-MFP (ipp_everywhere)
+<85>1 2024-03-18T13:57:46.456499Z LT-MRIVERA-02 sudo 2844744 - - backup : TTY=pts/3 ; PWD=/tmp ; USER=root ; COMMAND=/usr/sbin/iptables -L -n -v
+<86>1 2024-03-18T13:57:46.538499Z LT-MRIVERA-02 sudo 2844744 - - pam_unix(sudo:session): session opened for user root(uid=0) by backup(uid=3037)
+<30>1 2024-03-18T13:57:47.613285Z LT-MRIVERA-02 cups-browsed 9139 - - Browse remote printer FINANCE-MFP at 275408
+<86>1 2024-03-18T13:57:52.170592Z LT-MRIVERA-02 sudo 2844744 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T13:58:17.845063Z LT-MRIVERA-02 cups-browsed 9139 - - Printer CORP-PRINT-01 was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T13:59:20.632382Z LT-MRIVERA-02 polkitd 51580 - - Operator of unix-process:2844878:138956055 failed to authenticate as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.login1.reboot for system-bus-name::1.87 [/usr/bin/systemctl] (owned by unix-user:deploy)
+<86>1 2024-03-18T13:59:21.536138Z LT-MRIVERA-02 su 2839044 - - pam_unix(su:session): session closed for user root
+<86>1 2024-03-18T13:59:24.368138Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 207937.
+<30>1 2024-03-18T13:59:55.898244Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710770395.6932] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T13:59:55.950566Z LT-MRIVERA-02 thermald 11395 - - thermal zone acpitz: trip point updated
+<78>1 2024-03-18T14:02:00.216000Z LT-MRIVERA-02 CRON 2845100 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:02:42.569131Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710770562.5331] device (ens192): state change: ip-config -> activated
+<30>1 2024-03-18T14:09:27.854260Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.94'
+<30>1 2024-03-18T14:10:26.231585Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Resetting tracker extract task after idle timeout 740171
+<30>1 2024-03-18T14:13:34.256454Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'deploy' has logged in
+<30>1 2024-03-18T14:13:34.808280Z LT-MRIVERA-02 snapd 21826 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2024-03-18T14:18:36.484026Z LT-MRIVERA-02 fwupd 22409 - - metadata is 2 days old, scheduling refresh
+<30>1 2024-03-18T14:21:35.076014Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T14:21:36.549014Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T14:21:38.033014Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<30>1 2024-03-18T14:21:42.219537Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710771702.0995] device (ens192): state change: ip-config -> activated
+<30>1 2024-03-18T14:21:42.945376Z LT-MRIVERA-02 packagekitd 45919 - - get-updates transaction /432571
+<86>1 2024-03-18T14:38:54.758347Z LT-MRIVERA-02 su 2843305 - - pam_unix(su:session): session closed for user ubuntu
+<86>1 2024-03-18T14:38:55.897347Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 208383.
+<30>1 2024-03-18T14:53:44.772364Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T14:53:46.424364Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T14:53:47.794364Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<86>1 2024-03-18T14:58:34.182204Z LT-MRIVERA-02 login 2850652 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T14:58:41.728204Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209079 of user admin.
+<30>1 2024-03-18T14:58:42.638998Z LT-MRIVERA-02 avahi-daemon 47316 - - Service "_ipp._tcp" successfully established.
+<84>1 2024-03-18T14:59:16.974618Z LT-MRIVERA-02 login 2850728 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=aisha.johnson
+<30>1 2024-03-18T15:00:13.653962Z LT-MRIVERA-02 gnome-shell 49610 - - Monitor 0 configuration unchanged after hotplug event
+<30>1 2024-03-18T15:00:22.471405Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.97'
+<78>1 2024-03-18T15:02:00.158000Z LT-MRIVERA-02 CRON 2850961 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:04:46.852515Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Miner finished crawling /home/admin/Documents
+<30>1 2024-03-18T15:06:29.924274Z LT-MRIVERA-02 avahi-daemon 47316 - - Registering new address record for ens192.
+<30>1 2024-03-18T15:12:25.363922Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Indexed 43 file(s) under /home/ubuntu/Documents
+<30>1 2024-03-18T15:12:25.674744Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Indexed 27 file(s) under /home/ubuntu/Documents
+<30>1 2024-03-18T15:17:06.829359Z LT-MRIVERA-02 snapd 21826 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2024-03-18T15:17:27.560430Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Miner finished crawling /home/ubuntu/Documents
+<30>1 2024-03-18T15:18:09.272882Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.98'
+<30>1 2024-03-18T15:18:57.609688Z LT-MRIVERA-02 snapd 21826 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<86>1 2024-03-18T15:20:15.885084Z LT-MRIVERA-02 login 2852568 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T15:20:22.498084Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209275 of user admin.
+<86>1 2024-03-18T15:21:35.176400Z LT-MRIVERA-02 login 2852682 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T15:21:38.687400Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209285 of user ubuntu.
+<30>1 2024-03-18T15:21:40.730898Z LT-MRIVERA-02 systemd-resolved 21916 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 702278.
+<86>1 2024-03-18T15:24:30.282796Z LT-MRIVERA-02 login 2852929 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T15:24:36.096796Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209312 of user ubuntu.
+<30>1 2024-03-18T15:24:39.553676Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T15:25:55.374243Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T15:25:56.942243Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T15:25:58.419243Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<30>1 2024-03-18T15:26:58.653666Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'ubuntu' has logged in
+<30>1 2024-03-18T15:29:01.312595Z LT-MRIVERA-02 avahi-daemon 47316 - - Service "_ipps._tcp" successfully established.
+<30>1 2024-03-18T15:29:27.071920Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710775766.9629] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T15:29:51.673541Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710775791.4445] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T15:30:47.788068Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'ubuntu' has logged in
+<78>1 2024-03-18T15:32:00.055000Z LT-MRIVERA-02 CRON 2853561 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:32:08.702318Z LT-MRIVERA-02 snapd 21826 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<85>1 2024-03-18T15:32:24.508476Z LT-MRIVERA-02 sudo 2853594 - - admin : TTY=pts/5 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/journalctl -u sshd -n 40
+<86>1 2024-03-18T15:32:24.783476Z LT-MRIVERA-02 sudo 2853594 - - pam_unix(sudo:session): session opened for user root(uid=0) by admin(uid=1001)
+<86>1 2024-03-18T15:32:31.541489Z LT-MRIVERA-02 sudo 2853594 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T15:32:35.612717Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T15:34:12.100425Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710776051.9054] dhcp4 (ens192): state changed renew -> bound
+<86>1 2024-03-18T15:39:08.164176Z LT-MRIVERA-02 login 2854178 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T15:39:15.101176Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209446 of user admin.
+<30>1 2024-03-18T15:39:48.018922Z LT-MRIVERA-02 thermald 11395 - - thermal zone x86_pkg_temp: trip point updated
+<30>1 2024-03-18T15:42:38.397973Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710776558.1850] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T15:42:44.892454Z LT-MRIVERA-02 thermald 11395 - - cooling device 1 intel_powerclamp type: 0x02
+<85>1 2024-03-18T15:44:22.248821Z LT-MRIVERA-02 sudo 2854640 - - deploy : TTY=pts/1 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl restart sshd
+<86>1 2024-03-18T15:44:22.375821Z LT-MRIVERA-02 sudo 2854640 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T15:44:26.178163Z LT-MRIVERA-02 sudo 2854640 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T15:46:55.221118Z LT-MRIVERA-02 systemd-journald 21458 - - Rotating system journal.
+<30>1 2024-03-18T15:49:40.073752Z LT-MRIVERA-02 dbus-daemon 21599 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.99'
+<86>1 2024-03-18T15:51:08.668204Z LT-MRIVERA-02 login 2850652 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T15:51:10.593204Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 209079.
+<30>1 2024-03-18T15:51:54.279110Z LT-MRIVERA-02 systemd-resolved 21916 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 281449.
+<30>1 2024-03-18T15:56:14.440737Z LT-MRIVERA-02 packagekitd 45919 - - get-updates transaction /159537
+<30>1 2024-03-18T15:56:40.283499Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'ubuntu' has logged in
+<30>1 2024-03-18T15:58:05.628584Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T15:58:07.238584Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T15:58:08.794584Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<78>1 2024-03-18T16:02:00.108000Z LT-MRIVERA-02 CRON 2856248 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T16:08:58.737084Z LT-MRIVERA-02 login 2852568 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T16:09:02.467084Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 209275.
+<86>1 2024-03-18T16:11:12.691628Z LT-MRIVERA-02 login 2857316 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T16:11:20.243628Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209734 of user admin.
+<86>1 2024-03-18T16:15:06.320066Z LT-MRIVERA-02 login 2857773 - - pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)
+<86>1 2024-03-18T16:15:12.276066Z LT-MRIVERA-02 systemd-logind 21625 - - New session 209770 of user ubuntu.
+<86>1 2024-03-18T16:24:34.134796Z LT-MRIVERA-02 login 2852929 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T16:24:38.052796Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 209312.
+<30>1 2024-03-18T16:30:15.302562Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T16:30:16.859562Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T16:30:18.288562Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<78>1 2024-03-18T16:32:00.188000Z LT-MRIVERA-02 CRON 2859764 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:34:00.135618Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710779639.9746] device (ens192): state change: ip-config -> activated
+<30>1 2024-03-18T16:34:01.454245Z LT-MRIVERA-02 fwupd 22409 - - metadata is 6 days old, scheduling refresh
+<30>1 2024-03-18T16:34:32.898127Z LT-MRIVERA-02 systemd-resolved 21916 - - Transaction 557103 switched to TCP with advertised UDP packet size 512.
+<30>1 2024-03-18T16:43:34.444073Z LT-MRIVERA-02 irqbalance 7691 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T16:44:26.101941Z LT-MRIVERA-02 packagekitd 45919 - - get-updates transaction /739270
+<30>1 2024-03-18T16:44:26.462905Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Resetting tracker extract task after idle timeout 509807
+<30>1 2024-03-18T16:44:27.098624Z LT-MRIVERA-02 cups-browsed 9139 - - Printer CORP-PRINT-01 was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T16:44:27.589102Z LT-MRIVERA-02 gnome-shell 49610 - - Monitor 0 configuration unchanged after hotplug event
+<30>1 2024-03-18T16:44:34.993386Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<86>1 2024-03-18T16:46:00.135066Z LT-MRIVERA-02 login 2857773 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T16:46:02.298066Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 209770.
+<86>1 2024-03-18T16:47:04.133400Z LT-MRIVERA-02 login 2852682 - - pam_unix(login:session): session closed for user ubuntu
+<86>1 2024-03-18T16:47:07.814400Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 209285.
+<30>1 2024-03-18T16:47:17.776705Z LT-MRIVERA-02 packagekitd 45919 - - resolve transaction /292178
+<30>1 2024-03-18T16:47:18.583936Z LT-MRIVERA-02 systemd-resolved 21916 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:47:20.202775Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710780440.0988] dhcp4 (ens192): state changed renew -> bound
+<86>1 2024-03-18T16:57:22.140673Z LT-MRIVERA-02 su 2862653 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<30>1 2024-03-18T16:57:27.053553Z LT-MRIVERA-02 fwupd 22409 - - metadata is 14 days old, scheduling refresh
+<86>1 2024-03-18T16:57:27.702673Z LT-MRIVERA-02 systemd-logind 21625 - - New session 210149 of user admin.
+<30>1 2024-03-18T17:00:45.665845Z LT-MRIVERA-02 avahi-daemon 47316 - - Withdrawing address record for ens192.
+<86>1 2024-03-18T17:00:57.697452Z LT-MRIVERA-02 su 2863063 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T17:01:03.428452Z LT-MRIVERA-02 systemd-logind 21625 - - New session 210183 of user admin.
+<30>1 2024-03-18T17:01:03.838370Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Resetting tracker extract task after idle timeout 290427
+<30>1 2024-03-18T17:01:26.197436Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710781286.1654] device (ens192): state change: ip-config -> activated
+<30>1 2024-03-18T17:01:46.520707Z LT-MRIVERA-02 snapd 21826 - - stateengine.go:150: state ensure starting change 6071
+<78>1 2024-03-18T17:02:00.158000Z LT-MRIVERA-02 CRON 2863184 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T17:02:27.222527Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T17:02:28.717527Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T17:02:30.168527Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<30>1 2024-03-18T17:05:14.223518Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710781514.0105] dhcp4 (ens192): state changed renew -> bound
+<30>1 2024-03-18T17:06:22.366353Z LT-MRIVERA-02 snapd 21826 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2024-03-18T17:07:19.188446Z LT-MRIVERA-02 cups-browsed 9139 - - Browse remote printer FRONTDESK-MFP at 996895
+<30>1 2024-03-18T17:07:56.210616Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710781675.9806] device (ens192): state change: disconnected -> prepare
+<30>1 2024-03-18T17:08:15.183059Z LT-MRIVERA-02 irqbalance 7691 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T17:08:19.068673Z LT-MRIVERA-02 su 2862653 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T17:08:22.614673Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 210149.
+<30>1 2024-03-18T17:10:36.608643Z LT-MRIVERA-02 irqbalance 7691 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T17:10:45.725098Z LT-MRIVERA-02 gnome-shell 49610 - - Monitor 0 configuration unchanged after hotplug event
+<30>1 2024-03-18T17:11:42.987159Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'deploy' has logged in
+<30>1 2024-03-18T17:12:21.191919Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Indexed 43 file(s) under /home/admin/Downloads
+<86>1 2024-03-18T17:14:39.372628Z LT-MRIVERA-02 login 2857316 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T17:14:41.349628Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 209734.
+<30>1 2024-03-18T17:16:28.021456Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'admin' has logged in
+<30>1 2024-03-18T17:17:21.462160Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T17:18:26.573108Z LT-MRIVERA-02 systemd-resolved 21916 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 773701.
+<30>1 2024-03-18T17:21:19.265507Z LT-MRIVERA-02 thermald 11395 - - Unsupported cpu model, use default config
+<30>1 2024-03-18T17:30:31.237350Z LT-MRIVERA-02 systemd 1 - - Starting apt-daily.service - Daily apt download activities.
+<30>1 2024-03-18T17:30:35.790419Z LT-MRIVERA-02 systemd 1 - - apt-daily.service: Deactivated successfully.
+<78>1 2024-03-18T17:32:00.206000Z LT-MRIVERA-02 CRON 2866166 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T17:32:02.714506Z LT-MRIVERA-02 fwupd 22409 - - UEFI dbx: firmware version unchanged after LVFS metadata check
+<30>1 2024-03-18T17:32:04.201630Z LT-MRIVERA-02 gnome-shell 49610 - - Monitor 0 configuration unchanged after hotplug event
+<30>1 2024-03-18T17:32:23.077432Z LT-MRIVERA-02 avahi-daemon 47316 - - Withdrawing address record for ens192.
+<30>1 2024-03-18T17:32:24.943168Z LT-MRIVERA-02 snapd 21826 - - stateengine.go:150: state ensure starting change 6068
+<30>1 2024-03-18T17:33:33.852315Z LT-MRIVERA-02 snapd 21826 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2024-03-18T17:34:37.168709Z LT-MRIVERA-02 dhclient 31154 - - DHCPREQUEST for 10.10.1.99 on ens192 to 10.10.2.10 port 67
+<30>1 2024-03-18T17:34:38.489709Z LT-MRIVERA-02 dhclient 31154 - - DHCPACK of 10.10.1.99 from 10.10.2.10
+<30>1 2024-03-18T17:34:40.055709Z LT-MRIVERA-02 dhclient 31154 - - bound to 10.10.1.99 -- renewal in 1927 seconds.
+<86>1 2024-03-18T17:35:26.952056Z LT-MRIVERA-02 login 2866497 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<30>1 2024-03-18T17:35:32.891740Z LT-MRIVERA-02 thermald 11395 - - cooling device 1 intel_powerclamp type: 0x02
+<86>1 2024-03-18T17:35:33.724056Z LT-MRIVERA-02 systemd-logind 21625 - - New session 210491 of user root.
+<30>1 2024-03-18T17:35:34.149114Z LT-MRIVERA-02 cups-browsed 9139 - - Printer CORP-PRINT-01 was not found by DNS-SD, keeping stale queue for now
+<30>1 2024-03-18T17:35:34.380380Z LT-MRIVERA-02 fwupd 22409 - - metadata is 6 days old, scheduling refresh
+<30>1 2024-03-18T17:37:00.769417Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710783420.7504] device (ens192): state change: disconnected -> prepare
+<30>1 2024-03-18T17:37:01.055258Z LT-MRIVERA-02 snapd 21826 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2024-03-18T17:37:03.305955Z LT-MRIVERA-02 accounts-daemon 34172 - - user 'admin' has logged in
+<86>1 2024-03-18T17:38:26.343736Z LT-MRIVERA-02 login 2866802 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T17:38:32.084736Z LT-MRIVERA-02 systemd-logind 21625 - - New session 210518 of user root.
+<30>1 2024-03-18T17:38:32.674334Z LT-MRIVERA-02 avahi-daemon 47316 - - Service "_workstation._tcp" successfully established.
+<30>1 2024-03-18T17:39:14.886752Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710783554.7888] manager: NetworkManager state is now CONNECTED_GLOBAL
+<30>1 2024-03-18T17:39:59.713473Z LT-MRIVERA-02 gnome-shell 49610 - - Extension appindicatorsupport@rgcjonas.gmail.com already enabled
+<30>1 2024-03-18T17:42:10.773595Z LT-MRIVERA-02 NetworkManager 21571 - - <info>  [1710783730.6276] device (ens192): state change: disconnected -> prepare
+<30>1 2024-03-18T17:42:15.565210Z LT-MRIVERA-02 thermald 11395 - - cooling device 0 intel_powerclamp type: 0x02
+<30>1 2024-03-18T17:42:49.749847Z LT-MRIVERA-02 tracker-miner-fs-3 37734 - - Resetting tracker extract task after idle timeout 938473
+<86>1 2024-03-18T17:43:51.667736Z LT-MRIVERA-02 login 2866802 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T17:43:55.277736Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 210518.
+<86>1 2024-03-18T17:44:26.000104Z LT-MRIVERA-02 su 2867348 - - pam_unix(su:session): session opened for user ubuntu(uid=1000) by (uid=0)
+<86>1 2024-03-18T17:44:29.635104Z LT-MRIVERA-02 systemd-logind 21625 - - New session 210572 of user ubuntu.
+<86>1 2024-03-18T17:45:59.906452Z LT-MRIVERA-02 su 2863063 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T17:46:01.382452Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 210183.
+<86>1 2024-03-18T17:59:20.280056Z LT-MRIVERA-02 login 2866497 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T17:59:22.823056Z LT-MRIVERA-02 systemd-logind 21625 - - Removed session 210491.

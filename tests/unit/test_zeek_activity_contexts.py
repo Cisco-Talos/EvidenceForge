@@ -995,6 +995,50 @@ class TestSslContextPopulation:
         assert terminate_event.timestamp <= close_event.timestamp + timedelta(seconds=2)
         assert events.index(terminate_event) < events.index(close_event)
 
+    def test_public_ssh_adapter_defers_close_until_dependents_finish(self, activity_gen):
+        """The public SSH adapter should preserve a live responder for dependent evidence."""
+
+        gen, events = activity_gen
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            duration=120.0,
+            emit_session_close=True,
+            defer_session_close=True,
+        )
+
+        assert not any(event.event_type == "logoff" for event in events)
+        responder_pid = gen.ssh_responder_pid_for_tuple(
+            "10.0.10.50",
+            51111,
+            target.ip,
+        )
+        assert responder_pid is not None
+        assert gen.state_manager.get_process(target.hostname, responder_pid) is not None
+
+        gen.finalize_ssh_session_lifecycles(base_time + timedelta(hours=1))
+
+        assert any(event.event_type == "logoff" for event in events)
+        assert any(
+            event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == responder_pid
+            for event in events
+        )
+
     def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
         def run_bundle_once() -> list[tuple]:
             _reset_thread_rng()
