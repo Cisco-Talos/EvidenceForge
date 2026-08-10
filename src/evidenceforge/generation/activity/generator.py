@@ -6052,7 +6052,7 @@ class ActivityGenerator:
         """Return source-native process metadata for a service-owned connection."""
         service_name = (service or "").lower()
         roles = {str(role).lower() for role in (getattr(source_system, "roles", []) or [])}
-        target = hostname or "internal-service"
+        target = hostname or (http.host if http is not None else "") or "internal-service"
 
         if os_category == "windows":
             if service_name in {"kerberos", "ldap"} or dst_port in {88, 389}:
@@ -6156,13 +6156,6 @@ class ActivityGenerator:
         if dst_port in {80, 443, 8080, 8443} or service_name in {"http", "ssl", "https"}:
             user_agent = (http.user_agent if http is not None else "") or ""
             user_agent_lower = user_agent.lower()
-            if "mail_server" in roles:
-                return (
-                    "postfix",
-                    "/usr/lib/postfix/sbin/smtp",
-                    "smtp -n smtp -t unix -u",
-                    "postfix",
-                )
             if "forward_proxy" in roles:
                 return (
                     "squid",
@@ -7384,6 +7377,19 @@ class ActivityGenerator:
             if package_hint is not None:
                 return package_hint
             if server_like_source:
+                if ua.startswith("curl/") or " curl/" in ua:
+                    return "/usr/bin/curl", f"curl --proxy {proxy_url} {target_url}"
+                if ua.startswith("wget/") or " wget/" in ua:
+                    return (
+                        "/usr/bin/wget",
+                        f"wget -e use_proxy=yes -e http_proxy={proxy_url} {target_url}",
+                    )
+                if ua.startswith("python-requests/"):
+                    return (
+                        "/usr/bin/python3",
+                        f"/usr/bin/python3 /opt/meridian/bin/proxy_healthcheck.py "
+                        f"--target {hostname}",
+                    )
                 if ua.startswith("go-http-client/"):
                     return "/usr/local/bin/service-healthcheck", (
                         f"service-healthcheck --url {target_url}"
@@ -7549,6 +7555,15 @@ class ActivityGenerator:
 
         if not self._is_proxy_server_like_source(source_system):
             return None
+        if exe_name in {"curl", "wget", "python", "python3"} and (
+            self._connection_owner_requires_exact_command_line(image, command_line)
+        ):
+            return (
+                f"{exe_name}_proxy_client:{command_line}",
+                image,
+                command_line,
+                "root",
+            )
         if exe_name == "service-healthcheck":
             return (
                 f"service_healthcheck_proxy:{command_line}",
@@ -8537,12 +8552,15 @@ class ActivityGenerator:
             "nginx",
             "npm",
             "php-fpm",
+            "postfix",
             "ps",
             "python",
             "python3",
             "sed",
             "service-healthcheck",
             "sh",
+            "smtp",
+            "smtpd",
             "systemctl",
             "tail",
             "vim",

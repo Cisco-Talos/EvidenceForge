@@ -2494,6 +2494,91 @@ class TestExplicitProxyVisibility:
 
                 assert hint is None
 
+    def test_linux_server_proxy_client_hint_preserves_cli_client_family_and_target(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+        server = System(
+            hostname="MAIL-CLIN-01",
+            ip="10.0.2.26",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["mail_server"],
+        )
+
+        expected_images = {
+            "curl/8.4.0": "/usr/bin/curl",
+            "Wget/1.21.4": "/usr/bin/wget",
+            "python-requests/2.31.0": "/usr/bin/python3",
+        }
+        for user_agent, expected_image in expected_images.items():
+            hint = generator._explicit_proxy_client_process_hint(
+                user_agent=user_agent,
+                hostname="downloads.cloud.com",
+                dst_port=443,
+                proxy_sys=proxy,
+                source_system=server,
+            )
+
+            assert hint is not None
+            image, command_line = hint
+            assert image == expected_image
+            assert "downloads.cloud.com" in command_line
+            system_owner = generator._linux_proxy_helper_system_owner_spec(
+                source_system=server,
+                image=image,
+                command_line=command_line,
+            )
+            assert system_owner is not None
+            assert system_owner[1:] == (image, command_line, "root")
+
+    def test_service_connection_owner_uses_http_host_when_hostname_is_absent(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        server = System(
+            hostname="DB-PROD-01",
+            ip="10.0.4.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database"],
+        )
+
+        spec = generator._service_connection_owner_spec(
+            source_system=server,
+            service="http",
+            dst_port=8080,
+            os_category="linux",
+            hostname=None,
+            http=HttpContext(
+                method="CONNECT",
+                host="packages.microsoft.com",
+                uri="packages.microsoft.com:443",
+                user_agent="Wget/1.21.4",
+            ),
+        )
+
+        assert spec is not None
+        assert spec[1] == "/usr/bin/wget"
+        assert "packages.microsoft.com" in spec[2]
+
     def test_server_like_proxy_client_hint_keeps_service_style_owners(self):
         generator, _emitters = _generator(
             [
