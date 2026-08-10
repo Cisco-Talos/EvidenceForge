@@ -1280,6 +1280,10 @@ class SshSessionActionBundle:
         request = self.request
         close_time = self._source_native_session_close_time(state, auth_state)
         self._terminate_receiver_session_shell(state, close_time)
+        # A real dispatcher applies the logoff to StateManager immediately. That
+        # retires the session's transport process, so capture and schedule the
+        # responder termination before dispatching the logoff that consumes it.
+        self._terminate_receiver_sshd_process(state, auth_state, close_time)
         self.executor.dispatcher.dispatch_builder(
             OccurrenceBuilder(
                 timestamp=close_time,
@@ -1330,7 +1334,6 @@ class SshSessionActionBundle:
                 ),
             )
         )
-        self._terminate_receiver_sshd_process(state, auth_state, close_time)
 
     def _terminate_receiver_session_shell(
         self,

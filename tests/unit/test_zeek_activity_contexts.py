@@ -993,6 +993,7 @@ class TestSslContextPopulation:
         )
         assert terminate_event.timestamp > close_event.timestamp
         assert terminate_event.timestamp <= close_event.timestamp + timedelta(seconds=2)
+        assert events.index(terminate_event) < events.index(close_event)
 
     def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
         def run_bundle_once() -> list[tuple]:

@@ -1693,6 +1693,7 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.connections == []
         assert engine.activity_generator.ssh_sessions[0]["source_port"] == 45678
         assert engine.activity_generator.ssh_sessions[0]["source"] == "storyline_scp"
+        assert engine.activity_generator.ssh_sessions[0]["defer_session_close"] is True
         assert receiver_ports == [45678]
 
     def test_scp_network_and_receiver_artifacts_wait_for_visible_source_process_create(self):
