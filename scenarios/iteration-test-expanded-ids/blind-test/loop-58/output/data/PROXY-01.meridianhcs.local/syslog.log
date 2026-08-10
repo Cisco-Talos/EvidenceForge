@@ -1,0 +1,282 @@
+<85>1 2024-03-18T12:00:14.148310Z PROXY-01 sudo 4006105 - - nginx : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/find /var/www -maxdepth 2 -name .env
+<30>1 2024-03-18T12:00:27.679539Z PROXY-01 rsyslogd 18584 - - omfwd: target 10.10.2.30 using disk-assisted queue fwdRule1, checkpoint 93455
+<30>1 2024-03-18T12:00:28.562465Z PROXY-01 systemd-resolved 19061 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T12:01:05.529638Z PROXY-01 sshd 4002722 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:01:06.125351Z PROXY-01 systemd-logind 18656 - - Removed session 264833.
+<30>1 2024-03-18T12:01:17.079379Z PROXY-01 rsyslogd 18584 - - omfwd: target logrelay01 using disk-assisted queue main, checkpoint 94030
+<30>1 2024-03-18T12:03:39.029000Z PROXY-01 anacron 30860 - - Anacron 2.3 started on 2024-03-18
+<30>1 2024-03-18T12:03:40.462540Z PROXY-01 anacron 30860 - - Will run job `logrotate' in 2 min.
+<85>1 2024-03-18T12:04:32.668929Z PROXY-01 sudo 4006535 - - ops : TTY=pts/2 ; PWD=/etc ; USER=root ; COMMAND=/usr/bin/apt-cache policy openssl
+<86>1 2024-03-18T12:04:32.851929Z PROXY-01 sudo 4006535 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=6366)
+<86>1 2024-03-18T12:04:34.728566Z PROXY-01 sudo 4006535 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:05:32.537402Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 925139.
+<30>1 2024-03-18T12:05:38.930752Z PROXY-01 rsyslogd 18584 - - main Q: queue fwdRule1 has 2801 messages pending, worker threads 2
+<30>1 2024-03-18T12:05:40.547496Z PROXY-01 anacron 30860 - - Job `logrotate' started
+<30>1 2024-03-18T12:05:40.589546Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 232293.
+<30>1 2024-03-18T12:05:54.800096Z PROXY-01 rsyslogd 18584 - - omfwd: target logrelay01 using disk-assisted queue local-spool, checkpoint 94512
+<78>1 2024-03-18T12:06:00.143000Z PROXY-01 CRON 4006678 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:06:39.749468Z PROXY-01 rsyslogd 18584 - - omfwd: target logrelay01 using disk-assisted queue action-remote, checkpoint 95084
+<30>1 2024-03-18T12:07:36.196585Z PROXY-01 anacron 30860 - - Job `logrotate' terminated
+<30>1 2024-03-18T12:07:37.225964Z PROXY-01 anacron 30860 - - Normal exit (1 job run)
+<30>1 2024-03-18T12:07:53.257472Z PROXY-01 irqbalance 8688 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T12:08:49.055576Z PROXY-01 polkitd 52367 - - Subject unix-process:4006970:198772519 is authorized for action org.freedesktop.systemd1.manage-units
+<30>1 2024-03-18T12:10:22.515691Z PROXY-01 systemd 1 - - Starting apt-daily.service - Daily apt download activities.
+<30>1 2024-03-18T12:10:23.975688Z PROXY-01 systemd 1 - - apt-daily.service: Deactivated successfully.
+<30>1 2024-03-18T12:11:22.204391Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<85>1 2024-03-18T12:12:16.132959Z PROXY-01 sudo 4007360 - - ubuntu : TTY=pts/2 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/sbin/iptables -L -n -v
+<86>1 2024-03-18T12:12:16.292959Z PROXY-01 sudo 4007360 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2024-03-18T12:12:19.575283Z PROXY-01 sudo 4007360 - - pam_unix(sudo:session): session closed for user root
+<86>1 2024-03-18T12:12:25.732604Z PROXY-01 sshd 4007372 - - Connection from 10.10.1.31 port 54595 on 10.10.3.20 port 22
+<86>1 2024-03-18T12:12:27.919758Z PROXY-01 sshd 4007372 - - Accepted publickey for marcus.chen from 10.10.1.31 port 54595 ssh2: ECDSA SHA256:PRD8m1wyWuh9AINOEno722WDdQRzqBydHlhDSyPTFWs
+<86>1 2024-03-18T12:12:28.091999Z PROXY-01 sshd 4007372 - - pam_unix(sshd:session): session opened for user marcus.chen(uid=4119) by (uid=0)
+<86>1 2024-03-18T12:12:28.533157Z PROXY-01 systemd-logind 18656 - - New session 265165 of user marcus.chen.
+<85>1 2024-03-18T12:12:55.327588Z PROXY-01 sudo 4007419 - - svc_app : TTY=pts/0 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/ss -ltnp
+<86>1 2024-03-18T12:12:55.470588Z PROXY-01 sudo 4007419 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=2214)
+<86>1 2024-03-18T12:12:56.309529Z PROXY-01 sudo 4007419 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:13:19.961290Z PROXY-01 dbus-daemon 18589 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.77'
+<30>1 2024-03-18T12:15:31.394811Z PROXY-01 systemd-resolved 19061 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<86>1 2024-03-18T12:16:24.676050Z PROXY-01 su 4001999 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T12:16:28.907050Z PROXY-01 systemd-logind 18656 - - Removed session 264782.
+<30>1 2024-03-18T12:18:15.822905Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<85>1 2024-03-18T12:19:16.695454Z PROXY-01 sudo 4008056 - - deploy : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl is-active systemd-resolved
+<86>1 2024-03-18T12:19:16.783454Z PROXY-01 sudo 4008056 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2024-03-18T12:19:17.791243Z PROXY-01 sudo 4008056 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:20:17.311810Z PROXY-01 irqbalance 8688 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2024-03-18T12:20:17.600352Z PROXY-01 rsyslogd 18584 - - omfwd: target logrelay01 using disk-assisted queue fwdRule1, checkpoint 95244
+<30>1 2024-03-18T12:20:25.242795Z PROXY-01 rsyslogd 18584 - - main Q: queue main has 2590 messages pending, worker threads 2
+<30>1 2024-03-18T12:21:19.469801Z PROXY-01 polkitd 52367 - - Operator of unix-process:4008250:198847941 successfully authenticated as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.systemd1.manage-units for system-bus-name::1.80 [/usr/bin/systemctl] (owned by unix-user:deploy)
+<30>1 2024-03-18T12:21:49.783016Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<85>1 2024-03-18T12:22:51.206527Z PROXY-01 sudo 4008398 - - ubuntu : TTY=pts/0 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/systemd-analyze blame
+<86>1 2024-03-18T12:22:51.405527Z PROXY-01 sudo 4008398 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2024-03-18T12:22:54.614478Z PROXY-01 sudo 4008398 - - pam_unix(sudo:session): session closed for user root
+<30>1 2024-03-18T12:25:45.875737Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2632
+<30>1 2024-03-18T12:30:03.046642Z PROXY-01 irqbalance 8688 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T12:30:05.167106Z PROXY-01 dbus-daemon 18589 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.83'
+<30>1 2024-03-18T12:31:31.293468Z PROXY-01 dbus-daemon 18589 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.86'
+<86>1 2024-03-18T12:31:39.551259Z PROXY-01 sshd 4009246 - - Connection from 10.10.1.35 port 49429 on 10.10.3.20 port 22
+<86>1 2024-03-18T12:31:41.722533Z PROXY-01 sshd 4009246 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 49429 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T12:31:41.899668Z PROXY-01 sshd 4009246 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T12:31:42.455895Z PROXY-01 systemd-logind 18656 - - New session 265319 of user aisha.johnson.
+<30>1 2024-03-18T12:33:00.494993Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T12:33:05.595620Z PROXY-01 irqbalance 8688 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2024-03-18T12:33:45.409036Z PROXY-01 irqbalance 8688 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2024-03-18T12:34:53.664711Z PROXY-01 dbus-daemon 18589 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.89'
+<85>1 2024-03-18T12:34:55.158949Z PROXY-01 sudo 4009551 - - admin : TTY=pts/1 ; PWD=/var/log ; USER=root ; COMMAND=/bin/systemctl status systemd-resolved --no-pager
+<86>1 2024-03-18T12:34:55.355949Z PROXY-01 sudo 4009551 - - pam_unix(sudo:session): session opened for user root(uid=0) by admin(uid=1001)
+<30>1 2024-03-18T12:34:57.085255Z PROXY-01 irqbalance 8688 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T12:34:58.469462Z PROXY-01 polkitd 52367 - - Operator of unix-process:4009556:198929364 successfully authenticated as unix-user:admin to gain TEMPORARY authorization for action org.freedesktop.systemd1.manage-units for system-bus-name::1.91 [/usr/bin/systemctl] (owned by unix-user:root)
+<86>1 2024-03-18T12:35:01.264593Z PROXY-01 sudo 4009551 - - pam_unix(sudo:session): session closed for user root
+<78>1 2024-03-18T12:36:00.133000Z PROXY-01 CRON 4009654 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T12:37:04.298314Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2633
+<30>1 2024-03-18T12:38:20.753409Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T12:38:21.694047Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 288451.
+<30>1 2024-03-18T12:42:33.852870Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T12:42:44.438859Z PROXY-01 irqbalance 8688 - - IRQ 137 classified for CPU 3 balancing on ens192
+<86>1 2024-03-18T12:42:44.763272Z PROXY-01 sshd 4004516 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T12:42:45.303094Z PROXY-01 systemd-logind 18656 - - Removed session 264963.
+<30>1 2024-03-18T12:42:54.957054Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2024-03-18T12:44:21.264928Z PROXY-01 systemd-resolved 19061 - - Transaction 959663 switched to UDP with advertised UDP packet size 512.
+<30>1 2024-03-18T12:46:19.381870Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T12:46:38.861795Z PROXY-01 systemd-resolved 19061 - - Transaction 584168 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T12:47:18.888659Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 7 done for microk8s
+<30>1 2024-03-18T12:48:37.301383Z PROXY-01 dbus-daemon 18589 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.93'
+<30>1 2024-03-18T12:49:39.684641Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 4 done for microk8s
+<30>1 2024-03-18T12:51:09.927620Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T12:51:13.059409Z PROXY-01 dbus-daemon 18589 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.94'
+<30>1 2024-03-18T12:52:57.135271Z PROXY-01 systemd-resolved 19061 - - Flushed negative cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T12:55:53.871859Z PROXY-01 systemd 1 - - Starting motd-news.service - Message of the Day.
+<30>1 2024-03-18T12:55:55.892276Z PROXY-01 systemd 1 - - Finished motd-news.service - Message of the Day.
+<86>1 2024-03-18T13:00:52.590617Z PROXY-01 sshd 4007372 - - pam_unix(sshd:session): session closed for user marcus.chen
+<86>1 2024-03-18T13:00:53.228449Z PROXY-01 systemd-logind 18656 - - Removed session 265165.
+<30>1 2024-03-18T13:03:12.659717Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 472431.
+<30>1 2024-03-18T13:04:10.247003Z PROXY-01 dbus-daemon 18589 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.95'
+<78>1 2024-03-18T13:06:00.305000Z PROXY-01 CRON 4012529 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:09:01.464476Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 4 done for snapd-desktop-integration
+<30>1 2024-03-18T13:09:08.422812Z PROXY-01 dbus-daemon 18589 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.96'
+<30>1 2024-03-18T13:09:44.747847Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 363143.
+<30>1 2024-03-18T13:09:56.602909Z PROXY-01 systemd-resolved 19061 - - Transaction 486049 switched to UDP with advertised UDP packet size 512.
+<30>1 2024-03-18T13:11:05.398647Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 136834.
+<86>1 2024-03-18T13:11:16.455602Z PROXY-01 sshd 4013015 - - Connection from 10.10.1.35 port 64260 on 10.10.3.20 port 22
+<86>1 2024-03-18T13:11:18.648859Z PROXY-01 sshd 4013015 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 64260 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T13:11:18.813023Z PROXY-01 sshd 4013015 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T13:11:19.354277Z PROXY-01 systemd-logind 18656 - - New session 265636 of user aisha.johnson.
+<30>1 2024-03-18T13:12:18.139099Z PROXY-01 systemd-resolved 19061 - - Transaction 857462 switched to TCP with advertised UDP packet size 1472.
+<30>1 2024-03-18T13:12:39.145719Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2637
+<86>1 2024-03-18T13:12:56.181150Z PROXY-01 sshd 4009246 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T13:12:57.174967Z PROXY-01 systemd-logind 18656 - - Removed session 265319.
+<30>1 2024-03-18T13:13:05.379424Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 393254.
+<30>1 2024-03-18T13:15:10.777988Z PROXY-01 systemd-journald 18576 - - System Journal (/var/log/journal/97f4576de89e9be450e08a0d72da7146) is 1070.8M, max 4096M, 3025.2M free.
+<30>1 2024-03-18T13:15:11.205710Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 439389.
+<30>1 2024-03-18T13:18:03.867770Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 283454.
+<30>1 2024-03-18T13:27:12.583124Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2024-03-18T13:27:16.159950Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 518450.
+<30>1 2024-03-18T13:27:30.798861Z PROXY-01 systemd-resolved 19061 - - Flushed positive cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T13:28:06.644337Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2634
+<30>1 2024-03-18T13:28:25.524183Z PROXY-01 irqbalance 8688 - - IRQ 86 affinity hint keeps vector on CPU 2 (mlx5_comp1)
+<30>1 2024-03-18T13:31:03.834743Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 737151.
+<30>1 2024-03-18T13:31:10.976554Z PROXY-01 systemd-resolved 19061 - - Transaction 457591 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T13:31:42.555307Z PROXY-01 irqbalance 8688 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2024-03-18T13:32:00.360246Z PROXY-01 irqbalance 8688 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2024-03-18T13:33:26.267926Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 4 done for core20
+<30>1 2024-03-18T13:33:48.843560Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 744024.
+<30>1 2024-03-18T13:35:32.092458Z PROXY-01 systemd-resolved 19061 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T13:35:46.594583Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 9 done for core20
+<78>1 2024-03-18T13:36:00.201000Z PROXY-01 CRON 4015121 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T13:37:14.349506Z PROXY-01 systemd-resolved 19061 - - Transaction 355647 switched to UDP with advertised UDP packet size 512.
+<30>1 2024-03-18T13:40:35.327561Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 999717.
+<30>1 2024-03-18T13:41:10.634563Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 735682.
+<30>1 2024-03-18T13:41:55.293827Z PROXY-01 irqbalance 8688 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T13:45:44.265880Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2633
+<30>1 2024-03-18T13:45:54.858019Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T13:47:49.322221Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 767948.
+<30>1 2024-03-18T13:47:55.857680Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2637
+<86>1 2024-03-18T14:01:07.421712Z PROXY-01 sshd 4013015 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T14:01:08.276456Z PROXY-01 systemd-logind 18656 - - Removed session 265636.
+<30>1 2024-03-18T14:03:46.353492Z PROXY-01 irqbalance 8688 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2024-03-18T14:04:16.375584Z PROXY-01 irqbalance 8688 - - Skipping IRQ 64: banned by affinity mask 00000001 (mlx5_comp0)
+<30>1 2024-03-18T14:05:24.744326Z PROXY-01 irqbalance 8688 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<86>1 2024-03-18T14:06:34.611926Z PROXY-01 login 4018462 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)
+<86>1 2024-03-18T14:06:40.194926Z PROXY-01 systemd-logind 18656 - - New session 266079 of user admin.
+<30>1 2024-03-18T14:14:12.623493Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<86>1 2024-03-18T14:16:17.175374Z PROXY-01 su 4020185 - - pam_unix(su:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T14:16:22.559374Z PROXY-01 systemd-logind 18656 - - New session 266157 of user root.
+<30>1 2024-03-18T14:19:42.684790Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T14:20:07.524190Z PROXY-01 irqbalance 8688 - - Skipping IRQ 122: banned by affinity mask 00000004 (nvme0q2)
+<30>1 2024-03-18T14:20:08.368267Z PROXY-01 systemd-resolved 19061 - - Transaction 927937 switched to TCP with advertised UDP packet size 1232.
+<30>1 2024-03-18T14:20:17.356729Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 7 done for core20
+<30>1 2024-03-18T14:20:34.665782Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2024-03-18T14:21:32.269421Z PROXY-01 irqbalance 8688 - - Skipping IRQ 64: banned by affinity mask 00000002 (mlx5_comp0)
+<30>1 2024-03-18T14:26:29.707521Z PROXY-01 irqbalance 8688 - - Skipping IRQ 24: banned by affinity mask 00000002 (ens160)
+<30>1 2024-03-18T14:27:12.176988Z PROXY-01 snapd 18941 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2024-03-18T14:30:47.669608Z PROXY-01 irqbalance 8688 - - Skipping IRQ 64: banned by affinity mask 00000004 (mlx5_comp0)
+<30>1 2024-03-18T14:31:58.465172Z PROXY-01 irqbalance 8688 - - Skipping IRQ 16: banned by affinity mask 00000001 (ahci)
+<30>1 2024-03-18T14:35:23.885604Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 273425.
+<78>1 2024-03-18T14:36:00.206000Z PROXY-01 CRON 4023610 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T14:36:21.263995Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 453200.
+<30>1 2024-03-18T14:37:45.008723Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2024-03-18T14:41:31.416875Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook core20.configure
+<86>1 2024-03-18T14:42:53.130762Z PROXY-01 login 4024806 - - pam_unix(login:session): session opened for user root(uid=0) by LOGIN(uid=0)
+<86>1 2024-03-18T14:43:00.009762Z PROXY-01 systemd-logind 18656 - - New session 266369 of user root.
+<30>1 2024-03-18T14:44:44.988208Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T14:46:10.540806Z PROXY-01 systemd-resolved 19061 - - Transaction 225221 switched to UDP+EDNS0 with advertised UDP packet size 512.
+<30>1 2024-03-18T14:46:50.428622Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 983870.
+<30>1 2024-03-18T14:47:46.371449Z PROXY-01 irqbalance 8688 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2024-03-18T14:49:08.335405Z PROXY-01 irqbalance 8688 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T14:53:45.036803Z PROXY-01 irqbalance 8688 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2024-03-18T14:54:48.426725Z PROXY-01 irqbalance 8688 - - IRQ 45 classified for CPU 0 balancing on virtio0-input
+<30>1 2024-03-18T15:01:35.601904Z PROXY-01 irqbalance 8688 - - Skipping IRQ 64: banned by affinity mask 00000002 (mlx5_comp0)
+<30>1 2024-03-18T15:03:53.302960Z PROXY-01 irqbalance 8688 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T15:04:19.667096Z PROXY-01 irqbalance 8688 - - Skipping IRQ 45: banned by affinity mask 00000008 (virtio0-input)
+<30>1 2024-03-18T15:04:30.973425Z PROXY-01 irqbalance 8688 - - IRQ 137 classified for CPU 3 balancing on ens192
+<86>1 2024-03-18T15:04:59.206087Z PROXY-01 su 4028627 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<30>1 2024-03-18T15:05:03.264729Z PROXY-01 systemd-resolved 19061 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:05:04.779338Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 6 done for microk8s
+<86>1 2024-03-18T15:05:06.827087Z PROXY-01 systemd-logind 18656 - - New session 266548 of user admin.
+<78>1 2024-03-18T15:06:00.152000Z PROXY-01 CRON 4028791 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T15:07:16.529099Z PROXY-01 irqbalance 8688 - - Skipping IRQ 137: banned by affinity mask 00000008 (ens192)
+<86>1 2024-03-18T15:13:22.800087Z PROXY-01 su 4028627 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T15:13:24.595087Z PROXY-01 systemd-logind 18656 - - Removed session 266548.
+<86>1 2024-03-18T15:20:53.242374Z PROXY-01 su 4020185 - - pam_unix(su:session): session closed for user root
+<86>1 2024-03-18T15:20:55.411374Z PROXY-01 systemd-logind 18656 - - Removed session 266157.
+<30>1 2024-03-18T15:21:24.390705Z PROXY-01 systemd-resolved 19061 - - Flushed stale cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:22:32.305814Z PROXY-01 systemd-resolved 19061 - - Transaction 234873 switched to UDP+EDNS0 with advertised UDP packet size 1472.
+<86>1 2024-03-18T15:22:58.013926Z PROXY-01 login 4018462 - - pam_unix(login:session): session closed for user admin
+<86>1 2024-03-18T15:23:00.384926Z PROXY-01 systemd-logind 18656 - - Removed session 266079.
+<30>1 2024-03-18T15:23:04.840235Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook core20.configure
+<86>1 2024-03-18T15:23:58.921633Z PROXY-01 sshd 4031866 - - Connection from 10.10.1.21 port 44107 on 10.10.3.20 port 22
+<84>1 2024-03-18T15:23:59.475633Z PROXY-01 sshd 4031866 - - Failed password for lina.nguyen from 10.10.1.21 port 44107 ssh2
+<86>1 2024-03-18T15:24:10.084633Z PROXY-01 sshd 4031866 - - Connection closed by authenticating user lina.nguyen 10.10.1.21 port 44107 [preauth]
+<30>1 2024-03-18T15:26:19.944337Z PROXY-01 irqbalance 8688 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2024-03-18T15:26:20.501764Z PROXY-01 systemd-resolved 19061 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:26:20.563277Z PROXY-01 systemd-resolved 19061 - - Transaction 437449 switched to UDP+EDNS0 with advertised UDP packet size 1232.
+<30>1 2024-03-18T15:26:38.553898Z PROXY-01 irqbalance 8688 - - Skipping IRQ 16: banned by affinity mask 00000008 (ahci)
+<86>1 2024-03-18T15:27:21.429444Z PROXY-01 sshd 4032449 - - Connection from 10.10.2.20 port 62731 on 10.10.3.20 port 22
+<84>1 2024-03-18T15:27:22.135444Z PROXY-01 sshd 4032449 - - Failed password for svc_mgmt from 10.10.2.20 port 62731 ssh2
+<86>1 2024-03-18T15:27:22.587697Z PROXY-01 sshd 4032449 - - Connection closed by authenticating user svc_mgmt 10.10.2.20 port 62731 [preauth]
+<86>1 2024-03-18T15:27:58.251765Z PROXY-01 sshd 4032561 - - Connection from 10.10.3.10 port 56836 on 10.10.3.20 port 22
+<85>1 2024-03-18T15:27:58.375765Z PROXY-01 sshd 4032561 - - Invalid user unknown from 10.10.3.10 port 56836
+<84>1 2024-03-18T15:27:58.989765Z PROXY-01 sshd 4032561 - - Failed password for invalid user unknown from 10.10.3.10 port 56836 ssh2
+<86>1 2024-03-18T15:28:00.923765Z PROXY-01 sshd 4032561 - - Connection closed by invalid user unknown 10.10.3.10 port 56836 [preauth]
+<86>1 2024-03-18T15:28:43.270415Z PROXY-01 su 4032689 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T15:28:51.123415Z PROXY-01 systemd-logind 18656 - - New session 266736 of user admin.
+<30>1 2024-03-18T15:29:35.318457Z PROXY-01 irqbalance 8688 - - Skipping IRQ 86: banned by affinity mask 00000008 (mlx5_comp1)
+<30>1 2024-03-18T15:30:43.784847Z PROXY-01 irqbalance 8688 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2024-03-18T15:32:23.370022Z PROXY-01 systemd-resolved 19061 - - Transaction 100097 switched to TCP with advertised UDP packet size 1472.
+<78>1 2024-03-18T15:36:00.189000Z PROXY-01 CRON 4033952 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<86>1 2024-03-18T15:38:01.821330Z PROXY-01 su 4034312 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T15:38:09.667330Z PROXY-01 systemd-logind 18656 - - New session 266812 of user admin.
+<30>1 2024-03-18T15:38:09.972091Z PROXY-01 irqbalance 8688 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2024-03-18T15:40:28.518450Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T15:40:35.539899Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 212317.
+<30>1 2024-03-18T15:41:16.034866Z PROXY-01 snapd 18941 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2024-03-18T15:42:42.385114Z PROXY-01 snapd 18941 - - snapmgr.go:523: refresh candidates checked for lxd
+<30>1 2024-03-18T15:43:46.477045Z PROXY-01 irqbalance 8688 - - Skipping IRQ 137: banned by affinity mask 00000004 (ens192)
+<30>1 2024-03-18T15:49:20.729324Z PROXY-01 systemd-resolved 19061 - - Transaction 689565 switched to UDP with advertised UDP packet size 1472.
+<86>1 2024-03-18T15:54:25.474415Z PROXY-01 su 4032689 - - pam_unix(su:session): session closed for user admin
+<86>1 2024-03-18T15:54:27.077415Z PROXY-01 systemd-logind 18656 - - Removed session 266736.
+<30>1 2024-03-18T15:56:09.365710Z PROXY-01 irqbalance 8688 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T15:57:02.444771Z PROXY-01 systemd-resolved 19061 - - Transaction 718365 switched to UDP+EDNS0 with advertised UDP packet size 1232.
+<86>1 2024-03-18T15:58:47.080762Z PROXY-01 login 4024806 - - pam_unix(login:session): session closed for user root
+<86>1 2024-03-18T15:58:49.865762Z PROXY-01 systemd-logind 18656 - - Removed session 266369.
+<30>1 2024-03-18T15:59:03.019573Z PROXY-01 systemd-resolved 19061 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T15:59:50.685652Z PROXY-01 systemd-resolved 19061 - - Flushed positive cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:03:04.544162Z PROXY-01 irqbalance 8688 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<78>1 2024-03-18T16:06:00.171000Z PROXY-01 CRON 4038813 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:06:52.024445Z PROXY-01 irqbalance 8688 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2024-03-18T16:06:52.755759Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2024-03-18T16:13:22.605041Z PROXY-01 irqbalance 8688 - - Skipping IRQ 64: banned by affinity mask 00000004 (mlx5_comp0)
+<30>1 2024-03-18T16:13:27.838126Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 728269.
+<30>1 2024-03-18T16:18:46.584944Z PROXY-01 irqbalance 8688 - - IRQ 137 classified for CPU 3 balancing on ens192
+<30>1 2024-03-18T16:20:05.894746Z PROXY-01 systemd-resolved 19061 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:20:14.411805Z PROXY-01 irqbalance 8688 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<30>1 2024-03-18T16:22:35.907493Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2024-03-18T16:23:27.731892Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2024-03-18T16:24:41.524429Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T16:24:59.535288Z PROXY-01 su 4040980 - - pam_unix(su:session): session opened for user root(uid=0) by (uid=0)
+<86>1 2024-03-18T16:25:05.866288Z PROXY-01 systemd-logind 18656 - - New session 267187 of user root.
+<30>1 2024-03-18T16:26:31.762671Z PROXY-01 systemd-resolved 19061 - - Transaction 900685 switched to TCP with advertised UDP packet size 512.
+<30>1 2024-03-18T16:27:20.561446Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 445399.
+<30>1 2024-03-18T16:28:05.085024Z PROXY-01 irqbalance 8688 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2024-03-18T16:32:40.203396Z PROXY-01 snapd 18941 - - taskrunner.go:271: change 2630 task 8 done for snapd-desktop-integration
+<30>1 2024-03-18T16:33:20.093469Z PROXY-01 systemd-resolved 19061 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:33:31.511629Z PROXY-01 systemd-resolved 19061 - - Grace period over, resuming full feature set UDP+EDNS0 for DNS server 10.10.2.10 after probe 434081.
+<30>1 2024-03-18T16:35:13.880313Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2024-03-18T16:35:36.663122Z PROXY-01 irqbalance 8688 - - Skipping IRQ 154: banned by affinity mask 00000004 (virtio1-input)
+<78>1 2024-03-18T16:36:00.234000Z PROXY-01 CRON 4042239 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T16:37:34.235527Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2024-03-18T16:41:32.622343Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2024-03-18T16:42:51.089827Z PROXY-01 snapd 18941 - - snapmgr.go:523: refresh candidates checked for lxd
+<30>1 2024-03-18T16:42:52.551254Z PROXY-01 irqbalance 8688 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2024-03-18T16:46:19.305049Z PROXY-01 systemd-resolved 19061 - - Flushed stale cache scope ens192 after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T16:47:22.379014Z PROXY-01 systemd-resolved 19061 - - Transaction 702506 switched to UDP+EDNS0 with advertised UDP packet size 512.
+<30>1 2024-03-18T16:47:53.707611Z PROXY-01 irqbalance 8688 - - Skipping IRQ 122: banned by affinity mask 00000001 (nvme0q2)
+<30>1 2024-03-18T16:48:14.801119Z PROXY-01 systemd-resolved 19061 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.10.2.10 after transaction 101781.
+<30>1 2024-03-18T16:49:14.159846Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2024-03-18T16:53:31.259208Z PROXY-01 irqbalance 8688 - - IRQ 154 classified for CPU 2 balancing on virtio1-input
+<30>1 2024-03-18T16:55:11.002950Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2024-03-18T16:55:22.194947Z PROXY-01 irqbalance 8688 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2024-03-18T17:02:44.306438Z PROXY-01 snapd 18941 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<78>1 2024-03-18T17:06:00.139000Z PROXY-01 CRON 4045556 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T17:07:09.358221Z PROXY-01 irqbalance 8688 - - Skipping IRQ 45: banned by affinity mask 00000008 (virtio0-input)
+<86>1 2024-03-18T17:13:04.330753Z PROXY-01 su 4046150 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T17:13:09.947753Z PROXY-01 systemd-logind 18656 - - New session 267571 of user admin.
+<86>1 2024-03-18T17:13:17.502427Z PROXY-01 sshd 4046167 - - Connection from 10.10.1.35 port 61447 on 10.10.3.20 port 22
+<86>1 2024-03-18T17:13:19.669628Z PROXY-01 sshd 4046167 - - Accepted publickey for aisha.johnson from 10.10.1.35 port 61447 ssh2: RSA SHA256:Oj5lT2V1JG5JIKOMG7hLEtrPjVOqvpst2MkpedjOa1A
+<86>1 2024-03-18T17:13:19.763754Z PROXY-01 sshd 4046167 - - pam_unix(sshd:session): session opened for user aisha.johnson(uid=2528) by (uid=0)
+<86>1 2024-03-18T17:13:20.204017Z PROXY-01 systemd-logind 18656 - - New session 267573 of user aisha.johnson.
+<30>1 2024-03-18T17:22:27.267355Z PROXY-01 snapd 18941 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2024-03-18T17:22:29.107565Z PROXY-01 systemd-resolved 19061 - - Flushed negative cache scope global after DNS server 10.10.2.10 changed features.
+<30>1 2024-03-18T17:28:31.504880Z PROXY-01 irqbalance 8688 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2024-03-18T17:30:15.777982Z PROXY-01 irqbalance 8688 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2024-03-18T17:33:22.978201Z PROXY-01 irqbalance 8688 - - Skipping IRQ 86: banned by affinity mask 00000001 (mlx5_comp1)
+<78>1 2024-03-18T17:36:00.255000Z PROXY-01 CRON 4048159 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2024-03-18T17:36:18.206270Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2024-03-18T17:38:14.026465Z PROXY-01 snapd 18941 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<86>1 2024-03-18T17:43:15.443288Z PROXY-01 su 4040980 - - pam_unix(su:session): session closed for user root
+<86>1 2024-03-18T17:43:17.724288Z PROXY-01 systemd-logind 18656 - - Removed session 267187.
+<30>1 2024-03-18T17:47:36.528873Z PROXY-01 snapd 18941 - - stateengine.go:150: state ensure starting change 2638
+<30>1 2024-03-18T17:48:30.182462Z PROXY-01 irqbalance 8688 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<86>1 2024-03-18T17:51:14.126061Z PROXY-01 su 4049496 - - pam_unix(su:session): session opened for user admin(uid=1001) by (uid=0)
+<86>1 2024-03-18T17:51:19.489061Z PROXY-01 systemd-logind 18656 - - New session 267877 of user admin.
+<86>1 2024-03-18T17:55:00.853609Z PROXY-01 sshd 4046167 - - pam_unix(sshd:session): session closed for user aisha.johnson
+<86>1 2024-03-18T17:55:01.269435Z PROXY-01 systemd-logind 18656 - - Removed session 267573.

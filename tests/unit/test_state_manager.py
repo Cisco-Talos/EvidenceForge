@@ -1568,6 +1568,29 @@ class TestProcessManagement:
         assert proc is not None
         assert proc.last_activity_time == start + timedelta(minutes=5)
 
+    def test_assign_process_to_session_refreshes_session_index(self):
+        """Late-bound responder ownership should be visible to session closure."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        logon_id = sm.create_session(
+            username="deploy",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.10.50",
+        )
+        pid = sm.create_process(
+            "linux01",
+            0,
+            "/usr/sbin/sshd",
+            "sshd: deploy [priv]",
+            "root",
+            "root",
+        )
+
+        assert sm.assign_process_to_session("linux01", pid, logon_id)
+        assert [proc.pid for proc in sm.get_processes_for_session(logon_id)] == [pid]
+
     def test_update_session_activity_time_keeps_latest(self):
         """Session activity marker should track the latest dependent event."""
         sm = StateManager()

@@ -101,3 +101,29 @@ data-only blind panel before selecting the following family fix.
   a renderer/ambient source family and must not be an independent behavior planner.
 - **Sibling risk:** RDP density and the still-open compatibility SSH responder lifecycle remain
   follow-up concerns; this consolidation deliberately does not change authored attack sessions.
+
+## Loop 58
+
+- Generated 78,878 records from commit `316f0da7`; automated evaluation scored 95.77
+  (Parseability 100.00, Plausibility 96.70, Causality 89.57, Timing 96.00). The evaluator's
+  overall acceptance failed because pivot linkability was 50.0 against an 80.0 hard threshold.
+- The selected routine-SSH scheduling probe passed. Successful core SSH sessions fell from 133
+  to 48 (63.9%); the top three clients fell from 46.2 to 27.57 aggregate session-hours, and their
+  peak concurrency changed from 7/7/5 to 6/4/2.
+- Fresh initial synthetic-confidence scores were 58 (Threat Hunter), 25 (Detection), 69
+  (Network), and 76 (Host/EDR), averaging 57.0. Deliberation revised them to 68/51/73/82
+  (mean 68.5) and selected closed SSH responder lifecycle as the top hard contract gap.
+
+### Compatibility SSH Responder Lifecycle Contract
+
+- **Owner:** `SshSessionActionBundle` binds the tuple-scoped receiver `sshd` process to the
+  canonical SSH session; the generic logoff bundle owns closure for compatibility sessions.
+- **Invariant:** when a successful SSH close is visible, the exact receiver `sshd` incarnation is
+  discoverable through the session index and produces coherent process termination evidence.
+- **Entry paths:** generic Linux Type 10 logon compatibility, world-planned SSH bootstrap,
+  immediate action-bundle closure, deferred SCP closure, and later generic logoff.
+- **Consumers:** eCAR PROCESS/USER_SESSION/FLOW and Linux sshd/PAM/logind syslog.
+- **Layer rationale:** the responder is materialized before auth assigns final session identity;
+  late binding belongs in `StateManager`, which must also refresh its session secondary index.
+- **Sibling risk:** long-lived taskhostw processes and domain-controller outbound role leakage are
+  independent families and remain queued for the final loop.

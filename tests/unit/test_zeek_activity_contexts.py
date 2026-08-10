@@ -1039,6 +1039,52 @@ class TestSslContextPopulation:
             for event in events
         )
 
+    def test_ssh_compat_session_logoff_terminates_receiver(self, activity_gen):
+        """A later generic logoff should close a compatibility-owned SSH responder."""
+        gen, events = activity_gen
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        logon_id = gen.generate_logon(
+            user=user,
+            system=target,
+            time=base_time,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+        responder_pid = gen.ssh_responder_pid_for_tuple(
+            "10.0.10.50",
+            51111,
+            target.ip,
+        )
+        assert responder_pid is not None
+        assert responder_pid in [
+            proc.pid for proc in gen.state_manager.get_processes_for_session(logon_id)
+        ]
+
+        gen.generate_logoff(
+            user=user,
+            system=target,
+            time=base_time + timedelta(minutes=15),
+            logon_id=logon_id,
+            logon_type=10,
+        )
+
+        assert any(
+            event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == responder_pid
+            for event in events
+        )
+
     def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
         def run_bundle_once() -> list[tuple]:
             _reset_thread_rng()

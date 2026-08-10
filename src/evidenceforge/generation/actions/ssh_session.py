@@ -799,6 +799,22 @@ class SshSessionActionBundle:
                 state.logon_id,
                 transport_pid=plan.sshd_pid,
             )
+            responder = executor.state_manager.get_process(
+                request.target_system.hostname,
+                plan.sshd_pid,
+            )
+            if responder is not None and not (
+                executor.state_manager.assign_process_to_session(
+                    request.target_system.hostname,
+                    plan.sshd_pid,
+                    state.logon_id,
+                )
+            ):
+                raise StateError(
+                    "SSH responder could not be attached to its receiver session: "
+                    f"{request.target_system.hostname} pid={plan.sshd_pid} "
+                    f"logon_id={state.logon_id}"
+                )
         resolved_times = self._resolve_linux_auth_lifecycle(
             event=event,
             responder_pid=plan.sshd_pid,
