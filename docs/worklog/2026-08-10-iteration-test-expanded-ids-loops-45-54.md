@@ -47,3 +47,38 @@ reviewers only a new data-only copy plus the shared assessment guidance.
   sockets.
 - **Focused tests:** nine passed across explicit-proxy and high-confidence
   ownership paths.
+
+## Loop 46 Family Contract
+
+- **Selected family:** TLS SSL-to-X.509 lifecycle-group source observation.
+- **Classification:** `sibling_defect`; SSL references and X.509 analyzer rows
+  are sibling projections of the same captured certificate chain.
+- **Owning abstraction:** frozen per-sensor `NetworkSensorObservation` and its
+  `FileSensorObservation` analyzer-visibility decision.
+- **Invariant:** every certificate FUID retained in a sensor's `ssl.log` has a
+  corresponding `x509.log` row on that sensor; incomplete capture may retain a
+  source-local files row but cannot retain analyzer-derived references.
+- **Entry paths:** direct TLS, explicit-proxy origin TLS, STARTTLS, resumed and
+  full handshakes, multi-certificate chains, and multi-zone projection.
+- **Consumers:** Zeek SSL, files, and X.509 emitters; sensor-local FUID mapping;
+  cross-source evaluator joins and hunter pivots.
+- **Layer rationale:** packet capture completeness is sensor-local observation
+  truth. Filtering only at an emitter-global format check cannot represent a
+  chain visible on one sensor but incomplete on another.
+- **Sibling risks:** partial chain visibility, mapped sensor FUIDs, complete
+  capture, absent observation plans in low-level tests, and certificate files
+  retained without analyzer output.
+
+## Loop 46 Outcome
+
+- **Generation/eval:** 80,525 fresh records; 96.09963396291859; FAIL only on
+  pivot linkability (51.6129/100).
+- **Loop 45 family probe:** 1,684 endpoint proxy flows; 1,678 exact HTTP joins;
+  zero family, command-host, Postfix-owner, or lifecycle violations.
+- **Blind panel:** Synthetic/Real/Synthetic/Synthetic at 66/24/66/70, average
+  56.5; disagreement and a 46-point spread triggered deliberation.
+- **Deliberation:** unanimous Synthetic at 72/61/71/75, average 69.75.
+- **Selected family:** sensor-local TLS certificate lifecycle observation.
+  SSL certificate FUIDs are now projected only when the same sensor's frozen
+  file observation permits X.509 analysis.
+- **Focused tests:** 82 passed across TLS, Zeek files, and network observation.
