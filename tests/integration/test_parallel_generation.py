@@ -258,26 +258,50 @@ class TestParallelGeneration:
             engine.generate()
 
             # Extract cross-references
-            windows_events = parse_windows_log(
-                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
-            )
-
-            # Verify session-establishing LogonIDs are unique. Workstation unlocks
-            # are 4624 Type 7 re-authentications that can reuse an active interactive
-            # session LogonID. In a slice-of-time dataset, that original session may
-            # have started before the rendered window, so Type 7 is excluded from
-            # this uniqueness contract rather than required to match a visible 4624.
-            session_logon_ids = [
-                e.get("TargetLogonId")
-                for e in windows_events
-                if e.get("TargetLogonId")
-                and e.get("EventID") == "4624"
-                and str(e.get("LogonType")) != "7"
+            windows_events = [
+                event
+                for log_path in Path(tmpdir).rglob("windows_event_security.xml")
+                for event in parse_windows_log(log_path)
             ]
-            assert len(session_logon_ids) > 0
-            assert len(session_logon_ids) == len(set(session_logon_ids)), (
-                "Duplicate LogonIDs found in logon events!"
-            )
+
+            # Dynamically allocated LogonIDs are unique within one host. Workstation
+            # unlocks reuse an active interactive session, while Windows' built-in
+            # service principals intentionally retain their well-known LUIDs across
+            # distinct Type 5 authentication occurrences.
+            well_known_service_ids = {
+                "SYSTEM": "0x3e7",
+                "LOCAL SERVICE": "0x3e5",
+                "NETWORK SERVICE": "0x3e4",
+            }
+            dynamic_logon_ids_by_host: dict[str, list[str]] = {}
+            session_logons = [
+                event
+                for event in windows_events
+                if event.get("TargetLogonId")
+                and event.get("EventID") == "4624"
+                and str(event.get("LogonType")) != "7"
+            ]
+            assert session_logons
+            for event in session_logons:
+                hostname = event.get("Computer")
+                username = str(event.get("TargetUserName") or "").upper()
+                logon_id = str(event["TargetLogonId"]).lower()
+                assert hostname
+                expected_well_known_id = well_known_service_ids.get(username)
+                if expected_well_known_id is not None:
+                    assert str(event.get("LogonType")) == "5"
+                    assert logon_id == expected_well_known_id
+                    continue
+
+                assert logon_id not in well_known_service_ids.values(), (
+                    f"Well-known LogonID {logon_id} assigned to {username} on {hostname}"
+                )
+                dynamic_logon_ids_by_host.setdefault(hostname, []).append(logon_id)
+
+            for hostname, logon_ids in dynamic_logon_ids_by_host.items():
+                assert len(logon_ids) == len(set(logon_ids)), (
+                    f"Duplicate dynamically allocated LogonIDs found on {hostname}!"
+                )
 
             # PID values may be reused after exit. They must never identify two
             # overlapping process lifetimes on the same host.
